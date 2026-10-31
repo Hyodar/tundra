@@ -13,7 +13,7 @@ from tests.compiler.test_native_tree import by_image, mkosi_summary
 from tests.conftest import TUNDRA_TOOLS_COMMIT
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm import capabilities
-from tundravm.backends import InProcessBackend, LimaMkosiBackend, LocalLinuxBackend
+from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.capabilities import Host
 from tundravm.declarative import lock
 from tundravm.image import recipe_of
@@ -153,11 +153,12 @@ def test_tundravm_backend_and_an_explicit_backend_win(
     assert isinstance(chosen.backend, LimaMkosiBackend) and chosen.backend_origin == "env"
     prover_file.write_text(
         PROVER_SOURCE
-        + "\nfrom tundravm.backends import InProcessBackend\n\nbackend = InProcessBackend()\n",
+        + "\nfrom tundravm.backends import LimaMkosiBackend\n\n"
+        + 'backend = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")\n',
         encoding="utf-8",
     )
     bound = load_file(prover_file)
-    assert isinstance(bound.backend, InProcessBackend) and bound.backend_origin == "recipe"
+    assert isinstance(bound.backend, LimaMkosiBackend) and bound.backend_origin == "recipe"
     monkeypatch.setenv(BACKEND_ENV, "docker")
     with pytest.raises(tundravm.ValidationError, match="not a build backend"):
         load_file(REPO_ROOT / "examples" / "01_minimal.py")

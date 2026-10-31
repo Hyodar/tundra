@@ -14,9 +14,9 @@ Teaches:
 - ``AttestedTLS(443, upstream=...)``: TLS relayed to a service that listens on the
   loopback, the only way requests reach it; gate 3 binds its key to the quote.
 
-The committed ``peer.policy.json`` came from a simulated (in-process) bake with
-``allow_placeholder=True``: its ``note`` marks it as a placeholder, and the verifier below
-accepts it only because it passes ``allow_placeholder=True``.
+The committed ``peer.policy.json`` is a placeholder (its ``note`` says so: no TEE
+reproduces its registers), and the verifier below accepts it only because it passes
+``allow_placeholder=True``; a real one is a record's ``policy`` from a build.
 
     tundravm lock examples/06_attestation.py      # pin tundra-tools (network)
     tundravm build examples/06_attestation.py --tree-only build/attestation/mkosi

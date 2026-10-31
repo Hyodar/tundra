@@ -57,10 +57,10 @@ def test_explicit_output_operations_create_files(tmp_path: Path) -> None:
     compile(recipe).write(emit_dir)
     assert (emit_dir / "payload" / "mkosi.conf").exists()
 
-    artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), build=build_dir)
+    artifacts = bake(recipe, lock=locked, backend=Backend("local"), build=build_dir)
     assert {(a.variant, a.target) for a in artifacts} == {
         ("default", "qemu"),
         ("default", "azure"),
     }
-    assert (build_dir / "default" / "disk.qcow2").exists()
-    assert (build_dir / "default" / "disk.vhd").exists()
+    assert (build_dir / "default" / "output" / "qemu.raw").exists()
+    assert (build_dir / "default" / "output" / "azure.vhd").exists()

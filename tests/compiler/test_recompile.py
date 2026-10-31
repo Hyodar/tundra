@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tundravm.backends import InProcessBackend
+from tundravm.backends import LocalLinuxBackend
 from tundravm.declarative import (
     BootStep,
     Declaration,
@@ -106,9 +106,7 @@ def test_recompile_with_more_variants_does_not_duplicate_runtime_init(tmp_path: 
     assert overlay.is_dir() and not (overlay / "mkosi.extra/usr/lib/runtime-init").exists()
 
 
-def test_bake_after_compile_across_variants(
-    tmp_path: Path, inprocess_backend: InProcessBackend
-) -> None:
+def test_bake_after_compile_across_variants(tmp_path: Path) -> None:
     img = lower(_init_recipe(Variant("azure", outputs=("azure",))))
 
     emit(img, tmp_path / "preview")
@@ -116,7 +114,7 @@ def test_bake_after_compile_across_variants(
         img,
         ("default", "azure"),
         locked=None,
-        backend=inprocess_backend,
+        backend=LocalLinuxBackend(),
         build=tmp_path / "build",
     )
     assert set(result.profiles) == {"azure", "default"}

@@ -15,9 +15,9 @@ from tundravm.recipe import load_image, load_recipe
 
 RECIPE = """
 from tundravm.declarative import Debian, File, Fragment, Package, Recipe, Unit, Variant
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 
 recipe = Recipe(
     name="loaded",
@@ -79,7 +79,7 @@ def test_load_discovers_like_the_cli_and_rejects_other_values(tmp_path: Path) ->
 def test_load_image_lowers_and_wires_the_backend(recipe_file: Path) -> None:
     img = load_image(recipe_file)
     assert img.profile_names == ("azure", "default")
-    assert img.backend is not None and img.backend.name == "inprocess"
+    assert img.backend is not None and img.backend.name == "local_linux"
     assert img.targets["azure"] == ("azure",) and img.clouds("azure") == ("azure",)
 
 

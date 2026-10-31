@@ -10,7 +10,6 @@ import pytest
 
 from tests.helpers import write_recipe_file
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
-from tundravm.backends.inprocess import InProcessBackend
 from tundravm.cli import EXIT_OK, main
 from tundravm.measure import MEASURE_VERSION
 from tundravm.toolchain import (
@@ -43,7 +42,6 @@ def test_backends_report_the_mkosi_they_run() -> None:
         ("gcp-firmware-table", "dstack-mr-gcp@b16e08b"),
         ("tundravm-measure", MEASURE_VERSION),
     )
-    assert running_toolchain(InProcessBackend()).mkosi is None
 
 
 def test_the_tools_tree_is_the_resolved_one_else_the_locks() -> None:

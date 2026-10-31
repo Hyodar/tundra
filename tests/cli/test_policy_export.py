@@ -15,9 +15,9 @@ from tundravm.measure.policy import PLACEHOLDER_NOTE, policy_payload, read_polic
 
 RECIPE = """
 from tundravm.declarative import Fragment, Package, Recipe, Variant
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 BOOT = (Package("systemd"), Package("linux-image-amd64"))
 recipe = Recipe("peer", items=BOOT)
 """

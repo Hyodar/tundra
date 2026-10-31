@@ -343,12 +343,12 @@ def _fetched_sources(
 ) -> Path | None:
     """``<destination>/.sources`` when the build mounts it; fails if a checkout is missing.
 
-    ``None`` without source builds, a built kernel or an ``EfiStub`` package, and for the
-    in-process backend, which builds nothing. *offline* (no network in the build sandbox)
-    also requires every language build's prefetched dependencies.
+    ``None`` without source builds, a built kernel or an ``EfiStub`` package. *offline*
+    (no network in the build sandbox) also requires every language build's prefetched
+    dependencies.
     """
     builds = lowered.lock_sources()
-    if backend.name == "inprocess" or not builds:
+    if not builds:
         return None
     root = destination / SOURCES_DIRNAME
     pins = lowered.build_pins()

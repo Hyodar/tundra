@@ -360,12 +360,12 @@ def test_moving_the_bake_directory_changes_no_document(
 ) -> None:
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "0")
     recipe = Recipe("node", items=(Package("curl"), Package("linux-image-amd64")))
-    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "one")
+    bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "one")
     shutil.copytree(tmp_path / "one", tmp_path / "elsewhere" / "two")
     documents = [
         sbom(read_artifacts(out)[0], lock=read_lock(out / "tundravm.lock"))
         for out in (tmp_path / "one", tmp_path / "elsewhere" / "two")
     ]
-    assert documents[0].artifact == Path("default/disk.qcow2")
+    assert documents[0].artifact == Path("default/output/qemu.raw")
     for format in SBOM_FORMATS:
         assert documents[0].render(format) == documents[1].render(format)

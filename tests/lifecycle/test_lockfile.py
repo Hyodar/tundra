@@ -23,13 +23,13 @@ from tundravm.lockfile import (
 )
 
 RECIPE_FILE = """
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Fragment, Package, Recipe
 
 recipe = Recipe(
     "lockfile", items=(Package("curl"), Package("linux-image-amd64"))
 )
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 """
 
 
@@ -96,7 +96,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
     locked = lock(_recipe("curl"))
 
     with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe("curl", "jq"), lock=locked, backend=Backend("inprocess"), build=tmp_path)
+        bake(_recipe("curl", "jq"), lock=locked, backend=Backend("local"), build=tmp_path)
 
     assert "stale" in str(excinfo.value).lower()
 
@@ -104,7 +104,7 @@ def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
 def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
     recipe = _recipe("curl")
 
-    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path)
+    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path)
 
     assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
     assert artifacts[0].path.is_file()

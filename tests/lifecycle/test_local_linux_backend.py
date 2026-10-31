@@ -17,6 +17,8 @@ from tundravm.models import BakeRequest, OutputTarget
 from tundravm.testing import FakeMkosi
 from tundravm.toolchain import ToolsTree, running_toolchain
 
+pytestmark = pytest.mark.boundary
+
 linux_only = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="the Linux backend and mkosi are Linux-only"
 )

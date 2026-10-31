@@ -5,7 +5,7 @@ environment (``TUNDRAVM_IMAGE``, ``TUNDRAVM_BUILD``, ``TUNDRAVM_BACKEND``), then
 then the built-in default. ``image`` is the image file (``image = "prover.py"``), ``build``
 the build root (``build = "build"``: the lockfile ``build/tundravm.lock``, the build
 directories ``build/<image>/production/<build-id>/``), ``backend`` the build backend
-(``local``, ``lima``, ``inprocess``). Relative paths in the table are relative to the
+(``local`` or ``lima``). Relative paths in the table are relative to the
 ``pyproject.toml``; in the environment, to the working directory. Lookup walks up from the
 working directory to the first ``pyproject.toml`` that has the table. Instances live in
 ``.tundravm/instances/`` beside it (in the working directory without one).
@@ -44,7 +44,7 @@ REMOVED_KEYS: dict[str, str] = {
 }
 """Keys that no longer exist, with where their job went."""
 
-BACKEND_KINDS: tuple[str, ...] = ("local", "lima", "inprocess")
+BACKEND_KINDS: tuple[str, ...] = ("local", "lima")
 
 Origin = Literal["argument", "environment", "pyproject", "default"]
 

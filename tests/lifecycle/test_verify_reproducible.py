@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from tundravm.backends.base import MountSpec, Requirement
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import (
     Backend,
     Package,
@@ -25,9 +25,9 @@ from tundravm.models import REPRODUCE_DIRNAME, BakeRequest, BakeResult
 
 RECIPE = """
 from tundravm.declarative import Fragment, Package, Recipe, Variant
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 recipe = Recipe(
     "repro",
     items=(Package("curl"), Package("linux-image-amd64")),
@@ -46,10 +46,10 @@ def _recipe() -> Recipe:
 
 @dataclass
 class FlippingBackend:
-    """The in-process backend; a build under ``.reproduce`` flips a byte of its qemu image."""
+    """The Linux backend; a build under ``.reproduce`` flips a byte of its qemu image."""
 
-    name: str = "inprocess"
-    inner: InProcessBackend = field(default_factory=InProcessBackend)
+    name: str = "local_linux"
+    inner: LocalLinuxBackend = field(default_factory=LocalLinuxBackend)
     builds: list[Path] = field(default_factory=list)
 
     def requirements(self) -> tuple[Requirement, ...]:
@@ -98,13 +98,13 @@ def _declarative(out: Path) -> dict[str, object]:
     return block
 
 
-def test_inprocess_bake_is_reproducible_and_records_it(tmp_path: Path) -> None:
+def test_a_bake_is_reproducible_and_records_it(tmp_path: Path) -> None:
     recipe = _recipe()
     out = tmp_path / "build"
     artifacts = bake(
         recipe,
         lock=lock(recipe),
-        backend=Backend("inprocess"),
+        backend=Backend("local"),
         build=out,
         verify_reproducible=True,
     )
@@ -120,7 +120,7 @@ def test_inprocess_bake_is_reproducible_and_records_it(tmp_path: Path) -> None:
 
 def test_a_bake_without_the_check_records_nothing(tmp_path: Path) -> None:
     recipe = _recipe()
-    bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build")
+    bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build")
     assert "reproducibility" not in _declarative(tmp_path / "build")
 
 

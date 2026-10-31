@@ -555,9 +555,9 @@ from tundravm.declarative import (
     User,
     Variant,
 )
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 items = [
     Package("linux-image-amd64"),
     Package("curl"),
@@ -624,7 +624,7 @@ def test_cli_variant_selection(tmp_path: Path) -> None:
 def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
     subject = recipe(File("/etc/../../escape", "x"))
     with pytest.raises(LintError) as excinfo:
-        bake(subject, lock=lock(subject), backend=Backend("inprocess"), build=tmp_path / "out")
+        bake(subject, lock=lock(subject), backend=Backend("local"), build=tmp_path / "out")
     assert excinfo.value.code == "E_LINT"
     assert "1 error-level diagnostics" in str(excinfo.value)
     assert excinfo.value.context["codes"] == "file-path-relative"
@@ -632,7 +632,5 @@ def test_bake_refuses_error_level_findings(tmp_path: Path) -> None:
 
 def test_clean_recipe_bakes(tmp_path: Path) -> None:
     subject = recipe()
-    artifacts = bake(
-        subject, lock=lock(subject), backend=Backend("inprocess"), build=tmp_path / "out"
-    )
+    artifacts = bake(subject, lock=lock(subject), backend=Backend("local"), build=tmp_path / "out")
     assert [a.variant for a in artifacts] == ["default"]

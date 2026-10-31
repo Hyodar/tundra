@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from tundravm.backends.base import collect_artifacts, is_mkosi_state, mkosi_setting
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Package, Recipe, lower
 from tundravm.declarative.lifecycle import bake_image, read_tree
 from tundravm.diff import diff_trees
@@ -121,7 +121,7 @@ class _Collect:
 
 
 @dataclass(slots=True)
-class _LeavesRootState(InProcessBackend):
+class _LeavesRootState(LocalLinuxBackend):
     """Leaves what a sudo mkosi run can: a tools tree and an unreadable directory."""
 
     def execute(self, request: BakeRequest) -> BakeResult:
@@ -130,7 +130,7 @@ class _LeavesRootState(InProcessBackend):
         (project / "mkosi.tools" / "efi").chmod(0)
         (project / "mkosi.extra" / "locked").mkdir(parents=True)
         (project / "mkosi.extra" / "locked").chmod(0)
-        return InProcessBackend.execute(self, request)
+        return LocalLinuxBackend.execute(self, request)
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads everything")

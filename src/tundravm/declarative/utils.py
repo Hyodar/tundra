@@ -311,17 +311,10 @@ class Tdxs(Composite):
         *,
         validator: TdxsType = "tdx",
         mrtd: str | None = None,
-        allow_placeholder: bool = False,
         **kwargs: Any,
     ) -> Tdxs:
         """:meth:`from_policy` for a ``measure()`` result in memory."""
-        return cls.from_policy(
-            measurements.to_policy(allow_placeholder=allow_placeholder),
-            validator=validator,
-            mrtd=mrtd,
-            allow_placeholder=allow_placeholder,
-            **kwargs,
-        )
+        return cls.from_policy(measurements.to_policy(), validator=validator, mrtd=mrtd, **kwargs)
 
     def compose(self) -> Fragment:
         if not isinstance(self.expected_measurements, Mapping):

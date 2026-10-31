@@ -42,7 +42,7 @@ from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ErrorCode, PolicyError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
-pytestmark = pytest.mark.usefixtures("isolated_cwd")
+pytestmark = [pytest.mark.usefixtures("isolated_cwd"), pytest.mark.boundary]
 
 EFI_VERSION = "257.8-1~deb13u1"
 DEB_BYTES = b"!<arch>\ndebian-binary   fake systemd-boot-efi\n"

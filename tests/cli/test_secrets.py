@@ -154,7 +154,7 @@ def test_a_measurements_file_without_a_prediction_is_refused(
     measurements = instance.build.path / "measurements.json"
     result = cli("attest", instance.id, "--policy", measurements, "--identity", key)
     assert result.code == EXIT_SDK_ERROR
-    assert "has no qemu disk prediction (unchecked)" in result.err
+    assert "has no qemu disk prediction (unknown)" in result.err
 
 
 def test_deliver_puts_values_on_stdin_only(

@@ -36,7 +36,7 @@ from tundravm.declarative.lifecycle import FetchedSource, bake_image, fetch
 from tundravm.errors import ErrorCode, PolicyError, SourceError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
-pytestmark = pytest.mark.usefixtures("isolated_cwd")
+pytestmark = [pytest.mark.usefixtures("isolated_cwd"), pytest.mark.boundary]
 
 
 def _git(*args: str, cwd: Path) -> str:

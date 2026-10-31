@@ -23,7 +23,6 @@ from .project import render_table
 EXPLICIT_BACKENDS: dict[str, tuple[str, str]] = {
     "lima": ("LimaMkosiBackend", 'LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")'),
     "local": ("LocalLinuxBackend", "LocalLinuxBackend()"),
-    "inprocess": ("InProcessBackend", "InProcessBackend()"),
 }
 """``render_recipe_template(backend=KIND)``: the class and the instance a file that must bake
 with one backend, whatever the host, binds to ``backend``."""
@@ -499,8 +498,8 @@ WORKFLOW_TEMPLATE = """\
 # (`uv lock`) and both jobs install exactly what it locks.
 #
 # The build job is opt-in: it runs after check only when the repository variable
-# TUNDRAVM_BACKEND (Settings > Secrets and variables > Actions > Variables) names a
-# backend: local or inprocess. It builds the production profile twice in independent
+# TUNDRAVM_BACKEND (Settings > Secrets and variables > Actions > Variables) names the
+# backend: local (the runner has no Lima). It builds the production profile twice in independent
 # workspaces (`build --reproduce`), verifies the build directory against its manifest
 # and uploads it.
 name: tundravm

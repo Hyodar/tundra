@@ -203,14 +203,6 @@ def test_deploy_rows_name_the_cli_and_the_login() -> None:
     }
 
 
-def test_inprocess_builds_nothing() -> None:
-    host, ran = _host(tools={})
-    assert _rows(host, backend="inprocess", areas=("build",)) == {
-        "build:x86-64": "ready (simulated: the inprocess backend builds nothing)"
-    }
-    assert ran == []
-
-
 def test_capability_render_pads_the_name() -> None:
     assert Capability("run:tdx", "unavailable", "no TDX").render() == (
         "run:tdx          unavailable: no TDX"

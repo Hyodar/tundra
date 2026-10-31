@@ -37,9 +37,9 @@ BACKEND_NAME = "backend"
 """Module-level name of the build backend a recipe file bakes with; optional."""
 
 BACKEND_ENV = "TUNDRAVM_BACKEND"
-"""Names the backend kind (``local``, ``lima``, ``inprocess``) for a file that binds none."""
+"""Names the backend kind (``local`` or ``lima``) for a file that binds none."""
 
-BACKEND_KINDS: tuple[str, ...] = ("local", "lima", "inprocess")
+BACKEND_KINDS: tuple[str, ...] = ("local", "lima")
 
 BackendOrigin = Literal["recipe", "env", "host"]
 """Where a loaded file's backend came from: its own ``backend``, :data:`BACKEND_ENV`, or

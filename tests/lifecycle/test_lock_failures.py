@@ -143,7 +143,9 @@ def test_cli_lock_success_path_is_unchanged(
     target = Path("build") / "tundravm.lock"
     upstream = _Upstream(broken=False)
     code, out = _cli(monkeypatch, upstream, str(recipe_file))
-    assert (code, out) == (EXIT_OK, f"locked {target}\n")
+    assert code == EXIT_OK
+    assert out.splitlines()[0] == f"locked {target}"
+    assert out.splitlines()[1].startswith("  toolchain: mkosi ")
     pins = {pin.identity: pin.digest for pin in read_lock(target).pins}
     assert pins == {"nethermind": SHA, "raiko": SHA, "tool": DIGEST}
     assert len(upstream.calls) == 3

@@ -28,7 +28,7 @@ def _recipe() -> Recipe:
 
 def _bake(out: Path) -> tuple[Artifact, ...]:
     recipe = _recipe()
-    return bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=out)
+    return bake(recipe, lock=lock(recipe), backend=Backend("local"), build=out)
 
 
 def test_repeated_bakes_with_same_recipe_have_stable_artifact_digests(tmp_path: Path) -> None:

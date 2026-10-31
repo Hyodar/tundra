@@ -6,8 +6,8 @@ compiled in memory and read as values (packages, files, units, users, init
 steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint
 findings, :func:`assert_tree` and :func:`assert_tree_matches` compare against
 a golden directory, :func:`compile_tree` writes a tree to disk,
-:func:`fake_bake` and :func:`bake_in_process` produce simulated artifacts,
-:class:`FakeMkosi` stands in for mkosi under a real backend,
+:class:`FakeMkosi` and :class:`FakeSources` stand in for mkosi and the source fetches, so a
+real backend runs a whole build with nothing forked or fetched,
 :func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with, and
 :func:`boot` boots a baked image under QEMU and reads its serial console.
 
@@ -19,9 +19,7 @@ tundravm is installed.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import io
-import json
 import os
 import shutil
 import tempfile
@@ -34,19 +32,7 @@ from typing import Literal
 from tundravm.check import render
 from tundravm.compiler import PAYLOAD
 from tundravm.declarative import lifecycle
-from tundravm.declarative.lifecycle import (
-    INPROCESS,
-    MANIFEST_KEY,
-    Artifact,
-    Backend,
-    Lock,
-    Tree,
-    check_report,
-    read_artifacts,
-    read_tree,
-    variant_provenance,
-    variant_tree_digest,
-)
+from tundravm.declarative.lifecycle import Tree, check_report, read_tree
 from tundravm.declarative.model import (
     BootStep,
     Check,
@@ -56,11 +42,9 @@ from tundravm.declarative.model import (
     Package,
     Ready,
     Recipe,
-    Target,
 )
 from tundravm.diagnostics import Diagnostic, Severity
 from tundravm.diff import TreeDiff, _foreign_profile_globs, diff_trees
-from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
 from tundravm.testing._boot import (
     BootResult,
     BootUnavailable,
@@ -71,6 +55,7 @@ from tundravm.testing._boot import (
     scan_console,
 )
 from tundravm.testing._fake_mkosi import FakeCall, FakeMkosi, build_unavailable
+from tundravm.testing._fake_sources import FakeFetch, FakeSources
 from tundravm.testing._image import (
     TEST_PLATFORM,
     ImageFile,
@@ -405,68 +390,6 @@ def _replace_tree(source: Path, golden: Path, keep: Sequence[str]) -> None:
     shutil.copytree(source, golden, symlinks=True, dirs_exist_ok=True)
 
 
-_FAKE_FILENAMES: dict[str, str] = {
-    "qemu": "disk.qcow2",
-    "azure": "disk.vhd",
-    "gcp": "disk.raw.tar.gz",
-}
-
-
-def fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Artifact:
-    """A simulated artifact for *variant* derived from *tree*, recorded in *build*'s manifest.
-
-    Writes ``build/<variant>/<disk file>`` and ``build/bake-result.json`` (merging with
-    one already there), so :func:`tundravm.read_artifacts` reads it back.
-    ``measure`` refuses it without ``allow_placeholder``, ``deploy`` without ``allow_simulated``.
-    """
-    base = Path(build)
-    path = base / variant / _FAKE_FILENAMES[target]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"simulated: variant={variant} target={target} tree={tree.digest}\n")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest = base / BAKE_RESULT_FILENAME
-    previous = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else {}
-    result = BakeResult.load(base) if manifest.is_file() else BakeResult(backend=INPROCESS)
-    profile = result.profiles.setdefault(variant, ProfileBuildResult(profile=variant))
-    profile.artifacts[target] = ArtifactRef(target=target, path=path, digest=digest)
-    result.save(base)
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload[MANIFEST_KEY] = {"recipe_digest": "", "simulated": True}
-    payload["variants_baked"] = [variant]
-    for name, entry in payload["variants"].items():
-        entry[MANIFEST_KEY] = dict(variant_provenance(previous, name))
-    payload["variants"][variant][MANIFEST_KEY] = {
-        **payload[MANIFEST_KEY],
-        "tree_digest": variant_tree_digest(tree, variant),
-    }
-    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return next(a for a in read_artifacts(base) if a.variant == variant and a.target == target)
-
-
-def bake_in_process(
-    recipe: Recipe,
-    *,
-    build: str | Path | None = None,
-    variants: Variants = None,
-    lock: Lock | None = None,
-) -> tuple[Artifact, ...]:
-    """Bake *variants* (default: all) with the in-process backend into *build* or a temp dir.
-
-    The artifacts are simulated placeholders. Without *lock*, the recipe is
-    locked offline first, which fails for a source build: pass a lock built
-    with a ``resolver=`` for those.
-    """
-    names = _names(variants)
-    destination = (
-        Path(build) if build is not None else Path(tempfile.mkdtemp(prefix="tundravm-bake-"))
-    )
-    if lock is None:
-        lock = lifecycle.lock(recipe, offline=True, variants=names)
-    return lifecycle.bake(
-        recipe, lock=lock, backend=Backend("inprocess"), build=destination, variants=names
-    )
-
-
 def fake_fragment(
     name: str = "fake",
     *,
@@ -534,7 +457,9 @@ __all__ = [
     "CompiledTree",
     "ConsoleScan",
     "FakeCall",
+    "FakeFetch",
     "FakeMkosi",
+    "FakeSources",
     "HttpResponse",
     "PlannedImage",
     "ImageFile",
@@ -546,12 +471,10 @@ __all__ = [
     "assert_diagnostic",
     "assert_tree",
     "assert_tree_matches",
-    "bake_in_process",
     "boot",
     "boot_unavailable",
     "build_unavailable",
     "compile_tree",
-    "fake_bake",
     "fake_fragment",
     "fragment_plan",
     "plan",

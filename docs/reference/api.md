@@ -1452,22 +1452,6 @@ assert_tree_matches(
 
 Compare *recipe*'s compiled tree with *golden_dir*; rewrite it instead when updating.
 
-### `bake_in_process`
-
-*function*
-
-```python
-bake_in_process(
-    recipe: Recipe,
-    *,
-    build: str | Path | None = None,
-    variants: Variants = None,
-    lock: Lock | None = None,
-) -> tuple[Artifact, ...]
-```
-
-Bake *variants* (default: all) with the in-process backend into *build* or a temp dir.
-
 ### `boot`
 
 *function*
@@ -1617,16 +1601,6 @@ ConsoleScan(
 
 What a console transcript says: units started and failed, fatal lines.
 
-### `fake_bake`
-
-*function*
-
-```python
-fake_bake(tree: Tree, *, variant: str, target: Target, build: str | Path) -> Artifact
-```
-
-A simulated artifact for *variant* derived from *tree*, recorded in *build*'s manifest.
-
 ### `fake_fragment`
 
 *function*
@@ -1662,6 +1636,16 @@ One recorded `invoke`: mkosi's *argv*, the directory it ran in and its log.
 | `FakeCall.options(name: str) -> list[str]` | Every `--name=value` value in `argv`, in order. |
 | `FakeCall.verb` | The mkosi verb (`build`, `summary`…): the last non-option before `--json`. |
 
+### `FakeFetch`
+
+*dataclass*
+
+```python
+FakeFetch(url: str, pin: str, path: Path)
+```
+
+One recorded checkout: the source's url, the pin and where it landed.
+
 ### `FakeMkosi`
 
 *dataclass*
@@ -1686,6 +1670,23 @@ Records mkosi verbs instead of running them.
 | `FakeMkosi.invoke(argv: Sequence[str], *, cwd: Path, log: Path, on_output: Callable[[str], None] \| None = None, stdout: bool = False, terminal: bool = False) -> MkosiResult` |  |
 | `FakeMkosi.needs_sudo() -> bool` |  |
 | `FakeMkosi.verbs() -> list[str]` |  |
+
+### `FakeSources`
+
+*dataclass*
+
+```python
+FakeSources(fetched: list[FakeFetch] = list())
+```
+
+Records source checkouts instead of fetching them.
+
+| Member | Does |
+|---|---|
+| `FakeSources.fetch_source(source: Source, pin: str, dest: Path) -> None` |  |
+| `FakeSources.git_output(checkout: Path, *args: str) -> str \| None` |  |
+| `FakeSources.install(setattr: Callable[[object, str, object], None]) -> FakeSources` | Put this fake in place of the fetch boundary using *setattr* (pytest's `monkeypatch.setattr`, which undoes it after the test). |
+| `FakeSources.prefetch_deps(build: SourceBuild, pin: str, *args: object, **kwargs: object) -> None` |  |
 
 ### `fragment_plan`
 

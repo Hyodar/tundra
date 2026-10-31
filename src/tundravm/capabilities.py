@@ -31,7 +31,7 @@ Area = Literal["build", "run", "deploy", "verify"]
 AREAS: tuple[Area, ...] = ("build", "run", "deploy", "verify")
 Verdict = Literal["ready", "blocked", "unavailable", "unsupported"]
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
-BuildBackendKind = Literal["local", "lima", "inprocess"]
+BuildBackendKind = Literal["local", "lima"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,8 +128,6 @@ def default_backend(host: Host) -> BuildBackendKind:
 def build_capability(host: Host, backend: BuildBackendKind) -> Capability:
     """``build:x86-64``: whether *backend* can build here, and how."""
     name = "build:x86-64"
-    if backend == "inprocess":
-        return Capability(name, "ready", "simulated: the inprocess backend builds nothing")
     if backend == "lima":
         return _lima_build(name, host)
     return _linux_build(name, host)

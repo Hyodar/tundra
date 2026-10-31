@@ -34,7 +34,7 @@ from tundravm.lockfile import (
 )
 
 RECIPE = """
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import File, Fragment, Package, Recipe
 
 recipe = Recipe(
@@ -46,7 +46,7 @@ recipe = Recipe(
         File("/etc/motd", "hello\\n"),
     ),
 )
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 """
 
 HTOP = 'Package("jq"), Package("htop")'
@@ -148,7 +148,7 @@ def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:
     locked = lock(_recipe())
 
     with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe(Package("htop")), lock=locked, backend=Backend("inprocess"), build=tmp_path)
+        bake(_recipe(Package("htop")), lock=locked, backend=Backend("local"), build=tmp_path)
 
     error = excinfo.value
     assert "stale" in str(error)
@@ -282,7 +282,7 @@ def test_lockfile_round_trips_its_toolchain() -> None:
 
 
 VARIANTS_RECIPE = """
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Fragment, Package, Recipe, Variant
 
 recipe = Recipe(
@@ -293,5 +293,5 @@ recipe = Recipe(
         Variant("dev", add=Fragment("dev", items=(Package("vim"),))),
     ),
 )
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 """

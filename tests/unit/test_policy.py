@@ -20,7 +20,7 @@ from tundravm.errors import LockfileError, PolicyError
 from tundravm.recipe import load_recipe
 
 FROZEN_RECIPE = """
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Fragment, Package, Policy, Recipe
 
 recipe = Recipe(
@@ -28,7 +28,7 @@ recipe = Recipe(
     items=(Package("curl"), Package("linux-image-amd64")),
     policy=Policy(require_frozen_lock=True),
 )
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 """
 
 
@@ -47,9 +47,7 @@ def test_policy_requires_frozen_lock_for_bake(
 
     recipe = load_recipe(path)
     assert isinstance(recipe.policy, Policy) and recipe.policy.require_frozen_lock
-    artifacts = bake(
-        recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "api"
-    )
+    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "api")
     assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
 
 

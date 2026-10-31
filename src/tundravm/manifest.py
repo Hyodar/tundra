@@ -396,7 +396,7 @@ def _check_signature(
 
 def uki_root_hash(uki: Path) -> str | None:
     """The ``roothash=`` (or ``usrhash=``) on the command line *uki* carries; ``None``
-    without one, or when *uki* is no PE image (a simulated build's)."""
+    without one, or when *uki* is no PE image."""
     from .measure import pe
 
     try:

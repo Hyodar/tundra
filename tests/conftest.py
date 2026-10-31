@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.testing import FakeMkosi
+from tundravm.testing._fake_sources import FakeSources
 
 
 @pytest.fixture(autouse=True)
@@ -16,20 +18,19 @@ def _plain_format_outside_github(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _simulated_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A file that binds no ``backend`` bakes in process outside integration tests.
-
-    The loader picks this host's backend for such a file (local on Linux x86-64, Lima
-    elsewhere); a unit test never builds a real image by accident.
-    """
-    if request.node.get_closest_marker("integration") is None:
-        monkeypatch.setenv("TUNDRAVM_BACKEND", "inprocess")
-
-
-@pytest.fixture
-def inprocess_backend() -> InProcessBackend:
-    """Provide an in-process backend for tests that call bake()."""
-    return InProcessBackend()
+def _fake_process_boundary(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outside integration tests a build runs the Linux backend against a fake mkosi and
+    fake source checkouts: the whole build path runs, nothing forks, fetches or needs
+    privileges, and a unit test never builds a real image by accident (on any host).
+    Tests of the boundary itself are marked ``boundary``."""
+    if request.node.get_closest_marker("integration") is not None:
+        return
+    if request.node.get_closest_marker("boundary") is not None:
+        return
+    monkeypatch.setenv("TUNDRAVM_BACKEND", "local")
+    monkeypatch.setattr(LocalLinuxBackend, "_ensure_linux", lambda self: None)
+    FakeMkosi().install(monkeypatch.setattr)
+    FakeSources().install(monkeypatch.setattr)
 
 
 @pytest.fixture(autouse=True)

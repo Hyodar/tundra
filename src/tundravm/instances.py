@@ -145,7 +145,6 @@ def create(root: Path, build: Build, *, kind: str, platform: str, mode: Mode) ->
                 "image": build.image,
                 "profile": build.profile,
                 "kind": build.kind,
-                "simulated": build.simulated,
             },
         },
     )

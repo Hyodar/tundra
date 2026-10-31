@@ -73,7 +73,7 @@ def test_the_output_names_the_directory_and_what_it_does_not_check(project: Path
     assert lines[0] == "lock written: build/tundravm.lock (commit it)"
     assert lines[1].startswith("built build/demo/production/")
     assert any(line.startswith("  qemu.raw ") for line in lines)
-    assert "  unchecked: simulated build: the artifacts are placeholders, not images" in lines
+    assert "  unchecked: measurements qemu/uki: unknown" in lines  # the fake UKI is no PE
     assert "[production]" in result.err  # progress goes to stderr
 
 
@@ -231,8 +231,12 @@ def test_offline_without_a_lock_is_refused(project: Path, cli: Cli) -> None:
     assert not (project / "build" / "tundravm.lock").exists()
 
 
-def test_offline_with_a_lock_builds(project: Path, cli: Cli) -> None:
+def test_offline_builds_from_what_an_online_build_fetched(project: Path, cli: Cli) -> None:
     assert cli("lock").code == EXIT_OK
+    refused = cli("build", "--offline")
+    assert refused.code == EXIT_SDK_ERROR
+    assert "Cannot fetch 'tdxs': policy network_mode is offline." in refused.err
+    assert cli("build").code == EXIT_OK
     result = cli("build", "--offline")
     assert result.code == EXIT_OK, result.err
 

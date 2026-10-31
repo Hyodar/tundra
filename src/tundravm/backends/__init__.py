@@ -8,14 +8,12 @@ from .base import (
     backend_fingerprint,
     collect_artifacts,
 )
-from .inprocess import InProcessBackend
 from .lima import LimaMkosiBackend
 from .local_linux import LocalLinuxBackend
 
 __all__ = [
     "BuildBackend",
     "FingerprintedBackend",
-    "InProcessBackend",
     "LimaMkosiBackend",
     "LocalLinuxBackend",
     "MountSpec",

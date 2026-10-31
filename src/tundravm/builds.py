@@ -53,7 +53,6 @@ from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_m
 from .declarative._compile import emit, mkosi_argv
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
-    INPROCESS,
     Artifact,
     Lock,
     Measurements,
@@ -141,10 +140,6 @@ class Build:
     @property
     def production(self) -> bool:
         return self.kind == "production"
-
-    @property
-    def simulated(self) -> bool:
-        return bool(self.manifest.get("simulated"))
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -524,7 +519,6 @@ def _assemble(
     ports: Sequence[int] = (),
 ) -> dict[str, Any]:
     """Fill *out* from the workspace *work*; return the manifest it wrote."""
-    simulated = img.backend is not None and img.backend.name == INPROCESS
     unchecked: list[str] = []
     by_target = {artifact.target: artifact for artifact in artifacts}
     missing_targets = [t for t in targets if t not in by_target]
@@ -534,7 +528,7 @@ def _assemble(
             hint="Run the build with --verbose and read mkosi's output.",
             context={"workspace": str(work)},
         )
-    measurements = _measurements(artifacts, simulated)
+    measurements = _measurements(artifacts)
     qemu = _with_package_manifest(by_target["qemu"])
     sbom_record = _sbom(qemu, locked, img, out)
     packages = _packages(qemu, out)
@@ -574,10 +568,8 @@ def _assemble(
     mf.write_canonical(out / mf.MEASUREMENTS, measurements)
     uki = out / mf.UKI
     root_hash = mf.uki_root_hash(uki) if uki.is_file() else None
-    if img.mkosi.root == "verity" and root_hash is None and not simulated:
+    if img.mkosi.root == "verity" and root_hash is None:
         unchecked.append("root hash: the UKI's command line carries none")
-    if simulated:
-        unchecked.append("simulated build: the artifacts are placeholders, not images")
     states = {_record_name(r): str(r["state"]) for r in measurements["records"]}
     unchecked.extend(
         f"measurements {name}: {state}"
@@ -593,7 +585,6 @@ def _assemble(
         "image": img.image_id,
         "profile": profile,
         "kind": kind,
-        "simulated": simulated,
         "targets": list(targets),
         "ports": sorted(set(ports)),
         "rootfs": img.mkosi.root,
@@ -638,7 +629,7 @@ def _move(source: Path, target: Path, moved: set[Path]) -> None:
     os.replace(source, target)
 
 
-def _measurements(artifacts: Sequence[Artifact], simulated: bool) -> dict[str, Any]:
+def _measurements(artifacts: Sequence[Artifact]) -> dict[str, Any]:
     """One record per target and boot path; a prediction or an explicit state."""
     records: list[dict[str, Any]] = []
     for artifact in sorted(artifacts, key=lambda a: TARGETS.index(a.target)):
@@ -660,9 +651,6 @@ def _measurements(artifacts: Sequence[Artifact], simulated: bool) -> dict[str, A
                 "artifact": name,
                 "artifact_sha256": subject.sha256,
             }
-            if simulated:
-                records.append({**base, "state": "unchecked", "reason": "simulated build"})
-                continue
             try:
                 found = measure(subject, scheme=SCHEMES[artifact.target])
             except (MeasurementError, ArtifactError) as exc:

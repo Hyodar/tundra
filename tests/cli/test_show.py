@@ -53,9 +53,9 @@ def test_show_a_build(built: Build, cli: Cli) -> None:
     result = cli("show", "latest")
     assert result.code == EXIT_OK, result.err
     first = result.out.splitlines()[0]
-    assert first == f"build {built.id}  demo production (production, simulated)"
+    assert first == f"build {built.id}  demo production (production)"
     assert "  signed        no" in result.out
-    assert "    - simulated build: the artifacts are placeholders, not images" in result.out
+    assert "    - measurements qemu/uki: unknown" in result.out
     assert "reproduction  not attempted" in result.out
     report = json.loads(cli("show", built.id, "--json").out)
     assert report["schema"] == "tundravm.show/1"
@@ -75,8 +75,8 @@ def test_show_a_builds_units_tree_and_measurements(built: Build, cli: Cli) -> No
         line.endswith("  mkosi.conf") or " mkosi.conf " in line for line in tree.out.splitlines()
     )
     measured = cli("show", "latest", "--measurements")
-    assert "qemu/uki  payload.efi  unchecked" in measured.out
-    assert "qemu/disk  qemu.raw  unchecked" in measured.out
+    assert "qemu/uki  payload.efi  unknown" in measured.out
+    assert "qemu/disk  qemu.raw  unknown" in measured.out
     records = json.loads(cli("show", "latest", "--measurements", "--json").out)
     assert records["measurements"]["schema"] == "tundravm.measurements/1"
 
@@ -96,7 +96,7 @@ def test_no_build_yet(project: Path, cli: Cli) -> None:
 def test_show_the_latest_development_build(dev_built: Build, cli: Cli) -> None:
     result = cli("show", "--dev")
     assert result.code == EXIT_OK
-    assert result.out.startswith(f"build {dev_built.id}  demo dev (development, simulated)")
+    assert result.out.startswith(f"build {dev_built.id}  demo dev (development)")
 
 
 def test_diff_of_the_production_and_development_builds(dev_built: Build, cli: Cli) -> None:

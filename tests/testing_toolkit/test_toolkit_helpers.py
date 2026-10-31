@@ -23,20 +23,18 @@ from tundravm.declarative import (
     Variant,
     compile,
     lint,
-    lock,
-    read_artifacts,
 )
-from tundravm.declarative.lifecycle import read_tree, variant_tree_digest
+from tundravm.declarative.lifecycle import read_tree
 from tundravm.errors import ValidationError
 from tundravm.testing import (
     CompiledTree,
+    FakeMkosi,
+    FakeSources,
     assert_clean,
     assert_diagnostic,
     assert_tree,
     assert_tree_matches,
-    bake_in_process,
     compile_tree,
-    fake_bake,
     fake_fragment,
     fragment_plan,
     plan,
@@ -323,39 +321,36 @@ def test_golden_truncates_long_diffs(tmp_path: Path) -> None:
         assert_tree_matches(big, golden)
 
 
-# ── fake_bake / bake_in_process ──────────────────────────────────────
+# ── FakeMkosi / FakeSources ──────────────────────────────────────────
+
+IMAGE = """\
+from tundravm import Image, Service
+
+image = Image("demo", packages=["busybox"], services=[Service("app", ["/usr/bin/busybox"])])
+"""
+"""An image: it implies the evidence service, which builds from a git source."""
 
 
-def test_fake_bake_merges_into_one_manifest(tmp_path: Path) -> None:
-    recipe = _recipe()
-    tree = compile(recipe)
-    qemu = fake_bake(tree, variant="default", target="qemu", build=tmp_path)
-    azure = fake_bake(tree, variant="azure", target="azure", build=tmp_path)
-    assert qemu.path == tmp_path / "default" / "disk.qcow2"
-    assert azure.path == tmp_path / "azure" / "disk.vhd"
-    assert qemu.simulated and azure.simulated
-    assert qemu.tree_digest == variant_tree_digest(tree, "default")
-    assert set(read_artifacts(tmp_path)) == {qemu, azure}
+def test_the_fakes_run_a_whole_build_with_nothing_forked_or_fetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mkosi = FakeMkosi().install(monkeypatch.setattr)
+    sources = FakeSources().install(monkeypatch.setattr)
+    (tmp_path / "demo.py").write_text(IMAGE, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
 
+    code, out, err = run_cli("build", "demo.py")
+    assert code == 0, err
+    assert "built build/demo/production/" in out
+    assert mkosi.verbs() == ["summary", "build", "summary"]
+    (fetched,) = sources.fetched
+    assert fetched.url == "https://github.com/Hyodar/tundra-tools.git"
+    assert fetched.path.is_relative_to(tmp_path / "build" / "demo" / ".work" / ".sources")
 
-def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
-    out = tmp_path / "build"
-    artifacts = bake_in_process(_recipe(), build=out)
-    assert {(a.variant, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
-    for artifact in artifacts:
-        assert artifact.simulated
-        assert artifact.path.is_file()
-        assert artifact.path.is_relative_to(out)
-    assert set(read_artifacts(out)) == set(artifacts)
-    assert (out / "tundravm.lock").is_file()
-
-
-def test_bake_in_process_defaults_to_temp_dir_and_takes_a_lock() -> None:
-    recipe = _recipe()
-    locked = lock(recipe, variants=["azure"])
-    (artifact,) = bake_in_process(recipe, variants=["azure"], lock=locked)
-    assert (artifact.variant, artifact.target) == ("azure", "azure")
-    assert artifact.path.is_file()
+    code, _, err = run_cli("build", "demo.py")
+    assert code == 0, err
+    assert mkosi.verbs().count("build") == 2
+    assert len(sources.fetched) == 1, "the second build reuses the complete checkout"
 
 
 # ── fake_fragment ────────────────────────────────────────────────────

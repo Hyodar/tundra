@@ -21,6 +21,8 @@ from tests.helpers import REPO_ROOT
 from tundravm import _mkosi
 from tundravm.toolchain import MKOSI_PIN
 
+pytestmark = pytest.mark.boundary
+
 SRC = REPO_ROOT / "src" / "tundravm"
 IMPORTS_MKOSI = re.compile(r"^\s*(import mkosi\b|from mkosi(\.| )\S* ?import\b)", re.MULTILINE)
 

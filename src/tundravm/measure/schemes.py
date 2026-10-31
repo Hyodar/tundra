@@ -10,7 +10,6 @@ the TD); it records the vTPM PCR4/9/11 the guest's boot extends instead.
 from __future__ import annotations
 
 import gzip
-import hashlib
 import tarfile
 from pathlib import Path
 
@@ -21,7 +20,6 @@ from tundravm.measure.model import (
     MeasurementBackend,
     Measurements,
 )
-from tundravm.measure.placeholder import placeholder_measurements
 
 DISK_SUFFIXES = frozenset({".raw", ".img", ".vhd", ".qcow2", ".gz"})
 MEASURABLE_SUFFIXES = DISK_SUFFIXES | {".efi"}
@@ -56,7 +54,6 @@ def derive(
     *,
     artifact: Path,
     uki: Path | None,
-    allow_placeholder: bool = False,
 ) -> Measurements:
     """Measure *artifact* (booting the UKI *uki*) for *scheme*."""
     if scheme not in REASONS:
@@ -65,13 +62,8 @@ def derive(
             hint=f"Use one of: {', '.join(REASONS)}",
             context={"scheme": scheme},
         )
-    try:
-        image = tdx.image_hashes(_read_uki(artifact, uki))
-        gpt = _gpt_event(artifact)
-    except MeasurementError as exc:
-        if not allow_placeholder:
-            raise
-        return _placeholder(scheme, artifact, str(exc))
+    image = tdx.image_hashes(_read_uki(artifact, uki))
+    gpt = _gpt_event(artifact)
     registers: dict[str, list[str | dict[str, str]]] = {}
     extra: dict[str, object] = {}
     if scheme == "gcp":
@@ -146,18 +138,3 @@ def _gpt_event(artifact: Path) -> bytes | None:
         with artifact.open("rb") as handle:
             head = handle.read(_HEAD)
     return tdx.gpt_event(head)
-
-
-def _placeholder(scheme: MeasurementBackend, artifact: Path, why: str) -> Measurements:
-    seed = hashlib.sha256(artifact.read_bytes() if artifact.is_file() else b"").hexdigest()
-    registers: dict[str, list[str | dict[str, str]]] = {}
-    if scheme == "gcp":
-        registers |= _gcp_firmware_registers()
-    if scheme != "azure":
-        for name in ("RTMR1", "RTMR2"):
-            registers[name] = [hashlib.sha256(f"{scheme}:{name}:{seed}".encode()).hexdigest()]
-    return placeholder_measurements(
-        scheme,
-        Measurements(scheme, registers, dict(REASONS[scheme]), source="placeholder"),
-        context={"artifact": str(artifact), "reason": why},
-    )

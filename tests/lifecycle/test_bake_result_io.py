@@ -13,11 +13,9 @@ from tundravm.declarative import (
     Recipe,
     bake,
     lock,
-    measure,
     read_artifacts,
 )
 from tundravm.errors import StateError
-from tundravm.measure import PlaceholderMeasurementWarning
 from tundravm.models import BAKE_RESULT_FILENAME, ArtifactRef, BakeResult, ProfileBuildResult
 
 
@@ -38,7 +36,7 @@ def _result(build_dir: Path, outside: Path) -> BakeResult:
     return BakeResult(
         profiles={"default": default},
         lock_digest="cd" * 32,
-        backend="inprocess",
+        backend="local_linux",
         created_at="2026-10-04T12:00:00+00:00",
         lock_sha256="cd" * 32,
     )
@@ -61,7 +59,7 @@ def test_round_trip_stores_relative_paths_inside_build_dir(tmp_path: Path) -> No
     assert entry["artifacts"]["qemu"] == "default/disk.qcow2"
     assert entry["report_path"] == "default/report.json"
     assert entry["artifacts"]["azure"] == str(outside.resolve() / "disk.vhd")
-    assert payload["backend"] == "inprocess"
+    assert payload["backend"] == "local_linux"
     assert payload["lock_digest"] == "cd" * 32
     assert payload["created_at"] == "2026-10-04T12:00:00+00:00"
 
@@ -94,15 +92,11 @@ def test_load_corrupt_file_raises_state_error(tmp_path: Path) -> None:
         BakeResult.load(tmp_path)
 
 
-def test_bake_saves_and_a_fresh_read_measures_and_finds_it(tmp_path: Path) -> None:
+def test_bake_saves_and_a_fresh_read_finds_it(tmp_path: Path) -> None:
     recipe = Recipe("io", items=(Package("curl"), Package("linux-image-amd64")))
     build_dir = tmp_path / "build"
 
-    baked = bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=build_dir)
+    baked = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=build_dir)
     assert (build_dir / BAKE_RESULT_FILENAME).is_file()
-    assert BakeResult.load(build_dir).backend == "inprocess"
-
-    fresh = read_artifacts(build_dir)
-    assert fresh == baked
-    with pytest.warns(PlaceholderMeasurementWarning):
-        assert measure(fresh[0], scheme="qemu", allow_placeholder=True).values
+    assert BakeResult.load(build_dir).backend == "local_linux"
+    assert read_artifacts(build_dir) == baked

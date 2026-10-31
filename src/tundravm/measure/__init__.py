@@ -11,7 +11,6 @@ from tundravm.measure.model import (
     MeasurementBackend,
     Measurements,
     MeasurementSource,
-    PlaceholderMeasurementWarning,
 )
 from tundravm.models import ProfileBuildResult
 
@@ -23,10 +22,8 @@ def derive_measurements(
     backend: MeasurementBackend,
     profile: str,
     profile_result: ProfileBuildResult,
-    allow_placeholder: bool = False,
 ) -> Measurements:
-    """Measure *profile_result*'s artifact for scheme *backend*; placeholder values (for an
-    artifact that is no UKI or disk, such as a simulated one) need ``allow_placeholder``."""
+    """Measure *profile_result*'s artifact for scheme *backend*."""
     if not profile_result.artifacts:
         raise MeasurementError(
             "No artifacts are available for measurement derivation.",
@@ -39,7 +36,6 @@ def derive_measurements(
         backend,
         artifact=Path(artifact.path),
         uki=None if payload is None else Path(payload),
-        allow_placeholder=allow_placeholder,
     )
 
 
@@ -49,6 +45,5 @@ __all__ = [
     "MeasurementBackend",
     "MeasurementSource",
     "Measurements",
-    "PlaceholderMeasurementWarning",
     "derive_measurements",
 ]

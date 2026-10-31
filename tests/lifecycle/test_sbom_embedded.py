@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.backends.inprocess import UKI_FILENAME, InProcessBackend
+from tundravm.backends.base import BOOT_PAYLOAD_NAME
+from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import (
     Artifact,
     Backend,
@@ -215,7 +216,7 @@ def test_a_binary_recording_nothing_is_only_noted(tmp_path: Path) -> None:
 
 
 def bootable() -> Recipe:
-    """The sbom recipe with a kernel, so the in-process bake lints clean."""
+    """The sbom recipe with a kernel, so the bake lints clean."""
     recipe = _recipe()
     return replace(recipe, items=(*recipe.items, Package("linux-image-amd64")))
 
@@ -225,18 +226,18 @@ def test_the_bake_records_installed_digests_from_the_ukis_initrd(
 ) -> None:
     binary = cargo_binary(CRATES)
     initrd = newc([("usr/bin/app", binary, 0o100755), ("etc/app.conf", b"conf", 0o100644)])
-    original = InProcessBackend.execute
+    original = LocalLinuxBackend.execute
 
-    def execute(self: InProcessBackend, request: BakeRequest) -> BakeResult:
+    def execute(self: LocalLinuxBackend, request: BakeRequest) -> BakeResult:
         result = original(self, request)
-        uki = request.build_dir / request.profile / UKI_FILENAME
+        uki = request.build_dir / request.profile / "output" / BOOT_PAYLOAD_NAME
         uki.write_bytes(build_pe([(".text", b"stub"), (".initrd", gzip.compress(initrd))]))
         return result
 
-    monkeypatch.setattr(InProcessBackend, "execute", execute)
+    monkeypatch.setattr(LocalLinuxBackend, "execute", execute)
     recipe = bootable()
     locked = lock(recipe, resolver=_resolve)
-    bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path / "build")
+    bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path / "build")
     (artifact,) = read_artifacts(tmp_path / "build")
     assert artifact.installed == {"/etc/app.conf": sha(b"conf"), "/usr/bin/app": sha(binary)}
     (tmp_path / "bins").mkdir()
@@ -245,10 +246,10 @@ def test_the_bake_records_installed_digests_from_the_ukis_initrd(
     assert [c.name for c in document.embedded] == ["itoa"] and not document.unbound_binaries
 
 
-def test_a_simulated_bake_records_no_installed_digests(tmp_path: Path) -> None:
+def test_a_uki_without_a_readable_initrd_records_no_installed_digests(tmp_path: Path) -> None:
     recipe = bootable()
     locked = lock(recipe, resolver=_resolve)
-    bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path)
+    bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path)
     (artifact,) = read_artifacts(tmp_path)
     assert artifact.installed is None
     payload = json.loads((tmp_path / "bake-result.json").read_text(encoding="utf-8"))

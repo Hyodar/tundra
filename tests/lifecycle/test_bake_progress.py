@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
-from tundravm.backends.inprocess import InProcessBackend
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
 from tundravm.declarative.lifecycle import bake_image
@@ -168,7 +167,7 @@ def test_json_reporter_writes_one_object_per_line() -> None:
 # -- backend streaming --------------------------------------------------------
 
 
-def test_inprocess_backend_streams_output_lines(tmp_path: Path) -> None:
+def test_the_linux_backend_streams_the_build_output_only(tmp_path: Path) -> None:
     lines: list[str] = []
     request = BakeRequest(
         profile="default",
@@ -176,10 +175,8 @@ def test_inprocess_backend_streams_output_lines(tmp_path: Path) -> None:
         emit_dir=tmp_path / "emit",
         on_output=lines.append,
     )
-    InProcessBackend().execute(request)
-    assert lines[0].startswith("inprocess: building variant default")
-    assert "inprocess: wrote qemu artifact disk.qcow2" in lines
-    assert lines[-1] == "inprocess: done (1 artifacts)"
+    LocalLinuxBackend().execute(request)
+    assert lines == ["fake mkosi build"]  # summary --json is captured, not streamed
 
 
 def test_run_streaming_merges_stderr_and_keeps_a_tail() -> None:
@@ -231,12 +228,12 @@ def _recipe(*items: File) -> Recipe:
 
 
 def _bake(tmp_path: Path, recipe: Recipe, reporter: Capture | None) -> BakeResult:
-    """Bake *recipe* lowered, in process, with *reporter*, as ``tundravm bake`` does."""
+    """Bake *recipe* lowered against the fake mkosi, with *reporter*, as ``build`` does."""
     result, _ = bake_image(
         lower(recipe),
         ("default",),
         locked=None,
-        backend=InProcessBackend(),
+        backend=LocalLinuxBackend(),
         build=tmp_path / "build",
         reporter=reporter,
     )
@@ -290,7 +287,7 @@ def test_bake_forwards_logger_records_only_while_attached(tmp_path: Path) -> Non
         img,
         ("default",),
         locked=None,
-        backend=InProcessBackend(),
+        backend=LocalLinuxBackend(),
         build=tmp_path / "build",
         reporter=capture,
     )
@@ -317,12 +314,12 @@ def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
     [artifact] = bake(
         recipe,
         lock=lock(recipe),
-        backend=Backend("inprocess"),
+        backend=Backend("local"),
         build=tmp_path / "out",
         progress=progress.append,
     )
-    assert any(line.startswith("[default] build via inprocess ... ok") for line in progress)
-    assert (artifact.variant, artifact.target, artifact.simulated) == ("default", "qemu", True)
+    assert any(line.startswith("[default] build via local_linux ... ok") for line in progress)
+    assert (artifact.variant, artifact.target) == ("default", "qemu")
     saved = json.loads((tmp_path / "out" / "bake-result.json").read_text())
     assert saved["variants"]["default"]["artifact_digests"]["qemu"] == artifact.sha256
 

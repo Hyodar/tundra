@@ -46,15 +46,15 @@ def test_defaults_without_a_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_the_environment_wins_over_the_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _table(tmp_path, 'image = "a.py"\nbuild = "out"\nbackend = "lima"\n')
+    _table(tmp_path, 'image = "a.py"\nbuild = "out"\nbackend = "local"\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TUNDRAVM_IMAGE", "b.py")
     monkeypatch.setenv("TUNDRAVM_BUILD", "elsewhere")
-    monkeypatch.setenv("TUNDRAVM_BACKEND", "inprocess")
+    monkeypatch.setenv("TUNDRAVM_BACKEND", "lima")
     found = settings()
     assert found.image == Path("b.py")
     assert found.build == Path("elsewhere")
-    assert found.backend == "inprocess"
+    assert found.backend == "lima"
     assert set(found.origins.values()) == {"environment"}
 
 

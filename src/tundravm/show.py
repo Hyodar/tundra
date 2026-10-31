@@ -138,9 +138,7 @@ def build_report(build: Build) -> dict[str, object]:
 def render_build(build: Build) -> str:
     m = build.manifest
     lines = [
-        f"build {build.id}  {m['image']} {m['profile']} ({m['kind']}"
-        + (", simulated" if m.get("simulated") else "")
-        + ")",
+        f"build {build.id}  {m['image']} {m['profile']} ({m['kind']})",
         f"  path          {build.path}",
         f"  targets       {', '.join(m['targets'])}",
         f"  rootfs        {m.get('rootfs')}",

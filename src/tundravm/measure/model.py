@@ -7,15 +7,11 @@ from typing import Literal
 
 MeasurementBackend = Literal["qemu", "gcp", "azure", "portable"]
 """The measurement schemes: a host family, or ``portable`` (image-only registers)."""
-MeasurementSource = Literal["tundravm-measure", "placeholder"]
-"""Where measurement values came from; ``placeholder`` values are not real measurements."""
+MeasurementSource = Literal["tundravm-measure"]
+"""Where measurement values came from: tundravm's own replay of the boot event log."""
 MEASURE_TOOL = "tundravm-measure"
 MEASURE_VERSION = "1.0+attest-12f1e29.dstack-mr-gcp-b16e08b"
 """The replay's version and the pinned flashbots tools it ports (``flake.nix`` pins)."""
-
-
-class PlaceholderMeasurementWarning(UserWarning):
-    """``measure(..., allow_placeholder=True)`` returned values no tool measured."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,8 +21,7 @@ class Measurements:
     ``registers`` maps each register to its accepted values (a hex string, or a dict
     with ``value`` and ``firmware``/``label``); ``unverifiable`` maps the registers the
     scheme cannot predict offline to the reason. ``extra`` holds scheme fields
-    (``sources``, ``firmware_table``, ``vtpm_pcrs``). ``source`` is ``placeholder`` for
-    digest-derived stand-ins no attestation will reproduce.
+    (``sources``, ``firmware_table``, ``vtpm_pcrs``).
     """
 
     backend: MeasurementBackend

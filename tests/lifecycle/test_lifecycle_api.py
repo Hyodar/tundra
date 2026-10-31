@@ -43,7 +43,6 @@ from tundravm.declarative import (
     lock,
     lock_status,
     lower,
-    measure,
     read_artifacts,
     read_lock,
     write_lock,
@@ -52,14 +51,8 @@ from tundravm.declarative._compile import emit
 from tundravm.declarative.utils import Tdxs
 from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.errors import DeploymentError, LockfileError, MeasurementError, ValidationError
-from tundravm.measure import PlaceholderMeasurementWarning
 from tundravm.measure.policy import read_policy, write_policy
-from tundravm.testing import (
-    assert_clean,
-    assert_diagnostic,
-    assert_tree,
-    fake_bake,
-)
+from tundravm.testing import assert_clean, assert_diagnostic, assert_tree
 
 APP_UNIT = "[Unit]\nDescription=app\n\n[Service]\nUser=app\nExecStart=/usr/bin/true\n"
 REPO = "https://example.com/app.git"
@@ -227,18 +220,18 @@ def _baked(tmp_path: Path, lines: list[str] | None = None) -> tuple[Artifact, ..
     return bake(
         recipe,
         lock=lock(recipe),
-        backend=Backend("inprocess"),
+        backend=Backend("local"),
         build=tmp_path / "out",
         progress=None if lines is None else lines.append,
     )
 
 
-def test_bake_in_process_writes_simulated_artifacts(tmp_path: Path) -> None:
+def test_bake_writes_the_outputs_each_variant_declares(tmp_path: Path) -> None:
     lines: list[str] = []
     artifacts = _baked(tmp_path, lines)
     # each variant's artifacts are its declared outputs
     assert {(a.variant, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
-    assert all(a.simulated and a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
+    assert all(a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
     assert any("baked 2 variants" in line for line in lines)
@@ -250,7 +243,7 @@ def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:
         bake(
             _recipe(motd="bye\n"),
             lock=lock(_recipe()),
-            backend=Backend("inprocess"),
+            backend=Backend("local"),
             build=tmp_path / "out",
         )
 
@@ -260,7 +253,7 @@ def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> Non
     assert lock_status(_recipe(), locked, variants=("azure",)) == ()
 
     artifacts = bake(
-        _recipe(), lock=locked, backend=Backend("inprocess"), build=tmp_path, variants=("azure",)
+        _recipe(), lock=locked, backend=Backend("local"), build=tmp_path, variants=("azure",)
     )
 
     assert {(a.variant, a.target) for a in artifacts} == {("azure", "azure")}
@@ -268,7 +261,7 @@ def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> Non
         bake(
             _recipe(motd="bye\n"),
             lock=locked,
-            backend=Backend("inprocess"),
+            backend=Backend("local"),
             build=tmp_path / "stale",
             variants=("azure",),
         )
@@ -346,17 +339,6 @@ def test_measurements_policy_round_trips_into_a_tdxs_verifier(tmp_path: Path) ->
     placeholder = replace(found, tool="placeholder")
     with pytest.raises(MeasurementError, match="placeholder"):
         placeholder.to_policy()
-    assert "note" in placeholder.to_policy(allow_placeholder=True)
-
-
-def test_measure_rejects_simulated_unless_allowed(tmp_path: Path) -> None:
-    artifact = next(a for a in _baked(tmp_path) if a.target == "qemu")
-    with pytest.raises(MeasurementError, match="simulated"):
-        measure(artifact)
-    with pytest.warns(PlaceholderMeasurementWarning):
-        found = measure(artifact, scheme="gcp", allow_placeholder=True)
-    assert found.scheme == "gcp" and found.tool == "placeholder"
-    assert found.artifact_digest == artifact.sha256 and found.values
 
 
 def test_deploy_with_fake_qemu_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -369,18 +351,14 @@ def test_deploy_with_fake_qemu_runner(tmp_path: Path, monkeypatch: pytest.Monkey
         return subprocess.CompletedProcess(list(argv), 0, "", "")
 
     adapter = QemuDeployAdapter(runner=fake_qemu)
-    with pytest.raises(DeploymentError, match="simulated"):
-        deploy(artifact, using=Qemu(), adapter=adapter)
     with pytest.raises(DeploymentError, match="Cannot deploy a qemu artifact to azure"):
-        deploy(artifact, using=Azure("acct"), allow_simulated=True, adapter=adapter)
-    found = deploy(
-        artifact, using=Qemu(memory="4G", ssh_port=2223), allow_simulated=True, adapter=adapter
-    )
+        deploy(artifact, using=Azure("acct"), adapter=adapter)
+    found = deploy(artifact, using=Qemu(memory="4G", ssh_port=2223), adapter=adapter)
     assert found.target == "qemu" and found.id.startswith("qemu-default-")
     assert seen and "4G" in " ".join(seen[0]) and "2223" not in " ".join(seen[0])
     assert found.endpoint is None  # the recipe declares no SshAccess: no SSH forward
     with_ssh = replace(artifact, ssh_port=22, data_disks=("tundra-data",))
-    found = deploy(with_ssh, using=Qemu(ssh_port=2223), allow_simulated=True, adapter=adapter)
+    found = deploy(with_ssh, using=Qemu(ssh_port=2223), adapter=adapter)
     assert "user,id=net0,hostfwd=tcp::2223-:22" in seen[-1]
     assert "virtio-blk-pci,drive=data0,serial=tundra-data" in seen[-1]
     assert found.endpoint == "ssh://localhost:2223"
@@ -394,7 +372,6 @@ def test_doctor_with_fake_probe_runner() -> None:
         return subprocess.CompletedProcess(list(argv), 1, "", "")
 
     assert doctor(Backend("lima"), runner=ok) == ()
-    assert doctor(Backend("inprocess"), runner=missing) == ()
     found = doctor(Backend("lima"), runner=missing)
     assert found and {d.code for d in found} == {"tool-missing"}
     assert any(d.severity == "error" for d in found)
@@ -403,11 +380,5 @@ def test_doctor_with_fake_probe_runner() -> None:
     assert isinstance(Requirement, type)
 
 
-def test_fake_bake_artifact_round_trips(tmp_path: Path) -> None:
-    tree = compile(_recipe(), variants=("default",))
-    artifact = fake_bake(tree, variant="default", target="qemu", build=tmp_path)
-    assert artifact.simulated and artifact.tree_digest == tree.digest
-    assert read_artifacts(tmp_path) == (artifact,)
-    with pytest.raises(MeasurementError):
-        measure(artifact)
+def test_gcp_defaults_its_zone() -> None:
     assert Gcp("p", "b").zone == "us-central1-a"

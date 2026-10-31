@@ -12,6 +12,8 @@ from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 
+pytestmark = pytest.mark.boundary  # convert reads the tree through mkosi's own parser
+
 TREE = REPO_ROOT / "tests" / "fixtures" / "native-tree" / "tree-initramfs"
 
 SERVICE = """\

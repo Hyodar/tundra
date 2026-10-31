@@ -40,7 +40,7 @@ from tundravm.errors import ErrorCode, StateError, ValidationError
 from tundravm.explain import describe, render
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
-pytestmark = pytest.mark.usefixtures("isolated_cwd")
+pytestmark = [pytest.mark.usefixtures("isolated_cwd"), pytest.mark.boundary]
 
 SCRIPT = "payload/mkosi.build.d/10-kernel.sh"
 

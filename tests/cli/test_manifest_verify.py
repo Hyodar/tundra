@@ -7,14 +7,19 @@ import os
 import shutil
 import stat
 import subprocess
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.cli.conftest import Cli
 from tundravm import manifest as mf
+from tundravm._mkosi import MkosiResult
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
+from tundravm.testing import FakeMkosi
 
 SSH_KEYGEN = shutil.which("ssh-keygen")
 needs_ssh_keygen = pytest.mark.skipif(SSH_KEYGEN is None, reason="ssh-keygen is not installed")
@@ -39,9 +44,9 @@ def test_the_manifest_binds_the_directory(built: Build) -> None:
     assert payload["uki"]["sha256"] == mf.sha256_file(built.path / "payload.efi")
     assert payload["lock"]["sha256"] == mf.sha256_file(built.path / "inputs/tundravm.lock")
     assert payload["packages"] == {"state": "missing", "reason": "mkosi wrote no package manifest"}
-    assert payload["simulated"] is True and payload["kind"] == "production"
-    assert payload["measurements"]["records"] == {"qemu/disk": "unchecked", "qemu/uki": "unchecked"}
-    assert "simulated build: the artifacts are placeholders, not images" in payload["unchecked"]
+    assert payload["kind"] == "production"
+    assert payload["measurements"]["records"] == {"qemu/disk": "unknown", "qemu/uki": "unknown"}
+    assert "measurements qemu/uki: unknown" in payload["unchecked"]
     assert payload["root_hash"] is None and payload["rootfs"] == "initramfs"
     sources = json.loads((built.path / "inputs/sources.json").read_text())["sources"]
     assert payload["sources"] == sources and sources[0]["pin"] == "1" * 40
@@ -50,15 +55,36 @@ def test_the_manifest_binds_the_directory(built: Build) -> None:
 def test_observations_are_not_identity(built: Build) -> None:
     observed = json.loads((built.path / mf.OBSERVATIONS).read_text())
     assert observed["schema"] == "tundravm.observations/1" and observed["id"] == built.id
-    assert observed["runner"]["backend"] == "inprocess"
+    assert observed["runner"]["backend"] == "local_linux"
     assert observed["lock_written"] is True and observed["reproduction"] is None
     assert "observations.json" not in built.manifest["artifacts"]
 
 
-def test_the_summary_input_names_no_host_path(built: Build) -> None:
+@dataclass(slots=True)
+class _SummaryWithPaths(FakeMkosi):
+    """A fake mkosi whose ``summary --json`` names the tree it ran in, the build's workspace
+    and a host setting, as the real one does."""
+
+    def invoke(self, argv: Sequence[str], *, cwd: Path, **kwargs: Any) -> MkosiResult:
+        result = FakeMkosi.invoke(self, argv, cwd=cwd, **kwargs)
+        if not result.stdout:
+            return result
+        payload = json.loads(result.stdout)
+        for image in payload["Images"]:
+            image["ExtraTrees"] = [f"{Path(cwd).resolve()}/payload/mkosi.extra"]
+            image["CacheDirectory"] = str(Path(cwd).resolve() / "cache")
+        return replace(result, stdout=json.dumps(payload))
+
+
+def test_the_summary_input_names_no_host_path(
+    project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _SummaryWithPaths().install(monkeypatch.setattr)
+    assert cli("build").code == EXIT_OK
+    built = Build.open((project / "build" / "demo" / "latest-production").resolve())
     text = (built.path / "inputs" / "summary.json").read_text()
-    assert str(built.path.parent.parent) not in text
-    assert "$TREE" in text and "/tmp/" not in text
+    assert str(built.path.parent.parent) not in text and str(project) not in text
+    assert "$TREE/payload/mkosi.extra" in text and "CacheDirectory" not in text
 
 
 def test_an_untouched_build_verifies(built: Build, cli: Cli) -> None:

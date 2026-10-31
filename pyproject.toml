@@ -39,6 +39,7 @@ testpaths = ["tests"]
 markers = [
     "integration: integration tests (deselect with '-m \"not integration\"')",
     "boot: boots a baked image under QEMU (needs qemu-system-x86_64 and OVMF)",
+    "boundary: runs the real process boundary (the mkosi adapter, source fetches, host checks) instead of the unit suite's fakes",
 ]
 
 [tool.ruff]

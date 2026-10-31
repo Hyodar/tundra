@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, run_main
-from tundravm.backends import InProcessBackend
+from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import Recipe, compile, lint, lock, write_lock
 from tundravm.recipe import load_file, load_recipe
 
@@ -107,9 +107,9 @@ def test_examples_name_no_backend(path: Path, monkeypatch: pytest.MonkeyPatch) -
         if isinstance(target, ast.Name)
     }
     assert "backend" not in bound, f"{path.name}: drop `backend = ...`"
-    monkeypatch.setenv("TUNDRAVM_BACKEND", "inprocess")
+    monkeypatch.setenv("TUNDRAVM_BACKEND", "lima")
     loaded = load_file(path, extra_paths=[REPO_ROOT])
-    assert isinstance(loaded.backend, InProcessBackend) and loaded.backend_origin == "env"
+    assert isinstance(loaded.backend, LimaMkosiBackend) and loaded.backend_origin == "env"
 
 
 @pytest.mark.parametrize(

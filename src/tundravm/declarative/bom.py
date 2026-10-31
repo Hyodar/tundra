@@ -554,8 +554,6 @@ def _of_artifact(
     if lock is not None:
         declared = lock.lockfile.dependencies.get(artifact.variant) or profile.get("packages", ())
     notes = [f"unbound, the document is incomplete: {problem}" for problem in unbound]
-    if artifact.simulated:
-        notes.append("the artifact is simulated (in-process backend): nothing was installed")
     shown = _relative(path, artifact.build)
     missing = ("manifest",) if artifact.manifest_sha256 is not None and not path.is_file() else ()
     if missing:

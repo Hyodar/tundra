@@ -14,9 +14,9 @@ from tundravm.diff import FileChange, TreeDiff, diff_against, diff_trees
 
 RECIPE = """
 from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
-from tundravm.backends.inprocess import InProcessBackend
+from tundravm.backends.local_linux import LocalLinuxBackend
 
-backend = InProcessBackend()
+backend = LocalLinuxBackend()
 recipe = Recipe(
     "diff",
     items=(

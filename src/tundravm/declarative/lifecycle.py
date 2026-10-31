@@ -42,7 +42,6 @@ from tundravm._source import (
     write_marker,
 )
 from tundravm.backends import (
-    InProcessBackend,
     LimaMkosiBackend,
     LocalLinuxBackend,
     Requirement,
@@ -54,7 +53,6 @@ from tundravm.errors import (
     ArtifactError,
     DeploymentError,
     LockfileError,
-    MeasurementError,
     PolicyError,
     ReproducibilityError,
     StateError,
@@ -89,12 +87,11 @@ from .resolve import lint as _resolution_lint
 from .resolve import locate, resolve
 
 Scheme = Literal["qemu", "gcp", "azure", "portable"]
-BackendKind = Literal["lima", "local", "inprocess"]
+BackendKind = Literal["lima", "local"]
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
-INPROCESS = "inprocess"
 MANIFEST_KEY = "declarative"
-"""Top-level ``bake-result.json`` key holding the recipe/tree digests and ``simulated``."""
+"""Top-level ``bake-result.json`` key holding the recipe and tree digests."""
 
 
 def _version() -> str:
@@ -198,7 +195,7 @@ class Tree:
 
 @dataclass(frozen=True, slots=True)
 class Backend:
-    """Where :func:`bake` builds; ``inprocess`` writes simulated artifacts (tests)."""
+    """Where :func:`bake` builds: ``local`` (this Linux x86-64 host) or ``lima``."""
 
     kind: BackendKind
     cpus: int = 2
@@ -216,9 +213,7 @@ class Backend:
         """The compiler's backend instance for this kind."""
         if self.kind == "lima":
             return LimaMkosiBackend(cpus=self.cpus, memory=self.memory, disk=self.disk)
-        if self.kind == "local":
-            return LocalLinuxBackend()
-        return InProcessBackend()
+        return LocalLinuxBackend()
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +225,6 @@ class Artifact:
     recipe_digest: str
     lock_digest: str
     tree_digest: str
-    simulated: bool = False
     ports: tuple[int, ...] = ()
     """Guest ports the variant's ``Secrets`` deliveries listen on; ``deploy`` forwards them."""
     ssh_port: int | None = None
@@ -296,15 +290,11 @@ class Measurements:
         }
 
     def to_policy(
-        self,
-        *,
-        allow_placeholder: bool = False,
-        platform_approval: Mapping[str, Sequence[str]] | None = None,
+        self, *, platform_approval: Mapping[str, Sequence[str]] | None = None
     ) -> dict[str, object]:
         """The verifier policy ``measure --export-policy`` writes and ``Tdxs.from_policy`` reads.
 
-        Placeholder values are refused (``MeasurementError``) unless
-        *allow_placeholder*, and then carry a note saying so. *platform_approval* maps
+        *platform_approval* maps
         ``MRTD``/``RTMR0`` to values the operator approves for the platform (``measure
         --approve-mrtd/--approve-rtmr0``); ``attest`` trusts a quote only when both match.
         """
@@ -317,7 +307,6 @@ class Measurements:
             artifact_path=self.artifact_path,
             artifact_sha256=self.artifact_digest,
             boot_payload=self._boot_payload(),
-            allow_placeholder=allow_placeholder,
             platform_approval=platform_approval,
         )
 
@@ -1182,8 +1171,7 @@ def bake_image(
     *fetch* first checks the source builds out under
     ``build/.sources`` (:func:`fetch_image`, at the pins the bake builds; an
     unfrozen bake builds the pins it resolves). Without *fetch* the checkouts
-    must already be there, or the bake fails with ``E_STATE``. The in-process
-    backend builds nothing and fetches nothing.
+    must already be there, or the bake fails with ``E_STATE``.
 
     *offline* bakes as ``Policy(network_mode="offline")`` does: the fetch reuses
     complete checkouts and downloads nothing, every Go, Cargo and .NET build must
@@ -1213,8 +1201,7 @@ def bake_image(
             lock_file=None if used == lock_path else used,
             backend=img.backend if backend is None else backend,
         )
-        simulated = baking.backend is not None and baking.backend.name == INPROCESS
-        if fetch and not simulated:
+        if fetch:
             pinned = locked if locked is not None else _lock_at(lock_path)
             fetched = fetch_image(
                 baking,
@@ -1239,7 +1226,7 @@ def bake_image(
             source = lock_source if lock_source is not None else lock_path
             # None: an in-memory Lock read through a scratch copy
             lockfile = str(source) if lock_source is not None or used == lock_path else None
-        payload[MANIFEST_KEY] = {"recipe_digest": recipe_digest, "simulated": simulated}
+        payload[MANIFEST_KEY] = {"recipe_digest": recipe_digest}
         if locked is not None:
             payload[MANIFEST_KEY]["lockfile"] = lockfile
         warn = _tree_warning(reporter)
@@ -1559,7 +1546,7 @@ def bake(
     prefetched every Go, Cargo and .NET build's dependencies, else ``E_STATE``.
     *progress* receives the CLI's progress lines. Writes
     ``build/bake-result.json``, which :func:`read_artifacts` reads back.
-    In-process artifacts are ``simulated``. *verify_reproducible* bakes a
+    *verify_reproducible* bakes a
     second time into ``build/.reproduce`` and raises ``ReproducibilityError``
     unless every artifact's sha256 matches (see :func:`bake_image`).
     """
@@ -1600,7 +1587,6 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
     artifacts: list[Artifact] = []
     for variant, profile in sorted(result.profiles.items()):
         own = variant_provenance(payload, variant)
-        simulated = bool(own.get("simulated", result.backend == INPROCESS))
         lock_sha256 = own.get("lock_sha256", result.lock_sha256)
         for target, ref in sorted(profile.artifacts.items()):
             artifacts.append(
@@ -1612,7 +1598,6 @@ def read_artifacts(build: Path) -> tuple[Artifact, ...]:
                     recipe_digest=str(own.get("recipe_digest") or ""),
                     lock_digest=str(own.get("lock_digest") or result.lock_digest or ""),
                     tree_digest=str(own.get("tree_digest") or ""),
-                    simulated=simulated,
                     ports=tuple(int(port) for port in own.get("ports") or ()),
                     ssh_port=None if own.get("ssh_port") is None else int(own["ssh_port"]),
                     data_disks=tuple(str(serial) for serial in own.get("data_disks") or ()),
@@ -1704,9 +1689,7 @@ def verify_artifact(artifact: Artifact) -> None:
         )
 
 
-def measure(
-    artifact: Artifact, *, scheme: Scheme = "qemu", allow_placeholder: bool = False
-) -> Measurements:
+def measure(artifact: Artifact, *, scheme: Scheme = "qemu") -> Measurements:
     """Expected TDX measurements of *artifact* on the hosts of *scheme*.
 
     tundravm replays the boot event log from the UKI (and the disk's GPT) itself;
@@ -1714,21 +1697,13 @@ def measure(
 
     The artifact's bytes are checked against their recorded sha256 first
     (``verify_artifact``). An artifact that is no UKI or disk raises
-    ``MeasurementError``; *allow_placeholder* returns digest-derived values instead
-    (``tool="placeholder"``). Simulated artifacts are refused unless
-    *allow_placeholder*. A disk artifact whose bake recorded the UKI it boots is
+    ``MeasurementError``. A disk artifact whose bake recorded the UKI it boots is
     measured through that UKI when no tool reads the disk's format (the UKI's bytes
     are checked against their recorded sha256 too); the result names the UKI as
     its boot payload, so the policy covers every disk that boots it.
     """
     verify_artifact(artifact)
     uki = _measured_uki(artifact)
-    if artifact.simulated and not allow_placeholder:
-        raise MeasurementError(
-            "Refusing to measure a simulated artifact.",
-            hint="Bake with a real backend, or pass allow_placeholder=True for test values.",
-            context={"variant": artifact.variant, "path": str(artifact.path)},
-        )
     target = artifact.target
     profile = ProfileBuildResult(
         profile=artifact.variant,
@@ -1745,7 +1720,6 @@ def measure(
         backend=scheme,
         profile=artifact.variant,
         profile_result=profile,
-        allow_placeholder=allow_placeholder,
     )
     tool = str(found.source)
     if found.tool_version is not None:
@@ -1824,14 +1798,12 @@ def deploy(
     artifact: Artifact,
     *,
     using: DeployTarget,
-    allow_simulated: bool = False,
     adapter: DeployAdapter | None = None,
 ) -> Deployment:
     """Deploy *artifact* with *using*'s settings; its target must match the artifact's.
 
     The artifact's bytes are checked against their recorded sha256 first
-    (``verify_artifact``). Simulated artifacts are refused unless
-    *allow_simulated*. *adapter* replaces the target's default adapter (tests).
+    (``verify_artifact``). *adapter* replaces the target's default adapter (tests).
     On QEMU every port in ``artifact.ports`` that ``using.forward`` does not
     forward is forwarded from the same host port, ``ssh_port`` reaches SSH only when the
     variant declares it (``SshAccess``), and each ``artifact.data_disks`` serial gets a
@@ -1839,12 +1811,6 @@ def deploy(
     """
     verify_artifact(artifact)
     target = target_of(using)
-    if artifact.simulated and not allow_simulated:
-        raise DeploymentError(
-            "Refusing to deploy a simulated artifact.",
-            hint="Bake with a real backend first, or pass allow_simulated=True for a test run.",
-            context={"variant": artifact.variant, "path": str(artifact.path)},
-        )
     if artifact.target != target:
         raise DeploymentError(
             f"Cannot deploy a {artifact.target} artifact to {target}.",

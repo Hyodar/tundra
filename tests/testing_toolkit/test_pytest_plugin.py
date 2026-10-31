@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.declarative import Fragment, Package, Recipe, Variant, lint
-from tundravm.testing import assert_clean, bake_in_process, fake_fragment, recipe_file
+from tundravm.backends import LocalLinuxBackend
+from tundravm.declarative import Fragment, Package, Recipe, Variant, lint, lower
+from tundravm.declarative.lifecycle import bake_image
+from tundravm.testing import FakeMkosi, assert_clean, fake_fragment, recipe_file
 from tundravm.testing.pytest_plugin import CliRunner, CompileFactory
 
 
@@ -27,15 +29,19 @@ def test_recipe_fixture_is_minimal_and_clean(recipe: Recipe) -> None:
     assert lint(recipe) == ()
 
 
-def test_recipe_fixture_bakes_in_process(recipe: Recipe, tmp_path: Path) -> None:
+def test_recipe_fixture_builds_against_the_fake_mkosi(
+    recipe: Recipe, tmp_path: Path, fake_mkosi: FakeMkosi
+) -> None:
     curl = dataclasses.replace(recipe, items=(Package("curl"), Package("linux-image-amd64")))
     assert_clean(curl)
 
-    (artifact,) = bake_in_process(curl, build=tmp_path / "build")
+    _, (artifact,) = bake_image(
+        lower(curl), None, locked=None, backend=LocalLinuxBackend(), build=tmp_path / "build"
+    )
     assert (artifact.variant, artifact.target) == ("default", "qemu")
-    assert artifact.simulated
     assert artifact.path.is_file()
     assert (tmp_path / "build" / "mkosi" / "payload" / "mkosi.conf").is_file()
+    assert fake_mkosi.verbs() == ["summary", "build"]
 
 
 def test_compiled_factory_uses_fresh_dirs(

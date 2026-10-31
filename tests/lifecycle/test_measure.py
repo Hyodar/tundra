@@ -1,4 +1,4 @@
-"""``measure`` schemes on real (synthetic) UKIs and disks, and on simulated artifacts."""
+"""``measure`` schemes on real (synthetic) UKIs and disks; an artifact that is neither."""
 
 import hashlib
 import struct
@@ -25,7 +25,6 @@ from tundravm.measure import (
     MEASURE_VERSION,
     MeasurementBackend,
     Measurements,
-    PlaceholderMeasurementWarning,
     derive_measurements,
     schemes,
 )
@@ -108,11 +107,17 @@ def disk(tmp_path: Path) -> Path:
 
 
 def _baked(tmp_path: Path) -> Artifact:
+    """The qemu artifact of a build against the fake mkosi: a placeholder file, no disk."""
     recipe = Recipe("measured", items=(Package("curl"), Package("linux-image-amd64")))
     (artifact,) = bake(
-        recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build"
+        recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build"
     )
     return artifact
+
+
+def _measurable(tmp_path: Path, uki: Path) -> Artifact:
+    """A baked artifact whose file is the synthetic UKI *uki*."""
+    return replace(_baked(tmp_path), path=uki, sha256=hashlib.sha256(uki.read_bytes()).hexdigest())
 
 
 def _derived(artifact: Artifact, scheme: MeasurementBackend) -> Measurements:
@@ -121,9 +126,7 @@ def _derived(artifact: Artifact, scheme: MeasurementBackend) -> Measurements:
         profile=artifact.variant,
         artifacts={artifact.target: ArtifactRef(target=artifact.target, path=artifact.path)},
     )
-    return derive_measurements(
-        backend=scheme, profile=artifact.variant, profile_result=profile, allow_placeholder=True
-    )
+    return derive_measurements(backend=scheme, profile=artifact.variant, profile_result=profile)
 
 
 def _hex(value: object) -> bool:
@@ -204,13 +207,7 @@ def test_a_disk_without_its_uki_is_refused(disk: Path) -> None:
 
 
 def test_measure_of_a_real_uki_round_trips_through_the_policy(tmp_path: Path, uki: Path) -> None:
-    artifact = replace(
-        _baked(tmp_path),
-        path=uki,
-        sha256=hashlib.sha256(uki.read_bytes()).hexdigest(),
-        simulated=False,
-    )
-    found = measure(artifact, scheme="qemu")
+    found = measure(_measurable(tmp_path, uki), scheme="qemu")
 
     policy = found.to_policy()
     assert found.tool == f"{MEASURE_TOOL} {MEASURE_VERSION}"
@@ -222,42 +219,31 @@ def test_measure_of_a_real_uki_round_trips_through_the_policy(tmp_path: Path, uk
     assert set(dict(Tdxs.from_policy(policy).expected_measurements)) == {"rtmr1", "rtmr2"}
 
 
-def test_simulated_artifacts_give_placeholders_for_every_scheme(tmp_path: Path) -> None:
+def test_an_artifact_that_is_no_uki_or_disk_is_refused_for_every_scheme(
+    tmp_path: Path,
+) -> None:
     artifact = _baked(tmp_path)
 
-    with pytest.warns(PlaceholderMeasurementWarning):
-        found = {
-            scheme: measure(artifact, scheme=scheme, allow_placeholder=True)
-            for scheme in ALL_SCHEMES
-        }
-
-    assert {m.tool for m in found.values()} == {"placeholder"}
-    assert {m.artifact_digest for m in found.values()} == {artifact.sha256}
-    assert set(dict(found["qemu"].values)) == {"RTMR1", "RTMR2"}
-    assert len(dict(found["gcp"].registers)["MRTD"]) == 3
-    assert found["azure"].registers == ()
-    assert set(dict(found["azure"].unverifiable)) == {"MRTD", "RTMR0", "RTMR1", "RTMR2"}
+    for scheme in ALL_SCHEMES:
+        with pytest.raises(MeasurementError):
+            measure(artifact, scheme=scheme)
 
 
-def test_measure_export_is_stable(tmp_path: Path) -> None:
-    artifact = _baked(tmp_path)
-    with pytest.warns(PlaceholderMeasurementWarning):
-        first = measure(artifact, allow_placeholder=True)
-        second = measure(artifact, allow_placeholder=True)
+def test_measure_export_is_stable(tmp_path: Path, uki: Path) -> None:
+    artifact = _measurable(tmp_path, uki)
+    first = measure(artifact)
+    second = measure(artifact)
 
     assert first.to_dict() == second.to_dict()
     assert first.to_dict()["artifact"] == str(artifact.path)
-    assert first.to_policy(allow_placeholder=True) == second.to_policy(allow_placeholder=True)
-    with pytest.warns(PlaceholderMeasurementWarning):
-        assert dict(first.registers) == {
-            k: tuple(v) for k, v in _derived(artifact, "qemu").registers.items()
-        }
+    assert first.to_policy() == second.to_policy()
+    assert dict(first.registers) == {
+        k: tuple(v) for k, v in _derived(artifact, "qemu").registers.items()
+    }
 
 
-def test_measure_verification_reports_mismatched_registers(tmp_path: Path) -> None:
-    artifact = _baked(tmp_path)
-    with pytest.warns(PlaceholderMeasurementWarning):
-        measurements = measure(artifact, allow_placeholder=True)
+def test_measure_verification_reports_mismatched_registers(tmp_path: Path, uki: Path) -> None:
+    measurements = measure(_measurable(tmp_path, uki))
     values = dict(measurements.values)
     first = sorted(values)[0]
 

@@ -130,7 +130,6 @@ def policy_payload(
     unverifiable: Mapping[str, str] | None = None,
     boot_payload: Mapping[str, str] | None = None,
     extra: Mapping[str, object] | None = None,
-    allow_placeholder: bool = False,
     platform_approval: Mapping[str, Sequence[str | Mapping[str, str]]] | None = None,
 ) -> dict[str, object]:
     """The normalised policy for one measured artifact; raises on placeholders or gaps.
@@ -142,12 +141,10 @@ def policy_payload(
     ``registers`` as ``platform_approval``.
     """
     name, _, version = tool.partition(" ")
-    placeholder = name == PLACEHOLDER_TOOL
-    if placeholder and not allow_placeholder:
+    if name == PLACEHOLDER_TOOL:
         raise MeasurementError(
             "Refusing to export placeholder measurements as a verifier policy.",
-            hint="Measure a real build, or pass allow_placeholder=True for a test policy "
-            "(marked as a placeholder in its note).",
+            hint="Take the policy from a real build's measurements.json.",
         )
     payload: dict[str, object] = {
         **dict(extra or {}),
@@ -164,8 +161,6 @@ def policy_payload(
         payload["platform_approval"] = {k: list(v) for k, v in platform_approval.items()}
     if boot_payload is not None:
         payload["boot_payload"] = {"path": boot_payload["path"], "sha256": boot_payload["sha256"]}
-    if placeholder:
-        payload["note"] = PLACEHOLDER_NOTE
     return _checked(payload, where="the measurements")
 
 

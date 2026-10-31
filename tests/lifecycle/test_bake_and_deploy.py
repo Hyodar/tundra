@@ -23,13 +23,13 @@ from tundravm.models import DeployRequest, DeployResult
 
 
 def _bake(tmp_path: Path, *variants: Variant) -> tuple[Artifact, ...]:
-    """Bake *variants* with the in-process backend into ``tmp_path / "build"``."""
+    """Bake *variants* with the Linux backend (the fake mkosi) into ``tmp_path / "build"``."""
     recipe = Recipe(
         "deploy",
         items=(Package("curl"), Package("linux-image-amd64")),
         variants=variants,
     )
-    return bake(recipe, lock=lock(recipe), backend=Backend("inprocess"), build=tmp_path / "build")
+    return bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build")
 
 
 def _mock_qemu(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,10 +60,10 @@ def test_bake_respects_global_and_variant_output_targets(tmp_path: Path) -> None
     by_variant = {(a.variant, a.target): a for a in artifacts}
 
     assert set(by_variant) == {("default", "qemu"), ("azure", "azure"), ("gcp", "gcp")}
-    assert by_variant["default", "qemu"].path.name == "disk.qcow2"
-    assert by_variant["azure", "azure"].path.name == "disk.vhd"
-    assert by_variant["gcp", "gcp"].path.name == "disk.raw.tar.gz"
-    assert all(a.path.is_file() and a.simulated for a in artifacts)
+    assert by_variant["default", "qemu"].path.name == "qemu.raw"
+    assert by_variant["azure", "azure"].path.name == "azure.vhd"
+    assert by_variant["gcp", "gcp"].path.name == "gcp.tar.gz"
+    assert all(a.path.is_file() for a in artifacts)
 
 
 def test_verify_artifact_passes_for_untouched_bytes(tmp_path: Path) -> None:
@@ -80,8 +80,8 @@ def test_changed_artifact_is_refused_by_measure_and_deploy(
 
     for attempt in (
         lambda: verify_artifact(artifact),
-        lambda: measure(artifact, allow_placeholder=True),
-        lambda: deploy(artifact, using=Qemu(), allow_simulated=True),
+        lambda: measure(artifact),
+        lambda: deploy(artifact, using=Qemu()),
     ):
         with pytest.raises(ArtifactError) as excinfo:
             attempt()
@@ -100,7 +100,7 @@ def test_deploy_returns_result_when_target_was_baked(
     (artifact,) = _bake(tmp_path, Variant("default", outputs=("qemu",)))
     _mock_qemu(monkeypatch)
 
-    result = deploy(artifact, using=Qemu(memory="4G"), allow_simulated=True)
+    result = deploy(artifact, using=Qemu(memory="4G"))
     metadata = dict(result.metadata)
     artifact_path = Path(metadata["artifact_path"])
 
@@ -119,12 +119,12 @@ def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> 
         variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
     locked = lock(recipe, resolver=lambda source: "a" * 40)
-    artifacts = bake(recipe, lock=locked, backend=Backend("inprocess"), build=tmp_path / "build")
+    artifacts = bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path / "build")
     ports = {a.variant: a.ports for a in artifacts}
     assert ports == {"default": (8443,), "azure": (8443,)}  # one payload: the same secrets
     assert read_artifacts(tmp_path / "build") == artifacts
     plain = Recipe("plain", items=(kernel,), variants=(Variant("default", outputs=("qemu",)),))
-    (bare,) = bake(plain, lock=lock(plain), backend=Backend("inprocess"), build=tmp_path / "plain")
+    (bare,) = bake(plain, lock=lock(plain), backend=Backend("local"), build=tmp_path / "plain")
     assert bare.ports == ()
 
     calls: list[DeployRequest] = []
@@ -137,6 +137,6 @@ def test_deploy_forwards_the_secrets_ports_the_bake_recorded(tmp_path: Path) -> 
             return DeployResult(target="qemu", deployment_id="qemu-x", endpoint=None)
 
     default = next(a for a in artifacts if a.variant == "default")
-    deploy(default, using=Qemu(forward=((9000, 9000),)), allow_simulated=True, adapter=Recording())
-    deploy(default, using=Qemu(forward=((18443, 8443),)), allow_simulated=True, adapter=Recording())
+    deploy(default, using=Qemu(forward=((9000, 9000),)), adapter=Recording())
+    deploy(default, using=Qemu(forward=((18443, 8443),)), adapter=Recording())
     assert [r.parameters["forward"] for r in calls] == ["9000:9000,8443:8443", "18443:8443"]
