@@ -8,7 +8,9 @@
 - The tree always writes `MinimumVersion=27.1`, `Snapshot=`/`ToolsTreeSnapshot=`, `ToolsTree=default` with its distribution and release, `SourceDateEpoch=`, `Seed=` per image, `History=no`, `WithNetwork=` (`no` unless `Mkosi(build_network=True)`, now the default) and ships `/etc/machine-id` as `uninitialized`.
 - The payload carries the glue of every cloud target the recipe names, gated at boot; a variant that only names outputs selects wrappers. `tundravm.declarative.mkosi_argv(lowered, variant)` gives the `--profile=`/`--dependency=` options that select it.
 - `Mkosi(root="verity")`: an erofs root and its dm-verity hash partition, copied beside the ESP in every disk.
-- Removed: `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)`, the `nethermind-v1` dialect, standalone variants and variants that remove or replace declarations other than `File`, `Repository` and `Debloat`, per-variant settings and kernels, `Tdxs(legacy_units=)`, `tundravm import`.
+- Removed: `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)`, the `nethermind-v1` dialect, per-variant settings and kernels, a variant that replaces a source `Build`, `Tdxs(legacy_units=)`, `tundravm import`.
+- Every variant is always lowered: the shared payload is the intersection of all profiles and `payload/mkosi.profiles/<variant>/` holds what each adds, so a profile's bytes do not depend on which other profiles are compiled with it. A variant that extends another profile or removes declarations is lowered whole; what one profile removes moves into the overlays of the profiles that keep it, the default profile's overlay included through `mkosi.conf.d/99-<default>.conf`.
+- The ESP is a fixed 128M FAT32 of 512-byte clusters (`SizeMinBytes=SizeMaxBytes=128M`, `Minimize=off`, `SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"`); a UKI over about 125 MiB fails the disk build.
 - Lint: `mkosi-configure-script` and `mkosi-environment-passthrough` (errors; lowering refuses both).
 - `docs/design/evidence/gate1-tree.md`: the fixture tree and its resolved `mkosi summary`.
 
