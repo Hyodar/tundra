@@ -1,3 +1,12 @@
+# The test and boot jobs bake the Image templates. Every image implies the evidence
+# service, which builds tundra-tools from https://github.com/Hyodar/tundra-tools, a private
+# repository the runner's GITHUB_TOKEN cannot read. When the repository secret
+# TUNDRA_TOOLS_TOKEN exists (a fine-grained token with read-only Contents on tundra-tools),
+# those jobs rewrite that URL to carry it in the runner's global git config, so the lock's
+# `git ls-remote` and the host-side fetch read it:
+#   gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra
+# Their checkouts keep no credentials: the GITHUB_TOKEN header actions/checkout persists
+# for github.com would override the token in the URL.
 name: ci
 
 on:
@@ -6,12 +15,18 @@ on:
       - "**"
   pull_request:
 
+env:
+  # A step's `if:` cannot read secrets: this says whether the token exists, not what it is.
+  HAS_TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN != '' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -35,6 +50,15 @@ jobs:
           uv run mkosi --version
           uv run tundravm doctor --for build
 
+      - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
+        if: ${{ env.HAS_TUNDRA_TOOLS_TOKEN == 'true' }}
+        env:
+          TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
+        run: >-
+          git config --global
+          url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf
+          "https://github.com/Hyodar/tundra-tools"
+
       - name: Lint
         run: uv run ruff check .
 
@@ -54,12 +78,15 @@ jobs:
     # the runner exposes /dev/kvm, TCG otherwise; no TDX here): payload.efi through -kernel,
     # and the service template's qemu.raw as a disk OVMF boots through its ESP. The
     # templates are Image files whose evidence service builds tundra-tools from its source
-    # repository: the bake fetches it, so this job needs read access to that repository.
+    # repository: the bake fetches it, so this job needs read access to that repository
+    # (TUNDRA_TOOLS_TOKEN, see the header).
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -96,6 +123,15 @@ jobs:
           uv run mkosi --version
           uv run tundravm doctor --for build
           uv run tundravm doctor --for run
+
+      - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
+        if: ${{ env.HAS_TUNDRA_TOOLS_TOKEN == 'true' }}
+        env:
+          TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
+        run: >-
+          git config --global
+          url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf
+          "https://github.com/Hyodar/tundra-tools"
 
       - name: Bake and boot the templates
         env:

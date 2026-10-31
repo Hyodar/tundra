@@ -19,7 +19,7 @@ gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 | Area | State |
 |---|---|
 | The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds of the initramfs layout give identical digests |
-| Building an `Image` in CI | blocked: every image builds tundra-tools, a private repository the CI token cannot read |
+| Building an `Image` in CI | needs the `TUNDRA_TOOLS_TOKEN` secret (see [CI](#ci)): every image builds tundra-tools, a private repository the CI token cannot read |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
 | `run --mode simulated` | unit-tested against a fake QEMU; CI runs the fixture's dev build with it and fetches its page |
@@ -936,6 +936,12 @@ a starting point and port it by hand.
 
 Commit `uv.lock`; both jobs install exactly what it locks. Findings show as annotations on
 the pull request. The `build` job needs read access to tundra-tools.
+
+tundravm's own CI bakes the `Image` templates, so it needs the same access. It reads
+tundra-tools with the repository secret `TUNDRA_TOOLS_TOKEN` when it exists: a fine-grained
+personal access token with read-only Contents on `Hyodar/tundra-tools`, added with
+`gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra`. Making tundra-tools public does
+the same without a secret.
 
 ## When something fails
 

@@ -188,6 +188,11 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   fixture's dev profile and runs it with `run --mode simulated` until the host fetches its
   page. Evidence: `docs/design/evidence/gate3-fail-closed.md`.
 
+### CI
+
+- The jobs that bake the `Image` templates read tundra-tools with the repository secret
+  `TUNDRA_TOOLS_TOKEN` when it is set (`docs/guide.md#ci`).
+
 ### Documentation
 
 - `README.md` is one screen: what tundravm is, install, the quickstart and its transcript.
