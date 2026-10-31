@@ -421,8 +421,9 @@ SCRIPT_STAGES = ("prepare", "build", "postinst", "finalize", "postoutput")
 """The mkosi stages :class:`Mkosi` scripts run at."""
 
 RESERVED_SETTINGS: dict[str, str] = {
-    "ConfigureScripts": "the tree's configure script is what makes the build reproducible "
-    "and is generated from the image",
+    "ConfigureScripts": "the tree has no configure script, and check refuses one: it would "
+    "rewrite the configuration after `mkosi summary` resolved it, so the build would not be "
+    "what the manifest records",
     "Environment": "the build environment is passed through from the lock, so a setting "
     "here would change what was measured without changing the lock",
     "Bootable": "every image is a measured UKI",

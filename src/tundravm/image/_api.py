@@ -78,9 +78,9 @@ def _no_image(source: Path, *, module_names: dict[str, object], several: list[st
 
     if any(isinstance(value, Recipe) for value in module_names.values()):
         return ValidationError(
-            f"{source.name} defines a Recipe, not an Image.",
+            f"{source.name} binds the internal model (tundravm.declarative), not an Image.",
             hint="Bind a tundravm.Image to `image`: Image('name', services=[...]). "
-            "Recipe is internal and has no public spelling.",
+            "The internal model has no public spelling.",
             context={"image": str(source)},
         )
     return ValidationError(

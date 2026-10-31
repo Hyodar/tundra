@@ -735,7 +735,8 @@ def lock_status(
 
 
 def read_lock(path: Path) -> Lock:
-    """Parse the lockfile at *path*."""
+    """The lockfile at *path* (``build/tundravm.lock``), as ``tundravm.compile(image, lock=)``
+    and ``plan(image, lock=)`` take it."""
     from tundravm.lockfile import read_lockfile
 
     return Lock.of(read_lockfile(path))

@@ -1,15 +1,17 @@
-"""Helpers for testing recipes and fragments: plans, lint assertions, golden trees, CLI runs.
+"""Helpers for testing images: plans, lint assertions, golden trees, CLI runs.
 
-:func:`fragment_plan` puts a fragment on a minimal bootable platform and
-:func:`plan` takes a whole recipe; both return a :class:`PlannedImage`, one variant
-compiled in memory and read as values (packages, files, units, users, init
-steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint
-findings, :func:`assert_tree` and :func:`assert_tree_matches` compare against
-a golden directory, :func:`compile_tree` writes a tree to disk,
-:class:`FakeMkosi` and :class:`FakeSources` stand in for mkosi and the source fetches, so a
-real backend runs a whole build with nothing forked or fetched,
-:func:`fake_fragment` builds a small :class:`~tundravm.Fragment` to compose with, and
-:func:`boot` boots a baked image under QEMU and reads its serial console.
+:func:`plan` takes an :class:`~tundravm.Image` and returns a :class:`PlannedImage`: one
+profile compiled in memory and read as values (packages, files, units, users, runtime-init
+steps, hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint findings,
+:func:`assert_tree` compares ``tundravm.compile(image)`` against a golden directory, and
+:func:`read_lock` reads the lockfile those take. :class:`FakeMkosi` and
+:class:`FakeSources` stand in for mkosi and the source fetches, so a real backend runs a
+whole build with nothing forked or fetched; :func:`boot` boots a built image under QEMU
+and reads its serial console; :func:`run_cli` runs the CLI in-process.
+
+:func:`fragment_plan`, :func:`fake_fragment`, :func:`compile_tree`,
+:func:`assert_tree_matches` and :func:`recipe_file` work on the internal model an image
+lowers to (:mod:`tundravm.declarative`); they are for testing tundravm itself.
 
 Importing this package does not import pytest. The fixtures live in
 ``tundravm.testing.pytest_plugin``, which pytest loads automatically once
@@ -32,7 +34,7 @@ from typing import Literal
 from tundravm.check import render
 from tundravm.compiler import PAYLOAD
 from tundravm.declarative import lifecycle
-from tundravm.declarative.lifecycle import Tree, check_report, read_tree
+from tundravm.declarative.lifecycle import Tree, check_report, read_lock, read_tree
 from tundravm.declarative.model import (
     BootStep,
     Check,
@@ -71,16 +73,16 @@ _UNIFIED_LINES = 200
 _UNIT_DIR = "mkosi.extra/usr/lib/systemd/system"
 
 Variants = str | Sequence[str] | None
-"""A variant selection: one name, several names, or ``None`` for every declared variant."""
+"""A profile selection: one name, several names, or ``None`` for every declared profile."""
 
 
 class CompiledTree:
     """A compiled mkosi tree on disk, with readers for the files tests inspect.
 
-    ``variants`` are the compiled variants. Every ``variant`` argument names one of
-    them and defaults to the first. A variant reads the payload (``payload/``) with
-    its profile overlay (``payload/mkosi.profiles/<variant>/``) over it, as mkosi
-    merges them: a path in the overlay wins, scripts and configuration accumulate.
+    ``variants`` are the compiled profiles. Every ``variant`` argument names one of
+    them and defaults to the first. A profile reads the payload (``payload/``) with
+    its overlay (``payload/mkosi.profiles/<profile>/``) over it, as mkosi merges them:
+    a path in the overlay wins, scripts and configuration accumulate.
     """
 
     __slots__ = ("default_variant", "root", "variants")
@@ -99,22 +101,22 @@ class CompiledTree:
         return f"CompiledTree({str(self.root)!r}, variants={self.variants!r})"
 
     def layers(self, name: str | None = None) -> tuple[Path, ...]:
-        """The configuration directories variant *name* builds from: the payload, then its
-        profile overlay when it has one."""
+        """The configuration directories profile *name* builds from: the payload, then its
+        overlay when it has one."""
         name = name or self.default_variant
         if name not in self.variants:
-            raise KeyError(f"variant {name!r} was not compiled; compiled: {list(self.variants)}")
+            raise KeyError(f"profile {name!r} was not compiled; compiled: {list(self.variants)}")
         payload = self.root / PAYLOAD
         overlay = payload / "mkosi.profiles" / name
         return (payload, overlay) if overlay.is_dir() else (payload,)
 
     def variant(self, name: str | None = None) -> Path:
-        """The directory holding what variant *name* adds: its profile overlay, else the
+        """The directory holding what profile *name* adds: its overlay, else the
         payload."""
         return self.layers(name)[-1]
 
     def path(self, relpath: str, variant: str | None = None) -> Path:
-        """*relpath* in the variant's overlay when it is there, else in the payload."""
+        """*relpath* in the profile's overlay when it is there, else in the payload."""
         for layer in reversed(self.layers(variant)):
             found = layer / relpath.lstrip("/")
             if found.exists() or found.is_symlink():
@@ -128,7 +130,7 @@ class CompiledTree:
         return self.path(relpath, variant).exists()
 
     def files(self, variant: str | None = None) -> list[str]:
-        """Sorted POSIX paths of every file the variant reads, relative to its layer (the
+        """Sorted POSIX paths of every file the profile reads, relative to its layer (the
         payload's own profile overlays left out)."""
         found: set[str] = set()
         for layer in self.layers(variant):
@@ -148,7 +150,7 @@ class CompiledTree:
         return path.read_text(encoding="utf-8")
 
     def scripts(self, phase: str, variant: str | None = None) -> list[Path]:
-        """The variant's ``mkosi.<phase>.d/`` scripts in the order mkosi runs them."""
+        """The profile's ``mkosi.<phase>.d/`` scripts in the order mkosi runs them."""
         return [
             script
             for layer in self.layers(variant)
@@ -156,7 +158,7 @@ class CompiledTree:
         ]
 
     def script(self, phase: str, variant: str | None = None) -> str:
-        """The text of the variant's *phase* scripts, in the order mkosi runs them."""
+        """The text of the profile's *phase* scripts, in the order mkosi runs them."""
         found = self.scripts(phase, variant)
         if not found:
             phases = sorted(
@@ -168,7 +170,7 @@ class CompiledTree:
                 }
             )
             raise FileNotFoundError(
-                f"no {phase!r} script for variant {variant!r}; scripts: {', '.join(phases)}"
+                f"no {phase!r} script for profile {variant!r}; scripts: {', '.join(phases)}"
             )
         return "\n".join(path.read_text(encoding="utf-8") for path in found)
 
@@ -186,7 +188,7 @@ class CompiledTree:
         return "".join(self.runtime_init(variant, step=name) for name in steps)
 
     def conf(self, variant: str | None = None) -> str:
-        """The variant's payload configuration as mkosi reads it, one text: the payload's
+        """The profile's payload configuration as mkosi reads it, one text: the payload's
         ``mkosi.conf``, its ``mkosi.conf.d/*.conf`` and the overlay's ``mkosi.conf``."""
         texts: list[str] = []
         for layer in self.layers(variant):
@@ -208,10 +210,11 @@ def _names(variants: Variants) -> list[str] | None:
 def compile_tree(
     recipe: Recipe, *, variants: Variants = None, path: str | Path | None = None
 ) -> CompiledTree:
-    """Compile *variants* of *recipe* (default: every declared one) into *path* or a temp dir.
+    """Compile the profiles *variants* (default: all) of *recipe* into *path* or a temp dir.
 
-    Unknown variant names raise ``ValidationError``. No lockfile is consulted,
-    so source builds use their refs.
+    *recipe* is the internal model an image lowers to; for an :class:`~tundravm.Image`,
+    ``tundravm.compile(image).write(path)`` does the same. Unknown profile names raise
+    ``ValidationError``. No lockfile is consulted, so source builds use their refs.
     """
     root = Path(path) if path is not None else Path(tempfile.mkdtemp(prefix="tundravm-tree-"))
     tree = lifecycle.compile(recipe, variants=_names(variants))
@@ -220,14 +223,15 @@ def compile_tree(
 
 
 Lintable = Recipe | PlannedImage | Sequence[Diagnostic]
-"""What the assertions check: a recipe, a :class:`PlannedImage` to lint, or findings."""
+"""What the assertions check: a :class:`PlannedImage` to lint, findings, or the internal
+model an image lowers to."""
 
 
 def _findings(subject: Lintable, variants: Variants) -> Sequence[Diagnostic]:
     if isinstance(subject, Recipe):
         return check_report(subject, None, variants=_names(variants))
     if variants is not None:
-        raise TypeError("variants= selects what a Recipe is linted for; this input already chose")
+        raise TypeError("variants= selects the profiles to lint; this input already chose one")
     return subject.lint() if isinstance(subject, PlannedImage) else subject
 
 
@@ -245,18 +249,17 @@ def assert_clean(
 ) -> Sequence[Diagnostic]:
     """Fail on every error and warning finding whose code is not in *allow*.
 
-    *subject* is a ``Recipe`` (linted for *variants*, default: all), an
-    :class:`PlannedImage` (linted for its variant) or the diagnostics ``lint()``
-    returned. ``warnings="allow"`` fails on errors only. Returns every
-    diagnostic, allowed or not: *subject* itself for diagnostics.
+    *subject* is a :class:`PlannedImage` (``plan(image, profile)``, linted for its
+    profile), the diagnostics :meth:`PlannedImage.lint` returned, or the internal model
+    (linted for the profiles *variants*, default: all). ``warnings="allow"`` fails on
+    errors only. Returns every diagnostic, allowed or not: *subject* itself for
+    diagnostics.
     """
     diagnostics = _findings(subject, variants)
     severities = {"error", "warning"} if warnings == "fail" else {"error"}
     failing = [d for d in diagnostics if d.code not in allow and d.severity in severities]
     if failing:
-        raise AssertionError(
-            f"recipe has {len(failing)} unexpected finding(s):\n{_render(failing)}"
-        )
+        raise AssertionError(f"image has {len(failing)} unexpected finding(s):\n{_render(failing)}")
     return diagnostics
 
 
@@ -273,11 +276,10 @@ def assert_diagnostic(
 ) -> Diagnostic:
     """Return the first diagnostic matching every given field, else fail listing them all.
 
-    *diagnostics* is a sequence of diagnostics (what ``tundravm.lint()``
-    returned), a :class:`PlannedImage` to lint, or a ``Recipe`` to lint for
-    *variants* (default: *variant* alone when given, else all). *variant* is
-    the variant, ``""`` for the recipe as a whole; *location* the source
-    position (``file:line``).
+    *diagnostics* is a :class:`PlannedImage` to lint, a sequence of diagnostics (what
+    :meth:`PlannedImage.lint` returned), or the internal model to lint for the profiles
+    *variants* (default: *variant* alone when given, else all). *variant* is the profile,
+    ``""`` for the image as a whole; *location* the source position (``file:line``).
     """
     wanted_subject = subject
     if variants is None and variant and isinstance(diagnostics, Recipe):
@@ -309,8 +311,9 @@ def assert_diagnostic(
 def assert_tree(tree: Tree, golden: str | Path, *, update: bool | None = None) -> None:
     """Fail unless *golden* holds exactly *tree*: every path, its bytes, exec bit and symlink.
 
-    Empty directories are ignored (git does not keep them). *update* (default:
-    ``TUNDRAVM_UPDATE_GOLDEN=1``) writes *tree* to *golden* instead of comparing.
+    *tree* is what ``tundravm.compile(image, lock=...)`` returns. Empty directories are
+    ignored (git does not keep them). *update* (default: ``TUNDRAVM_UPDATE_GOLDEN=1``)
+    writes *tree* to *golden* instead of comparing.
     """
     root = Path(golden)
     if update is None:
@@ -348,12 +351,12 @@ def assert_tree_matches(
     variants: Variants = None,
     update: bool | None = None,
 ) -> TreeDiff:
-    """Compare *recipe*'s compiled tree with *golden_dir*; rewrite it instead when updating.
+    """Compare the compiled tree of *recipe* (the internal model) with *golden_dir*.
 
-    Unlike :func:`assert_tree`, a mismatch shows a unified diff. *update*
-    defaults to ``TUNDRAVM_UPDATE_GOLDEN=1`` in the environment. Variant
-    overlays in *golden_dir* that were not compiled are neither compared nor
-    touched. Returns the diff from the golden tree to the compiled one.
+    Unlike :func:`assert_tree`, a mismatch shows a unified diff; when updating it rewrites
+    *golden_dir* instead. *update* defaults to ``TUNDRAVM_UPDATE_GOLDEN=1`` in the
+    environment. Profile overlays in *golden_dir* that were not compiled are neither
+    compared nor touched. Returns the diff from the golden tree to the compiled one.
     """
     golden = Path(golden_dir)
     if update is None:
@@ -400,17 +403,13 @@ def fake_fragment(
     requires: Sequence[str | Fragment] = (),
     checks: Sequence[Check] = (),
 ) -> Fragment:
-    """A small :class:`~tundravm.Fragment` for testing how fragments compose.
+    """A small group of internal declarations, for testing how groups compose.
 
-    It declares a ``Package`` per name in *packages*, a ``File`` per
-    ``path: content`` in *files* and, when *init* is given, a ``BootStep`` called
-    *name* running *init* after the *after* readiness handles. *requires* names the fragments
-    (or takes the fragments themselves) that must be in the same variant,
-    and *checks* run on every variant that includes it::
-
-        a = fake_fragment("a")
-        b = fake_fragment("b", requires=(a,))
-        Recipe(name="t", items=(b,))  # lint: fragment-requires-missing
+    It declares a ``Package`` per name in *packages*, a ``File`` per ``path: content`` in
+    *files* and, when *init* is given, a runtime-init step called *name* running *init*
+    after the *after* readiness handles. *requires* names the groups (or takes the groups
+    themselves) that must be in the same profile, and *checks* run on every profile that
+    includes it. A requirement left out is the lint finding ``fragment-requires-missing``.
     """
     items: list[Declaration] = [Package(package) for package in packages]
     items.extend(File(path, content) for path, content in (files or {}).items())
@@ -425,7 +424,8 @@ def fake_fragment(
 
 
 def recipe_file(tmp_path: Path, source: str, name: str = "recipe.py") -> Path:
-    """Write dedented *source* to ``tmp_path/name`` for CLI tests and return its path."""
+    """Write dedented *source* (an image file) to ``tmp_path/name`` for CLI tests; return
+    its path."""
     path = Path(tmp_path) / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(source).lstrip("\n"), encoding="utf-8")
@@ -478,6 +478,7 @@ __all__ = [
     "fake_fragment",
     "fragment_plan",
     "plan",
+    "read_lock",
     "recipe_file",
     "run_cli",
     "scan_console",

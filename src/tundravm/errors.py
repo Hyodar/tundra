@@ -183,7 +183,7 @@ class AttestationError(TdxError):
 
 
 class ArtifactError(TdxError):
-    """A baked artifact's bytes no longer match the sha256 the bake recorded."""
+    """A built artifact's bytes no longer match the sha256 its build's manifest records."""
 
     def __init__(
         self,
@@ -221,7 +221,7 @@ class StateError(TdxError):
 
 
 class LintError(TdxError):
-    """``bake()`` refused: the compiler's checks reported error-level diagnostics."""
+    """``build`` refused: the image's checks reported error-level diagnostics."""
 
     def __init__(
         self,

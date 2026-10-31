@@ -1,4 +1,4 @@
-"""Pytest fixtures for tundravm recipes and fragments.
+"""Pytest fixtures for testing tundravm images.
 
 Registered as the ``tundravm`` plugin through the ``pytest11`` entry point, so
 the fixtures are available in any project that has tundravm installed. Disable
@@ -39,22 +39,22 @@ BootRunner = Callable[..., BootResult]
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
-        "markers", "boot: boots a baked image under QEMU (needs qemu-system-x86_64 and OVMF)"
+        "markers", "boot: boots a built image under QEMU (needs qemu-system-x86_64 and OVMF)"
     )
 
 
 @pytest.fixture
 def recipe() -> Recipe:
-    """A minimal lint-clean ``Recipe`` named ``test``: one ``default`` variant, the kernel package.
-
-    Its ``items`` are ``(Package("linux-image-amd64"),)``.
+    """A minimal lint-clean internal model named ``test``: one ``default`` profile, the
+    kernel package. For testing tundravm itself; an image test builds an ``Image``.
     """
     return Recipe(name="test", items=(Package("linux-image-amd64"),))
 
 
 @pytest.fixture
 def compiled(tmp_path: Path) -> CompileFactory:
-    """Factory: ``compiled(recipe, variants=None)`` compiles into a new dir under ``tmp_path``."""
+    """Factory: ``compiled(recipe, variants=None)`` compiles the internal model's profiles
+    (:func:`~tundravm.testing.compile_tree`) into a new dir under ``tmp_path``."""
     counter = itertools.count()
 
     def factory(recipe: Recipe, variants: Variants = None) -> CompiledTree:

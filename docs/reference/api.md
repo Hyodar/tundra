@@ -26,7 +26,7 @@ __version__ = '0.1.0'
 class ArtifactError(TdxError)
 ```
 
-A baked artifact's bytes no longer match the sha256 the bake recorded. Code `E_ARTIFACT_CHANGED`.
+A built artifact's bytes no longer match the sha256 its build's manifest records. Code `E_ARTIFACT_CHANGED`.
 
 ### `AttestationError`
 
@@ -121,7 +121,7 @@ Build(
 Calendar(spec: str, *, persistent: bool = True, jitter: str | None = None)
 ```
 
-`Task(schedule=Calendar("daily"))`: run at calendar times (`OnCalendar=`, a shorthand such as `daily` or `*-*-* 03:00:00`). *persistent* catches up on a run missed while the machine was off (`Persistent=yes`); *jitter* spreads the start.
+`Service(timer=Calendar("daily"))`: run at calendar times (`OnCalendar=`, a shorthand such as `daily` or `*-*-* 03:00:00`). *persistent* catches up on a run missed while the machine was off (`Persistent=yes`); *jitter* spreads the start.
 
 | Member | Does |
 |---|---|
@@ -182,7 +182,7 @@ A named group of declarations, written as a class, with typed exports.
 | Member | Does |
 |---|---|
 | `Component.compose() -> Iterable[object]` | The declarations and nested components this component stands for. |
-| `Component.name` | The fragment name this component lowers to. |
+| `Component.name` | The component's name, as `show` and its diagnostics print it. |
 | `Component.readiness() -> tuple[Readied, ...]` | What `ready` waits for: the readiness of each service it composes that declares one. A component whose readiness is not a service of its own (one that wraps a packaged or internal unit) overrides this. |
 | `Component.ready` | "Every service this component declares readiness for is ready". |
 | `Component.service(name: str) -> ServiceRef` | The service called *name*, for `requires=` and for a profile's `changes=`. |
@@ -280,7 +280,7 @@ One finding: a lint *code*, its *severity* and a one-line *message*.
 
 | Member | Does |
 |---|---|
-| `Diagnostic.to_dict() -> dict[str, object]` | The JSON form `lint --format json` prints: every field, *context* as an object. |
+| `Diagnostic.to_dict() -> dict[str, object]` | The JSON form `check --json` prints: every field, *context* as an object. |
 
 ### `doctor`
 
@@ -334,7 +334,7 @@ DropIn(
 )
 ```
 
-A typed drop-in for a packaged unit: `Unit("x.service", dropin=DropIn(...))`.
+A typed drop-in over a service's unit: `Service(..., unit=DropIn(...))`.
 
 | Member | Does |
 |---|---|
@@ -382,7 +382,7 @@ Where a component answers, with its readiness: an export a caller can wire.
 Every(interval: str, *, first: str | None = None, jitter: str | None = None)
 ```
 
-`Task(schedule=Every("1h"))`: run *first* after boot (default: *interval*), then *interval* after each start (`OnBootSec=` + `OnUnitActiveSec=`); *jitter* spreads the start (`RandomizedDelaySec=`).
+`Service(timer=Every("1h"))`: run *first* after boot (default: *interval*), then *interval* after each start (`OnBootSec=` + `OnUnitActiveSec=`); *jitter* spreads the start (`RandomizedDelaySec=`).
 
 | Member | Does |
 |---|---|
@@ -606,7 +606,7 @@ The kernel: `Kernel.default()` (the distribution's, tested) or `Kernel.build(...
 class LintError(TdxError)
 ```
 
-`bake()` refused: the compiler's checks reported error-level diagnostics. Code `E_LINT`.
+`build` refused: the image's checks reported error-level diagnostics. Code `E_LINT`.
 
 ### `Listen`
 
@@ -839,11 +839,11 @@ Resolved(
 )
 ```
 
-One variant after expansion, overlays and reference checks.
+One profile of the image after expansion, profile changes and reference checks.
 
 | Member | Does |
 |---|---|
-| `Resolved.bind(ref: Ref) -> Declaration` | The variant's final declaration *ref* names; `ValidationError` when absent. |
+| `Resolved.bind(ref: Ref) -> Declaration` | The profile's final declaration *ref* names; `ValidationError` when absent. |
 
 ### `Resources`
 
@@ -1387,7 +1387,7 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 
 ## tundravm.testing
 
-Helpers for testing recipes and fragments: plans, lint assertions, golden trees, CLI runs.
+Helpers for testing images: plans, lint assertions, golden trees, CLI runs.
 
 ### `assert_clean`
 
@@ -1450,7 +1450,7 @@ assert_tree_matches(
 ) -> TreeDiff
 ```
 
-Compare *recipe*'s compiled tree with *golden_dir*; rewrite it instead when updating.
+Compare the compiled tree of *recipe* (the internal model) with *golden_dir*.
 
 ### `boot`
 
@@ -1559,7 +1559,7 @@ compile_tree(
 ) -> CompiledTree
 ```
 
-Compile *variants* of *recipe* (default: every declared one) into *path* or a temp dir.
+Compile the profiles *variants* (default: all) of *recipe* into *path* or a temp dir.
 
 ### `CompiledTree`
 
@@ -1573,18 +1573,18 @@ A compiled mkosi tree on disk, with readers for the files tests inspect.
 
 | Member | Does |
 |---|---|
-| `CompiledTree.conf(variant: str \| None = None) -> str` | The variant's payload configuration as mkosi reads it, one text: the payload's `mkosi.conf`, its `mkosi.conf.d/*.conf` and the overlay's `mkosi.conf`. |
+| `CompiledTree.conf(variant: str \| None = None) -> str` | The profile's payload configuration as mkosi reads it, one text: the payload's `mkosi.conf`, its `mkosi.conf.d/*.conf` and the overlay's `mkosi.conf`. |
 | `CompiledTree.exists(relpath: str, variant: str \| None = None) -> bool` |  |
-| `CompiledTree.files(variant: str \| None = None) -> list[str]` | Sorted POSIX paths of every file the variant reads, relative to its layer (the payload's own profile overlays left out). |
-| `CompiledTree.layers(name: str \| None = None) -> tuple[Path, ...]` | The configuration directories variant *name* builds from: the payload, then its profile overlay when it has one. |
+| `CompiledTree.files(variant: str \| None = None) -> list[str]` | Sorted POSIX paths of every file the profile reads, relative to its layer (the payload's own profile overlays left out). |
+| `CompiledTree.layers(name: str \| None = None) -> tuple[Path, ...]` | The configuration directories profile *name* builds from: the payload, then its overlay when it has one. |
 | `CompiledTree.main_conf() -> str` | The root `mkosi.conf`: the settings every image shares and the QEMU disk. |
-| `CompiledTree.path(relpath: str, variant: str \| None = None) -> Path` | *relpath* in the variant's overlay when it is there, else in the payload. |
+| `CompiledTree.path(relpath: str, variant: str \| None = None) -> Path` | *relpath* in the profile's overlay when it is there, else in the payload. |
 | `CompiledTree.read(relpath: str, variant: str \| None = None) -> str` |  |
 | `CompiledTree.runtime_init(variant: str \| None = None, *, step: str \| None = None) -> str` | The runtime-init script text: one *step*'s script, or every step in the order `runtime-init.service` lists them (`/usr/lib/runtime-init/<step>`). |
-| `CompiledTree.script(phase: str, variant: str \| None = None) -> str` | The text of the variant's *phase* scripts, in the order mkosi runs them. |
-| `CompiledTree.scripts(phase: str, variant: str \| None = None) -> list[Path]` | The variant's `mkosi.<phase>.d/` scripts in the order mkosi runs them. |
+| `CompiledTree.script(phase: str, variant: str \| None = None) -> str` | The text of the profile's *phase* scripts, in the order mkosi runs them. |
+| `CompiledTree.scripts(phase: str, variant: str \| None = None) -> list[Path]` | The profile's `mkosi.<phase>.d/` scripts in the order mkosi runs them. |
 | `CompiledTree.unit(name: str, variant: str \| None = None) -> str` | Systemd unit text; a bare name such as `"app"` means `app.service`. |
-| `CompiledTree.variant(name: str \| None = None) -> Path` | The directory holding what variant *name* adds: its profile overlay, else the payload. |
+| `CompiledTree.variant(name: str \| None = None) -> Path` | The directory holding what profile *name* adds: its overlay, else the payload. |
 
 ### `ConsoleScan`
 
@@ -1618,7 +1618,7 @@ fake_fragment(
 ) -> Fragment
 ```
 
-A small `Fragment` for testing how fragments compose.
+A small group of internal declarations, for testing how groups compose.
 
 ### `FakeCall`
 
@@ -1702,7 +1702,7 @@ fragment_plan(
 ) -> PlannedImage
 ```
 
-*items* (a fragment, or declarations) planned on a minimal bootable test platform.
+Internal declarations (or one group of them) planned on a minimal bootable platform.
 
 ### `HttpResponse`
 
@@ -1738,7 +1738,7 @@ One file of the image tree: bytes, mode, stage and the declarations that put it 
 
 | Member | Does |
 |---|---|
-| `ImageFile.fragment` | The innermost fragment that declared the file, `None` for a compiler file. |
+| `ImageFile.fragment` | The innermost component that declared the file, `None` for a compiler file. |
 | `ImageFile.text` | The content decoded as UTF-8. |
 
 ### `InitStep`
@@ -1754,7 +1754,7 @@ InitStep(
 )
 ```
 
-One runtime-init step: a declared `BootStep` or a built-in (`keys`, `disks`, `secrets`).
+One runtime-init step: a declared one or a built-in (`keys`, `disks`, `secrets`).
 
 ### `Lintable`
 
@@ -1777,7 +1777,7 @@ plan(
 ) -> PlannedImage
 ```
 
-*variant* of *subject* (default: its first profile) as a `PlannedImage`.
+The profile *variant* of *subject* (default: `production`) as a `PlannedImage`.
 
 ### `PlannedImage`
 
@@ -1787,7 +1787,7 @@ plan(
 PlannedImage(recipe: Recipe, variant: str, *, lock: Lock | None = None)
 ```
 
-One variant of a recipe, planned in memory: what its compiled tree holds, as values.
+One profile of an image, planned in memory: what its compiled tree holds, as values.
 
 | Member | Does |
 |---|---|
@@ -1796,12 +1796,22 @@ One variant of a recipe, planned in memory: what its compiled tree holds, as val
 | `PlannedImage.groups` | The declared groups, by name. |
 | `PlannedImage.hooks(stage: str) -> tuple[Hook, ...]` | The build hooks of *stage* (`prepare`, `postinst`, `finalize`...) in run order. |
 | `PlannedImage.init_steps` | The runtime-init steps in the order they run (the graph's topological order). |
-| `PlannedImage.lint() -> tuple[Diagnostic, ...]` | Every finding for this variant, as `lint` reports it. |
+| `PlannedImage.lint() -> tuple[Diagnostic, ...]` | Every finding for this profile, as `tundravm check` reports it. |
 | `PlannedImage.packages` | Every package the image installs (`runtime`) or builds with (`build`), by name. |
 | `PlannedImage.service(name: str) -> UnitView` | The `<name>.service` unit; same as `unit` for a service name. |
-| `PlannedImage.settings(section: str) -> Mapping[str, tuple[str, ...]]` | The compiled payload's `mkosi.conf` section, `{key: values}` (empty when absent), merged as mkosi reads it: the root `mkosi.conf`, the payload's `mkosi.conf` and `mkosi.conf.d/*.conf`, then the variant's profile overlay. List settings (`Packages`, scripts, trees) accumulate, the others override. |
+| `PlannedImage.settings(section: str) -> Mapping[str, tuple[str, ...]]` | The compiled payload's `mkosi.conf` section, `{key: values}` (empty when absent), merged as mkosi reads it: the root `mkosi.conf`, the payload's `mkosi.conf` and `mkosi.conf.d/*.conf`, then the profile's overlay. List settings (`Packages`, scripts, trees) accumulate, the others override. |
 | `PlannedImage.unit(name: str) -> UnitView` | The shipped unit *name* (a bare name means `.service`), parsed. |
 | `PlannedImage.users` | The declared users, by name. |
+
+### `read_lock`
+
+*function*
+
+```python
+read_lock(path: Path) -> Lock
+```
+
+The lockfile at *path* (`build/tundravm.lock`), as `tundravm.compile(image, lock=)` and `plan(image, lock=)` take it.
 
 ### `recipe_file`
 
@@ -1811,7 +1821,7 @@ One variant of a recipe, planned in memory: what its compiled tree holds, as val
 recipe_file(tmp_path: Path, source: str, name: str = 'recipe.py') -> Path
 ```
 
-Write dedented *source* to `tmp_path/name` for CLI tests and return its path.
+Write dedented *source* (an image file) to `tmp_path/name` for CLI tests; return its path.
 
 ### `run_cli`
 

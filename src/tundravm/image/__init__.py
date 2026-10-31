@@ -1,7 +1,7 @@
 """The public SDK: an :class:`Image` of :class:`Service` values, :class:`Component`
 groups and :class:`Profile` variations.
 
-Everything a recipe author writes lives here; :mod:`tundravm.declarative` is the
+Everything an image author writes lives here; :mod:`tundravm.declarative` is the
 internal model the image lowers onto. The package is named after its one entry point:
 an image is what you declare. The runtime contracts are values here too
 (:class:`Volume`, :class:`Secret`, :class:`AttestedTLS`, :class:`TLS`, :class:`RootFS`);

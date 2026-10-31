@@ -1275,7 +1275,7 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
 
 @dataclass(frozen=True, slots=True)
 class DropIn:
-    """A typed drop-in for a packaged unit: ``Unit("x.service", dropin=DropIn(...))``.
+    """A typed drop-in over a service's unit: ``Service(..., unit=DropIn(...))``.
 
     Renders ``/usr/lib/systemd/system/<unit>.d/<name>.conf`` with the fields that are set
     (each defaults to "unchanged"); the field meanings are ``Service``'s. ``exec_start``
@@ -1888,8 +1888,7 @@ class Install:
 
     ``artifact=True`` installs the output of the toolchain the build is ``using``:
     *source* is its ``artifact`` path (``build/<output>`` for ``Go``), and the
-    build caches it as the artifact
-    the way the generated ``Key``/``Disk``/``Secrets`` builds do.
+    build caches it as the artifact, the way the image's own tundra-tools builds are cached.
     """
 
     source: str
@@ -2252,7 +2251,7 @@ def _require_span(owner: object, value: object, what: str, key: str, section: st
 
 @dataclass(frozen=True, slots=True)
 class Every:
-    """``Task(schedule=Every("1h"))``: run *first* after boot (default: *interval*), then
+    """``Service(timer=Every("1h"))``: run *first* after boot (default: *interval*), then
     *interval* after each start (``OnBootSec=`` + ``OnUnitActiveSec=``); *jitter* spreads
     the start (``RandomizedDelaySec=``)."""
 
@@ -2278,7 +2277,7 @@ class Every:
 
 @dataclass(frozen=True, slots=True)
 class Calendar:
-    """``Task(schedule=Calendar("daily"))``: run at calendar times (``OnCalendar=``, a
+    """``Service(timer=Calendar("daily"))``: run at calendar times (``OnCalendar=``, a
     shorthand such as ``daily`` or ``*-*-* 03:00:00``). *persistent* catches up on a run
     missed while the machine was off (``Persistent=yes``); *jitter* spreads the start."""
 
@@ -2737,27 +2736,31 @@ DECLARATION_TYPES: tuple[type, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class Resolved:
-    """One variant after expansion, overlays and reference checks."""
+    """One profile of the image after expansion, profile changes and reference checks.
+
+    *variant* is the profile's name, *items* every declaration it holds, *fragments* the
+    names of the components they came from. A component's ``check(resolved)`` reads it.
+    """
 
     variant: str
     outputs: tuple[Target, ...]
-    """Every output of the variant, own or inherited (never empty)."""
+    """Every target the profile builds, own or inherited (never empty)."""
     items: tuple[Declaration, ...]
     fragments: tuple[str, ...]
 
     def __post_init__(self) -> None:
         _freeze(self, "outputs")
         if not self.outputs:
-            raise _fail(self, f"variant {self.variant!r} resolved to no outputs.")
+            raise _fail(self, f"profile {self.variant!r} resolved to no targets.")
 
     def bind(self, ref: Ref) -> Declaration:
-        """The variant's final declaration *ref* names; ``ValidationError`` when absent."""
+        """The profile's final declaration *ref* names; ``ValidationError`` when absent."""
         for item in self.items:
             if item.ref == ref:
                 return item
         raise ValidationError(
-            f"variant {self.variant!r} does not declare {ref}.",
-            hint=f"Declare {ref} in the variant, or reference one it declares.",
+            f"profile {self.variant!r} does not declare {ref}.",
+            hint=f"Declare {ref} in the image or the profile, or reference one it declares.",
         )
 
 

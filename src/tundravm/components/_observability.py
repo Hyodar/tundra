@@ -151,7 +151,7 @@ class Observability(Component):
 
     *logs* is a :class:`JournalExport`, *metrics* a :class:`PrometheusRemoteWrite`; each
     is optional. Their credentials are secrets the image declares in ``secrets=``.
-    Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Fragment name:
+    Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Component name:
     ``observability``.
     """
 

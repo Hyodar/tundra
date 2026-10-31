@@ -859,6 +859,7 @@ def test_the_tdxs_source_is_unpinned() -> None:
 | `assert_clean(subject, allow=)` | fails on any error or warning not allowed |
 | `assert_diagnostic(subject, code)` | the first finding with that code, or a failure listing all |
 | `assert_tree(tundravm.compile(image), golden)` | every path, byte, exec bit and symlink; `TUNDRAVM_UPDATE_GOLDEN=1` rewrites |
+| `read_lock(path)` | `build/tundravm.lock` as the value `tundravm.compile(image, lock=)` and `plan(image, lock=)` take |
 | `FakeMkosi`, fixture `fake_mkosi` | mkosi replaced at the adapter: backends run, nothing forks, `build` writes placeholder outputs, `calls` records each argv |
 | `FakeSources` | the source fetch replaced at its git and http boundary: each checkout is a stub a later build reuses, nothing reaches the network, `fetched` records each |
 | `boot(artifact)`, fixture `boot` | boots a built disk or UKI under QEMU with OVMF and reads the serial console |

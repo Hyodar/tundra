@@ -1,4 +1,4 @@
-"""One variant planned in memory and read as values: plan(), fragment_plan(), PlannedImage."""
+"""One profile planned in memory and read as values: plan(), fragment_plan(), PlannedImage."""
 
 from __future__ import annotations
 
@@ -46,8 +46,8 @@ Stage = Literal["skeleton", "extra"]
 
 TEST_PLATFORM = Fragment("test-platform", (Package("linux-image-amd64"), Network()))
 """What :func:`fragment_plan` boots on by default: the kernel package and a DHCP
-:class:`~tundravm.declarative.utils.Network`, so ``kernel-missing`` and ``network-missing``
-stay quiet and the fragment's own findings stand alone."""
+network, so ``kernel-missing`` and ``network-missing`` stay quiet and the findings of what is
+under test stand alone."""
 
 UNIT_DIRS = ("/usr/lib/systemd/system", "/etc/systemd/system")
 _ENABLE = re.compile(r"systemctl\s+(enable|mask|disable)\s+([^\n;&|]+)")
@@ -77,7 +77,7 @@ class ImageFile:
 
     @property
     def fragment(self) -> str | None:
-        """The innermost fragment that declared the file, ``None`` for a compiler file."""
+        """The innermost component that declared the file, ``None`` for a compiler file."""
         for origin in reversed(self.origin):
             if origin.fragments:
                 return origin.fragments[-1][0]
@@ -86,7 +86,7 @@ class ImageFile:
 
 @dataclass(frozen=True, slots=True)
 class InitStep:
-    """One runtime-init step: a declared ``BootStep`` or a built-in (``keys``, ``disks``,
+    """One runtime-init step: a declared one or a built-in (``keys``, ``disks``,
     ``secrets``).
 
     ``after`` is every step it runs after (its own ``after`` plus the steps naming
@@ -146,12 +146,12 @@ _LIST_SETTINGS = frozenset(
 
 
 class PlannedImage:
-    """One variant of a recipe, planned in memory: what its compiled tree holds, as values.
+    """One profile of an image, planned in memory: what its compiled tree holds, as values.
 
-    Nothing compiles until a query reads the tree, so :meth:`lint` works on a
-    recipe that does not compile. Declared things (users, groups, init steps,
-    hooks, builds) come from the resolved variant; shipped things (files,
-    units, packages, mkosi settings) from the compiled tree.
+    :func:`plan` makes one. Nothing compiles until a query reads the tree, so :meth:`lint`
+    works on an image that does not compile. Declared things (users, groups, runtime-init
+    steps, hooks, builds) come from the resolved profile; shipped things (files, units,
+    packages, mkosi settings) from the compiled tree.
     """
 
     def __init__(self, recipe: Recipe, variant: str, *, lock: Lock | None = None) -> None:
@@ -160,20 +160,21 @@ class PlannedImage:
         self.lock = lock
 
     def __repr__(self) -> str:
-        return f"<PlannedImage of {self.recipe.name!r}, variant {self.variant!r}>"
+        return f"<PlannedImage of {self.recipe.name!r}, profile {self.variant!r}>"
 
     @cached_property
     def tree(self) -> Tree:
-        """The compiled tree of this variant alone, as :func:`tundravm.compile` returns it."""
+        """The compiled tree of this profile alone, as :func:`tundravm.compile` returns it."""
         return lifecycle.compile(self.recipe, variants=[self.variant], lock=self.lock)
 
     @cached_property
     def resolved(self) -> Resolved:
-        """The resolved variant: every declaration after fragments, parents and changes."""
+        """The resolved profile: every declaration after components, the profiles it extends
+        and their changes."""
         return resolve(self.recipe, variant=self.variant)
 
     def lint(self) -> tuple[Diagnostic, ...]:
-        """Every finding for this variant, as :func:`tundravm.lint` reports it."""
+        """Every finding for this profile, as ``tundravm check`` reports it."""
         return lifecycle.lint(self.recipe, variants=[self.variant], lock=self.lock)
 
     @cached_property
@@ -182,8 +183,8 @@ class PlannedImage:
 
     @cached_property
     def _entries(self) -> dict[str, Entry]:
-        """The variant's effective files, by path relative to its layer: the root, the
-        payload and the variant's profile overlay over it."""
+        """The profile's effective files, by path relative to its layer: the root, the
+        payload and the profile's overlay over it."""
         merged: dict[str, Entry] = {}
         for layer in self._layers:
             merged.update(layer)
@@ -217,7 +218,7 @@ class PlannedImage:
             return self.files[path]
         here = posixpath.dirname(path)
         nearby = [p for p in self.files if posixpath.dirname(p) == here]
-        raise KeyError(f"variant {self.variant!r} ships no {path}; in {here}: {nearby}")
+        raise KeyError(f"profile {self.variant!r} ships no {path}; in {here}: {nearby}")
 
     @cached_property
     def _unit_states(self) -> dict[str, str]:
@@ -239,7 +240,7 @@ class PlannedImage:
         shipped = sorted(
             posixpath.basename(p) for p in self.files if posixpath.dirname(p) in UNIT_DIRS
         )
-        raise KeyError(f"variant {self.variant!r} ships no unit {name!r}; units: {shipped}")
+        raise KeyError(f"profile {self.variant!r} ships no unit {name!r}; units: {shipped}")
 
     def service(self, name: str) -> UnitView:
         """The ``<name>.service`` unit; same as :meth:`unit` for a service name."""
@@ -248,7 +249,7 @@ class PlannedImage:
     def settings(self, section: str) -> Mapping[str, tuple[str, ...]]:
         """The compiled payload's ``mkosi.conf`` section, ``{key: values}`` (empty when
         absent), merged as mkosi reads it: the root ``mkosi.conf``, the payload's
-        ``mkosi.conf`` and ``mkosi.conf.d/*.conf``, then the variant's profile overlay. List
+        ``mkosi.conf`` and ``mkosi.conf.d/*.conf``, then the profile's overlay. List
         settings (``Packages``, scripts, trees) accumulate, the others override."""
         merged: dict[str, tuple[str, ...]] = {}
         for layer in self._layers:
@@ -320,9 +321,9 @@ class PlannedImage:
 def plan(
     subject: Recipe | PublicImage, variant: str | None = None, *, lock: Lock | None = None
 ) -> PlannedImage:
-    """*variant* of *subject* (default: its first profile) as a :class:`PlannedImage`.
+    """The profile *variant* of *subject* (default: ``production``) as a :class:`PlannedImage`.
 
-    *subject* is a public :class:`~tundravm.Image` or the internal recipe one lowers to.
+    *subject* is an :class:`~tundravm.Image` (or the internal model one lowers to).
     The tree compiles in memory on the first query that reads it; *lock*'s source pins
     apply to the compile and to :meth:`PlannedImage.lint`.
     """
@@ -339,12 +340,12 @@ def fragment_plan(
     variant: str = "default",
     lock: Lock | None = None,
 ) -> PlannedImage:
-    """*items* (a fragment, or declarations) planned on a minimal bootable test platform.
+    """Internal declarations (or one group of them) planned on a minimal bootable platform.
 
-    *include* adds what the items need but are not under test (a storage
-    fragment their ``requires`` names). *base* is the platform: a fragment
-    (default :data:`TEST_PLATFORM`, the kernel package) under one ``qemu``
-    variant called *variant*, or a whole recipe whose ``items`` gain them.
+    For testing tundravm itself; an image is planned with :func:`plan`. *include* adds what
+    the items need but are not under test (a group their ``requires`` names). *base* is the
+    platform: a group (default :data:`TEST_PLATFORM`, the kernel package) under one
+    ``qemu`` profile called *variant*, or a whole internal model whose items gain them.
     """
     if len(items) == 1 and isinstance(items[0], Fragment):
         under_test = items[0]

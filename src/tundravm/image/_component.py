@@ -126,7 +126,7 @@ class Endpoint:
     ready: ServiceReady | None = field(default=None, compare=False)
     provider: str | Component | None = field(default=None, compare=False, repr=False)
     """The component that publishes it (``provider=self``): a consumer holding this
-    endpoint in a field requires that component, without naming its fragment."""
+    endpoint in a field requires that component, without naming it."""
 
     def __post_init__(self) -> None:
         if isinstance(self.provider, Component):
@@ -262,9 +262,9 @@ class Component(Located, metaclass=_ComponentMeta):
     cannot be smuggled into ``services=``. An optional ``check(self, resolved)`` returning
     diagnostics becomes the component's lint rule.
 
-    The fragment it lowers to is named after the class (``TaikoClient`` is
-    ``taiko-client``), after an ``id`` or ``name`` field when it has one, or after
-    ``class X(Component, fragment="x")``. ``class X(Component, build_network=True)``
+    Its name, which ``show`` and every diagnostic about it print, comes from the class
+    (``TaikoClient`` is ``taiko-client``), from an ``id`` or ``name`` field when it has
+    one, or from ``class X(Component, fragment="x")``. ``class X(Component, build_network=True)``
     says its builds fetch dependencies while the image is built (``cargo fetch``,
     ``dotnet restore``), so an image holding it builds with the network on, which the
     tree records (``WithNetwork=yes``).
@@ -295,7 +295,7 @@ class Component(Located, metaclass=_ComponentMeta):
 
     @property
     def name(self) -> str:
-        """The fragment name this component lowers to."""
+        """The component's name, as ``show`` and its diagnostics print it."""
         return component_name(self)
 
     @property

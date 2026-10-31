@@ -1,6 +1,6 @@
-"""Boot a baked image under QEMU and read its serial console: :func:`boot`.
+"""Boot a built image under QEMU and read its serial console: :func:`boot`.
 
-The image is booted the way ``deploy --target qemu`` boots it without TDX: OVMF from
+The image is booted the way ``run --mode simulated`` boots it: OVMF from
 pflash and either the UKI through ``-kernel`` or the disk (``qemu.raw``) through ``-drive``
 on a throwaway snapshot, which OVMF boots from the UKI on its ESP
 (``EFI/BOOT/BOOTX64.EFI``). Nothing is added to the image: the console settings the harness
@@ -438,7 +438,7 @@ def boot(
     (``127.0.0.1``) to guest ports; once the markers and units are in, the boot also waits
     until each *wait_http* URL (``http://127.0.0.1:HOST/``) answers with a 2xx, so the
     answers (:meth:`BootResult.http_get`) prove the network, firewall and service. *via*
-    picks the boot path (:data:`BootPath`): ``"disk"`` boots a bake result's ``qemu.raw``
+    picks the boot path (:data:`BootPath`): ``"disk"`` boots a build's ``qemu.raw``
     through its ESP with no ``-kernel``. Raises :class:`BootUnavailable` when QEMU or OVMF
     is missing.
     """
