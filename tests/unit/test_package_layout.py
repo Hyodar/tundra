@@ -14,7 +14,7 @@ CORE_MODULES = [
     "tundravm.recipe",
     "tundravm.check",
     "tundravm.diff",
-    "tundravm.explain",
+    "tundravm._describe",
     "tundravm.builds",
     "tundravm.manifest",
     "tundravm.instances",

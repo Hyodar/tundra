@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from tundravm._describe import describe, render
 from tundravm.declarative import (
     Build,
     Fragment,
@@ -35,7 +36,6 @@ from tundravm.declarative import (
     mkosi_argv,
 )
 from tundravm.errors import ValidationError
-from tundravm.explain import describe, render
 
 LINUX = "https://github.com/gregkh/linux"
 SHA = "a" * 64
@@ -168,7 +168,7 @@ def test_an_overlay_variant_leaves_the_payload_alone(tmp_path: Path) -> None:
     assert payload == _files(plain)
 
 
-def test_explain_shows_the_recipes_build_options() -> None:
+def test_show_describes_the_recipes_build_options() -> None:
     online = _recipe(Package("curl"), Setting("Build", "WithNetwork", ("yes",)))
     assert describe(lower(online), profile="default")["build_options"] == {"with_network": True}
     assert describe(lower(_recipe(Package("curl"))), profile="default")["build_options"] == {}

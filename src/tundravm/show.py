@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import manifest as mf
+from ._describe import describe, render
 from ._location import display_location
 from .builds import Build
 from .declarative._lowered import Lowered
@@ -30,7 +31,6 @@ from .declarative.model import Recipe
 from .declarative.resolve import describe as describe_identity
 from .declarative.resolve import provenance as resolved_provenance
 from .diff import diff_trees
-from .explain import describe, render
 
 UNIT_DIRS = ("usr/lib/systemd/system/", "etc/systemd/system/")
 

@@ -10,7 +10,7 @@
 | `testing_toolkit/` | `tundravm.testing`: fragment plans and `Image` queries, helpers, the boot harness (fake QEMU), the pytest plugin |
 | `docs/` | the docs run as written: code blocks, commands, links; the generated reference is current |
 | `integration/` | real mkosi builds, QEMU boots of baked templates (also marked `boot`) and the upstream nethermind-tdx comparison; marked `integration`, deselect with `-m "not integration"` |
-| `unit/` | models, errors, policy, explain, package layout, public surface, recipe loading |
+| `unit/` | models, errors, policy, `show`'s image description, package layout, public surface, recipe loading |
 
 Conventions: no network and no real builds. Outside `integration` tests the root `conftest.py` makes source resolution fail (pass `resolver=` to `lock()`) and puts `FakeMkosi` and `FakeSources` (`tundravm.testing`) at the process boundary, so a build runs the Linux backend's whole path with nothing forked or fetched; tests of that boundary itself are marked `boundary`.
 Shared fixtures live in `conftest.py` (`isolated_cwd`); shared helpers (repo paths, `run_main`, `write_recipe_file`, `conf_list`) in `helpers.py`.

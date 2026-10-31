@@ -11,8 +11,8 @@ from tundravm.check import render, render_github
 from tundravm.declarative import Diagnostic, Recipe, lint, lower
 from tundravm.declarative.resolve import provenance, resolve
 from tundravm.errors import ValidationError
-from tundravm.explain import explain_why
 from tundravm.recipe import load_recipe
+from tundravm.show import provenance as show_provenance
 
 RECIPE = """
 from tundravm.declarative import BootStep, Debian, Package, Recipe, Service, Unit, Variant
@@ -117,11 +117,11 @@ def test_provenance_carries_origin_locations(recipe_path: Path) -> None:
         'changes=(Unit.ref("gone.service").remove(),)', "changes=(app.ref.edit(user=None),)"
     )
     recipe = load_recipe(_write(recipe_path.parent / "explored.py", source))
-    data = explain_why(recipe, "dev", "unit:app.service").to_dict()
-    declarations = data["declarations"]
-    assert isinstance(declarations, list)
+    declarations = show_provenance(recipe, ["dev"])["dev"]
     (row,) = (r for r in declarations if r["declaration"] == "Service(app.service)")
-    assert [(o["action"], o["location"]) for o in row["origins"]] == [
+    origins = row["origins"]
+    assert isinstance(origins, list)
+    assert [(o["action"], o["location"]) for o in origins] == [
         ("declared", "explored.py:4"),
         ("edited", "explored.py:13"),
     ]

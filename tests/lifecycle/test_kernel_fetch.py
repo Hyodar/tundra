@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import on_platform, source_dir
+from tundravm._describe import describe, render
 from tundravm._source import GitSource
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.declarative import (
@@ -37,7 +38,6 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.lifecycle import FetchedSource, bake_image, fetch, write_lock
 from tundravm.errors import ErrorCode, StateError, ValidationError
-from tundravm.explain import describe, render
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
 pytestmark = [pytest.mark.usefixtures("isolated_cwd"), pytest.mark.boundary]

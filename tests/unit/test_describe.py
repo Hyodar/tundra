@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from tundravm._describe import describe, render
 from tundravm.declarative import (
     BootStep,
     Debian,
@@ -24,7 +25,6 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.errors import ValidationError
-from tundravm.explain import describe, render
 
 
 def _recipe() -> Recipe:
@@ -74,7 +74,7 @@ def _recipe() -> Recipe:
     )
 
 
-def test_explain_structure() -> None:
+def test_describe_structure() -> None:
     image = lower(_recipe())
     info = describe(image, profile="default")
 
@@ -144,7 +144,7 @@ def test_explain_structure() -> None:
     assert debloat == image.explain_debloat(profile="default")
 
 
-def test_explain_is_json_serializable_and_stable() -> None:
+def test_describe_is_json_serializable_and_stable() -> None:
     image = lower(_recipe())
     payload = json.dumps(describe(image, profile="default"), sort_keys=True)
     assert json.loads(payload)["variant"] == "default"
@@ -152,7 +152,7 @@ def test_explain_is_json_serializable_and_stable() -> None:
     assert payload == json.dumps(describe(lower(_recipe()), profile="default"), sort_keys=True)
 
 
-def test_explain_does_not_mutate_state() -> None:
+def test_describe_does_not_mutate_state() -> None:
     image = lower(_recipe())
     digest_before = image.digest()
     first = describe(image, profile="default")
@@ -164,7 +164,7 @@ def test_explain_does_not_mutate_state() -> None:
     assert image.digest() == digest_before
 
 
-def test_explain_per_variant() -> None:
+def test_describe_per_variant() -> None:
     image = lower(_recipe())
     azure = describe(image, profile="azure")
 
@@ -183,7 +183,7 @@ def test_explain_per_variant() -> None:
         describe(image.select(("default", "azure")))
 
 
-def test_explain_includes_kernel() -> None:
+def test_describe_includes_kernel() -> None:
     kernel = Kernel("6.12.1", Git("https://github.com/gregkh/linux", "v6.12.1"), cmdline="quiet")
     image = lower(Recipe("kernel", items=(kernel,)))
     info = describe(image, profile="default")
