@@ -231,16 +231,28 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
             context={"recipe": str(recipe_path), "attr": attr},
         )
     value = getattr(module, attr)
-    if isinstance(value, Recipe):
-        return value
+    found = _as_recipe(value)
+    if found is not None:
+        return found
     if callable(value):
         return _call_factory(value, attr, recipe_path)
     raise ValidationError(
-        f"Attribute {attr!r} is a {type(value).__name__}: --attr loads the internal model "
-        "(tundravm.declarative) or a zero-argument function returning it, not an Image yet.",
-        hint="Bind the Image to `image` and drop --attr.",
+        f"Attribute {attr!r} is a {type(value).__name__}, not an Image or a zero-argument "
+        "function returning one.",
+        hint="Pass --attr NAME where NAME binds an Image, or a function that returns one.",
         context={"recipe": str(recipe_path), "attr": attr},
     )
+
+
+def _as_recipe(value: object) -> Recipe | None:
+    """*value* as the internal recipe when it is an ``Image`` or already a recipe."""
+    from tundravm.image import Image, recipe_of
+
+    if isinstance(value, Recipe):
+        return value
+    if isinstance(value, Image):
+        return recipe_of(value)
+    return None
 
 
 def _discover_image(module: ModuleType, recipe_path: Path) -> Recipe | None:
@@ -353,30 +365,33 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
         raise
     except Exception as exc:
         raise recipe_load_error(exc, recipe_path) from exc
-    if isinstance(result, Recipe):
-        return result
+    found = _as_recipe(result)
+    if found is not None:
+        return found
     if result is None:
         raise ValidationError(
             f"Factory {name}() returned None.",
             hint=(
-                "Return the model from the factory instead of compiling or building inside it; "
+                "Return the Image from the factory instead of compiling or building inside it; "
                 "the CLI runs those steps."
             ),
             context={"recipe": str(recipe_path), "attr": name},
         )
     raise ValidationError(
-        f"Factory {name}() returned {type(result).__name__}: a factory returns the internal "
-        "model (tundravm.declarative), not an Image yet.",
-        hint="Bind the Image to `image` instead of a factory.",
+        f"Factory {name}() returned {type(result).__name__}, not an Image.",
+        hint="Return the Image from the factory.",
         context={"recipe": str(recipe_path), "attr": name},
     )
 
 
 def _public_names(module: ModuleType) -> list[str]:
+    from tundravm.image import Image
+
     return sorted(
         name
         for name, value in vars(module).items()
-        if not name.startswith("_") and (isinstance(value, Recipe) or inspect.isfunction(value))
+        if not name.startswith("_")
+        and (isinstance(value, Recipe | Image) or inspect.isfunction(value))
     )
 
 

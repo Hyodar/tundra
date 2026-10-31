@@ -82,6 +82,23 @@ def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
     assert load_image(recipe, attribute="third").state.base == "debian/sid"
 
 
+def test_attr_selects_an_image_or_a_factory_returning_one(tmp_path: Path) -> None:
+    recipe = _write(
+        tmp_path,
+        "image.py",
+        "from tundravm import Debian, Image\n"
+        "image = Image('r', packages=['busybox'])\n"
+        "other = Image('r', base=Debian('sid'), packages=['busybox'])\n"
+        "def third():\n    return Image('r', base=Debian('bookworm'), packages=['busybox'])\n",
+    )
+    assert load_image(recipe).state.base == "debian/trixie"
+    assert load_image(recipe, attribute="other").state.base == "debian/sid"
+    assert load_image(recipe, attribute="third").state.base == "debian/bookworm"
+    with pytest.raises(ValidationError) as excinfo:
+        load_recipe(recipe, attribute="nope")
+    assert "image, other, third" in str(excinfo.value)
+
+
 def test_attr_missing_lists_candidates(tmp_path: Path) -> None:
     recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r')\n")
     with pytest.raises(ValidationError) as excinfo:
@@ -122,7 +139,7 @@ def test_factory_returning_none_is_explained(tmp_path: Path) -> None:
     _write(tmp_path, "recipe.py", HEADER + "def build():\n    return Fragment('c')\n")
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe)
-    assert "returned Fragment: a factory returns the internal model" in str(excinfo.value)
+    assert "returned Fragment, not an Image" in str(excinfo.value)
 
 
 def test_factory_with_required_args_is_rejected(tmp_path: Path) -> None:

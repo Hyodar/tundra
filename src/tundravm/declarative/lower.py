@@ -131,7 +131,7 @@ _COMPILER_KEYS: dict[str, str] = {
     "Packages": "Package(name)",
     "BuildPackages": "the packages= of the Build, GoBinary or CargoBinary that needs them",
     "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
-    "KernelCommandLine": "Kernel(cmdline=...)",
+    "KernelCommandLine": "nothing: the compiler writes the kernel command line itself",
     **{
         key: "Debian(kernel_modules=...)"
         for key in ("KernelModules", "KernelModulesInclude", "KernelModulesExclude")

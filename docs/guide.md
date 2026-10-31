@@ -577,11 +577,12 @@ How to read it as an mkosi user:
 
 ### The escape to mkosi
 
-`mkosi=Mkosi(settings={"KernelCommandLine": "..."}, scripts=[("postinst", "...")])` adds
+`mkosi=Mkosi(settings={"Locale": "C.UTF-8"}, scripts=[("postinst", "...")])` adds
 verbatim settings and scripts at an mkosi stage (`prepare`, `build`, `postinst`,
-`finalize`, `postoutput`). The manifest records them. Settings that would contradict a
-guarantee are refused at construction: `ConfigureScripts`, `Environment`, `Bootable`,
-`Format`, `Profiles`, `Dependencies`.
+`finalize`, `postoutput`). The manifest records them. Settings the compiler writes itself
+or that would contradict a guarantee are refused at construction, each with the slot that
+sets it: `KernelCommandLine`, `Packages`, `ExtraTrees`, `ConfigureScripts`, `Environment`,
+`Bootable`, `Format`, `Profiles`, `Dependencies`.
 
 ### Converting an mkosi tree
 
