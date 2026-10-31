@@ -78,7 +78,7 @@ jobs:
       - name: Bake the smoke recipe and the templates
         run: >-
           uv run pytest tests/integration/test_mkosi_smoke.py
-          tests/integration/test_templates_bake.py -m integration -v -rs -rP
+          tests/integration/test_templates_bake.py -m integration -v -rsP
 
   boot:
     # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
@@ -107,7 +107,7 @@ jobs:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
-        run: uv run pytest tests/integration/test_templates_boot.py -m boot -v -rs -rP
+        run: uv run pytest tests/integration/test_templates_boot.py -m boot -v -rsP
 
       - name: Upload console logs
         if: always()
@@ -165,7 +165,7 @@ jobs:
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
           TUNDRAVM_FIXTURE_BUILD: ${{ runner.temp }}/fixture/fixture/latest-production
-        run: uv run pytest tests/integration/test_fixture_boot.py -m boot -v -rs -rP
+        run: uv run pytest tests/integration/test_fixture_boot.py -m boot -v -rsP
 
       - name: Run the dev build as an instance and fetch its page
         run: |
@@ -241,7 +241,7 @@ jobs:
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
           TUNDRAVM_VERITY_BUILD: ${{ runner.temp }}/verity/fixture/latest-production
-        run: uv run pytest tests/integration/test_verity_boot.py -m boot -v -rs -rP
+        run: uv run pytest tests/integration/test_verity_boot.py -m boot -v -rsP
 
       - name: Upload console logs
         if: always()
