@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+from pathlib import Path
 
 import pytest
 
@@ -205,10 +206,13 @@ def test_the_root_does_not_spell_a_namespaced_name() -> None:
 def test_no_private_module_looks_like_a_namespace() -> None:
     public = {name.removeprefix("tundravm.") for name in _reference.MODULES}
     # The internal modules a reader could take for a namespace of the SDK are private.
+    package = Path(importlib.import_module("tundravm").__file__).parent
     for gone in ("image", "observability", "platforms"):
         assert gone not in public
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module(f"tundravm.{gone}")
+        # A stale ``__pycache__`` directory would import as a namespace package, so the
+        # check is for source files, not for the import failing.
+        assert not (package / f"{gone}.py").exists(), gone
+        assert not list((package / gone).glob("*.py")), gone
     components = importlib.import_module("tundravm.components")
     submodules = [m.name for m in pkgutil.iter_modules(components.__path__)]
     assert submodules and all(name.startswith("_") for name in submodules), submodules
