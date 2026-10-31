@@ -1,0 +1,86 @@
+name: setup
+description: >-
+  uv, Python 3.12 and the locked environment, for every job of ci.yml; optionally the mkosi
+  build host, QEMU with OVMF and /dev/kvm, the doctor checks and read access to tundra-tools.
+
+inputs:
+  host:
+    description: >-
+      none (the unit suite), build (the Debian keyring the mkosi tools tree needs and the
+      unprivileged user namespaces Ubuntu 24.04's AppArmor withholds) or boot (build, plus
+      QEMU, OVMF and a /dev/kvm the runner user opens).
+    default: none
+  doctor:
+    description: The `tundravm doctor --for` checks to run after the sync, space-separated.
+    default: ""
+  tundra-tools-token:
+    description: >-
+      A token that reads https://github.com/Hyodar/tundra-tools (the TUNDRA_TOOLS_TOKEN
+      secret). Set, the runner's global git config carries it for that URL and the template
+      tests must pass (TUNDRAVM_SOURCES_REQUIRED=1); empty, they skip.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Set up Python
+      shell: bash
+      run: uv python install 3.12
+
+    - name: Prepare the build host
+      # mkosi comes with tundravm (uv sync) and builds in an unprivileged user namespace.
+      if: inputs.host == 'build' || inputs.host == 'boot'
+      shell: bash
+      env:
+        QEMU: ${{ inputs.host == 'boot' && 'qemu-system-x86 ovmf' || '' }}
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq debian-archive-keyring $QEMU
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+    - name: Let the runner user open /dev/kvm
+      if: inputs.host == 'boot'
+      shell: bash
+      run: |
+        qemu-system-x86_64 --version
+        ls /usr/share/OVMF
+        if [ -e /dev/kvm ]; then
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+        else
+          echo "no /dev/kvm: the boots run on TCG"
+        fi
+
+    - name: Sync dependencies
+      shell: bash
+      run: uv sync
+
+    - name: mkosi and the host
+      if: inputs.doctor != ''
+      shell: bash
+      env:
+        CHECKS: ${{ inputs.doctor }}
+      run: |
+        uv run mkosi --version
+        for check in $CHECKS; do
+          uv run tundravm doctor --for "$check"
+        done
+
+    - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
+      # The job's checkout must not persist credentials: the GITHUB_TOKEN header
+      # actions/checkout writes for github.com would override the token in the URL.
+      if: inputs.tundra-tools-token != ''
+      shell: bash
+      env:
+        TUNDRA_TOOLS_TOKEN: ${{ inputs.tundra-tools-token }}
+      run: |
+        git config --global \
+          url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf \
+          "https://github.com/Hyodar/tundra-tools"
+        echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"

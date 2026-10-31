@@ -1,5 +1,6 @@
 # test is the unit suite alone; templates and boot bake the Image templates for real, and
 # the fixture jobs build tests/fixtures/native-tree/recipe.py, which fetches no source.
+# Every job sets up through .github/actions/setup.
 #
 # Every image implies the evidence service, which builds tundra-tools from
 # https://github.com/Hyodar/tundra-tools, a private repository the runner's GITHUB_TOKEN
@@ -8,10 +9,10 @@
 # in the runner's global git config, so the lock's `git ls-remote` and the host-side fetch
 # read it:
 #   gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra
-# Their checkouts keep no credentials: the GITHUB_TOKEN header actions/checkout persists
-# for github.com would override the token in the URL. With the token, the template tests
-# must pass (TUNDRAVM_SOURCES_REQUIRED=1); without it, they skip and say which repository
-# they could not read (require_sources in tests/integration/support.py).
+# No checkout keeps credentials: the GITHUB_TOKEN header actions/checkout persists for
+# github.com would override the token in the URL. With the token, the template tests must
+# pass (TUNDRAVM_SOURCES_REQUIRED=1); without it, they skip and say which repository they
+# could not read (require_sources in tests/integration/support.py).
 name: ci
 
 on:
@@ -19,10 +20,6 @@ on:
     branches:
       - "**"
   pull_request:
-
-env:
-  # A step's `if:` cannot read secrets: this says whether the token exists, not what it is.
-  HAS_TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN != '' }}
 
 concurrency:
   # A newer push to the same branch (or pull request) cancels the run it supersedes.
@@ -41,14 +38,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Sync dependencies
-        run: uv sync
+      - name: Set up
+        uses: ./.github/actions/setup
 
       - name: Lint
         run: |
@@ -77,37 +68,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Prepare the build host
-        # mkosi comes with tundravm (uv sync); the host needs the Debian keyring for the
-        # tools tree and the unprivileged user namespaces Ubuntu 24.04's AppArmor withholds.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq debian-archive-keyring
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: mkosi and the host
-        run: |
-          uv run mkosi --version
-          uv run tundravm doctor --for build
-
-      - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
-        if: ${{ env.HAS_TUNDRA_TOOLS_TOKEN == 'true' }}
-        env:
-          TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
-        run: |
-          git config --global \
-            url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf \
-            "https://github.com/Hyodar/tundra-tools"
-          echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"
+      - name: Set up the build host
+        uses: ./.github/actions/setup
+        with:
+          host: build
+          doctor: build
+          tundra-tools-token: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
 
       - name: Bake the smoke recipe and the templates
         run: >-
@@ -129,51 +95,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Prepare the build host, QEMU and OVMF
-        # mkosi comes with tundravm (uv sync) and builds in an unprivileged user namespace.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq debian-archive-keyring qemu-system-x86 ovmf
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          qemu-system-x86_64 --version
-          ls /usr/share/OVMF
-
-      - name: Let the runner user open /dev/kvm
-        run: |
-          if [ -e /dev/kvm ]; then
-            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-            sudo udevadm control --reload-rules
-            sudo udevadm trigger --name-match=kvm
-            ls -l /dev/kvm
-          else
-            echo "no /dev/kvm: the boots run on TCG"
-          fi
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: mkosi and the host
-        run: |
-          uv run mkosi --version
-          uv run tundravm doctor --for build
-          uv run tundravm doctor --for run
-
-      - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
-        if: ${{ env.HAS_TUNDRA_TOOLS_TOKEN == 'true' }}
-        env:
-          TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
-        run: |
-          git config --global \
-            url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf \
-            "https://github.com/Hyodar/tundra-tools"
-          echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"
+      - name: Set up the build host, QEMU and OVMF
+        uses: ./.github/actions/setup
+        with:
+          host: boot
+          doctor: build run
+          tundra-tools-token: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
 
       - name: Bake and boot the templates
         env:
@@ -206,41 +133,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Put the build root under the runner's temp
         run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/fixture" >> "$GITHUB_ENV"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Prepare the build host, QEMU and OVMF
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq debian-archive-keyring qemu-system-x86 ovmf
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - name: Let the runner user open /dev/kvm
-        run: |
-          if [ -e /dev/kvm ]; then
-            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-            sudo udevadm control --reload-rules
-            sudo udevadm trigger --name-match=kvm
-          else
-            echo "no /dev/kvm: the boot runs on TCG"
-          fi
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: mkosi and the host
-        run: |
-          uv run mkosi --version
-          uv run tundravm doctor --for build
-          uv run tundravm doctor --for run
+      - name: Set up the build host, QEMU and OVMF
+        uses: ./.github/actions/setup
+        with:
+          host: boot
+          doctor: build run
 
       - name: Build the fixture's production and dev profiles
         run: |
@@ -313,41 +216,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Put the build root under the runner's temp
         run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/verity" >> "$GITHUB_ENV"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Prepare the build host, QEMU and OVMF
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq debian-archive-keyring qemu-system-x86 ovmf
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - name: Let the runner user open /dev/kvm
-        run: |
-          if [ -e /dev/kvm ]; then
-            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-            sudo udevadm control --reload-rules
-            sudo udevadm trigger --name-match=kvm
-          else
-            echo "no /dev/kvm: the boot runs on TCG"
-          fi
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: mkosi and the host
-        run: |
-          uv run mkosi --version
-          uv run tundravm doctor --for build
-          uv run tundravm doctor --for run
+      - name: Set up the build host, QEMU and OVMF
+        uses: ./.github/actions/setup
+        with:
+          host: boot
+          doctor: build run
 
       - name: Build the verity fixture
         run: |
@@ -382,21 +261,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Prepare the build host
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq debian-archive-keyring
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - name: Sync dependencies
-        run: uv sync
+      - name: Set up the build host
+        uses: ./.github/actions/setup
+        with:
+          host: build
 
       - name: Build the verity fixture's cloud profiles
         run: |
@@ -428,30 +299,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Put the build root under the runner's temp
         run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/reproduce" >> "$GITHUB_ENV"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Prepare the build host
-        # Same as the boot job without QEMU: mkosi builds in an unprivileged user namespace.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq debian-archive-keyring
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: mkosi and the host
-        run: |
-          uv run mkosi --version
-          uv run tundravm doctor --for build
+      - name: Set up the build host
+        uses: ./.github/actions/setup
+        with:
+          host: build
+          doctor: build
 
       - name: Build each cloud profile twice and compare
         run: |
