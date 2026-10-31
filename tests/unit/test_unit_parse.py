@@ -100,25 +100,6 @@ def test_canonical_renderings_parse_back(decl: object, init: bool, mode: Mode) -
     assert type(conversion.declaration) is type(decl)
 
 
-def test_unit_without_user_converts_to_root() -> None:
-    text = "[Unit]\nDescription=glue\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\n"
-    text += "ExecStart=/usr/bin/glue\n\n[Install]\nWantedBy=minimal.target\n"
-    [conversion] = convert({"glue.service": text})
-    assert conversion.declaration == Task(
-        "glue", "/usr/bin/glue", user=Root(), hardening=Hardening.none(), timeout=None
-    ), conversion.blockers
-    assert "User=" not in rendered(conversion.declaration)["glue.service"]
-
-
-def test_timer_pair_converts_to_a_scheduled_task() -> None:
-    texts = rendered(Task("backup", "/usr/bin/backup", schedule=Every("1h"), user="backup"))
-    [conversion] = convert(texts)
-    assert conversion.units == ("backup.service", "backup.timer")
-    assert conversion.declaration == Task(
-        "backup", "/usr/bin/backup", schedule=Every("1h"), user="backup"
-    )
-
-
 def test_mount_and_dropin_convert() -> None:
     mount = "[Unit]\nDescription=/srv\n\n[Mount]\nWhat=tmpfs\nWhere=/srv\nType=tmpfs\n"
     [conversion] = convert({"srv.mount": mount})

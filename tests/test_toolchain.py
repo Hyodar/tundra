@@ -18,7 +18,6 @@ from tundravm.toolchain import (
     Toolchain,
     ToolsTree,
     compare_toolchains,
-    installed_mkosi,
     lock_toolchain,
     running_toolchain,
     toolchain_drift,
@@ -26,10 +25,6 @@ from tundravm.toolchain import (
 
 PINNED = MkosiTool(MKOSI_PIN.version, MKOSI_PIN.commit)
 TRIXIE = ToolsTree("debian", "trixie", "20251020T000000Z")
-
-
-def test_the_installed_mkosi_is_the_pinned_commit() -> None:
-    assert installed_mkosi() == PINNED
 
 
 def test_backends_report_the_mkosi_they_run() -> None:

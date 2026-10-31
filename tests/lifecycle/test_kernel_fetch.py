@@ -313,7 +313,6 @@ def test_the_kernel_cache_key_covers_the_distribution(tmp_path: Path, config: Pa
 TOOL = Build(
     "tool", Git("https://x.example/tool", "main"), script="make", install=(Install("t", "/t"),)
 )
-BUILD_PACKAGE = Variant("dev", add=Fragment("dev", items=(Package("gcc-14", role="build"),)))
 IMAGE_PACKAGE = Variant("slim", add=Fragment("slim", items=(Package("htop"),)))
 
 

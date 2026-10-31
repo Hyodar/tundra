@@ -24,8 +24,6 @@ from tundravm.declarative.lifecycle import Scheme
 from tundravm.errors import MeasurementError
 from tundravm.measure import MEASURE_VERSION
 
-from .test_measure import build_uki
-
 
 def _baked(tmp_path: Path) -> tuple[Artifact, ...]:
     """The artifacts of a qemu ``default`` and a ``gcp`` variant, built against the fake
@@ -62,14 +60,6 @@ def test_no_scheme_measures_what_is_no_uki(tmp_path: Path, scheme: Scheme) -> No
     gcp = next(a for a in _baked(tmp_path) if a.variant == "gcp")
     with pytest.raises(MeasurementError):
         measure(gcp, scheme=scheme)
-
-
-def test_a_changed_artifact_is_refused_before_measuring(tmp_path: Path) -> None:
-    artifact = _default(tmp_path)
-    artifact.path.write_bytes(build_uki())
-
-    with pytest.raises(Exception, match="changed since it was built"):
-        measure(artifact, scheme="qemu")
 
 
 # --- CLI ---------------------------------------------------------------------

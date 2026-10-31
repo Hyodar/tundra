@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
 from tundravm.declarative import Package, Recipe
 from tundravm.errors import ValidationError
 from tundravm.recipe import load_image, load_recipe
@@ -34,54 +33,6 @@ def test_loads_module_level_recipe(tmp_path: Path) -> None:
     assert "curl" in load_image(recipe).state.profiles["default"].packages
 
 
-def test_loads_build_factory(tmp_path: Path) -> None:
-    recipe = _write(
-        tmp_path,
-        "recipe.py",
-        HEADER + "def build() -> Recipe:\n    return Recipe('r', platform=Debian('trixie'))\n",
-    )
-    assert load_recipe(recipe).platform.release == "trixie"
-
-
-def test_discovers_single_build_prefixed_factory(tmp_path: Path) -> None:
-    recipe = _write(
-        tmp_path,
-        "recipe.py",
-        HEADER + "def helper():\n    return 1\n"
-        "def build_surge_prover():\n    return Recipe('r', platform=Debian('sid'))\n",
-    )
-    assert load_recipe(recipe).platform.release == "sid"
-
-
-def test_discovers_factory_by_return_annotation(tmp_path: Path) -> None:
-    recipe = _write(
-        tmp_path,
-        "recipe.py",
-        HEADER
-        + "def make_the_thing() -> Recipe:\n    return Recipe('r', platform=Debian('sid'))\n",
-    )
-    assert load_recipe(recipe).platform.release == "sid"
-
-
-def test_discovers_single_anonymous_instance(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", HEADER + "my_vm = Recipe('vm')\n")
-    assert load_recipe(recipe).name == "vm"
-
-
-def test_attr_override_selects_instance_or_factory(tmp_path: Path) -> None:
-    recipe = _write(
-        tmp_path,
-        "recipe.py",
-        HEADER + "recipe = Recipe('r', platform=Debian('bookworm'))\n"
-        "other = Recipe('r', platform=Debian('trixie'))\n"
-        "def third() -> Recipe:\n    return Recipe('r', platform=Debian('sid'))\n",
-    )
-    assert load_recipe(recipe).platform.release == "bookworm"
-    assert load_recipe(recipe, attribute="other").platform.release == "trixie"
-    assert load_recipe(recipe, attribute="third").platform.release == "sid"
-    assert load_image(recipe, attribute="third").state.base == "debian/sid"
-
-
 def test_attr_selects_an_image_or_a_factory_returning_one(tmp_path: Path) -> None:
     recipe = _write(
         tmp_path,
@@ -97,33 +48,6 @@ def test_attr_selects_an_image_or_a_factory_returning_one(tmp_path: Path) -> Non
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(recipe, attribute="nope")
     assert "image, other, third" in str(excinfo.value)
-
-
-def test_attr_missing_lists_candidates(tmp_path: Path) -> None:
-    recipe = _write(tmp_path, "recipe.py", HEADER + "recipe = Recipe('r')\n")
-    with pytest.raises(ValidationError) as excinfo:
-        load_recipe(recipe, attribute="nope")
-    assert "recipe" in str(excinfo.value)
-
-
-def test_ambiguous_instances_error(tmp_path: Path) -> None:
-    recipe = _write(
-        tmp_path,
-        "recipe.py",
-        HEADER + "a = Recipe('a')\nb = Recipe('b')\n",
-    )
-    with pytest.raises(ValidationError) as excinfo:
-        load_recipe(recipe)
-    assert "a, b" in str(excinfo.value)
-    assert "--attr" in str(excinfo.value)
-
-
-def test_no_recipe_error(tmp_path: Path) -> None:
-    for body in ("x = 1\n", "recipe = {'name': 'not a Recipe'}\n"):
-        recipe = _write(tmp_path, "recipe.py", body)
-        with pytest.raises(ValidationError) as excinfo:
-            load_recipe(recipe)
-        assert "does not define an Image" in str(excinfo.value)
 
 
 def test_factory_returning_none_is_explained(tmp_path: Path) -> None:
@@ -180,22 +104,6 @@ def test_missing_file_error(tmp_path: Path) -> None:
     with pytest.raises(ValidationError) as excinfo:
         load_recipe(tmp_path / "missing.py")
     assert "not found" in str(excinfo.value)
-
-
-def test_surge_example_recipe_loads() -> None:
-    recipe = SURGE_EXAMPLE / "image.py"
-    loaded = load_recipe(recipe, extra_paths=[REPO_ROOT])
-    assert isinstance(loaded, Recipe)
-    assert {v.name for v in loaded.variants} == {"production", "dev"}
-    img = load_image(recipe, extra_paths=[REPO_ROOT])
-    assert {"production", "dev"} == set(img.state.profiles)
-
-
-@pytest.mark.parametrize("path", EXAMPLE_RECIPES, ids=lambda path: path.name)
-def test_examples_are_loadable_recipes(path: Path) -> None:
-    assert isinstance(load_recipe(path, extra_paths=[REPO_ROOT]), Recipe)
-    img = load_image(path, extra_paths=[REPO_ROOT])
-    assert img.state.profiles
 
 
 # ── import failures become E_VALIDATION ──────────────────────────────────

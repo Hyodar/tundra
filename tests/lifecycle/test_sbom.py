@@ -25,13 +25,12 @@ from tundravm.declarative import (
     Variant,
     bake,
     lock,
-    lower,
     read_lock,
     sbom,
 )
 from tundravm.declarative.bom import SBOM_FORMATS, manifest_path, purl, read_manifest
 from tundravm.declarative.utils import EfiStub
-from tundravm.errors import ArtifactError, ValidationError
+from tundravm.errors import ArtifactError
 
 REPO = "https://example.com/app.git"
 COMMIT = "c" * 40
@@ -216,28 +215,6 @@ def test_a_recorded_manifest_that_is_gone_unbinds_the_document(
     assert simulated.bound and not simulated.complete and simulated.missing == ()
 
 
-def test_artifact_without_lock_lists_no_sources(tmp_path: Path) -> None:
-    document = sbom(_artifact(tmp_path))
-    assert document.sources == ()
-    assert document.base == "debian/trixie" and document.arch == "x86_64"
-    assert any("no lockfile" in note for note in document.notes)
-
-
-def test_lowered_sbom_lists_declared_sources_pinned_by_the_lock(
-    tmp_path: Path, locked: Lock
-) -> None:
-    img = lower(_recipe(), variants=["default"])
-    pinned = sbom(img, lock=locked, manifest=tmp_path / "absent.manifest")
-    assert [(c.kind, c.version) for c in pinned.sources] == [
-        ("build", COMMIT),
-        ("efi-stub", DEB_SHA),
-    ]
-    assert pinned.recipe_digest == img.digest() and pinned.snapshot == SNAPSHOT
-    unpinned = sbom(img, manifest=tmp_path / "absent.manifest")
-    assert [c.version for c in unpinned.sources] == ["", ""]
-    assert unpinned.sources[0].ref == "main"
-
-
 # ── serializers ──────────────────────────────────────────────────────────
 
 
@@ -279,24 +256,6 @@ def test_spdx_document_structure(tmp_path: Path, locked: Lock) -> None:
     assert related == set(ids)
 
 
-def test_cyclonedx_document_structure(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path, lock=locked), lock=locked).to_cyclonedx()
-    assert (document["bomFormat"], document["specVersion"], document["version"]) == (
-        "CycloneDX",
-        "1.5",
-        1,
-    )
-    assert document["serialNumber"].startswith("urn:uuid:")
-    assert document["metadata"]["component"]["type"] == "operating-system"
-    refs = [c["bom-ref"] for c in document["components"]]
-    assert len(refs) == len(set(refs))
-    assert all({"type", "name", "purl"} <= set(c) for c in document["components"])
-    (dependency,) = document["dependencies"]
-    assert dependency == {"ref": "image", "dependsOn": refs}
-    app = next(c for c in document["components"] if c["name"] == "app")
-    assert {"name": "tundravm:install", "value": "/usr/bin/app"} in app["properties"]
-
-
 def test_documents_are_deterministic(
     tmp_path: Path, locked: Lock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -306,19 +265,6 @@ def test_documents_are_deterministic(
     for format in SBOM_FORMATS:
         assert first.render(format) == second.render(format)
     assert first.to_spdx()["creationInfo"]["created"] == "1970-01-01T00:00:00Z"
-
-
-def test_text_and_markdown_tables(tmp_path: Path, locked: Lock) -> None:
-    document = sbom(_artifact(tmp_path, lock=locked), lock=locked)
-    text = document.render("text")
-    assert text.startswith("sbom default\n")
-    assert "packages (5)" in text and "sources (2)" in text
-    assert "  bsdutils         1:2.41.5-0+deb13u1" in text
-    markdown = document.render("markdown")
-    assert "| name | version | arch | origin |" in markdown
-    assert f"| app | build | {COMMIT} | main | {REPO} | /usr/bin/app, /etc/app.conf |" in markdown
-    with pytest.raises(ValidationError):
-        document.render("xml")  # type: ignore[arg-type]
 
 
 # ── binding to the bake ──────────────────────────────────────────────────

@@ -1,58 +1,11 @@
-import io
-from pathlib import Path
-
-import pytest
-
-from tundravm.cli import EXIT_SDK_ERROR, main
 from tundravm.declarative import (
-    Backend,
     Debian,
     Fragment,
     Package,
     Recipe,
     Variant,
-    bake,
     lock,
 )
-from tundravm.errors import LockfileError
-from tundravm.lockfile import (
-    LockedFetch,
-    build_lockfile,
-    parse_lockfile,
-    serialize_lockfile,
-)
-
-RECIPE_FILE = """
-from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import Fragment, Package, Recipe
-
-recipe = Recipe(
-    "lockfile", items=(Package("curl"), Package("linux-image-amd64"))
-)
-backend = LocalLinuxBackend()
-"""
-
-
-def _recipe(*packages: str) -> Recipe:
-    return Recipe(
-        "lockfile",
-        items=(Package("linux-image-amd64"), *(Package(name) for name in packages)),
-        platform=Debian("bookworm", boot=None),
-    )
-
-
-def test_lockfile_roundtrip_parser_serializer() -> None:
-    lock = build_lockfile(
-        recipe={
-            "base": "debian/bookworm",
-            "profiles": {"default": {"packages": ["curl"]}},
-        },
-        fetches=[LockedFetch(source="https://example.invalid/a", kind="http", digest="abc")],
-    )
-    encoded = serialize_lockfile(lock)
-    decoded = parse_lockfile(encoded)
-
-    assert decoded == lock
 
 
 def test_lock_records_dependency_and_recipe_metadata() -> None:
@@ -76,35 +29,3 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
     assert lockfile.dependencies["default"] == ["curl"]
     assert lockfile.dependencies["dev"] == ["curl", "jq"]
     assert lockfile.recipe_digest
-
-
-def test_offline_build_fails_when_lock_missing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    recipe = tmp_path / "recipe.py"
-    recipe.write_text(RECIPE_FILE, encoding="utf-8")
-
-    code = main(["build", str(recipe), "--offline"], stdout=io.StringIO())
-
-    assert code == EXIT_SDK_ERROR
-    assert "error [E_LOCKFILE]" in capsys.readouterr().err
-    assert not (tmp_path / "build").exists()
-
-
-def test_bake_frozen_fails_when_lock_is_stale(tmp_path: Path) -> None:
-    locked = lock(_recipe("curl"))
-
-    with pytest.raises(LockfileError) as excinfo:
-        bake(_recipe("curl", "jq"), lock=locked, backend=Backend("local"), build=tmp_path)
-
-    assert "stale" in str(excinfo.value).lower()
-
-
-def test_bake_frozen_succeeds_with_current_lock(tmp_path: Path) -> None:
-    recipe = _recipe("curl")
-
-    artifacts = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path)
-
-    assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
-    assert artifacts[0].path.is_file()

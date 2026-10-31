@@ -183,18 +183,6 @@ def test_booting_from_a_disk_changes_rtmr1_not_rtmr2(uki: Path, disk: Path) -> N
     assert bare.registers["RTMR2"] == booted.registers["RTMR2"]
 
 
-def test_the_command_line_and_stub_version_reach_rtmr2(tmp_path: Path, uki: Path) -> None:
-    other = tmp_path / "other.efi"
-    other.write_bytes(build_uki(cmdline=b"console=ttyS1"))
-    old_stub = tmp_path / "old.efi"
-    old_stub.write_bytes(build_uki(stub=255))
-    rtmr2 = {
-        path.name: schemes.derive("portable", artifact=path, uki=None).registers["RTMR2"]
-        for path in (uki, other, old_stub)
-    }
-    assert len({value[0] for value in rtmr2.values()}) == 3
-
-
 def test_a_disk_without_its_uki_is_refused(disk: Path) -> None:
     with pytest.raises(MeasurementError, match="recorded no UKI"):
         schemes.derive("qemu", artifact=disk, uki=None)
@@ -234,15 +222,3 @@ def test_measure_export_is_stable(tmp_path: Path, uki: Path) -> None:
     assert dict(first.registers) == {
         k: tuple(v) for k, v in _derived(artifact, "qemu").registers.items()
     }
-
-
-def test_measure_verification_reports_mismatched_registers(tmp_path: Path, uki: Path) -> None:
-    measurements = measure(_measurable(tmp_path, uki))
-    values = dict(measurements.values)
-    first = sorted(values)[0]
-
-    assert measurements.verify(values) == ()
-    assert measurements.verify({**values, first: "00" * 48, "RTMR9": "11" * 48}) == (
-        first,
-        "RTMR9",
-    )

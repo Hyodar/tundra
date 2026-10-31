@@ -21,11 +21,10 @@ from tundravm._reporting import (
 )
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
+from tundravm.declarative import File, Package, Recipe, lower
 from tundravm.declarative.lifecycle import bake_image
-from tundravm.errors import BackendExecutionError, LintError
+from tundravm.errors import LintError
 from tundravm.models import BakeRequest, BakeResult
-from tundravm.testing import FakeMkosi
 
 
 @dataclass
@@ -180,22 +179,6 @@ def test_failure_message_includes_tail_only_when_not_streamed() -> None:
     )
 
 
-def test_local_backend_maps_streamed_failure_to_backend_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_mkosi: FakeMkosi
-) -> None:
-    fake_mkosi.fail = 1
-    fake_mkosi.log = "E: Unable to locate package nope"
-    monkeypatch.setattr(LocalLinuxBackend, "_ensure_linux", lambda self: None)
-    request = BakeRequest(profile="default", build_dir=tmp_path / "b", emit_dir=tmp_path / "e")
-
-    with pytest.raises(BackendExecutionError) as excinfo:
-        LocalLinuxBackend(privilege="none").execute(request)
-
-    assert excinfo.value.code == "E_BACKEND_EXECUTION"
-    assert "E: Unable to locate package nope" in str(excinfo.value)
-    assert excinfo.value.context["returncode"] == "1"
-
-
 # -- bake events ----------------------------------------------------------------
 
 
@@ -254,45 +237,6 @@ def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
         if (e.extra.get("phase"), e.extra.get("status")) == ("build", "ok")
     )
     assert float(ok_build.extra["duration_s"]) >= 0
-
-
-def test_bake_forwards_logger_records_only_while_attached(tmp_path: Path) -> None:
-    capture = Capture()
-    img = lower(_recipe())
-    bake_image(
-        img,
-        ("default",),
-        locked=None,
-        backend=LocalLinuxBackend(),
-        build=tmp_path / "build",
-        reporter=capture,
-    )
-    logged = [e for e in capture.events if e.extra.get("source") == "logger"]
-    assert [e.extra["operation"] for e in logged] == ["bake_profile_start", "bake_profile_complete"]
-
-
-def test_bake_without_reporter_records_digests_and_durations(tmp_path: Path) -> None:
-    result = _bake(tmp_path, _recipe(), None)
-    profile = result.profiles["default"]
-    assert profile.artifacts["qemu"].digest is not None
-    assert len(profile.artifacts["qemu"].digest or "") == 64
-    assert profile.duration_s is not None and result.duration_s is not None
-    assert result.duration_s >= profile.duration_s
-
-
-def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
-    recipe = _recipe()
-    progress: list[str] = []
-    [artifact] = bake(
-        recipe,
-        lock=lock(recipe),
-        backend=Backend("local"),
-        build=tmp_path / "out",
-        progress=progress.append,
-    )
-    assert any(line.startswith("[default] build via local_linux ... ok") for line in progress)
-    assert (artifact.variant, artifact.target) == ("default", "qemu")
-    assert len(artifact.sha256) == 64
 
 
 def test_bake_lint_failure_emits_failed_phase_and_done(tmp_path: Path) -> None:

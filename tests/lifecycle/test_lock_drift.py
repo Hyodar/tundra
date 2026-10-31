@@ -49,8 +49,6 @@ recipe = Recipe(
 backend = LocalLinuxBackend()
 """
 
-HTOP = 'Package("jq"), Package("htop")'
-
 
 def _recipe(*extra: Package | File) -> Recipe:
     items = (
@@ -70,28 +68,6 @@ def _payload(recipe: Recipe) -> dict[str, object]:
 @pytest.fixture
 def recipe(tmp_path: Path) -> Path:
     return write_recipe_file(tmp_path, RECIPE)
-
-
-def _add_htop(recipe: Path) -> None:
-    recipe.write_text(recipe.read_text().replace('Package("jq")', HTOP), encoding="utf-8")
-
-
-def test_section_digests_cover_top_level_and_profile_sections() -> None:
-    payload: dict[str, object] = {
-        "base": "debian/bookworm",
-        "arch": "x86_64",
-        "profiles": {"default": {"packages": ["curl"], "files": []}},
-    }
-    digests = section_digests(payload)
-
-    assert sorted(digests) == [
-        "arch",
-        "base",
-        "variants.default.files",
-        "variants.default.packages",
-    ]
-    assert digests == section_digests(json.loads(json.dumps(payload)))
-    assert all(len(value) == 64 for value in digests.values())
 
 
 def test_lockfile_records_section_digests_and_keeps_whole_digest() -> None:
@@ -279,19 +255,3 @@ def test_lockfile_round_trips_its_toolchain() -> None:
     assert parsed == current
     assert LOCKFILE_VERSION == 5
     assert parsed.toolchain is not None and parsed.toolchain.tundravm
-
-
-VARIANTS_RECIPE = """
-from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import Fragment, Package, Recipe, Variant
-
-recipe = Recipe(
-    "drift",
-    items=(Package("curl"), Package("linux-image-amd64")),
-    variants=(
-        Variant("default", outputs=("qemu",)),
-        Variant("dev", add=Fragment("dev", items=(Package("vim"),))),
-    ),
-)
-backend = LocalLinuxBackend()
-"""

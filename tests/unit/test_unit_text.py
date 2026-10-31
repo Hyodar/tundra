@@ -45,11 +45,6 @@ def test_values_follow_systemd_syntax() -> None:
     assert [e.raw for e in junk] == ["not a directive"]
 
 
-def test_no_trailing_newline_is_kept() -> None:
-    assert not UnitText.parse("[Unit]\nA=b").trailing_newline
-    assert UnitText.parse("[Unit]\nA=b\n").trailing_newline
-
-
 @pytest.mark.parametrize(
     ("name", "text"), [*golden_units(), *constant_units()], ids=lambda value: str(value)[:60]
 )

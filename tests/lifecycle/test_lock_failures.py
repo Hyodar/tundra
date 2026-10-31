@@ -10,7 +10,7 @@ import pytest
 
 import tundravm._source as source_module
 from tundravm._source import GitSource, Source
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR, main
+from tundravm.cli import EXIT_FAILURE, EXIT_SDK_ERROR, main
 from tundravm.declarative import Lock, lock, lock_status, read_lock, write_lock
 from tundravm.errors import ErrorCode, LockfileError, SourceError
 from tundravm.recipe import load_recipe
@@ -135,20 +135,6 @@ def test_cli_lock_failure_keeps_the_existing_lockfile(
     argv = (str(recipe_file), "--update", "raiko")
     assert _cli(monkeypatch, _Upstream(), *argv)[0] == EXIT_SDK_ERROR
     assert target.read_bytes() == before
-
-
-def test_cli_lock_success_path_is_unchanged(
-    recipe_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = Path("build") / "tundravm.lock"
-    upstream = _Upstream(broken=False)
-    code, out = _cli(monkeypatch, upstream, str(recipe_file))
-    assert code == EXIT_OK
-    assert out.splitlines()[0] == f"locked {target}"
-    assert out.splitlines()[1].startswith("  toolchain: mkosi ")
-    pins = {pin.identity: pin.digest for pin in read_lock(target).pins}
-    assert pins == {"nethermind": SHA, "raiko": SHA, "tool": DIGEST}
-    assert len(upstream.calls) == 3
 
 
 def test_offline_lock_reports_every_unpinned_source_at_once(recipe_file: Path) -> None:

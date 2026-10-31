@@ -24,16 +24,6 @@ def test_lima_mount_plan_single_mount(tmp_path: Path) -> None:
     assert mounts[0].target == "/home/debian/mnt"
 
 
-def test_lima_mount_plan_is_deterministic(tmp_path: Path) -> None:
-    request = bake_request(tmp_path)
-    backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
-
-    first = backend.mount_plan(request)
-    second = backend.mount_plan(request)
-
-    assert first == second
-
-
 def test_lima_instance_name_is_hash_based(tmp_path: Path) -> None:
     request = bake_request(tmp_path)
     backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")

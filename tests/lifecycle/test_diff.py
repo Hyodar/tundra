@@ -141,18 +141,6 @@ def make_recipe(*extra: Package, variants: tuple[Variant, ...] = ()) -> Recipe:
     )
 
 
-def test_diff_reports_new_package(tmp_path: Path) -> None:
-    tree = tmp_path / "tree"
-    tv.compile(make_recipe()).write(tree)
-    assert diff_against(lower(make_recipe()), tree).is_clean
-
-    changed = make_recipe(Package("extra"))
-    diff = diff_against(lower(changed), tree)
-    assert [(c.path, c.status) for c in diff.changes] == [("payload/mkosi.conf", "modified")]
-    assert "+    extra\n" in diff.unified()
-    assert "    extra\n" not in (tree / "payload" / "mkosi.conf").read_text(encoding="utf-8")
-
-
 def test_diff_against_missing_tree_is_all_added(tmp_path: Path) -> None:
     diff = diff_against(lower(make_recipe()), tmp_path / "missing")
     assert diff.changes

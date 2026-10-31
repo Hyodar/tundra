@@ -342,23 +342,6 @@ def test_lima_backend_mounts_the_sources(tmp_path: Path) -> None:
 
 # ── CLI ──────────────────────────────────────────────────────────────
 
-RECIPE = """
-from tundravm.declarative import Build, Fragment, Git, Install, Package, Recipe
-
-recipe = Recipe(
-    "tool",
-    items=(
-        Package("linux-image-amd64"),
-        Build(
-            "tool",
-            Git({url!r}, "main"),
-            script="make",
-            install=(Install("tool", "/usr/bin/tool"),),
-        ),
-    ),
-)
-"""
-
 
 # ── checkout verification ────────────────────────────────────────────
 

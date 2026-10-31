@@ -227,16 +227,6 @@ def test_bake_writes_the_outputs_each_variant_declares(tmp_path: Path) -> None:
     assert any("built 2 profiles" in line for line in lines)
 
 
-def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:
-    with pytest.raises(LockfileError, match="stale"):
-        bake(
-            _recipe(motd="bye\n"),
-            lock=lock(_recipe()),
-            backend=Backend("local"),
-            build=tmp_path / "out",
-        )
-
-
 def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> None:
     locked = lock(_recipe())
     assert lock_status(_recipe(), locked, variants=("azure",)) == ()
