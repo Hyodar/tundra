@@ -420,7 +420,9 @@ def _handler(answer: Answer) -> type[_Lines]:
 def _tcp(answer: Answer) -> Iterator[str]:
     server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _handler(answer))
     server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    ).start()
     try:
         yield f"tcp://127.0.0.1:{server.server_address[1]}"
     finally:

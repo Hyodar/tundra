@@ -50,6 +50,14 @@ MANAGEMENT_PORT = 8745
 SSH_PORT = 22
 QEMU = "qemu-system-x86_64"
 VOLUME_SIZE = 16 << 30
+LAUNCH_GRACE = 0.5
+"""Seconds a launched QEMU must survive before it counts as started."""
+POLL = 0.25
+"""Seconds between reads of the console while following an attached instance."""
+STOP_POLL = 0.1
+"""Seconds between checks that a stopped instance is gone."""
+CONNECT_TIMEOUT = 1.0
+"""Seconds a readiness probe waits for a port to accept a connection."""
 """The size of each sparse volume disk a local instance gets."""
 CONSOLE_CMDLINE = (
     "console=ttyS0",
@@ -337,7 +345,7 @@ def launch(
     )
     instance.save()
     instance.event("launched", mode=mode, build=build.id, pid=process.pid)
-    time.sleep(0.5)
+    time.sleep(LAUNCH_GRACE)
     if process.poll() is not None:
         instance.data["state"] = "exited"
         instance.save()
@@ -370,7 +378,7 @@ def _follow(instance: Instance, process: subprocess.Popen[bytes], out: TextIO) -
                     out.flush()
             if process.poll() is not None:
                 break
-            time.sleep(0.25)
+            time.sleep(POLL)
     except KeyboardInterrupt:
         stop(instance)
         return
@@ -410,10 +418,11 @@ def alive(instance: Instance) -> bool:
     return True
 
 
-def reachable(host: str, port: int | None, timeout: float = 1.0) -> bool:
+def reachable(host: str, port: int | None, timeout: float | None = None) -> bool:
     if port is None:
         return False
-    with contextlib.suppress(OSError), socket.create_connection((host, port), timeout=timeout):
+    wait = CONNECT_TIMEOUT if timeout is None else timeout
+    with contextlib.suppress(OSError), socket.create_connection((host, port), timeout=wait):
         return True
     return False
 
@@ -476,7 +485,7 @@ def stop(instance: Instance, timeout: float = 10.0) -> bool:
         conn.sendall(b"quit\n")
     deadline = time.monotonic() + timeout
     while alive(instance) and time.monotonic() < deadline:
-        time.sleep(0.1)
+        time.sleep(STOP_POLL)
     pid = instance.data.get("pid")
     if alive(instance) and isinstance(pid, int):
         with contextlib.suppress(ProcessLookupError):

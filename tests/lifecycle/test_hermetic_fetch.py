@@ -84,7 +84,9 @@ def snapshot(tmp_path: Path) -> Iterator[tuple[str, str]]:
     pool.mkdir(parents=True)
     (pool / f"systemd-boot-efi_{EFI_VERSION}_amd64.deb").write_bytes(DEB_BYTES)
     server = HTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(root)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         yield (

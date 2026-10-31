@@ -71,6 +71,7 @@ class Fake:
         self.transcript = tmp_path / "transcript.txt"
         self.log = tmp_path / "boot" / "console.log"
         self.monkeypatch = monkeypatch
+        monkeypatch.setattr("tundravm.testing._boot._POLL", 0.02)  # the fake console is instant
         monkeypatch.setenv("FAKE_QEMU_ARGV", str(self.argv))
         monkeypatch.setenv("FAKE_QEMU_TRANSCRIPT", str(self.transcript))
 
@@ -143,7 +144,7 @@ def test_emergency_mode_is_fatal(fake: Fake) -> None:
 
 
 def test_a_boot_that_never_reaches_the_target_times_out(fake: Fake) -> None:
-    result = fake.run(*BOOTED[:2], timeout=1)
+    result = fake.run(*BOOTED[:2], timeout=0.3)
     assert result.timed_out and not result.ok
     assert result.missing == ("Reached target minimal.target",)
     assert result.duration < 15
@@ -341,7 +342,9 @@ class _Page(http.server.BaseHTTPRequestHandler):
 
 def test_boot_waits_for_each_http_url_and_keeps_the_answer(fake: Fake) -> None:
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Page)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    ).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     try:
         result = fake.run(*BOOTED, forward={18080: 8080, 2222: 22}, wait_http=(url,))
@@ -359,7 +362,7 @@ def test_an_http_url_that_never_answers_fails_the_boot(fake: Fake) -> None:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         url = f"http://127.0.0.1:{probe.getsockname()[1]}/"
-    result = fake.run(*BOOTED, wait_http=(url,), timeout=3)
+    result = fake.run(*BOOTED, wait_http=(url,), timeout=0.5)
     assert not result.ok and result.timed_out and result.missing == (url,)
     with pytest.raises(AssertionError, match="did not answer"):
         result.http_get(url)

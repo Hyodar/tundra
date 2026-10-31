@@ -37,6 +37,16 @@ image = Image(
 PYPROJECT = '[project]\nname = "demo"\nversion = "0"\n\n[tool.tundravm]\nimage = "demo.py"\n'
 
 
+@pytest.fixture(autouse=True)
+def _short_instance_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fake QEMU starts, prints and stops at once, and nothing listens on a deployment's
+    address: wait milliseconds, not the seconds a real guest needs."""
+    monkeypatch.setattr("tundravm.instances.LAUNCH_GRACE", 0.05)
+    monkeypatch.setattr("tundravm.instances.POLL", 0.01)
+    monkeypatch.setattr("tundravm.instances.STOP_POLL", 0.01)
+    monkeypatch.setattr("tundravm.instances.CONNECT_TIMEOUT", 0.05)
+
+
 @dataclass(frozen=True, slots=True)
 class Result:
     code: int

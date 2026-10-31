@@ -78,7 +78,9 @@ def served(tmp_path: Path) -> Iterator[tuple[str, str]]:
     (root / "tool-1.0.tar.gz").write_bytes(data.getvalue())
     handler = partial(_QuietHandler, directory=str(root))
     server = HTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_port}/tool-1.0.tar.gz"

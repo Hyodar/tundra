@@ -94,7 +94,9 @@ def tarball(tmp_path: Path) -> Iterator[tuple[str, str]]:
         archive.addfile(info, io.BytesIO(payload))
     (root / "linux-6.1.tar.gz").write_bytes(data.getvalue())
     server = HTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(root)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_port}/linux-6.1.tar.gz"
