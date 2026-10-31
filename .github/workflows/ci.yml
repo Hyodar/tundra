@@ -1,9 +1,12 @@
-# The test and boot jobs bake the Image templates. Every image implies the evidence
-# service, which builds tundra-tools from https://github.com/Hyodar/tundra-tools, a private
-# repository the runner's GITHUB_TOKEN cannot read. When the repository secret
-# TUNDRA_TOOLS_TOKEN exists (a fine-grained token with read-only Contents on tundra-tools),
-# those jobs rewrite that URL to carry it in the runner's global git config, so the lock's
-# `git ls-remote` and the host-side fetch read it:
+# test is the unit suite alone; templates and boot bake the Image templates for real, and
+# the fixture jobs build tests/fixtures/native-tree/recipe.py, which fetches no source.
+#
+# Every image implies the evidence service, which builds tundra-tools from
+# https://github.com/Hyodar/tundra-tools, a private repository the runner's GITHUB_TOKEN
+# cannot read. When the repository secret TUNDRA_TOOLS_TOKEN exists (a fine-grained token
+# with read-only Contents on tundra-tools), templates and boot rewrite that URL to carry it
+# in the runner's global git config, so the lock's `git ls-remote` and the host-side fetch
+# read it:
 #   gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra
 # Their checkouts keep no credentials: the GITHUB_TOKEN header actions/checkout persists
 # for github.com would override the token in the URL. With the token, the template tests
@@ -21,9 +24,53 @@ env:
   # A step's `if:` cannot read secrets: this says whether the token exists, not what it is.
   HAS_TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN != '' }}
 
+concurrency:
+  # A newer push to the same branch (or pull request) cancels the run it supersedes.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    # Lint, format, types and the unit suite: a fake mkosi and fake checkouts, no sudo, no
+    # build host, no network resolution (tests/conftest.py).
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check src tests examples
+
+      - name: Typecheck
+        run: uv run mypy .
+
+      - name: Unit tests
+        run: uv run pytest -m "not integration"
+
+      - name: Check the surge image and its committed tree
+        # The surge image tracks upstream branches on purpose and ships no lockfile, so
+        # source-unpinned warnings are expected; errors and tree drift fail the step.
+        run: uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+
+  templates:
+    # Real mkosi builds on the runner: the smoke recipe (no source builds) and the service
+    # and cloud templates, whose evidence service needs tundra-tools (see the header).
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,19 +109,10 @@ jobs:
             "https://github.com/Hyodar/tundra-tools"
           echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"
 
-      - name: Lint
-        run: uv run ruff check .
-
-      - name: Typecheck
-        run: uv run mypy .
-
-      - name: Tests
-        run: uv run pytest
-
-      - name: Check the surge image and its committed tree
-        # The surge image tracks upstream branches on purpose and ships no lockfile, so
-        # source-unpinned warnings are expected; errors and tree drift fail the step.
-        run: uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+      - name: Bake the smoke recipe and the templates
+        run: >-
+          uv run pytest tests/integration/test_mkosi_smoke.py
+          tests/integration/test_templates_bake.py -m integration -v -rs -rP
 
   boot:
     # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
