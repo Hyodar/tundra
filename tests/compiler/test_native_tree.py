@@ -14,6 +14,8 @@ import json
 import os
 import re
 import runpy
+import shutil
+import struct
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -24,7 +26,12 @@ import pytest
 
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
 from tundravm.check import declaration_check
-from tundravm.compiler.emit_mkosi import MAIN_IMAGE_SETTINGS, MKOSI_VERSION, verity_uuids
+from tundravm.compiler.emit_mkosi import (
+    ESP_MKFS_ENVIRONMENT,
+    MAIN_IMAGE_SETTINGS,
+    MKOSI_VERSION,
+    verity_uuids,
+)
 from tundravm.declarative import (
     Recipe,
     Setting,
@@ -224,7 +231,7 @@ def test_main_image_is_the_qemu_disk_with_every_reproducibility_setting() -> Non
         "ToolsTreePackages=qemu-utils\n"
         "History=no\n"
         "WithNetwork=no\n"
-        "Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512\n"
+        'Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"\n'
         "\n"
         "[Content]\n"
         "SourceDateEpoch=0\n"
@@ -271,13 +278,45 @@ def test_cloud_glue_is_in_the_payload_and_gated_at_boot() -> None:
         assert "[Match]" not in conf.read_text(encoding="utf-8"), conf
 
 
+def test_the_esp_is_a_fixed_fat32_by_cluster_count(tmp_path: Path) -> None:
+    """Every disk's ESP is the fixed 128M partition, formatted as repart does offline
+    (``mkfs.vfat -F 32 -S 4096`` then the tree's options, the last ``-S`` winning): 512-byte
+    sectors and clusters, 65525 clusters or more (UEFI's FAT32), room for the UKI."""
+    for root in ROOTS:
+        for disk in ("", "mkosi.images/azure/", "mkosi.images/gcp/"):
+            esp = (FIXTURE / f"tree-{root}" / disk / "mkosi.repart/00-esp.conf").read_text()
+            assert esp == (
+                "[Partition]\nType=esp\nFormat=vfat\nCopyFiles=/efi:/\n"
+                "SizeMinBytes=128M\nSizeMaxBytes=128M\n"
+            ), (root, disk)
+    mkfs = shutil.which("mkfs.vfat") or shutil.which("mkfs.fat")
+    if mkfs is None:
+        pytest.skip("mkfs.vfat is not installed")
+    image = tmp_path / "esp.img"
+    image.write_bytes(b"")
+    os.truncate(image, 128 << 20)
+    options = ESP_MKFS_ENVIRONMENT.partition("=")[2].partition("=")[2].strip('"').split()
+    subprocess.run(
+        [mkfs, "-i", "12345678", "-n", "ESP", "-F", "32", "-S", "4096", *options, str(image)],
+        check=True,
+        capture_output=True,
+    )
+    boot = image.read_bytes()[:512]
+    sector, per_cluster, reserved, fats = struct.unpack_from("<HBHB", boot, 11)
+    total, fat_sectors = struct.unpack_from("<II", boot, 32)
+    clusters = (total - reserved - fats * fat_sectors) // per_cluster
+    assert (sector, per_cluster) == (512, 1)
+    assert clusters >= 65525
+    assert clusters * sector >= 125 << 20  # a UKI of up to 125 MiB fits
+
+
 def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
     tree = FIXTURE / "tree-initramfs"
     for target, script in (("azure", "vhd"), ("gcp", "tar")):
         assert (tree / f"mkosi.images/{target}/mkosi.conf").read_text(encoding="utf-8") == (
             "[Config]\nDependencies=payload\n\n"
             f"[Output]\nFormat=disk\nOutput={target}\nSeed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70\n\n"
-            "[Build]\nEnvironment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512\n\n"
+            '[Build]\nEnvironment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"\n\n'
             "[Content]\nBootable=no\nExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI\n"
         )
         esp = (tree / f"mkosi.images/{target}/mkosi.repart/00-esp.conf").read_text(encoding="utf-8")

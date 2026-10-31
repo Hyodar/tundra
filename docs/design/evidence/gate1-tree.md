@@ -54,15 +54,32 @@ proven in CI (section "What CI proves" below).
   UUID only: `config_parse_uuid` refuses `uninitialized`).
 - `ToolsTreePackages=qemu-utils`: the Azure converter runs `qemu-img`, which the default
   Debian tools tree does not name; the GCP converter and both GPT resizes use python3 only.
-- `Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512` in the main image and each wrapper:
-  repart (systemd 257, offline) formats the ESP FAT32 with 4096-byte sectors, one per
-  cluster, and `Minimize=guess` sizes the file system to the UKI, not to the partition, so
-  the fixture's ESP held 29158 clusters (verity) and the service template's 38260. UEFI types
-  a FAT by its cluster count (FAT32 needs 65525), so OVMF saw a FAT16 it could not mount,
-  found no `EFI/BOOT/BOOTX64.EFI` and fell through PXE and HTTP boot to its shell. A larger
-  `SizeMinBytes=` does not help (the partition grows, the minimized file system does not:
-  512M partition, still 29158 clusters); mkfs.vfat takes the last `-S`, and 512-byte sectors,
-  the disk's own, give the same file system eight times the clusters.
+- The ESP is a fixed `SizeMinBytes=128M`, `SizeMaxBytes=128M` (section 3.6 says
+  `SizeMinBytes=64M`, minimized) formatted with
+  `Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"` in the main image and each
+  wrapper. The size rule, and why:
+  - *FAT32 by cluster count.* UEFI types a FAT by its cluster count (FAT32 needs 65525), and
+    repart (systemd 257, offline) formats the ESP `mkfs.vfat -F 32 -S 4096`: 4096-byte
+    sectors, one per cluster, gave the fixture's ESP 29158 clusters (verity) and the service
+    template's 38260, so OVMF saw a FAT16 it could not mount, found no
+    `EFI/BOOT/BOOTX64.EFI` and fell through PXE and HTTP boot to its shell. mkfs.vfat takes
+    the last `-S`: `-S512` (the disk's own sectors) and `-s1` (one sector per cluster) make
+    every ESP from 34 MiB up FAT32 by count; `-F 32` refuses a smaller one instead of writing
+    a FAT16 (dosfstools: "Not enough or too many clusters").
+  - *Not minimized.* `Minimize=guess` sizes a vfat by formatting a 1 TiB sparse file, copying
+    the files in and taking 1.5 times the bytes written (`context_minimize`, repart.c). On
+    1 TiB with 512-byte sectors mkfs.fat writes 256 MiB of FATs, so the 65 MiB initramfs UKI
+    got a 481 MiB ESP (504885248 bytes, 123013 clusters) and the 43 MiB verity one 449 MiB
+    (470765568 bytes), and `azure.vhd`, a fixed VHD, carried all of it. `-s1` cannot be
+    combined with it either: 1 TiB of 512-byte clusters is more than FAT32 can count, and
+    mkfs.fat refuses the first format.
+  - *128 MiB.* At that size the FAT32 has 258078 clusters and 126 MiB of data
+    (`test_the_esp_is_a_fixed_fat32_by_cluster_count` formats it as repart does), room for
+    every UKI tundravm ships: the fixture's 65 MiB (initramfs) and 43 MiB (verity), the
+    templates' at most 72 MiB, surge's verity UKI (kernel and initrd only). A UKI over about
+    125 MiB fails the disk's build (`mcopy`: disk full); `RootFS.verity()` keeps the OS out of
+    the UKI. The size is the same on every build, whatever the UKI's, and the converters grow
+    the disk around it as before.
 - The verity UKI also names `root=/dev/mapper/root`: the device systemd-veritysetup-generator
   opens for `roothash=`, so the initrd mounts the root through dm-verity whatever the boot
   path (`-kernel` sets no `LoaderDevicePartUUID`, which `gpt-auto` needs) and never mounts the
@@ -195,7 +212,7 @@ ToolsTreeSnapshot=20251113T083151Z
 ToolsTreePackages=qemu-utils
 History=no
 WithNetwork=no
-Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512
+Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"
 
 [Content]
 SourceDateEpoch=0
@@ -218,7 +235,7 @@ Output=azure
 Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70
 
 [Build]
-Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512
+Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"
 
 [Content]
 Bootable=no
@@ -232,8 +249,8 @@ ExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes=128M
+SizeMaxBytes=128M
 ```
 
 `mkosi.images/gcp/mkosi.conf`
@@ -248,7 +265,7 @@ Output=gcp
 Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70
 
 [Build]
-Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512
+Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"
 
 [Content]
 Bootable=no
@@ -262,8 +279,8 @@ ExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes=128M
+SizeMaxBytes=128M
 ```
 
 `mkosi.images/payload/mkosi.conf`
@@ -280,8 +297,8 @@ Include=../../payload
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes=128M
+SizeMaxBytes=128M
 ```
 
 `payload/mkosi.conf`
@@ -376,7 +393,7 @@ Packages=
 - payload `ExtraTrees`: <tree>/payload/mkosi.extra
 - payload scripts: <tree>/payload/mkosi.postinst.d/50-postinst.sh, <tree>/payload/mkosi.finalize.d/50-finalize.sh
 - main `ExtraTrees`: <tree>/mkosi.output/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI
-- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
+- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 -s1 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
 
 ### Resolved summary, every node (`--profile=dev --dependency=azure --dependency=gcp`)
 
@@ -396,7 +413,7 @@ Packages=
 - azure `PostOutputScripts`: <tree>/mkosi.images/azure/mkosi.postoutput.d/vhd
 - gcp `PostOutputScripts`: <tree>/mkosi.images/gcp/mkosi.postoutput.d/tar
 - main `ExtraTrees`: <tree>/mkosi.output/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI
-- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
+- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 -s1 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
 
 Full normalised summary: `tests/fixtures/native-tree/summary-initramfs.json`.
 
@@ -532,7 +549,7 @@ ToolsTreeSnapshot=20251113T083151Z
 ToolsTreePackages=qemu-utils
 History=no
 WithNetwork=no
-Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512
+Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"
 
 [Content]
 SourceDateEpoch=0
@@ -557,7 +574,7 @@ Output=azure
 Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70
 
 [Build]
-Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512
+Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"
 
 [Content]
 Bootable=no
@@ -573,8 +590,8 @@ ExtraTrees=%O/payload.root-verity.raw:/payload/root-verity.raw
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes=128M
+SizeMaxBytes=128M
 ```
 
 `mkosi.images/azure/mkosi.repart/10-root.conf`
@@ -607,7 +624,7 @@ Output=gcp
 Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70
 
 [Build]
-Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512
+Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"
 
 [Content]
 Bootable=no
@@ -623,8 +640,8 @@ ExtraTrees=%O/payload.root-verity.raw:/payload/root-verity.raw
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes=128M
+SizeMaxBytes=128M
 ```
 
 `mkosi.images/gcp/mkosi.repart/10-root.conf`
@@ -659,8 +676,8 @@ Include=../../payload
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes=128M
+SizeMaxBytes=128M
 ```
 
 `mkosi.repart/10-root.conf`
@@ -809,7 +826,7 @@ Minimize=best
 - payload `ExtraTrees`: <tree>/payload/mkosi.extra
 - payload scripts: <tree>/payload/mkosi.postinst.d/50-postinst.sh, <tree>/payload/mkosi.finalize.d/50-finalize.sh
 - main `ExtraTrees`: <tree>/mkosi.output/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI, <tree>/mkosi.output/payload.root.raw:/payload/root.raw, <tree>/mkosi.output/payload.root-verity.raw:/payload/root-verity.raw
-- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
+- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 -s1 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
 
 ### Resolved summary, every node (`--profile=dev --dependency=azure --dependency=gcp`)
 
@@ -830,7 +847,7 @@ Minimize=best
 - azure `PostOutputScripts`: <tree>/mkosi.images/azure/mkosi.postoutput.d/vhd
 - gcp `PostOutputScripts`: <tree>/mkosi.images/gcp/mkosi.postoutput.d/tar
 - main `ExtraTrees`: <tree>/mkosi.output/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI, <tree>/mkosi.output/payload.root.raw:/payload/root.raw, <tree>/mkosi.output/payload.root-verity.raw:/payload/root-verity.raw
-- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
+- main `SourceDateEpoch=0`, `History=False`, `WithNetwork=False`, `Environment`: SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512 -s1 (each wrapper too), `MinimumVersion=27.1`, `RepartDirectories`: <tree>/mkosi.repart
 
 Full normalised summary: `tests/fixtures/native-tree/summary-verity.json`.
 
@@ -865,11 +882,18 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
   (`default-initrd`, the `Format=disk` payload split into `payload.efi`, `payload.root.raw`
   and `payload.root-verity.raw`, each disk, each converter).
 - **Item 3** (`test_fixture_boot.py`, `test_verity_boot.py`
-  `test_qemu_disk_esp_is_a_fat32_the_firmware_reads`): with
-  `SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512` the ESP is `FatLayout(bytes_per_sector=512,
-  sectors_per_cluster=8, clusters=123013)` (initramfs, 504885248 bytes) and `clusters=114697`
-  (verity, 470765568 bytes). Before that change it was 4096-byte sectors with 38260 clusters
-  (service template, run 41135443949) and 29158 (verity), and OVMF answered
+  `test_qemu_disk_esp_is_a_fat32_the_firmware_reads`): run
+  [41148955043](https://github.com/Hyodar/tundra/actions/runs/41148955043) (branch
+  `ci/compiler-fixes`), with the fixed 128M ESP and `SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"`:
+  the ESP is `FatLayout(bytes_per_sector=512, sectors_per_cluster=1, total_sectors=262144,
+  clusters=258078, fat32_layout=True)`, 134217728 bytes, for both layouts (UKIs of 68019200
+  bytes, initramfs, and 45276672, verity). `qemu.raw` is 135286784 bytes (initramfs) and
+  262017024 (verity), `azure.vhd` 262144512 (verity); in run 41140855928, under
+  `Minimize=guess` and `-S512` alone, they were 505954304, 598564864 and 598737408, the ESP
+  `clusters=123013` (initramfs, 504885248 bytes) and `clusters=114697` (verity, 470765568
+  bytes). `fixture-boot`, `verity`, `verity-cloud` and `reproduce` are green on it, and the
+  `reproduce` digests match. Before the 512-byte sectors it was 4096-byte sectors with 38260
+  clusters (service template, run 41135443949) and 29158 (verity), and OVMF answered
   `BdsDxe: failed to load Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0): Not Found`,
   tried PXE and HTTP boot and stopped at `UEFI Interactive Shell v2.2` (runs 41131910330,
   41135443949, 41137178661).
@@ -948,9 +972,6 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
   the initramfs layout only. The root hash matched across runs 41139713901 and 41140855928
   (`784caec0...`), but no job compares the digests.
 - **The surge tree** is not built by any job.
-- **The ESP size**: with 512-byte sectors, repart's `Minimize=guess` makes the ESP
-  470-505MB for a 45MB UKI (it was 120-157MB with 4096-byte sectors). `qemu.raw` stays sparse,
-  but `azure.vhd` is a fixed VHD of that size.
 
 ## Acceptance
 
@@ -958,5 +979,6 @@ Gate 1 was accepted on master `eebdcfa` (2026-10-30) with CI run 41126669505 gre
 three jobs then defined: `test`, `boot` (the minimal and service templates booted under QEMU
 from `payload.efi`) and `reproduce`. Run 41140855928 adds the verity layout built end to end
 and booted from dm-verity, the converters keeping its partitions, and `qemu.raw` booted
-through its ESP. Still open: the templates' boots (repository access), the GCE import, a
-reproduction of the verity artifacts, and the surge tree build.
+through its ESP. Run 41148955043 boots both layouts from the fixed 128M ESP (the size rule
+is in "Deviations from section 3.6"). Still open: the templates' boots (repository access),
+the GCE import, a reproduction of the verity artifacts, and the surge tree build.

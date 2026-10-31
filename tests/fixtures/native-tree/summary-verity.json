@@ -138,7 +138,7 @@
         ],
         "Distribution": "debian",
         "Environment": {
-          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512 -s1"
         },
         "ExtraTrees": [
           {
@@ -349,7 +349,7 @@
         ],
         "Distribution": "debian",
         "Environment": {
-          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512 -s1"
         },
         "ExtraTrees": [
           {
@@ -426,7 +426,7 @@
         ],
         "Distribution": "debian",
         "Environment": {
-          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512 -s1"
         },
         "ExtraTrees": [
           {
@@ -505,7 +505,7 @@
         ],
         "Distribution": "debian",
         "Environment": {
-          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512"
+          "SYSTEMD_REPART_MKFS_OPTIONS_VFAT": "-S512 -s1"
         },
         "ExtraTrees": [
           {

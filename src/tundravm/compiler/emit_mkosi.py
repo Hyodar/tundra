@@ -159,21 +159,34 @@ ARCH_TO_MKOSI: dict[str, str] = {
 # Minimal systemd target the systemd debloat makes the default target
 MINIMAL_TARGET_UNIT = v1.MINIMAL_TARGET
 
-ESP_PARTITION = """\
+ESP_SIZE = "128M"
+"""The ESP of every disk, fixed: FAT32 with 512-byte sectors and clusters holds 258078
+clusters and 126 MiB of data at this size, room for a UKI up to about 125 MiB (the
+fixture's initramfs UKI is about 65 MiB, its verity one 43 MiB, the templates' at most
+72 MiB). A larger UKI fails the disk's build (``mcopy``: disk full); ``RootFS.verity()``
+keeps the OS out of the UKI."""
+ESP_PARTITION = f"""\
 [Partition]
 Type=esp
 Format=vfat
 CopyFiles=/efi:/
-SizeMinBytes=64M
-Minimize=guess
+SizeMinBytes={ESP_SIZE}
+SizeMaxBytes={ESP_SIZE}
 """
-"""The ESP of every disk around the payload: the UKI at ``/EFI/BOOT/BOOTX64.EFI``, sized to it."""
-ESP_MKFS_ENVIRONMENT = "Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512"
-"""Every disk image's ``[Build]``: repart formats the ESP FAT32 with 4096-byte sectors (one per
-cluster) and minimizes the file system to the UKI, not to the partition, so a 120M ESP held
-29158 clusters. UEFI firmware types a FAT by its cluster count, and under 65525 OVMF reads it
-as FAT16, finds no file system and boots nothing. mkfs.vfat takes the last ``-S``: 512-byte
-sectors, the disk's own, give the same file system eight times the clusters."""
+"""The ESP of every disk around the payload: the UKI at ``/EFI/BOOT/BOOTX64.EFI``.
+
+Not ``Minimize=guess``: repart (systemd 257) sizes a vfat it minimizes by formatting a 1 TiB
+sparse file, copying the files in and taking 1.5 times the bytes written, and on 1 TiB
+mkfs.fat writes 256 MiB of FATs (512-byte sectors), so a 65 MiB UKI got a 481 MiB ESP and
+``azure.vhd``, a fixed VHD, carried all of it. A fixed size is also the same on every
+build, whatever the UKI's."""
+ESP_MKFS_ENVIRONMENT = 'Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"'
+"""Every disk image's ``[Build]``: the ESP's FAT32 in 512-byte sectors (the disk's own; repart
+passes 4096 offline, and mkfs.vfat takes the last ``-S``) and one sector per cluster. UEFI
+firmware types a FAT by its cluster count, and under 65525 OVMF reads it as FAT16, finds no
+file system and boots nothing (4096-byte sectors gave a 120M ESP 29158 clusters); with
+512-byte clusters any ESP from 34 MiB up is FAT32 by count, and ``-F 32`` (repart's) refuses
+a smaller one rather than writing a FAT16."""
 VERITY_DATA = "/payload/root.raw"
 """Where a disk image's root carries the verity payload's root partition (``CopyBlocks=``)."""
 VERITY_HASH = "/payload/root-verity.raw"
