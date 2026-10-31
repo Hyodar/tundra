@@ -6,7 +6,9 @@
 # `git ls-remote` and the host-side fetch read it:
 #   gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra
 # Their checkouts keep no credentials: the GITHUB_TOKEN header actions/checkout persists
-# for github.com would override the token in the URL.
+# for github.com would override the token in the URL. With the token, the template tests
+# must pass (TUNDRAVM_SOURCES_REQUIRED=1); without it, they skip and say which repository
+# they could not read (require_sources in tests/integration/support.py).
 name: ci
 
 on:
@@ -54,10 +56,11 @@ jobs:
         if: ${{ env.HAS_TUNDRA_TOOLS_TOKEN == 'true' }}
         env:
           TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
-        run: >-
-          git config --global
-          url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf
-          "https://github.com/Hyodar/tundra-tools"
+        run: |
+          git config --global \
+            url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf \
+            "https://github.com/Hyodar/tundra-tools"
+          echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"
 
       - name: Lint
         run: uv run ruff check .
@@ -128,10 +131,11 @@ jobs:
         if: ${{ env.HAS_TUNDRA_TOOLS_TOKEN == 'true' }}
         env:
           TUNDRA_TOOLS_TOKEN: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
-        run: >-
-          git config --global
-          url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf
-          "https://github.com/Hyodar/tundra-tools"
+        run: |
+          git config --global \
+            url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf \
+            "https://github.com/Hyodar/tundra-tools"
+          echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"
 
       - name: Bake and boot the templates
         env:

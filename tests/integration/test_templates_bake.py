@@ -2,8 +2,9 @@
 
 Each bake builds the tree's default selection (``payload.efi`` and ``qemu.raw``); the checks
 read the payload's root, unpacked as root from the UKI's ``.initrd`` (the whole OS of an
-initramfs payload). Needs a host the Linux backend builds on and non-interactive sudo;
-skipped otherwise.
+initramfs payload). Needs a host the Linux backend builds on and non-interactive sudo, and
+read access to tundra-tools, which every template's evidence service builds from
+(``support.require_sources``); skipped otherwise.
 Run with: uv run pytest tests/integration/test_templates_bake.py -m integration
 """
 
@@ -28,6 +29,8 @@ from tundravm.models import BakeRequest, BakeResult
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
 from tundravm.testing import build_unavailable
+
+from .support import require_sources
 
 pytestmark = pytest.mark.integration
 
@@ -110,11 +113,12 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         ),
         encoding="utf-8",
     )
-    loaded = load_file(recipe_path)
+    lowered = load_file(recipe_path).lowered()
+    require_sources(lowered, ("production",))
     backend = LocalLinuxBackend()
     out = tmp_path / "build"
     try:
-        bake_image(loaded.lowered(), ("production",), locked=None, backend=backend, build=out)
+        bake_image(lowered, ("production",), locked=None, backend=backend, build=out)
         output = out / "production" / "output"
         assert (output / "qemu.raw").is_file(), sorted(p.name for p in output.iterdir())
         _unpack_payload(output, out / "root")
@@ -370,12 +374,13 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         ),
     )
     # The checks read the payload; the production variant declares all three disks.
-    recipe = replace(recipe, items=(*recipe.items, *repositories))
+    lowered = lower(replace(recipe, items=(*recipe.items, *repositories)))
+    require_sources(lowered, ("production",))
     backend = _Capturing(LocalLinuxBackend())
     out = tmp_path / "build"
     try:
         try:
-            bake_image(lower(recipe), ("production",), locked=None, backend=backend, build=out)
+            bake_image(lowered, ("production",), locked=None, backend=backend, build=out)
         except BackendExecutionError:
             print("\n".join(backend.lines[-80:]))  # pytest shows it with the failure
             raise

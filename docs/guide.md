@@ -941,7 +941,7 @@ tundravm's own CI bakes the `Image` templates, so it needs the same access. It r
 tundra-tools with the repository secret `TUNDRA_TOOLS_TOKEN` when it exists: a fine-grained
 personal access token with read-only Contents on `Hyodar/tundra-tools`, added with
 `gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra`. Making tundra-tools public does
-the same without a secret.
+the same without a secret. Without either, the template tests skip and name the repository.
 
 ## When something fails
 

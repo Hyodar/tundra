@@ -191,7 +191,8 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 ### CI
 
 - The jobs that bake the `Image` templates read tundra-tools with the repository secret
-  `TUNDRA_TOOLS_TOKEN` when it is set (`docs/guide.md#ci`).
+  `TUNDRA_TOOLS_TOKEN` when it is set (`docs/guide.md#ci`). Without it, the template bake
+  and boot tests skip and name the repository they cannot read; with it, they must pass.
 
 ### Documentation
 

@@ -13,7 +13,8 @@ fail-closed (plan 6.1: ``tdx-evidence.service`` refuses and no service starts): 
 ``minimal`` template's production profile is booted to show that, and the
 ``service`` template's ``dev`` profile, which runs simulated, serves its page.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
-``qemu-system-x86_64`` and OVMF; skipped otherwise. ``test_fixture_boot.py`` boots the same
+``qemu-system-x86_64``, OVMF and read access to tundra-tools (``support.require_sources``);
+skipped otherwise. ``test_fixture_boot.py`` boots the same
 two paths on the gate 1 fixture, which fetches no source.
 CI's ``boot`` job runs it.
 Run with: uv run pytest tests/integration/test_templates_boot.py -m boot
@@ -35,7 +36,15 @@ from tundravm.templates import render_recipe_template
 from tundravm.testing import BootResult, boot
 from tundravm.testing._boot import BootPath, expected_cmdline
 
-from .support import ESP_TYPE, free_port, read_fat, read_gpt, remove_build, require_boot
+from .support import (
+    ESP_TYPE,
+    free_port,
+    read_fat,
+    read_gpt,
+    remove_build,
+    require_boot,
+    require_sources,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.boot]
 
@@ -61,6 +70,7 @@ def _bake(tmp: Path, template: str, variant: str) -> Iterator[Artifact]:
         encoding="utf-8",
     )
     lowered = load_file(recipe_path).lowered()
+    require_sources(lowered, (variant,))
     out = tmp / "build"
     try:
         backend = LocalLinuxBackend()
