@@ -7,6 +7,16 @@ on a throwaway snapshot, which OVMF boots from the UKI on its ESP
 needs reach the kernel through SMBIOS (``io.systemd.stub.kernel-cmdline-extra``, the
 way ``mkosi vm`` passes them), which systemd-stub appends to the UKI's own command line
 when Secure Boot is off; :func:`expected_cmdline` is the line the kernel should then print.
+
+The serial console is one byte stream that the kernel, systemd and the journal share. The
+kernel writes its lines straight to the UART, past the tty that userspace's whole-line
+writes go through, so a kernel line can land inside a journal line: ``... starts no servi``,
+then a whole ``[    2.197534] virtio_blk ...`` line, then ``ces``. A marker
+(:func:`on_console`) is therefore looked for in the transcript without its ANSI escapes and
+carriage returns, and in that text de-interleaved (:func:`deinterleave`): every run of whole
+kernel lines (a ``[ seconds.micros]`` stamp up to its newline) that starts in the middle of
+another line is cut out, which puts the interrupted line back together, while the kernel
+line itself is whole in the transcript. A marker still has to appear in full in one of them.
 """
 
 from __future__ import annotations
@@ -72,11 +82,24 @@ _SOURCE = re.compile(r"^\[\s*[0-9.]+\]\s+([^\s\[:]+)(?:\[[0-9]+\])?:\s")
 """The identifier of a journal line forwarded to the console (``nft[155]: ...``)."""
 _KERNEL_CMDLINE = re.compile(r"^\[\s*[0-9.]+\]\s+Kernel command line: (.*?)\s*$", re.MULTILINE)
 """The command line the kernel booted with, as it prints it (the text of ``/proc/cmdline``)."""
+_INTERRUPTION = re.compile(r"(?<=[^\n])(?:\[ *[0-9]+\.[0-9]+\] [^\n]*\n)+")
+"""Whole kernel lines (``[    2.197534] ...`` up to the newline) written into another line."""
 
 
 def clean_console(raw: str) -> str:
     """*raw* serial output without ANSI escapes and carriage returns."""
     return _ANSI.sub("", raw)
+
+
+def deinterleave(text: str) -> str:
+    """Console *text*, cleaned, with each run of kernel lines that interrupts another line
+    cut out, which makes the interrupted line whole again."""
+    return _INTERRUPTION.sub("", clean_console(text))
+
+
+def on_console(text: str, marker: str) -> bool:
+    """Whether *marker* is on console *text*: in it cleaned or in it de-interleaved."""
+    return marker in clean_console(text) or marker in deinterleave(text)
 
 
 def kernel_cmdline(text: str) -> str | None:
@@ -164,9 +187,9 @@ def unit_name(name: str) -> str:
 def missing_from(
     text: str, scan: ConsoleScan, markers: Sequence[str], units: Sequence[str]
 ) -> tuple[str, ...]:
-    """The *markers* not in *text* and the *units* not started, in order."""
-    clean = clean_console(text)
-    absent = [marker for marker in markers if marker not in clean]
+    """The *markers* not on console *text* (:func:`on_console`) and the *units* not started,
+    in order."""
+    absent = [marker for marker in markers if not on_console(text, marker)]
     absent += [unit for unit in map(unit_name, units) if unit not in scan.started]
     return tuple(absent)
 

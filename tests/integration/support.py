@@ -22,7 +22,7 @@ from tundravm._modules import execution
 from tundravm._source import GitSource
 from tundravm.declarative._lowered import Lowered
 from tundravm.testing import BootResult, boot_unavailable, build_unavailable
-from tundravm.testing._boot import DEFAULT_MARKERS
+from tundravm.testing._boot import DEFAULT_MARKERS, on_console
 
 SECTOR = 512
 
@@ -217,11 +217,11 @@ def assert_fail_closed(result: BootResult) -> None:
     assert not result.timed_out and result.fatal == (), summary
     assert result.returncode in (None, 0), summary
     for marker in FAIL_CLOSED_MARKERS:
-        assert marker in result.console, f"{marker!r} not on the console\n{summary}"
+        assert on_console(result.console, marker), f"{marker!r} not on the console\n{summary}"
     assert GATE in result.failed, summary
     for unit in GATED:
         assert unit in result.failed and unit not in result.started, f"{unit}\n{summary}"
-    assert f"Dependency failed for {GATED[0]}" in result.console, summary
+    assert on_console(result.console, f"Dependency failed for {GATED[0]}"), summary
     assert {"minimal.target", "boot-probe.service"} <= set(result.started), summary
     assert set(result.failed) == {GATE, *GATED}, summary
 

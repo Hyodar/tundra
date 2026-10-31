@@ -195,6 +195,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   and boot tests skip and name the repository they cannot read; with it, they must pass.
   The `test` job runs only the unit suite; the new `templates` job bakes for real, and a
   newer push to a branch cancels the run it supersedes.
+- The boot harness finds a marker that kernel lines interrupted on the serial console. It
+  also matches the console with each run of whole kernel lines written into another line
+  cut out, so `fixture-boot` no longer waits out its budget when a `virtio_blk` line lands
+  inside the gate's refusal.
 
 ### Documentation
 

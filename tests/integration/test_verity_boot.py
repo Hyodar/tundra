@@ -31,7 +31,7 @@ from tundravm.compiler.emit_mkosi import verity_uuids
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.recipe import load_file
 from tundravm.testing import BootResult, boot
-from tundravm.testing._boot import expected_cmdline, uki_cmdline
+from tundravm.testing._boot import expected_cmdline, on_console, uki_cmdline
 
 from .support import (
     ESP_TYPE,
@@ -168,7 +168,7 @@ def test_root_is_erofs_on_dm_verity_under_a_volatile_overlay(verity_boot: BootRe
         "Mounted sysroot.mount",
         "Finished systemd-volatile-root.service",
     ):
-        assert line in console, line
+        assert on_console(console, line), line
     mounts = [line.split() for line in probe_lines(console, "mount /")]
     assert [mount[:2] for mount in mounts] == [["overlay", "overlay"]], mounts
     options = mounts[0][2].split(",")

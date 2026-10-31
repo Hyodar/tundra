@@ -34,7 +34,7 @@ from tundravm.declarative.lifecycle import Artifact, bake_image
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
 from tundravm.testing import BootResult, boot
-from tundravm.testing._boot import BootPath, expected_cmdline
+from tundravm.testing._boot import BootPath, expected_cmdline, on_console
 
 from .support import (
     ESP_TYPE,
@@ -173,7 +173,7 @@ def test_minimal_template_boots_to_its_target_fail_closed(minimal_boot: BootResu
     """The production image reaches minimal.target without TDX, its gate refuses, and its
     app never starts."""
     assert "minimal.target" in minimal_boot.started and minimal_boot.fatal == ()
-    assert REFUSED in minimal_boot.console
+    assert on_console(minimal_boot.console, REFUSED)
     assert {"tdx-evidence.service", "app.service"} <= set(minimal_boot.failed)
     assert "app.service" not in minimal_boot.started
 

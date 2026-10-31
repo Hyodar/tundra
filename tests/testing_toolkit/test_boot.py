@@ -18,12 +18,17 @@ import pytest
 
 from tests.measure.test_replay import _pe
 from tundravm import testing
+from tundravm._modules.execution import REFUSED
 from tundravm.testing import BootResult, BootUnavailable, boot, boot_unavailable, scan_console
 from tundravm.testing._boot import (
     CONSOLE_CMDLINE,
+    DEFAULT_MARKERS,
+    clean_console,
+    deinterleave,
     expected_cmdline,
     find_ovmf,
     kernel_cmdline,
+    on_console,
     qemu_command,
     uki_cmdline,
 )
@@ -53,6 +58,24 @@ BOOTED = (
     f"{OK}Started app.service.\r\n",
     f"{OK}Reached target minimal.target.\r\n",
 )
+
+INTERLEAVED = (
+    "[    1.858739] systemd[1]: Reached target network.target.\r\n",
+    "[    1.861157] tdx-evidence[202]: tdx-evidence: refused: no TDX quote path; a production "
+    "profile starts no servi[    2.197534] virtio_blk virtio1: [vda] 264232 512-byte logical "
+    "blocks (135 MB/129 MiB)\r\n",
+    "ces\r\n",
+    "[    1.866442] systemd[1]: Starting systemd-networkd-wait-online.service...\r\n",
+    "[FAILED] Failed to start tdx-evidence.service.\r\r\n",
+    "See 'systemctl status tdx-evidence.service' for details.\r\r\n",
+    "[DEPEND] Dependency failed for web.service.\r\r\n",
+    "[    1.872729] s[    2.208352]  vda: vda1\r\n",
+    "ystemd[1]: \x1b[0;1;39mtdx-evidence.service: Main process exited, code=exited, "
+    "status=1/FAILURE\x1b[0m\r\n",
+    "[DEPEND] Dependency failed for greeter.service.\r\r\n",
+)
+"""CI run 41168178339's ``fixture-disk.console.log`` (``fixture-boot``, attempt 1), lines
+547 to 557 byte for byte: kernel lines written into two journal lines."""
 
 
 class Fake:
@@ -149,6 +172,25 @@ def test_a_boot_that_never_reaches_the_target_times_out(fake: Fake) -> None:
     assert result.missing == ("Reached target minimal.target",)
     assert result.duration < 15
     assert "timed out" in result.summary()
+
+
+def test_a_marker_split_by_kernel_lines_is_on_the_console() -> None:
+    console = "".join(INTERLEAVED)
+    assert REFUSED not in clean_console(console)
+    assert on_console(console, REFUSED)
+    lines = deinterleave(console).splitlines()
+    assert f"[    1.861157] tdx-evidence[202]: {REFUSED}" in lines
+    exited = "tdx-evidence.service: Main process exited, code=exited, status=1/FAILURE"
+    assert f"[    1.872729] systemd[1]: {exited}" in lines
+    assert on_console(console, "[    2.208352]  vda: vda1")  # the kernel line, whole
+    assert not on_console(console[: console.index("ces\r\n")], REFUSED)  # not written yet
+    assert not on_console(console.replace("servi[", "servi\n["), REFUSED)  # a real line break
+
+
+def test_boot_finds_a_marker_kernel_lines_interrupted(fake: Fake) -> None:
+    result = fake.run(*BOOTED, *INTERLEAVED, markers=(*DEFAULT_MARKERS, REFUSED))
+    assert not result.timed_out and result.missing == ()
+    assert result.failed == ("tdx-evidence.service", "web.service", "greeter.service")
 
 
 def test_qemu_exiting_early_reports_its_stderr(fake: Fake) -> None:
