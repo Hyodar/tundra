@@ -419,7 +419,9 @@ def build_parser() -> argparse.ArgumentParser:
         "    written), forward every TCP port the image's firewall accepts or its services\n"
         "    declare, and the management port :8745, from 127.0.0.1, and write\n"
         "    .tundravm/instances/<image>-<n>/.\n"
-        "    simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`.\n"
+        "    simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`; a\n"
+        "      production build boots fail-closed (tdx-evidence.service refuses, no service\n"
+        "      starts, nothing is delivered), a --dev build runs its services.\n"
         "    tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.\n"
         "tundravm run status INSTANCE   the process, control-plane and application readiness\n"
         "tundravm run logs INSTANCE     the serial console\n"
@@ -1152,7 +1154,7 @@ def _run_action(
         if args.json:
             print(json_report("run", report), file=out)
         else:
-            for key in ("id", "mode", "state", "control_plane", "application"):
+            for key in ("id", "mode", "state", "services", "control_plane", "application"):
                 if key in report:
                     print(f"{key:<14} {report[key]}", file=out)
             build = cast(Mapping[str, object], report["build"])
@@ -1190,7 +1192,9 @@ def _mode(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -
         "meaning": "a TDX guest whose evidence a production policy can accept"
         if production
         else (
-            "no TDX: evidence is `simulated`, never production"
+            instances.FAIL_CLOSED
+            if instances.fail_closed(instance)
+            else "no TDX: evidence is `simulated`, never production"
             if instance.mode == "simulated"
             else "a TDX guest of a development build: never production"
         ),

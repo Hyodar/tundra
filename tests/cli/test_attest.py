@@ -41,10 +41,13 @@ def tdx_quote(
     tee_type: int = 0x81,
     rtmrs: tuple[bytes, ...] = (R0, R1, R2, R3),
     mrtd: bytes = MRTD,
+    debug: bool = False,
 ) -> bytes:
-    """A synthetic DCAP quote: 48-byte header, TD report body, an empty signature section."""
+    """A synthetic DCAP quote: 48-byte header, TD report body, an empty signature section;
+    *debug* sets the TD's ``DEBUG`` attribute (bit 0 of ``TDATTRIBUTES``)."""
     body = bytearray(584)
     body[16:64] = b"\x5e" * 48  # mrseam
+    body[120] = 1 if debug else 0  # td_attributes
     body[128:136] = b"\xe7\x02\x06\x00\x00\x00\x00\x00"  # xfam
     body[136:184] = mrtd
     body[232:280] = b"\x0a" * 48  # mrowner
@@ -357,15 +360,19 @@ def test_to_dict_is_the_stable_json_shape() -> None:
     payload = attest("tcp://h:1", PEER, nonce=NONCE, transport=FakeIssuer()).to_dict()
     assert sorted(payload) == [
         "checks",
+        "debug",
+        "guest_mode",
         "issuer",
         "nonce",
         "passed",
         "platform",
         "policy",
+        "production",
         "quote_version",
         "reasons",
         "registers",
         "signature_status",
+        "simulated",
         "source",
         "trusted",
         "validator",
@@ -373,6 +380,7 @@ def test_to_dict_is_the_stable_json_shape() -> None:
         "verdict",
     ]
     assert payload["checks"] == CHECKS_NOTE
+    assert payload["debug"] is payload["simulated"] is payload["production"] is False
     assert payload["signature_status"] == "unchecked" and payload["trusted"] is False
     assert payload["verdict"] in VERDICTS
     assert payload["registers"]["RTMR0"] == {  # type: ignore[index]

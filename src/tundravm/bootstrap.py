@@ -14,7 +14,12 @@ key or the session to a quote, and every command, its output and each receipt sa
 - :func:`deliver` attests again (fresh nonce), applies :func:`release_predicate`, then
   writes each credential to ``/run/tundravm/credentials/<name>`` (mode 0600, written to a
   temporary name and renamed). :func:`unlock` attests again with the policy of the last
-  successful ``attest`` and writes the passphrase into the volume's FIFO.
+  successful ``attest`` and writes the passphrase into the volume's FIFO. Both refuse a
+  production build in a simulated instance before anything is sent
+  (:func:`fail_closed`): its services never start there, and nothing is released to it.
+- The evidence is checked for the build's kind (``production``: simulated and debug
+  evidence never pass) with the guest's execution-gate mode, read over the session
+  (``/run/tundravm/mode``), which can only make it ``simulated``.
 
 Values travel on the SSH command's standard input only: never on an argv, in a log, a tree,
 a manifest or a receipt (receipts name what was delivered, not what it was).
@@ -39,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from . import manifest as mf
+from ._modules.execution import MODE_FILE
 from .attestation import Attestation, Transport
 from .attestation import attest as check_quote
 from .errors import AttestationError, StateError, ValidationError
@@ -163,6 +169,13 @@ class Session:
             )
         return result.stdout or b""
 
+    def guest_mode(self) -> str | None:
+        """What the guest's execution gate recorded (``tdx``, ``simulated``), ``None`` when
+        it recorded nothing (an image older than the gate, or a refused production boot)."""
+        said = self.run(f"head -c 64 {MODE_FILE} 2>/dev/null || true").decode(errors="replace")
+        said = said.strip()
+        return said or None
+
     def transport(self) -> Transport:
         """tdxs's JSON lines over this session (one ``socat`` per request)."""
 
@@ -244,15 +257,20 @@ def attest(
     """Fresh evidence from *instance* checked against *policy*; delivers nothing.
 
     The quote comes over the bootstrap SSH session (or from *issuer*, an endpoint the
-    operator relays themselves); a simulated instance may pass as ``simulated``. A passing
-    attestation records the policy in the receipt (``secrets unlock`` reuses it) and makes
-    the session's host key the instance's ``known_hosts``.
+    operator relays themselves); a simulated instance of a development build may pass as
+    ``simulated``. The evidence is checked for the build's kind (a production build's never
+    passes simulated or with the ``DEBUG`` attribute) and, over the session, with the
+    guest's execution-gate mode. A passing attestation records the policy in the receipt
+    (``secrets unlock`` reuses it) and makes the session's host key the instance's
+    ``known_hosts``.
     """
     data, digest = read_policy(policy, instance)
     simulated = instance.mode == "simulated"
+    production = instance.data["build"]["kind"] == "production"
     with tempfile.TemporaryDirectory(prefix="tundravm-attest-") as scratch:
         hosts = Path(scratch) / "known_hosts"
         send = transport
+        session: Session | None = None
         if send is None and issuer is None:
             session = Session(
                 instance, identity_path(identity), runner=runner, poster=poster, hosts=hosts
@@ -264,6 +282,8 @@ def attest(
             data,
             validator=validator,
             allow_simulated=simulated,
+            production=production,
+            guest_mode=None if session is None else session.guest_mode(),
             transport=send,
         )
         if result.passed and hosts.is_file():
@@ -272,6 +292,7 @@ def attest(
         "attested",
         verdict=result.verdict,
         passed=result.passed,
+        guest_mode=result.guest_mode,
         policy=str(policy.resolve()),
         policy_sha256=digest,
         nonce=result.nonce,
@@ -288,17 +309,37 @@ def attest(
     return result
 
 
+def fail_closed(instance: Instance) -> str | None:
+    """Why nothing may be released to *instance* whatever it answers: a production build in
+    a simulated instance, whose services the execution gate never starts."""
+    if instance.mode == "simulated" and instance.data["build"]["kind"] == "production":
+        return (
+            "a production build in a simulated instance is fail-closed: its services never "
+            "start without TDX, and nothing is released to it"
+        )
+    return None
+
+
 def release_predicate(instance: Instance, result: Attestation) -> str | None:
     """Why *result* may not release a secret to *instance*; ``None`` when it may.
 
-    A production build on TDX needs ``trusted`` (a validator checked the quote); a
-    development build on TDX accepts ``measurements-match``; a simulated instance accepts
-    ``simulated`` and nothing it delivers is production. Partial coverage never releases.
+    A production build on TDX needs ``trusted`` (a validator checked the quote, with full
+    coverage), no simulation and no ``DEBUG`` attribute; a development build on TDX accepts
+    ``measurements-match``; a simulated instance of a development build accepts
+    ``simulated`` only, and one of a production build nothing (:func:`fail_closed`).
+    Partial coverage never releases.
     """
+    refused = fail_closed(instance)
+    if refused is not None:
+        return refused
     verdict = result.verdict
     if instance.mode == "simulated":
         return None if verdict == "simulated" else f"a simulated instance answered {verdict}"
+    if result.simulated:
+        return "a TDX instance answered with simulated evidence"
     if instance.data["build"]["kind"] == "production":
+        if result.debug:
+            return "the TD has the DEBUG attribute: the host can read it"
         return None if verdict == "trusted" else f"production delivery needs trusted, got {verdict}"
     if verdict in ("trusted", "measurements-match"):
         return None
@@ -336,6 +377,7 @@ def deliver(
 ) -> tuple[Attestation, tuple[str, ...]]:
     """Attest, apply :func:`release_predicate`, then write each ``NAME=@FILE`` credential."""
     values = _values(pairs)
+    _refuse_fail_closed(instance, "delivery-refused")
     declared = {str(s["name"]) for s in instance.build.runtime().get("secrets", ())}
     unknown = [name for name, _ in values if name not in declared]
     if unknown:
@@ -372,6 +414,19 @@ def deliver(
     return result, names
 
 
+def _refuse_fail_closed(instance: Instance, event: str, **fields: object) -> None:
+    """Refuse before anything is sent when :func:`fail_closed` says so."""
+    refused = fail_closed(instance)
+    if refused is None:
+        return
+    instance.event(event, reason=refused, **fields)
+    raise AttestationError(
+        f"Nothing sent to {instance.id}: {refused}.",
+        hint="Run a development build (`tundravm run --dev --mode simulated`) to try values, "
+        "or the production build on TDX (`--mode tdx`, `deploy`).",
+    )
+
+
 def read_passphrase(volume: str) -> bytes:
     """The passphrase from the terminal (not echoed), or standard input when piped."""
     if sys.stdin.isatty():
@@ -394,6 +449,7 @@ def unlock(
 
     *passphrase* may be a callable: it is asked for only once the attestation released it
     (so a refused unlock never prompts)."""
+    _refuse_fail_closed(instance, "unlock-refused", volume=volume)
     volumes = {str(v["name"]): v for v in instance.build.runtime().get("volumes", ())}
     found = volumes.get(volume)
     if found is None:
@@ -444,6 +500,7 @@ __all__ = [
     "SshRunner",
     "attest",
     "deliver",
+    "fail_closed",
     "identity_path",
     "read_passphrase",
     "read_policy",

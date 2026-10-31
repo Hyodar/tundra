@@ -13,7 +13,9 @@ image's firewall accepts or its services declare (the manifest's ``ports``) forw
 unprivileged; the management port :data:`MANAGEMENT_PORT` among them). ``simulated`` uses
 KVM when ``/dev/kvm`` is usable, TCG otherwise, and appends the console settings to the
 UKI's command line through SMBIOS; ``tdx`` boots TDVF with a ``tdx-guest`` object and
-appends nothing, and is refused where ``doctor --for tdx`` is not ready.
+appends nothing, and is refused where ``doctor --for tdx`` is not ready. A production build
+boots in ``simulated`` too, fail-closed: its execution gate (``tdx-evidence.service``) finds
+no TDX and none of its services start, which :func:`status` says (:data:`FAIL_CLOSED`).
 """
 
 from __future__ import annotations
@@ -58,6 +60,11 @@ CONSOLE_CMDLINE = (
 
 Mode = Literal["simulated", "tdx"]
 MODES: tuple[Mode, ...] = ("simulated", "tdx")
+FAIL_CLOSED = (
+    "fail-closed: a production build without TDX; tdx-evidence.service refuses and no "
+    "service starts"
+)
+"""What :func:`status` says of a production build's services in a simulated instance."""
 
 
 @dataclass(slots=True)
@@ -285,8 +292,9 @@ def launch(
             )
     if mode == "simulated" and build.production:
         print(
-            "note: a production build in simulated mode: its services wait for a TDX quote "
-            "that never comes; only a dev build (--dev) runs its services simulated",
+            "note: a production build in simulated mode is fail-closed: tdx-evidence.service "
+            "finds no TDX, so none of its services start and nothing is delivered to it; "
+            "a dev build (--dev) runs its services simulated",
             file=sys.stderr,
         )
     disk = build.artifact("qemu")
@@ -429,8 +437,14 @@ def readiness(instance: Instance) -> dict[str, object]:
     }
 
 
+def fail_closed(instance: Instance) -> bool:
+    """A production build in a simulated instance: the gate starts none of its services."""
+    return bool(instance.mode == "simulated" and instance.data["build"]["kind"] == "production")
+
+
 def status(instance: Instance) -> dict[str, object]:
-    """``run status``: the process, then readiness when it runs."""
+    """``run status``: the process, then readiness when it runs, and :data:`FAIL_CLOSED` as
+    ``services`` for a production build in a simulated instance."""
     running = alive(instance)
     if not running and instance.data.get("state") == "running":
         instance.data["state"] = "exited"
@@ -441,6 +455,8 @@ def status(instance: Instance) -> dict[str, object]:
         "state": "running" if running else str(instance.data.get("state")),
         "build": instance.data["build"],
     }
+    if fail_closed(instance):
+        report["services"] = FAIL_CLOSED
     if running:
         report.update(readiness(instance))
     return report
@@ -502,6 +518,7 @@ def known_hosts(instance: Instance) -> Path:
 __all__ = [
     "CONSOLE",
     "EVENTS",
+    "FAIL_CLOSED",
     "INSTANCE",
     "MANAGEMENT_PORT",
     "MODES",
@@ -512,6 +529,7 @@ __all__ = [
     "alive",
     "create",
     "describe",
+    "fail_closed",
     "forwards",
     "free_port",
     "launch",

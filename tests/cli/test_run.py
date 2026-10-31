@@ -138,15 +138,33 @@ def test_a_second_run_is_another_instance(
         cli("run", "stop", name)
 
 
-def test_a_production_build_runs_simulated_with_a_note(
+def test_a_production_build_runs_simulated_fail_closed(
     built: Build, project: Path, cli: Cli, qemu: Path
 ) -> None:
+    """It still boots (the console shows the gate refusing), and status and mode say its
+    services are fail-closed."""
     result = cli("run", "--mode", "simulated", "--detach")
     assert result.code == EXIT_OK, result.err
-    assert "wait for a TDX quote that never comes" in result.err
+    assert "simulated mode is fail-closed: tdx-evidence.service finds no TDX" in result.err
+    status = cli("run", "status", "demo-1")
+    assert f"services       {instances.FAIL_CLOSED}" in status.out
+    report = json.loads(cli("run", "status", "demo-1", "--json").out)
+    assert report["services"] == instances.FAIL_CLOSED
+    mode = cli("run", "mode", "demo-1")
+    assert instances.FAIL_CLOSED in mode.out
     ssh = cli("run", "ssh", "demo-1")
     assert ssh.code == EXIT_SDK_ERROR
     assert "runs a production build: it has no debug access" in ssh.err
+    cli("run", "stop", "demo-1")
+
+
+def test_a_development_build_runs_simulated_without_the_fail_closed_line(
+    dev_built: Build, project: Path, cli: Cli, qemu: Path
+) -> None:
+    assert cli("run", "--mode", "simulated", "--dev", "--detach").code == EXIT_OK
+    status = cli("run", "status", "demo-1")
+    assert "fail-closed" not in status.out
+    assert "services" not in json.loads(cli("run", "status", "demo-1", "--json").out)
     cli("run", "stop", "demo-1")
 
 

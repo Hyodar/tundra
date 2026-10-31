@@ -86,7 +86,7 @@ CHECKS_NOTE = (
 TIMEOUT_S = 30.0
 SIMULATOR = "simulator"
 ATTESTATION_SCHEMA = "tundravm.attestation/2"
-"""The ``schema`` of the record :meth:`Attestation.save` (``attest --record``) writes.
+"""The ``schema`` of the record :meth:`Attestation.save` (``attest --output``) writes.
 Version 2 adds the ``partial`` verdict: a version 1 record could say ``trusted`` without the
 platform registers approved, so it is no longer read."""
 TRUST_NOTE = (
@@ -111,6 +111,7 @@ _V5_BODY_TYPES = {2: 584, 3: 648}
 _BODY_FIELDS: dict[str, tuple[int, int]] = {
     "mrseam": (16, 48),
     "xfam": (128, 8),
+    "td_attributes": (120, 8),
     "mrtd": (136, 48),
     "mrowner": (232, 48),
     "rtmr0": (328, 48),
@@ -133,6 +134,13 @@ class Quote:
     mrseam: str
     mrowner: str
     xfam: str
+    td_attributes: str = ""
+    """``TDATTRIBUTES`` as hex, in quote (little-endian) byte order."""
+
+    @property
+    def debug(self) -> bool:
+        """The ``DEBUG`` attribute (bit 0): the host can read and change the TD's state."""
+        return bool(self.td_attributes) and bool(int(self.td_attributes[:2], 16) & 1)
 
     def registers(self) -> dict[str, str]:
         """``MRTD`` and ``RTMR0``..``RTMR3`` as lower-case hex."""
@@ -192,6 +200,7 @@ def parse_quote(raw: bytes) -> Quote:
         mrseam=field("mrseam").hex(),
         mrowner=field("mrowner").hex(),
         xfam=field("xfam").hex(),
+        td_attributes=field("td_attributes").hex(),
     )
 
 
@@ -255,7 +264,8 @@ class Attestation:
     policy: str | None = None
     allow_simulated: bool = False
     accept_partial: bool = False
-    """``partial`` passes (``attest --accept-partial``); it is still never ``trusted``."""
+    """``partial`` passes (:func:`attest`'s *accept_partial*, which no command sets); it is
+    still never ``trusted``."""
     document: str = field(default="", repr=False)
     """The tdxs attestation document exactly as the issuer sent it: the hex of its JSON."""
     user_data: str = ""
@@ -272,6 +282,14 @@ class Attestation:
     """The policy's ``scheme``; an ``azure`` one is never trusted (its image is in the vTPM)."""
     observed_at: str = ""
     """When the quote was requested: ISO 8601 UTC, to the second."""
+    debug: bool = False
+    """The quote's TD has the ``DEBUG`` attribute set."""
+    production: bool = False
+    """Checked for a production build: simulated and debug evidence never pass."""
+    guest_mode: str | None = None
+    """What the guest's execution gate recorded (``/run/tundravm/mode``: ``tdx`` or
+    ``simulated``), read over the session; ``None`` when not read. The guest says it, so it
+    can only make evidence ``simulated``, never the reverse."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -280,14 +298,16 @@ class Attestation:
 
     @property
     def simulated(self) -> bool:
-        return self.platform == SIMULATOR
+        """A simulator issuer's evidence, or a guest whose gate found no TDX."""
+        return self.platform == SIMULATOR or self.guest_mode == "simulated"
 
     @property
     def reasons(self) -> tuple[str, ...]:
         """Why the verdict is not positive, in order.
 
         ``validator-rejected``, ``nonce-mismatch``, ``register-mismatch``, ``simulated``,
-        ``platform-unverified`` (MRTD or RTMR0 unchecked: no approved value),
+        ``debug`` (the TD's ``DEBUG`` attribute), ``platform-unverified`` (MRTD or RTMR0
+        unchecked: no approved value),
         ``image-unverified`` (RTMR1 or RTMR2 unchecked).
         """
         found: list[str] = []
@@ -299,6 +319,8 @@ class Attestation:
             found.append("register-mismatch")
         if self.simulated:
             found.append("simulated")
+        if self.debug:
+            found.append("debug")
         unchecked = {r.name for r in self.registers if r.verdict == "unchecked"}
         if unchecked & set(PLATFORM_REGISTERS):
             found.append("platform-unverified")
@@ -325,6 +347,8 @@ class Attestation:
             return "untrusted" if self.signature_status == "valid" else "measurements-mismatch"
         if self.simulated:
             return "simulated"
+        if self.debug and self.production:
+            return "untrusted"
         if not self.covered:
             return "partial"
         return "trusted" if self.signature_status == "valid" else "measurements-match"
@@ -335,12 +359,13 @@ class Attestation:
 
     @property
     def passed(self) -> bool:
-        """``trusted`` or ``measurements-match``; ``simulated`` too with ``allow_simulated``,
-        ``partial`` with ``accept_partial``."""
+        """``trusted`` or ``measurements-match``; ``simulated`` too with ``allow_simulated``
+        unless :attr:`production`, ``partial`` with ``accept_partial``. Debug evidence is
+        ``untrusted`` for production, so it never passes there."""
         verdict = self.verdict
         return (
             verdict in ("trusted", "measurements-match")
-            or (verdict == "simulated" and self.allow_simulated)
+            or (verdict == "simulated" and self.allow_simulated and not self.production)
             or (verdict == "partial" and self.accept_partial)
         )
 
@@ -348,6 +373,8 @@ class Attestation:
         """The JSON form ``attest --format json`` prints (sorted keys)."""
         return {
             "checks": CHECKS_NOTE,
+            "debug": self.debug,
+            "guest_mode": self.guest_mode,
             "issuer": self.issuer,
             "nonce": {
                 "value": self.nonce,
@@ -358,10 +385,12 @@ class Attestation:
             "passed": self.passed,
             "platform": self.platform,
             "policy": self.policy,
+            "production": self.production,
             "quote_version": self.quote_version,
             "reasons": list(self.reasons),
             "registers": {r.name: r.to_dict() for r in self.registers},
             "signature_status": self.signature_status,
+            "simulated": self.simulated,
             "source": self.source,
             "trusted": self.trusted,
             "validator": self.validator,
@@ -370,12 +399,13 @@ class Attestation:
         }
 
     def record(self) -> dict[str, object]:
-        """The ``tundravm.attestation/2`` record :meth:`save` writes (``attest --record``).
+        """The ``tundravm.attestation/2`` record :meth:`save` writes (``attest --output``).
 
         It keeps what a later offline check needs: the ``document`` as received,
         ``user_data`` and ``nonce``, ``report_data`` (``expected``, ``actual``,
         ``verdict``), ``platform``, ``source``, ``quote_version``, the simulator's
-        ``metadata`` reply, ``registers``, the ``policy`` (``path``, ``sha256``,
+        ``metadata`` reply, ``registers``, ``debug``, ``simulated``, what it was checked for
+        (``production``, the guest's ``guest_mode``), the ``policy`` (``path``, ``sha256``,
         ``artifact``, ``scheme``), the ``validator`` (``endpoint`` and its whole ``reply``, or
         ``null``), ``signature_status``, ``verdict``, ``reasons``, ``observed_at``,
         the ``tundravm`` version and the ``trust`` note.
@@ -401,6 +431,10 @@ class Attestation:
             "quote_version": self.quote_version,
             "metadata": None if self.metadata is None else dict(self.metadata),
             "registers": {r.name: r.to_dict() for r in self.registers},
+            "debug": self.debug,
+            "simulated": self.simulated,
+            "production": self.production,
+            "guest_mode": self.guest_mode,
             "policy": {
                 "path": self.policy,
                 "sha256": self.policy_sha256,
@@ -434,6 +468,8 @@ def attest(
     nonce: str | bytes | None = None,
     allow_simulated: bool = False,
     accept_partial: bool = False,
+    production: bool = False,
+    guest_mode: str | None = None,
     transport: Transport | None = None,
     validator_transport: Transport | None = None,
     clock: Callable[[], datetime] | None = None,
@@ -452,7 +488,10 @@ def attest(
     (qemu, portable) needs its ``platform_approval``, else the verdict is ``partial``
     (*accept_partial* lets it pass). An azure policy is refused: its image measurements
     are vTPM PCRs, which this path does not verify. A simulator issuer's
-    verdict is ``simulated`` at best; *allow_simulated* lets it pass.
+    verdict is ``simulated`` at best; *allow_simulated* lets it pass. *production* checks
+    for a production build: simulated evidence never passes, and a quote of a TD with the
+    ``DEBUG`` attribute is ``untrusted``. *guest_mode* is what the guest's execution gate
+    recorded; ``simulated`` makes the evidence simulated.
     *transport* and *validator_transport* replace the network and *clock* the wall
     clock ``observed_at`` reads (tests; ``SOURCE_DATE_EPOCH`` is not honoured, since a
     pinned clock would make every record look fresh). Raises
@@ -491,7 +530,7 @@ def attest(
     meta: Mapping[str, object] | None = None
     if platform == SIMULATOR:
         meta = _call(send, issuer, "metadata", {})
-    source, version, actual, bound = _measured(platform, raw, meta, issuer)
+    source, version, actual, bound, debug = _measured(platform, raw, meta, issuer)
     status: SignatureStatus = "unchecked"
     rejection = None
     answer: Mapping[str, object] | None = None
@@ -523,6 +562,9 @@ def attest(
         policy_artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
         policy_scheme=str(data.get("scheme")),
         observed_at=observed,
+        debug=debug,
+        production=production,
+        guest_mode=guest_mode,
     )
 
 
@@ -537,14 +579,16 @@ def _canonical(policy: Mapping[str, object]) -> bytes:
 
 def _measured(
     platform: str, raw: bytes, meta: Mapping[str, object] | None, endpoint: str
-) -> tuple[Literal["quote", "metadata"], int | None, dict[str, str], bytes]:
-    """Where the registers come from, the quote version, the registers and the bound
-    ``report_data``: the TDX quote's, or a simulator's ``metadata`` and first 32 bytes."""
+) -> tuple[Literal["quote", "metadata"], int | None, dict[str, str], bytes, bool]:
+    """Where the registers come from, the quote version, the registers, the bound
+    ``report_data`` and the ``DEBUG`` attribute: the TDX quote's, or a simulator's
+    ``metadata`` and first 32 bytes (no attributes)."""
     if platform == SIMULATOR:
         # The simulator binds only the 32-byte hash; its padding is implicit.
-        return "metadata", None, _metadata_registers(meta or {}, endpoint), raw[:32] + bytes(32)
+        registers = _metadata_registers(meta or {}, endpoint)
+        return "metadata", None, registers, raw[:32] + bytes(32), False
     quote = parse_quote(raw)
-    return "quote", quote.version, quote.registers(), quote.report_data
+    return "quote", quote.version, quote.registers(), quote.report_data, quote.debug
 
 
 _VALIDATOR_BROKEN = ("transport error", "not configured", "not initialized")
@@ -746,7 +790,7 @@ class AttestationRecord:
         return sha if isinstance(sha, str) and sha else None
 
 
-_RECORD_HINT = "Write the record with `tundravm attest --record FILE` (Attestation.save)."
+_RECORD_HINT = "Write the record with `tundravm attest --output FILE` (Attestation.save)."
 
 
 def read_attestation(
@@ -788,7 +832,7 @@ def read_attestation(
         raw = _b64(document.get("raw_quote"), "raw_quote")
         platform = str(document.get("platform") or "")
         meta_map = meta if isinstance(meta, Mapping) else None
-        source_kind, version, actual, bound = _measured(platform, raw, meta_map, where)
+        source_kind, version, actual, bound, debug = _measured(platform, raw, meta_map, where)
     except MeasurementError as exc:
         raise ValidationError(
             f"{where}: its document is not an attestation document: "
@@ -841,6 +885,9 @@ def read_attestation(
         policy_artifact=dict(artifact) if isinstance(artifact, Mapping) else None,
         policy_scheme=None if scheme is None else str(scheme),
         observed_at=str(data.get("observed_at") or ""),
+        debug=debug,
+        production=data.get("production") is True,
+        guest_mode=_recorded_mode(data.get("guest_mode")),
     )
     problems.extend(_disagreements(data, derived.record()))
     if parse_time(derived.observed_at) is None:
@@ -938,6 +985,12 @@ def _recorded_judgement(
 
 
 _COMPARED = ("platform", "source", "quote_version", "signature_status", "verdict", "reasons")
+_COMPARED_WHEN_RECORDED = ("debug", "simulated")
+"""Fields a record written before they existed lacks; compared when it holds them."""
+
+
+def _recorded_mode(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _disagreements(stored: Mapping[str, Any], derived: Mapping[str, Any]) -> list[str]:
@@ -955,6 +1008,9 @@ def _disagreements(stored: Mapping[str, Any], derived: Mapping[str, Any]) -> lis
         compare(f"report_data.{key}", said_bound.get(key), got)
     for key in _COMPARED:
         compare(key, stored.get(key), derived[key])
+    for key in _COMPARED_WHEN_RECORDED:
+        if key in stored:
+            compare(key, stored.get(key), derived[key])
     said_registers = stored.get("registers") if isinstance(stored.get("registers"), Mapping) else {}
     assert isinstance(said_registers, Mapping)
     got_registers = derived["registers"]

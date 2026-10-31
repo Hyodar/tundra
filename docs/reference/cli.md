@@ -224,7 +224,9 @@ tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach]
     written), forward every TCP port the image's firewall accepts or its services
     declare, and the management port :8745, from 127.0.0.1, and write
     .tundravm/instances/<image>-<n>/.
-    simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`.
+    simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`; a
+      production build boots fail-closed (tdx-evidence.service refuses, no service
+      starts, nothing is delivered), a --dev build runs its services.
     tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.
 tundravm run status INSTANCE   the process, control-plane and application readiness
 tundravm run logs INSTANCE     the serial console
