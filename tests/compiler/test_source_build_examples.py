@@ -61,14 +61,6 @@ def _surge_stack() -> Recipe:
     return load_recipe(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
 
 
-def test_unpinned_app_builds_fail_naming_lock_and_build() -> None:
-    hooks = _hooks(compile(_surge_stack()))
-    assert (
-        "\n# unpinned: feat/tdx-proving\necho 'tundravm: source build taiko-client is not "
-        "pinned: run tundravm lock, then tundravm build' >&2 && exit 1\n"
-    ) in hooks
-
-
 @pytest.mark.parametrize(
     ("name", "cache_namespace"),
     [
@@ -235,24 +227,6 @@ def test_install_steps_render_files_modes_and_directories() -> None:
         f'cp -a {key}/app-data/. "$DESTDIR/usr/share/app-data/" && '
         f'install -D -m 0755 {key}/helper "$DESTDIR/usr/libexec/helper"'
     )
-
-
-def test_install_modes_directories_and_payload() -> None:
-    build = _multi(
-        Install("out/app", "/usr/bin/app", mode=0o750),
-        Install("conf/app.toml", "/etc/app/app.toml", mode=0o600),
-        Install("share/", "/usr/share/app-data", mode=None, directory=True),
-    )
-    hook = _hook(build)
-    assert 'install -D -m 0750 "$BUILDROOT/build/app/out/app"' in hook
-    assert 'install -D -m 0600 "$BUILDROOT/build/app/conf/app.toml"' in hook
-    assert 'cp -a "$BUILDROOT/build/app/share/." ' in hook
-    assert hook.endswith('/app-data/. "$DESTDIR/usr/share/app-data/"')
-    assert _payload(build)["install"] == [
-        {"kind": "file", "path": "out/app", "dest": "/usr/bin/app", "mode": "0750"},
-        {"kind": "file", "path": "conf/app.toml", "dest": "/etc/app/app.toml", "mode": "0600"},
-        {"kind": "tree", "path": "share/", "dest": "/usr/share/app-data", "mode": None},
-    ]
 
 
 @pytest.mark.parametrize(

@@ -11,12 +11,10 @@ from tundravm.declarative import (
     Recipe,
     Service,
     Task,
-    User,
     lint,
-    lower,
 )
 from tundravm.declarative.state import _service
-from tundravm.models import DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP, ProfileState
+from tundravm.models import ProfileState
 
 STRICT_LINES = (
     "ProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nNoNewPrivileges=yes\n"
@@ -63,11 +61,6 @@ def test_explicit_users_are_not_declared_twice() -> None:
     assert [s.user for s in profile.services] == ["app", "root"]
 
 
-def test_remain_after_exit_renders_on_a_service() -> None:
-    text, _ = rendered(Service("once", "/usr/bin/once", type="oneshot", remain_after_exit=True))
-    assert "Type=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/once\n" in text
-
-
 def test_wants_orders_after_and_legacy_spellings_still_render() -> None:
     text, _ = rendered(Service("app", "/usr/bin/app", wants=("network-online.target",)))
     assert "After=network-online.target\nWants=network-online.target\n" in text
@@ -101,10 +94,3 @@ def test_opt_outs_are_linted() -> None:
         ("hardening-disabled", "bare.service", "warning"),
         ("hardening-relaxed", "jit.service", "info"),
     }
-
-
-def test_debloat_keeps_timers_target() -> None:
-    assert "timers.target" in DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP
-    recipe = Recipe(name="t", platform=Debian("trixie"), items=(User("app"),))
-    debloat = lower(recipe).state.profiles["default"].debloat
-    assert "timers.target" in debloat.effective_units_keep

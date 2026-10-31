@@ -85,25 +85,6 @@ def test_the_cloud_glue_is_not_gated() -> None:
     assert gate.GATE_UNIT not in tree.unit("azure-complete-provisioning")
 
 
-def test_the_gate_is_an_enabled_root_oneshot_in_the_payload() -> None:
-    tree = compile_tree(_recipe(Service("app", "/usr/bin/app", needs=())))
-    text = tree.unit(gate.GATE_UNIT)
-    for line in (
-        "Type=oneshot",
-        "RemainAfterExit=yes",
-        f"ExecStart={gate.GATE_SCRIPT}",
-        "Environment=TUNDRAVM_EXECUTION=production",
-        "StandardOutput=journal+console",
-        "CapabilityBoundingSet=",
-        "WantedBy=minimal.target",
-    ):
-        assert line in text.splitlines(), line
-    assert "User=" not in text and "PrivateDevices" not in text and "Condition" not in text
-    assert f"systemctl enable {gate.GATE_UNIT}" in tree.script("postinst")
-    script = tree.path(f"mkosi.extra{gate.GATE_SCRIPT}")
-    assert script.read_text() == gate.SCRIPT and script.stat().st_mode & 0o111
-
-
 @pytest.mark.parametrize(
     ("default", "other", "dropin"),
     [

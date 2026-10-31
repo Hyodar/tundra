@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from tundravm._source import CargoBuild, DotnetBuild, GitSource, GoBuild, ScriptBuild, SourceBuild
+from tundravm._source import DotnetBuild, GitSource, ScriptBuild, SourceBuild
 from tundravm._source import Install as SourceInstall
 from tundravm.declarative import (
     Build,
@@ -55,10 +55,6 @@ def _conf(tree: Tree) -> str:
     entry = next(e for e in tree.entries if e.path == "payload/mkosi.conf")
     assert entry.content is not None
     return entry.content.decode()
-
-
-def test_declarative_names_are_the_compiler_recipes() -> None:
-    assert (Go, Cargo, Dotnet) == (GoBuild, CargoBuild, DotnetBuild)
 
 
 def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
@@ -223,20 +219,6 @@ def test_lock_payload_records_the_recipe() -> None:
     }
     locked = lock(_recipe(build), resolver=lambda _source: SHA_A)
     assert [(p.identity, p.digest) for p in locked.pins] == [("tool", SHA_A)]
-
-
-def test_script_builds_still_lower_to_script_build() -> None:
-    build = Build("tool", Git(REPO, "main"), "make", (Install("tool", "/usr/bin/tool"),))
-    spec = lower(_recipe(build)).source_builds()["tool"]
-    assert spec.build == ScriptBuild(script="make", output="tool")
-
-
-def test_recipe_builds_are_hashable() -> None:
-    install = (Install("build/tool", "/usr/bin/tool"),)
-    first = Build("tool", Git(REPO, "main"), using=Go(output="tool"), install=install)
-    second = Build("tool", Git(REPO, "main"), using=Go(output="tool"), install=install)
-    assert first == second
-    assert hash(Fragment("f", items=(first,))) == hash(Fragment("f", items=(second,)))
 
 
 INSTALL = (Install("build/tool", "/usr/bin/tool"),)

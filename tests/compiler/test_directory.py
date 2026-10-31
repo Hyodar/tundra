@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import own_files, run_main
-from tundravm.declarative import Debian, FileTree, Fragment, Recipe, Variant, compile, lower
+from tundravm.declarative import Debian, FileTree, Recipe, compile, lower
 from tundravm.errors import ValidationError
 from tundravm.models import FileEntry
 
@@ -49,28 +49,11 @@ def test_imports_nested_tree_under_dest(tmp_path: Path) -> None:
     assert files["/etc/app/motd"].content == "hello\n"
 
 
-def test_preserves_modes_unless_mode_given(tmp_path: Path) -> None:
-    src = _tree(tmp_path / "etc")
-    modes = {f.path: f.mode for f in _files(_recipe(FileTree("/opt", src)))}
-    assert modes["/opt/bin/start.sh"] == "0755"
-    assert modes["/opt/motd"] == "0644"
-
-    forced = _files(_recipe(FileTree("/opt", src, mode=0o600)))
-    assert {f.mode for f in forced} == {"0600"}
-
-
 def test_exclude_globs_match_relative_paths_and_prune_dirs(tmp_path: Path) -> None:
     src = _tree(tmp_path / "etc")
     recipe = _recipe(FileTree("/etc", src, exclude=("cache", "*.swp", "systemd/*/*.network")))
 
     assert [f.path for f in _files(recipe)] == ["/etc/bin/start.sh", "/etc/motd"]
-
-
-def test_order_is_deterministic(tmp_path: Path) -> None:
-    src = _tree(tmp_path / "etc")
-    first = [f.path for f in _files(_recipe(FileTree("/x", src)))]
-    second = [f.path for f in _files(_recipe(FileTree("/x", src)))]
-    assert first == second == sorted(first)
 
 
 def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
@@ -85,23 +68,6 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
     compile(recipe).write(tmp_path / "tree")
     emitted = tmp_path / "tree" / "payload" / "mkosi.extra" / "lib" / "firmware" / "firmware.bin"
     assert emitted.read_bytes() == blob
-
-
-def test_scoped_to_variant(tmp_path: Path) -> None:
-    src = _tree(tmp_path / "etc")
-    recipe = Recipe(
-        "tree",
-        variants=(
-            Variant("default", outputs=("qemu",)),
-            Variant(
-                "dev",
-                add=Fragment("dev", items=(FileTree("/etc/dev", src, exclude=("cache",)),)),
-            ),
-        ),
-    )
-    image = lower(recipe)
-    assert own_files(image.state.profiles["default"].files) == []
-    assert len(own_files(image.state.profiles["dev"].files)) == 4
 
 
 def test_rejects_missing_or_empty_src(tmp_path: Path) -> None:

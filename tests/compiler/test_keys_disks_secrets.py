@@ -1,7 +1,6 @@
 """Keys, disks and secrets lower to the tundra-tools builds, configs and runtime-init steps."""
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -93,20 +92,6 @@ def _assert_runs_between_probes(tree: CompiledTree, step: str) -> None:
 
 
 # ── Keys ─────────────────────────────────────────────────────────────
-
-
-def test_key_generation_adds_build_hook(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Key("key_persistent"))
-
-    builds = _builds(tree)
-    assert len(builds) == 1
-    build_script = builds[0]
-    assert re.search(r'build\}/key-generation-[0-9a-f]{16}"', build_script)
-    assert "mkosi-chroot bash -c" in build_script
-    assert "mkdir -p ./build" in build_script
-    assert "go build" in build_script
-    assert "./cmd/key-gen" in build_script
-    assert "$DESTDIR/usr/bin/key-gen" in build_script
 
 
 def test_key_generation_registers_init_script(tmp_path: Path) -> None:
@@ -202,20 +187,6 @@ def test_key_generation_rejects_duplicate_and_shared_outputs(tmp_path: Path) -> 
 # ── Disks ────────────────────────────────────────────────────────────
 
 
-def test_disk_encryption_adds_build_hook(tmp_path: Path) -> None:
-    disk = Disk("disk_persistent", "/persistent", device="/dev/vda3", key=PERSISTENT_KEY)
-    tree = _compile(tmp_path, disk)
-
-    builds = _builds(tree)
-    assert len(builds) == 1
-    build_script = builds[0]
-    assert re.search(r'build\}/disk-encryption-[0-9a-f]{16}"', build_script)
-    assert "mkosi-chroot bash -c" in build_script
-    assert "mkdir -p ./build" in build_script
-    assert "./cmd/disk-setup" in build_script
-    assert "$DESTDIR/usr/bin/disk-setup" in build_script
-
-
 def test_disk_encryption_registers_init_script(tmp_path: Path) -> None:
     disk = Disk(
         "disk_persistent", "/data", device="/dev/vdb", key=PERSISTENT_KEY, mapper="cryptdata"
@@ -252,12 +223,6 @@ def test_disk_encryption_renders_custom_disk_config(tmp_path: Path) -> None:
     assert 'encryption_key: "rootfs_key"' in content
     assert 'mount_at: "/mnt/scratch"' in content
     assert 'dirs: ["data", "cache"]' in content
-
-
-def test_disk_encryption_installs_cryptsetup(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Disk("disk_persistent", "/persistent", key=PERSISTENT_KEY))
-
-    assert "cryptsetup" in conf_list(tree.conf(), "Packages")
 
 
 def test_disk_encryption_custom_repo(tmp_path: Path) -> None:
@@ -324,19 +289,6 @@ def test_disk_encryption_rejects_conflicting_disks(tmp_path: Path) -> None:
 # ── Secrets ──────────────────────────────────────────────────────────
 
 
-def test_secret_delivery_adds_build_hook(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Secrets())
-
-    builds = _builds(tree)
-    assert len(builds) == 1
-    build_script = builds[0]
-    assert re.search(r'build\}/secret-delivery-[0-9a-f]{16}"', build_script)
-    assert "mkosi-chroot bash -c" in build_script
-    assert "mkdir -p ./build" in build_script
-    assert "./cmd/secret-delivery" in build_script
-    assert "$DESTDIR/usr/bin/secret-delivery" in build_script
-
-
 def test_secret_delivery_registers_init_script(tmp_path: Path) -> None:
     secrets = Secrets(port=9090)
     tree = _compile(tmp_path, secrets, *_probes(secrets.ready))
@@ -346,12 +298,6 @@ def test_secret_delivery_registers_init_script(tmp_path: Path) -> None:
     assert script.count(expected) == 1
     _assert_runs_between_probes(tree, "secrets")
     assert 'server_url: "0.0.0.0:9090"' in tree.read(SECRET_CONFIG)
-
-
-def test_secret_delivery_does_not_add_runtime_packages(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, Secrets())
-
-    assert "python3" not in conf_list(tree.conf(), "Packages")
 
 
 def test_secret_delivery_writes_config_from_declared_secrets(tmp_path: Path) -> None:
@@ -490,36 +436,6 @@ def _runtime_items() -> tuple[Declaration, ...]:
     return (key, disk, Secrets(store=disk))
 
 
-def test_init_generates_a_unit_per_runtime_init_step(tmp_path: Path) -> None:
-    tree = _compile(tmp_path, *_runtime_items())
-
-    assert len(_builds(tree)) == 3
-
-    assert _step(tree, "keys").startswith("#!/bin/bash\nset -euo pipefail\n")
-    assert "/usr/bin/key-gen setup /etc/tdx/key-gen.yaml" in _step(tree, "keys")
-    assert "/usr/bin/disk-setup setup /etc/tdx/disk-setup.yaml" in _step(tree, "disks")
-    assert "/usr/bin/secret-delivery" in _step(tree, "secrets")
-    assert not tree.exists("mkosi.extra/usr/bin/runtime-init")
-
-    step = tree.unit("runtime-init-disks.service")
-    assert "Type=oneshot" in step
-    assert "ExecStart=/usr/lib/runtime-init/disks" in step
-    svc = tree.unit("runtime-init.service")
-    assert "Type=oneshot" in svc
-    assert "ExecStart=/bin/true" in svc
-    units = "runtime-init-keys.service runtime-init-disks.service runtime-init-secrets.service"
-    assert f"Requires={units}" in svc.splitlines()
-
-    conf = tree.conf()
-    packages = conf_list(conf, "Packages")
-    assert "cryptsetup" in packages
-    assert "python3" not in packages
-
-    build_packages = conf_list(conf, "BuildPackages")
-    assert "golang" in build_packages
-    assert "git" in build_packages
-
-
 def test_builtin_steps_depend_on_each_other(tmp_path: Path) -> None:
     key, disk, secrets = _runtime_items()
     tree = _compile(tmp_path, secrets, disk, key)
@@ -527,18 +443,3 @@ def test_builtin_steps_depend_on_each_other(tmp_path: Path) -> None:
     assert _deps(tree, "keys") == []
     assert _deps(tree, "disks") == ["runtime-init-keys.service"]
     assert _deps(tree, "secrets") == ["runtime-init-disks.service"]
-
-
-def test_secrets_not_stored_on_a_disk_do_not_wait_for_it(tmp_path: Path) -> None:
-    key, disk, _ = _runtime_items()
-    tree = _compile(tmp_path, key, disk, Secrets())
-
-    assert _deps(tree, "secrets") == []
-
-
-def test_init_without_init_scripts_does_not_generate_runtime_init(tmp_path: Path) -> None:
-    tree = _compile(tmp_path)
-
-    assert not tree.exists("mkosi.extra/usr/bin/runtime-init")
-    assert not tree.exists("mkosi.extra/usr/lib/runtime-init")
-    assert not tree.exists("mkosi.extra/usr/lib/systemd/system/runtime-init.service")

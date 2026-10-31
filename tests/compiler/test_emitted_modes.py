@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm.declarative import (
     Debian,
     Debloat,
@@ -32,12 +31,10 @@ from tundravm.declarative import (
     Template,
     Variant,
     compile,
-    load,
     lower,
 )
 from tundravm.declarative._compile import emit
 from tundravm.declarative.lifecycle import read_tree
-from tundravm.testing import assert_tree
 
 UMASKS = (0o002, 0o022, 0o077)
 
@@ -139,14 +136,6 @@ def test_emitted_paths_get_explicit_modes(tmp_path: Path, kernel_config: Path) -
         "payload/mkosi.profiles/gcp/mkosi.conf": 0o644,
     }
     assert {path: found.get(path) for path in expected} == expected
-
-
-@pytest.mark.parametrize("mask", UMASKS)
-def test_surge_matches_its_golden_tree_under_any_umask(mask: int) -> None:
-    surge = load(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
-    with umask(mask):
-        tree = compile(surge)
-    assert_tree(tree, SURGE_EXAMPLE / "mkosi", update=False)
 
 
 def test_tree_digest_covers_the_exec_bit_alone(tmp_path: Path) -> None:

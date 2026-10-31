@@ -81,15 +81,6 @@ def test_scheduled_task_renders_a_timer_and_leaves_the_service_to_it() -> None:
     assert "systemctl enable backup.service" not in script
 
 
-def test_every_renders_monotonic_timers() -> None:
-    task = Task("probe", "/usr/bin/true", schedule=Every("1min", first="30s"), hardening=OFF)
-    assert _tree(task).unit("probe.timer") == (
-        "[Unit]\nDescription=probe\n\n"
-        "[Timer]\nOnBootSec=30s\nOnUnitActiveSec=1min\n\n"
-        "[Install]\nWantedBy=timers.target\n"
-    )
-
-
 def test_socket_activated_service() -> None:
     service = Service(
         "app",

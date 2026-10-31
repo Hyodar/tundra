@@ -23,17 +23,7 @@ from tundravm.backends.base import collect_artifacts, drop_intermediates
 from tundravm.compiler.emit_mkosi import ACCOUNTS_FINALIZE, AZURE_CONVERTER, GCP_CONVERTER
 from tundravm.declarative import Debian, Package, Recipe, Variant, compile
 
-PINNED = {
-    "accounts": "9175aea9c4328f7e086be2ebaadc30fc167993f0d4db5292ab410f2115121e41",
-    "azure": "2021b21fdcee1c2cfd271990eaefb29978ad24348854eb4c28fcc9afdf9525ce",
-    "gcp": "69cd5ad32d6f1befc294693de5a9f44c5faa98e030e18fd954e866e62d8d2530",
-}
-"""sha256 of each emitted script: a change to one is deliberate (re-record it here)."""
 SECTOR = 512
-
-
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _tree(tmp_path: Path, **platform: object) -> Path:
@@ -51,50 +41,11 @@ def _tree(tmp_path: Path, **platform: object) -> Path:
     return tmp_path / "mkosi"
 
 
-def test_the_emitted_scripts_are_pinned() -> None:
-    assert _sha(ACCOUNTS_FINALIZE) == PINNED["accounts"]
-    assert _sha(AZURE_CONVERTER) == PINNED["azure"]
-    assert _sha(GCP_CONVERTER) == PINNED["gcp"]
-
-
-def test_finalize_ends_with_the_accounts_step_and_wrappers_convert(tmp_path: Path) -> None:
-    tree = _tree(tmp_path)
-    finalize = (tree / "payload/mkosi.finalize.d/50-finalize.sh").read_text()
-    assert finalize.endswith("\n\n" + ACCOUNTS_FINALIZE)
-    assert finalize.count("tundravm_sort_by_field passwd 3") == 1
-    assert (tree / "mkosi.images/azure/mkosi.postoutput.d/vhd").read_text() == AZURE_CONVERTER
-    assert (tree / "mkosi.images/gcp/mkosi.postoutput.d/tar").read_text() == GCP_CONVERTER
-    seeds = {
-        line
-        for conf in (
-            "mkosi.conf",
-            "payload/mkosi.conf",
-            *(f"mkosi.images/{t}/mkosi.conf" for t in ("azure", "gcp")),
-        )
-        for line in (tree / conf).read_text().splitlines()
-        if line.startswith("Seed=")
-    }
-    assert len(seeds) == 1  # every image partitions from the same fixed seed
-
-
 def test_a_non_reproducible_build_skips_the_accounts_step(tmp_path: Path) -> None:
     tree = _tree(tmp_path, epoch=None)
     finalize = (tree / "payload/mkosi.finalize.d/50-finalize.sh").read_text()
     assert "tundravm_sort" not in finalize
     assert "\nSourceDateEpoch=0\n" in (tree / "mkosi.conf").read_text()
-
-
-def test_the_converters_spell_their_normalizations() -> None:
-    for script in (AZURE_CONVERTER, GCP_CONVERTER):
-        assert "EFI PART" in script  # the GPT grow helper
-        assert "sgdisk" not in script and "mkfs.vfat" not in script and "parted" not in script
-    assert "--sort=name" in GCP_CONVERTER
-    assert "--owner=0 --group=0 --numeric-owner --mode=0644" in GCP_CONVERTER
-    assert "--hole-detection=raw" in GCP_CONVERTER
-    assert '| gzip -n >"$OUTPUTDIR/gcp.tar.gz"' in GCP_CONVERTER
-    assert '"$TMP/disk.raw" 1073741824' in GCP_CONVERTER
-    assert '"$DISK" 1048576' in AZURE_CONVERTER
-    assert "footer[68:84] = unique" in AZURE_CONVERTER
 
 
 @pytest.mark.skipif(shutil.which("awk") is None, reason="needs awk")

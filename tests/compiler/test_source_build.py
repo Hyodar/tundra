@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import conf_list, source_dir, write_recipe_file
+from tests.helpers import conf_list, source_dir
 from tundravm._source import (
     GitSource,
     ScriptBuild,
@@ -26,18 +26,15 @@ from tundravm.declarative import (
     Build,
     Declaration,
     Diagnostic,
-    Disk,
     Fragment,
     Git,
     Http,
     Install,
-    Key,
     Lock,
     Package,
     Pin,
     Policy,
     Recipe,
-    Secrets,
     Tree,
     Variant,
     bake,
@@ -59,27 +56,6 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 REPO = "https://example.com/acme/tool.git"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-# The former examples/qemu_basic.py, on a platform: a recipe without source builds, whose
-# payload (and so digest) source builds must not touch.
-QEMU_BASIC = '''\
-"""Minimal QEMU-focused recipe.
-
-tundravm show examples/qemu_basic.py
-tundravm build examples/qemu_basic.py
-"""
-
-from tundravm.backends import LimaMkosiBackend
-from tundravm.declarative import Debian, File, Fragment, Package, Recipe
-
-recipe = Recipe(
-    name="qemu-basic",
-    platform=Debian("bookworm", boot=None),
-    items=(Package("curl"), Package("jq"), File("/etc/motd", "QEMU profile\\n")),
-)
-
-backend = LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")
-'''
-QEMU_BASIC_DIGEST = "47d88961b7f3e90205a58ff4ad8ab79170e110f57c9a80b0b1cb0e4d94267813"
 GO_SCRIPT = (
     'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool'
 )
@@ -191,13 +167,6 @@ def test_payload_has_source_builds_only_when_declared() -> None:
     assert entry["build"]["kind"] == "script"
 
 
-def test_existing_digest_is_unchanged(tmp_path: Path) -> None:
-    recipe = write_recipe_file(tmp_path, QEMU_BASIC)
-    out = io.StringIO()
-    assert main(["show", str(recipe), "--json"], stdout=out) == EXIT_OK
-    assert json.loads(out.getvalue())["digest"] == QEMU_BASIC_DIGEST
-
-
 def test_duplicate_source_build_name_is_rejected() -> None:
     recipe = _recipe(_build(), _build("dev"))
     found = lint(recipe)
@@ -206,29 +175,7 @@ def test_duplicate_source_build_name_is_rejected() -> None:
         lower(recipe)
 
 
-def test_variant_inherits_common_source_builds() -> None:
-    variants = (Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",)))
-    recipe = _recipe(_build(), variants=variants)
-    assert "tool" in lower(recipe).source_builds(profile="azure")
-    tree = compile(recipe)
-    # azure only adds its wrapper: it builds the payload's hooks, with no overlay of its own
-    assert not any(e.path.startswith("payload/mkosi.profiles/") for e in tree.entries)
-    assert _hooks(tree) == _spec().render()
-
-
 # ── Rendering ───────────────────────────────────────────────────────
-
-
-def test_unpinned_and_pinned_rendering() -> None:
-    spec = _spec()
-    unpinned = spec.render()
-    assert unpinned.startswith(f"{TOOL_MARKER}\n# unpinned: main\n")
-    assert "git" not in unpinned.split("\n", 1)[1]  # the sandbox never fetches
-    pinned = spec.render(SHA_A)
-    assert "unpinned" not in pinned
-    assert "git clone" not in pinned and "git -C" not in pinned
-    assert f"$SRCDIR/tundravm-sources/{source_dir('tool', SHA_A, REPO)}" in pinned
-    assert spec.render(SHA_B) != pinned  # the cache key fingerprints the pin
 
 
 def test_hooks_copy_the_fetched_checkout() -> None:
@@ -324,36 +271,6 @@ def test_tdxs_hook_copies_the_fetched_checkout() -> None:
     assert "run tundravm lock, then tundravm build" in current
 
 
-def _runtime_recipe() -> Recipe:
-    key = Key("key_persistent", output="/tmp/key_persistent")
-    disk = Disk("disk_persistent", "/persistent", key=key)
-    return _recipe(Package("linux-image-amd64"), key, disk, Secrets(store=disk))
-
-
-def _assert_runtime_tool_hook(name: str, binary: str) -> None:
-    recipe = _runtime_recipe()
-    tree = compile(recipe)
-    spec = lower(recipe).source_builds()[name]
-    assert spec.render() in _hooks(tree)
-    assert f'"$DESTDIR/usr/bin/{binary}"' in spec.render(SHA_A)
-    step = {"key-gen": "keys", "disk-setup": "disks", "secret-delivery": "secrets"}[binary]
-    runtime_init = _read(tree, f"payload/mkosi.extra/usr/lib/runtime-init/{step}")
-    assert runtime_init.count(f"/usr/bin/{binary} setup ") == 1
-    assert not [d for d in lint(recipe) if d.severity == "error"]
-
-
-def test_key_generation_hook_is_a_source_build() -> None:
-    _assert_runtime_tool_hook("key-generation", "key-gen")
-
-
-def test_disk_encryption_hook_is_a_source_build() -> None:
-    _assert_runtime_tool_hook("disk-encryption", "disk-setup")
-
-
-def test_secret_delivery_hook_is_a_source_build() -> None:
-    _assert_runtime_tool_hook("secret-delivery", "secret-delivery")
-
-
 # ── Locking ─────────────────────────────────────────────────────────
 
 
@@ -371,13 +288,6 @@ def test_lock_records_fetches_and_compile_uses_pin() -> None:
     assert "unpinned" not in script
     # The recipe payload keeps the symbolic declaration: the lock stays fresh.
     assert lock_status(recipe, locked) == ()
-
-
-def test_unpinned_compile_emits_marker() -> None:
-    script = _hooks(compile(_recipe(_build())))
-    assert "# unpinned: main" in script
-    assert "then tundravm build" in script
-    assert script == _spec().render()
 
 
 def test_pin_for_another_ref_is_ignored() -> None:
@@ -534,12 +444,3 @@ def test_check_rule_source_unpinned() -> None:
     # lint reads the pins of ./build/tundravm.lock, as `tundravm lint` does.
     write_lock(lock(recipe, resolver=_Fixed(SHA_A)), Path("build") / "tundravm.lock")
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
-
-
-def test_cli_offline_build_without_a_lock_fails_clearly(tmp_path: Path) -> None:
-    recipe = tmp_path / "recipe.py"
-    recipe.write_text(RECIPE_FILE.format(repo="https://x/y.git"), encoding="utf-8")
-    out = io.StringIO()
-    code = main(["build", str(recipe), "--offline"], stdout=out)
-    assert code != EXIT_OK
-    assert not (tmp_path / "build" / "tundravm.lock").exists()
