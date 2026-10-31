@@ -1,5 +1,6 @@
-"""What the integration tests that build or boot share: the host check, build removal, and
-a reader for the GPT of a disk image (raw, a fixed VHD, or a stream out of an archive)."""
+"""What the integration tests that build or boot share: the host check, build removal, a
+reader for the GPT of a disk image (raw, a fixed VHD, or a stream out of an archive), and
+what a production boot without TDX shows (:func:`assert_fail_closed`)."""
 
 from __future__ import annotations
 
@@ -15,7 +16,9 @@ from typing import IO
 
 import pytest
 
-from tundravm.testing import boot_unavailable, build_unavailable
+from tundravm._modules import execution
+from tundravm.testing import BootResult, boot_unavailable, build_unavailable
+from tundravm.testing._boot import DEFAULT_MARKERS
 
 SECTOR = 512
 
@@ -127,6 +130,33 @@ def probe_lines(console: str, what: str) -> list[str]:
         if sep and said.startswith(f"{what} "):
             found.append(said.removeprefix(f"{what} ").strip())
     return found
+
+
+GATE = execution.GATE_UNIT
+GATED = ("web.service", "greeter.service")
+"""The fixture's units made from a ``Service``: each requires the execution gate."""
+FAIL_CLOSED_MARKERS = (*DEFAULT_MARKERS, PROBE_DONE, execution.REFUSED)
+"""What a production boot of the fixture without TDX prints: the target is reached, the
+probe (a boot task, not gated) finished, and the gate refused."""
+FAIL_CLOSED_UNITS = ("boot-probe", GATE, *GATED)
+"""The units such a boot waits for, started or failed."""
+
+
+def assert_fail_closed(result: BootResult) -> None:
+    """*result* is a production boot with no TDX: it booted to its target with nothing
+    fatal, ``tdx-evidence.service`` failed with the gate's line, every gated service failed
+    on that dependency and never started, and the ungated probe ran."""
+    summary = result.summary(tail=200)
+    assert not result.timed_out and result.fatal == (), summary
+    assert result.returncode in (None, 0), summary
+    for marker in FAIL_CLOSED_MARKERS:
+        assert marker in result.console, f"{marker!r} not on the console\n{summary}"
+    assert GATE in result.failed, summary
+    for unit in GATED:
+        assert unit in result.failed and unit not in result.started, f"{unit}\n{summary}"
+    assert f"Dependency failed for {GATED[0]}" in result.console, summary
+    assert {"minimal.target", "boot-probe.service"} <= set(result.started), summary
+    assert set(result.failed) == {GATE, *GATED}, summary
 
 
 def free_port() -> int:

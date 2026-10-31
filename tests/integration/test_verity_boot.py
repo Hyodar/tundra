@@ -5,8 +5,11 @@ bakes a payload disk whose erofs root and dm-verity hash partitions the QEMU dis
 block for block beside the ESP; the UKI on the ESP names them, with the root hash, on its
 command line. Booted with no ``-kernel``, the initrd must open the root through dm-verity,
 mount the erofs read-only and stack ``systemd.volatile=overlay``'s tmpfs over it; the
-fixture's ``boot-probe`` task prints what the root really is and the tests read it, and its
-``web`` service serves a page the host fetches through a QEMU forward.
+fixture's ``boot-probe`` task prints what the root really is and the tests read it. The
+build is a production profile and there is no TDX, so the boot is fail-closed: the probe
+is a boot task, which the execution gate does not hold back, and the ``web`` service never
+starts (``test_fixture_boot.py`` has the gate's assertions; the dev build that serves the
+page runs in the ``fixture-boot`` job).
 
 CI's ``verity`` job builds the fixture with ``tundravm build ... --attr verity_recipe`` and
 points ``TUNDRAVM_VERITY_BUILD`` at that build directory; without it the test bakes the
@@ -28,14 +31,15 @@ from tundravm.compiler.emit_mkosi import verity_uuids
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.recipe import load_file
 from tundravm.testing import BootResult, boot
-from tundravm.testing._boot import DEFAULT_MARKERS, expected_cmdline, uki_cmdline
+from tundravm.testing._boot import expected_cmdline, uki_cmdline
 
 from .support import (
     ESP_TYPE,
-    PROBE_DONE,
+    FAIL_CLOSED_MARKERS,
+    FAIL_CLOSED_UNITS,
     ROOT_X86_64_TYPE,
     ROOT_X86_64_VERITY_TYPE,
-    free_port,
+    assert_fail_closed,
     probe_lines,
     read_fat,
     read_gpt,
@@ -51,10 +55,6 @@ BOOT_TIMEOUT = float(os.environ.get("TUNDRAVM_BOOT_TIMEOUT", "900"))
 LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 BUILD = os.environ.get("TUNDRAVM_VERITY_BUILD")
 """A build directory ``tundravm build --attr verity_recipe --profile default`` published."""
-
-WEB_PORT = 8080
-PAGE = "<!doctype html>\n<title>fixture</title>\n<h1>fixture</h1>\n"
-URL: dict[str, str] = {}
 
 
 @pytest.fixture(scope="module")
@@ -77,20 +77,17 @@ def output(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 @pytest.fixture(scope="module")
 def verity_boot(output: Path, tmp_path_factory: pytest.TempPathFactory) -> BootResult:
     """``qemu.raw`` booted through its ESP, until the probe has printed everything and the
-    page answered."""
-    host = free_port()
-    URL["page"] = url = f"http://127.0.0.1:{host}/"
+    gate has refused."""
     log = Path(LOG_DIR or tmp_path_factory.mktemp("verity-logs")) / "verity-disk.console.log"
     result = boot(
         output / "qemu.raw",
         via="disk",
         timeout=BOOT_TIMEOUT,
         memory="4G",
-        markers=(*DEFAULT_MARKERS, PROBE_DONE),
-        expect_units=("web", "boot-probe"),
+        markers=FAIL_CLOSED_MARKERS,
+        expect_units=FAIL_CLOSED_UNITS,
+        settle=10.0,
         log=log,
-        forward={host: WEB_PORT},
-        wait_http=(url,),
     )
     print(" ".join(result.command))  # recorded in the test log
     print(result.summary(tail=400))
@@ -140,14 +137,10 @@ def test_qemu_disk_esp_is_a_fat32_the_firmware_reads(output: Path) -> None:
 
 def test_verity_disk_boots_through_its_esp(verity_boot: BootResult) -> None:
     """No ``-kernel``: OVMF boots the UKI off the ESP, the initrd switches to the verity
-    root and the system reaches its target with the service serving, the probe run and
-    nothing failed."""
+    root and the system reaches its target with the probe run, fail-closed: nothing failed
+    but the gate and the services that require it."""
     assert "-kernel" not in verity_boot.command
-    verity_boot.assert_booted()
-    assert {"minimal.target", "web.service", "boot-probe.service"} <= set(verity_boot.started)
-    assert verity_boot.failed == ()
-    assert verity_boot.fatal == ()
-    assert verity_boot.http_get(URL["page"]) == PAGE
+    assert_fail_closed(verity_boot)
 
 
 def test_the_kernel_boots_the_ukis_cmdline(output: Path, verity_boot: BootResult) -> None:

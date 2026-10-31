@@ -7,8 +7,11 @@ virtio disk (no ``-kernel``) that OVMF boots from the same UKI on its ESP
 ``service`` template is baked once, unchanged, and booted both ways; each time the host
 fetches its page through a QEMU port forward (network, firewall and app end to end), and
 each boot's kernel prints the command line the UKI carries plus the harness's console words.
-The templates are ``Image`` files: they lower to a ``production`` variant, and their
-evidence service builds tundra-tools from its source repository, which the bake fetches.
+The templates are ``Image`` files, and their evidence service builds tundra-tools from its
+source repository, which the bake fetches. There is no TDX here, so a production profile is
+fail-closed (plan 6.1: ``tdx-evidence.service`` refuses and no service starts): the
+``minimal`` template, which has no other profile, is booted to show that, and the
+``service`` template's ``dev`` profile, which runs simulated, serves its page.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
 ``qemu-system-x86_64`` and OVMF; skipped otherwise. ``test_fixture_boot.py`` boots the same
 two paths on the gate 1 fixture, which fetches no source.
@@ -24,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from tundravm._modules.execution import REFUSED
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative.lifecycle import Artifact, bake_image
 from tundravm.recipe import load_file
@@ -46,9 +50,9 @@ PAGE = "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
 """What the unchanged ``service`` starter serves."""
 
 
-def _bake(tmp: Path, template: str) -> Iterator[Artifact]:
-    """Bake *template*'s ``production`` variant, unchanged: its ``qemu`` artifact
-    (``qemu.raw``, booting ``payload.efi``), removed with the build afterwards."""
+def _bake(tmp: Path, template: str, variant: str) -> Iterator[Artifact]:
+    """Bake *template*'s *variant*, unchanged: its ``qemu`` artifact (``qemu.raw``, booting
+    ``payload.efi``), removed with the build afterwards."""
     recipe_path = tmp / "node.py"
     recipe_path.write_text(
         render_recipe_template(
@@ -60,7 +64,7 @@ def _bake(tmp: Path, template: str) -> Iterator[Artifact]:
     out = tmp / "build"
     try:
         backend = LocalLinuxBackend()
-        _, artifacts = bake_image(lowered, ("production",), locked=None, backend=backend, build=out)
+        _, artifacts = bake_image(lowered, (variant,), locked=None, backend=backend, build=out)
         (artifact,) = (artifact for artifact in artifacts if artifact.target == "qemu")
         assert artifact.path.name == "qemu.raw", artifact.path
         uki = artifact.boot_payload
@@ -99,9 +103,9 @@ def _boot(
 
 @pytest.fixture(scope="module")
 def minimal_artifact(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Artifact]:
-    """The ``minimal`` template baked once."""
+    """The ``minimal`` template's production profile baked once."""
     require_boot()
-    yield from _bake(tmp_path_factory.mktemp("minimal"), "minimal")
+    yield from _bake(tmp_path_factory.mktemp("minimal"), "minimal", "production")
 
 
 @pytest.fixture(scope="module")
@@ -110,15 +114,16 @@ def minimal_boot(
 ) -> BootResult:
     """The ``minimal`` template's UKI booted through ``-kernel``."""
     logs = tmp_path_factory.mktemp("minimal-logs")
-    return _boot(minimal_artifact, logs, "minimal", "kernel", ("hello.service",))
+    units = ("tdx-evidence.service", "app.service")
+    return _boot(minimal_artifact, logs, "minimal", "kernel", units)
 
 
 @pytest.fixture(scope="module")
 def service_artifact(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Artifact]:
     """The ``service`` template (TeeBase, strict sandbox, curated modules) baked once,
-    unchanged, for both boot paths."""
+    unchanged, as its ``dev`` profile (which runs without TDX), for both boot paths."""
     require_boot()
-    yield from _bake(tmp_path_factory.mktemp("service"), "service")
+    yield from _bake(tmp_path_factory.mktemp("service"), "service", "dev")
 
 
 SERVICE_URL: dict[str, str] = {}
@@ -154,11 +159,13 @@ def _uki(artifact: Artifact) -> Path:
     return artifact.boot_payload
 
 
-def test_minimal_template_boots_to_its_target(minimal_boot: BootResult) -> None:
-    """The image reaches minimal.target, runs its hello task, and no unit fails."""
-    minimal_boot.assert_booted()
-    assert {"minimal.target", "hello.service"} <= set(minimal_boot.started)
-    assert minimal_boot.failed == ()
+def test_minimal_template_boots_to_its_target_fail_closed(minimal_boot: BootResult) -> None:
+    """The production image reaches minimal.target without TDX, its gate refuses, and its
+    app never starts."""
+    assert "minimal.target" in minimal_boot.started and minimal_boot.fatal == ()
+    assert REFUSED in minimal_boot.console
+    assert {"tdx-evidence.service", "app.service"} <= set(minimal_boot.failed)
+    assert "app.service" not in minimal_boot.started
 
 
 def test_minimal_template_boots_the_ukis_cmdline(

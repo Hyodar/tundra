@@ -1,18 +1,22 @@
 """Boot the gate 1 fixture (``initramfs`` layout) both ways: ``-kernel`` and ``qemu.raw``.
 
 ``tests/fixtures/native-tree/recipe.py``'s ``recipe`` is a plain ``Recipe`` with no source
-builds, so it bakes anywhere the Linux backend does. Its ``default`` variant is booted under
-QEMU with OVMF from pflash twice: the payload's UKI (``payload.efi``) through ``-kernel``,
-and ``qemu.raw`` attached as a virtio disk on a snapshot with no ``-kernel``, which OVMF
-boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI`` on the ESP (the way ``run --mode
-simulated`` boots it). Each boot must reach ``minimal.target`` with the fixture's
-``web`` service running and its page fetched by the host through a QEMU forward, and the
-kernel's command line (and ``/proc/cmdline``, which the fixture's ``boot-probe`` task prints)
-must be the UKI's own with the harness's SMBIOS console words appended.
+builds, so it bakes anywhere the Linux backend does. Its ``default`` variant, a production
+profile, is booted under QEMU with OVMF from pflash twice: the payload's UKI
+(``payload.efi``) through ``-kernel``, and ``qemu.raw`` attached as a virtio disk on a
+snapshot with no ``-kernel``, which OVMF boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI``
+on the ESP (the way ``run --mode simulated`` boots it). There is no TDX here, so each boot
+must be fail-closed (plan 6.1): ``minimal.target`` reached, ``tdx-evidence.service`` failed
+with the gate's console line, the ``web`` and ``greeter`` services never started on that
+dependency, and the ungated ``boot-probe`` task run. The kernel's command line (and
+``/proc/cmdline``, which the probe prints) must be the UKI's own with the harness's SMBIOS
+console words appended.
 
 CI's ``fixture-boot`` job builds it with ``tundravm build --profile default`` and points
 ``TUNDRAVM_FIXTURE_BUILD`` at that build directory; without it the test bakes the
-``default`` variant itself. Needs a Linux build host, ``qemu-system-x86_64`` and OVMF.
+``default`` variant itself. The same job builds the ``dev`` profile and runs it with
+``tundravm run --mode simulated``, where the gate records ``simulated`` and the host
+fetches the page. Needs a Linux build host, ``qemu-system-x86_64`` and OVMF.
 Run with: uv run pytest tests/integration/test_fixture_boot.py -m boot
 """
 
@@ -28,12 +32,13 @@ from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.recipe import load_file
 from tundravm.testing import BootResult, boot
-from tundravm.testing._boot import DEFAULT_MARKERS, BootPath, expected_cmdline
+from tundravm.testing._boot import BootPath, expected_cmdline
 
 from .support import (
     ESP_TYPE,
-    PROBE_DONE,
-    free_port,
+    FAIL_CLOSED_MARKERS,
+    FAIL_CLOSED_UNITS,
+    assert_fail_closed,
     probe_lines,
     read_fat,
     read_gpt,
@@ -49,12 +54,6 @@ LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 BUILD = os.environ.get("TUNDRAVM_FIXTURE_BUILD")
 """A build directory ``tundravm build tests/fixtures/native-tree/recipe.py --profile default``
 published (``payload.efi`` and ``qemu.raw`` at its top)."""
-
-WEB_PORT = 8080
-PAGE = "<!doctype html>\n<title>fixture</title>\n<h1>fixture</h1>\n"
-"""What the fixture's ``web`` service serves (``recipe.py``'s ``PAGE``)."""
-URL: dict[str, str] = {}
-"""The URL each boot fetched the page from (a free host port, per boot)."""
 
 
 @pytest.fixture(scope="module")
@@ -74,8 +73,8 @@ def output(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 
 
 def _boot(output: Path, logs: Path, via: BootPath) -> BootResult:
-    host = free_port()
-    URL[via] = url = f"http://127.0.0.1:{host}/"
+    """Boot until the target, the probe and the gate's refusal are on the console and the
+    gate and each gated service has started or failed."""
     image = output / ("payload.efi" if via == "kernel" else "qemu.raw")
     log = Path(LOG_DIR or logs) / f"fixture-{via}.console.log"
     result = boot(
@@ -83,11 +82,10 @@ def _boot(output: Path, logs: Path, via: BootPath) -> BootResult:
         via=via,
         timeout=BOOT_TIMEOUT,
         memory="4G",
-        markers=(*DEFAULT_MARKERS, PROBE_DONE),
-        expect_units=("web", "boot-probe"),
+        markers=FAIL_CLOSED_MARKERS,
+        expect_units=FAIL_CLOSED_UNITS,
+        settle=10.0,
         log=log,
-        forward={host: WEB_PORT},
-        wait_http=(url,),
     )
     print(" ".join(result.command))  # recorded in the test log
     print(result.summary(tail=400))
@@ -117,29 +115,20 @@ def test_qemu_disk_esp_is_a_fat32_the_firmware_reads(output: Path) -> None:
     assert fat.uefi_fat32, f"ESP {esp.size} bytes: {fat}"
 
 
-def _assert_booted(result: BootResult, via: BootPath) -> None:
-    result.assert_booted()
-    assert {"minimal.target", "web.service", "boot-probe.service"} <= set(result.started)
-    assert result.failed == ()
-    assert result.fatal == ()
-    assert result.http_get(URL[via]) == PAGE
-
-
-def test_uki_boots_through_kernel_with_its_service_serving(kernel_boot: BootResult) -> None:
+def test_uki_boots_through_kernel_fail_closed(kernel_boot: BootResult) -> None:
     assert "-kernel" in kernel_boot.command
-    _assert_booted(kernel_boot, "kernel")
+    assert_fail_closed(kernel_boot)
 
 
-def test_disk_boots_through_its_esp_with_its_service_serving(
-    output: Path, disk_boot: BootResult
-) -> None:
+def test_disk_boots_through_its_esp_fail_closed(output: Path, disk_boot: BootResult) -> None:
     """No ``-kernel``: OVMF finds the UKI on the ESP of the virtio disk, and the system
-    reaches its target with the service up and its page served, as through ``-kernel``."""
+    reaches its target with the gate refusing and no service started, as through
+    ``-kernel``."""
     command = disk_boot.command
     assert "-kernel" not in command
     assert f"file={output / 'qemu.raw'},format=raw,if=virtio,snapshot=on" in command
     assert any(arg.startswith("if=pflash,format=raw,readonly=on,") for arg in command)
-    _assert_booted(disk_boot, "disk")
+    assert_fail_closed(disk_boot)
 
 
 @pytest.mark.parametrize("via", ["kernel", "disk"])
