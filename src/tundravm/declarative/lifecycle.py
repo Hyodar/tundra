@@ -638,6 +638,12 @@ def check_report(
     if recipe is not None:
         names = variant_names(recipe, variants)
         found.extend(_resolution_lint(recipe, variants=names))
+        # the tree's shared payload is what every variant builds: lowering resolves them all
+        seen = {(d.code, d.subject, d.location) for d in found}
+        for d in _resolution_lint(recipe):
+            if d.severity == "error" and (d.code, d.subject, d.location) not in seen:
+                seen.add((d.code, d.subject, d.location))
+                found.append(d)
         if any(d.severity == "error" for d in found):
             return found
         img = lower(recipe, variants=names)

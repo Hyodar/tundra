@@ -93,6 +93,7 @@ def test_every_variant_gets_the_platform_with_its_provenance() -> None:
     at = display_location(origins[0].location)
     assert origins[0].describe() == f"declared at {at} in the platform"
     assert lower(recipe, variants=("default",)).base == "debian/trixie"
-    # resolved, they are other images; lowered, a profile overlay can only add to the payload
-    with pytest.raises(ValidationError, match="'rescue' \\(it is standalone\\)"):
-        lower(recipe)
+    # lowered, each is its whole image; the shared payload is what every one builds
+    whole = lower(recipe)
+    assert "udev" not in whole.state.effective_profile("no-udev").packages
+    assert "curl" not in whole.state.effective_profile("rescue").packages

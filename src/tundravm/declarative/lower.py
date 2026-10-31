@@ -9,15 +9,18 @@ lint, diff, lock, bake and inspect work on.
 Variants map onto compiler profiles. The default variant (the one named
 ``default``, else the first root variant) is the default profile and receives
 every declaration it resolves to. A variant whose parent is ``base`` or the
-default variant becomes a profile that extends the default one and declares
-only what it adds (or replaces, for types the profile merge overrides by
-identity). Every other variant (parentless, chained onto another variant, with
-its own settings or kernel, or removing/replacing what the extending merge
-cannot express) is lowered standalone from its own resolved declarations, with
-its own mkosi options and kernel.
+default variant and that only adds becomes a profile that extends the default one
+and declares only what it adds (or replaces, for types the profile merge overrides
+by identity). Every other variant (parentless, chained onto another variant, or
+removing or replacing what the extending merge cannot express) is lowered whole, as
+a standalone profile, from its own resolved declarations: its ``extends`` chain and
+its changes applied. The emitter then writes the declarations every profile shares
+once and each profile's own in its overlay. A variant with its own settings or kernel
+is refused: they are the whole tree's.
 
-Lowering is deterministic and never touches the network; ``Path`` contents
-are read here.
+Every variant is lowered whatever a compile selects, so the shared payload never
+depends on the selection. Lowering is deterministic and never touches the network;
+``Path`` contents are read here.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from tundravm.models import KernelPatchSpec, OutputTarget, RecipeState, unit_nam
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
     BASE_VARIANT,
+    Build,
     Debloat,
     Declaration,
     Disk,
@@ -145,27 +149,34 @@ _LIST_SETTINGS = (("Build", "Environment"), ("Build", "SandboxTrees"), BUILD_SOU
 _TRUE = frozenset({"true", "yes", "1"})
 
 
-class _Standalone(Exception):
-    """The extending-profile merge cannot express a variant; lower it standalone.
+class _Whole(Exception):
+    """The extending-profile merge cannot express a variant; lower it whole.
 
     The message says why, completing "it ...".
     """
+
+
+class _Refused(Exception):
+    """A variant the tree cannot carry at all. The message says why, completing "it ..."."""
 
 
 _FALSE = frozenset({"false", "no", "0"})
 
 
 def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
-    """Lower *recipe* onto the compiler, with *variants* (default: all).
+    """Lower *recipe* onto the compiler; *variants* must be declared (default: all).
 
-    The default variant is always lowered: it is the payload every variant builds on.
-    Every other variant is an addition to it: a variant that only names other outputs
-    becomes the cloud wrappers it selects, one that adds content a profile overlay.
+    Every variant is lowered whichever *variants* names: the tree's shared payload is what
+    all of them build, so it never depends on a selection (``Lowered.select`` picks what
+    operations run on). The default variant is the payload every variant builds on; a
+    variant that only names other outputs becomes the cloud wrappers it selects, one that
+    adds, removes or changes content a profile overlay.
     Raises ``ValidationError`` for an unresolvable recipe, for declarations the
-    compiler cannot express, and for variants that are not an addition to the default.
+    compiler cannot express, and for variants with their own settings or kernel.
     """
     default = _default_variant(recipe)
-    selected = _selected(recipe, variants, default)
+    _selected(recipe, variants, default)
+    selected = _selected(recipe, None, default)
     resolved = {variant.name: resolve(recipe, variant=variant.name) for variant in selected}
     base = resolved[default.name]
     _check_mirrors(recipe)
@@ -201,20 +212,26 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         child = resolved[variant.name]
         targets[variant.name] = tuple(child.outputs)
         try:
-            if variant.inherits not in (BASE_VARIANT, default.name):
-                raise _Standalone(
-                    "is standalone"
-                    if variant.inherits is None
-                    else f"inherits variant {variant.inherits!r}"
-                )
             _same_configuration(base, child)
-            own, reemit = _overlay(base, child)
-        except _Standalone as why:
+            _same_builds(base, child)
+        except _Refused as why:
             rejected.append((variant.name, str(why)))
             continue
-        builder.extending(variant.name)
         if "backports" in child.fragments and "backports" not in base.fragments:
             overlay_sandbox[variant.name] = _backports_sources(recipe)
+        try:
+            if variant.inherits not in (BASE_VARIANT, default.name):
+                raise _Whole("extends another variant")
+            own, reemit = _overlay(base, child)
+        except _Whole:
+            # Its whole resolved image, as the payload is lowered: the emitter splits what
+            # every profile shares from what this one builds beyond it.
+            builder.standalone(variant.name)
+            builder.declare(variant.name, child.items, full=child.items)
+            builder.targets(variant.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
+            overlays.append(variant.name)
+            continue
+        builder.extending(variant.name)
         if own or reemit or variant.name in overlay_sandbox:
             overlays.append(variant.name)
             builder.declare(variant.name, own, full=child.items, reemit=reemit)
@@ -222,11 +239,10 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)
         raise ValidationError(
-            f"Cannot emit variant{plural} {listed}: a variant is a profile overlay on the "
-            f"default variant {default.name!r}'s payload, so it can only add to it.",
-            hint=f"Make each a pure addition to {default.name!r}: inherits {BASE_VARIANT!r} "
-            f"or {default.name!r}, nothing removed, {default.name!r}'s settings and kernel, "
-            "and edits limited to File, Repository and Debloat; or make it its own recipe.",
+            f"Cannot emit variant{plural} {listed}: every variant of a tree shares the default "
+            f"variant {default.name!r}'s mkosi settings, kernel and source builds.",
+            hint=f"Declare those settings, the kernel and the builds once, for {default.name!r} "
+            "(or in Recipe.items); or make the variant its own recipe.",
             context={"variants": ", ".join(name for name, _ in rejected)},
         )
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
@@ -266,15 +282,16 @@ def _require_shared_distribution(lowered: Lowered) -> None:
     toolchain.
     """
     default = lowered.default_profile
-    payload = lowered.state.effective_profile(default)
-    if lowered.kernel_source(default) is None and not payload.source_builds:
+    states = [lowered.state.effective_profile(n) for n in (default, *lowered.overlays)]
+    shared = set(states[0].source_builds).intersection(*(s.source_builds for s in states[1:]))
+    if lowered.kernel_source(default) is None and not shared:
         return
     expected = lowered.distribution_fingerprint(default)
     for name in lowered.overlays:
         if lowered.distribution_fingerprint(name) != expected:
             raise ValidationError(
-                f"Cannot emit variant {name!r}: it adds build packages or repositories, and "
-                f"the payload's kernel and source builds, which every variant runs, are "
+                f"Cannot emit variant {name!r}: it changes the build packages or repositories, "
+                f"and the payload's kernel and source builds, which every variant runs, are "
                 f"cached for the default variant {default!r}'s toolchain.",
                 hint=f"Declare those build packages and repositories in {default!r} (or "
                 "Recipe.items), or make the variant its own recipe.",
@@ -387,11 +404,21 @@ def _wide(items: Sequence[Declaration]) -> dict[tuple[str, ...], Declaration]:
 
 
 def _same_configuration(base: Resolved, child: Resolved) -> None:
-    """Raise ``_Standalone`` when *child*'s settings or kernel differ from *base*'s."""
+    """Raise ``_Refused`` when *child*'s settings or kernel differ from *base*'s."""
     mine, theirs = _wide(child.items), _wide(base.items)
     changed = sorted(key for key in mine.keys() | theirs.keys() if mine.get(key) != theirs.get(key))
     if changed:
-        raise _Standalone(f"has its own {', '.join(describe(key) for key in changed)}")
+        raise _Refused(f"has its own {', '.join(describe(key) for key in changed)}")
+
+
+def _same_builds(base: Resolved, child: Resolved) -> None:
+    """Raise ``_Refused`` when *child* builds one of *base*'s source builds differently: a
+    source build is pinned by its name, once per tree."""
+    builds = {identity(item): item for item in base.items if isinstance(item, Build)}
+    for item in child.items:
+        previous = builds.get(identity(item))
+        if previous is not None and previous != item:
+            raise _Refused(f"replaces {describe(identity(item))}")
 
 
 def _default_variant(recipe: Recipe) -> Variant:
@@ -425,7 +452,7 @@ def _overlay(
     present = {identity(item) for item in child.items}
     missing = [describe(key) for key in inherited if key not in present]
     if missing:
-        raise _Standalone(f"removes {', '.join(missing)}")  # the merge only adds
+        raise _Whole(f"removes {', '.join(missing)}")  # the merge only adds
     own: list[Declaration] = []
     for item in child.items:
         previous = inherited.get(identity(item))
@@ -433,17 +460,17 @@ def _overlay(
             own.append(item)
         elif previous != item:
             if not isinstance(item, _OVERRIDABLE):
-                raise _Standalone(f"replaces {describe(identity(item))}")
+                raise _Whole(f"replaces {describe(identity(item))}")
             own.append(item)
     if any(isinstance(item, _RUNTIME) for item in own) and any(
         isinstance(item, (Key, Disk, Secrets)) for item in base.items
     ):
         # runtime tools are configured once per profile
-        raise _Standalone("changes the keys, disks or secrets the default variant configures")
+        raise _Whole("changes the keys, disks or secrets the default variant configures")
     if any(isinstance(item, Setting) for item in own):
-        raise _Standalone("has its own Build.BuildSources")  # mounts merge per profile
+        raise _Whole("has its own Build.BuildSources")  # mounts merge per profile
     if any(isinstance(item, Debloat) and item.keep_paths_by_variant for item in own):
-        raise _Standalone("declares per-variant debloat paths")
+        raise _Whole("declares per-variant debloat paths")
     reemit: list[Unit | Service | Task | Mount] = []
     if has_init(child.items) and not has_init(base.items):
         # inherited units and services written before any step existed wait for none

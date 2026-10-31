@@ -13,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.compiler.emit_mkosi import _DEBLOAT_MASK, _globbed_path, _kernel_module_check
+from tundravm.compiler.emit_mkosi import (
+    _DEBLOAT_MASK,
+    _DEBLOAT_UNMASK,
+    _globbed_path,
+    _kernel_module_check,
+)
 
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 
@@ -94,6 +99,51 @@ def test_debloat_masks_triggers_with_their_units_and_keeps_referenced_targets(
         }
         & masked
     )
+
+
+def _fake_systemd(root: Path) -> None:
+    (root / UNITS).mkdir(parents=True)
+    for name, text in SYSTEMD_FILES.items():
+        (root / UNITS / name).write_text(text, encoding="utf-8")
+
+
+def _masked(root: Path) -> set[str]:
+    system = root / "etc/systemd/system"
+    return {p.name for p in system.iterdir() if p.is_symlink() and os.readlink(p) == "/dev/null"}
+
+
+def _quoted(units: tuple[str, ...]) -> str:
+    return " ".join(f'"{unit}"' for unit in units)
+
+
+def test_an_overlay_unmasks_to_what_its_own_whole_debloat_leaves(tmp_path: Path) -> None:
+    """The shared payload masks all but what every profile keeps; a profile that keeps more
+    unmasks it after, and its triggers follow their units: the result is what the profile's
+    own whole debloat would have left."""
+    shared = ("systemd-journald-dev-log.socket", "kept-trigger.timer")
+    profile = (*shared, "systemd-journald.service", "systemd-ask-password-console.path")
+    expected_root = tmp_path / "whole" / "root"
+    _fake_systemd(expected_root)
+    whole = _run(
+        _DEBLOAT_MASK.replace("@KEEP@", _quoted(profile)),
+        _stub_chroot(expected_root.parent, expected_root),
+    )
+    assert whole.returncode == 0, whole.stderr
+
+    root = tmp_path / "split" / "root"
+    _fake_systemd(root)
+    env = _stub_chroot(root.parent, root)
+    done = _run(_DEBLOAT_MASK.replace("@KEEP@", _quoted(shared)), env)
+    assert done.returncode == 0, done.stderr
+    assert {"systemd-journald.service", "systemd-journald-dev-log.socket"} <= _masked(root)
+    unmask = ("systemd-journald.service", "systemd-ask-password-console.path")
+    script = _DEBLOAT_UNMASK.replace("@UNMASK@", _quoted(unmask))
+    done = _run(script.replace("@KEEP@", _quoted(profile)), env)
+    assert done.returncode == 0, done.stderr
+    # the socket comes back with its service; the kept path stays masked with its unit
+    assert _masked(root) == _masked(expected_root)
+    assert "systemd-journald-dev-log.socket" not in _masked(root)
+    assert "systemd-ask-password-console.path" in _masked(root)
 
 
 def _kdir(tmp_path: Path, *, crc32c: bool) -> Path:

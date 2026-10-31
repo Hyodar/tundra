@@ -55,9 +55,11 @@ class Profile(Located):
     """A named variation on the image: what it adds, and what it changes.
 
     *extends* is the profile it starts from (``None``: the image itself, which is the
-    ``production`` profile); a profile that extends another resolves as the chain it is,
-    and the compiler refuses by name to emit a chain it cannot express as one mkosi
-    profile overlay. *add* is more content. *changes* edit or remove what the
+    ``production`` profile); a profile that extends another resolves as the chain it is.
+    tundravm resolves every profile's whole image, then writes what all of them build once
+    and what each builds beyond it in its own mkosi profile overlay; a declaration one
+    profile removes leaves the shared payload for the overlays of the profiles that keep
+    it, ``production``'s included. *add* is more content. *changes* edit or remove what the
     image declares, by reference: ``service.ref.edit(...)``, ``component.service("x").ref
     .remove()``; removing a service removes its unit, its user, its firewall rule and the
     dependencies that are now unused. There is no string-keyed ``set``: a change names a

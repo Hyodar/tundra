@@ -4,7 +4,8 @@ The tree is the mkosi-native one: ``dev`` is the only profile overlay, ``azure``
 ``gcp`` the only wrappers, and the root is the verity layout (root and hash partitions
 beside the ESP, in the QEMU disk and both wrappers). The dev profile compiled alone writes
 the shared payload, the QEMU disk and its own overlay (the rest of the committed tree is
-ignored); production alone differs in one known line.
+ignored); ``test_profile_overlays.py`` checks the shared payload is the same for every
+selection.
 """
 
 from __future__ import annotations
@@ -50,17 +51,3 @@ def test_surge_image_matches_the_committed_tree(surge: Recipe) -> None:
 def test_the_dev_profile_compiles_alone_to_its_golden_tree(surge: Recipe) -> None:
     diff = assert_tree_matches(surge, GOLDEN, variants=["dev"], update=False)
     assert diff.is_clean
-
-
-def test_production_alone_differs_only_in_the_shared_debloat_whitelist(surge: Recipe) -> None:
-    """The shared payload's debloat keeps every unit any compiled profile enables, so
-    compiling production alone masks the dev profile's serial getty, which the whole tree
-    leaves unmasked (still disabled) in production too."""
-    alone = {e.path: e.content for e in compile(surge, variants=["production"]).entries}
-    whole = {e.path: e.content for e in compile(surge).entries}
-    changed = sorted(path for path in alone if alone[path] != whole.get(path))
-    assert changed == ["payload/mkosi.postinst.d/50-postinst.sh"]
-    removed = set((whole[changed[0]] or b"").decode().split()) - set(
-        (alone[changed[0]] or b"").decode().split()
-    )
-    assert removed == {'"serial-getty@.service"'}

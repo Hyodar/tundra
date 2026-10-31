@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tundravm.declarative import (
     BootStep,
     Calendar,
@@ -19,7 +17,6 @@ from tundravm.declarative import (
     Variant,
 )
 from tundravm.declarative.systemd import Dynamic, Hardening
-from tundravm.errors import ValidationError
 from tundravm.testing import CompiledTree, assert_clean, compile_tree
 
 OFF = Hardening.none()
@@ -161,7 +158,7 @@ def test_generated_units_lint_clean() -> None:
     )
 
 
-def test_variant_overlay_adds_shapes_and_refuses_edits_and_removals() -> None:
+def test_variant_overlay_adds_edits_and_removes_shapes() -> None:
     base = (Task("tick", "/usr/bin/true", schedule=Every("1h")), Mount("/var/x", "tmpfs"))
 
     def recipe(variant: Variant) -> Recipe:
@@ -175,10 +172,18 @@ def test_variant_overlay_adds_shapes_and_refuses_edits_and_removals() -> None:
     assert not tree.exists("mkosi.extra/usr/lib/systemd/system/tock.timer", "default")
     assert "OnUnitActiveSec=1h" in tree.unit("tick.timer", "slow")  # the payload's
     assert tree.exists("mkosi.extra/usr/lib/systemd/system/var-x.mount", "slow")
-    # a profile overlay can only add to the payload: an edit or a removal is another image
-    for change in (Task.ref("tick").edit(schedule=Calendar("daily")), Mount.ref("/var/x").remove()):
-        with pytest.raises(ValidationError, match="slow"):
-            compile_tree(recipe(Variant("slow", changes=(change,))))
+    # an edit replaces the shared unit in the overlay; a removal moves it out of the shared
+    # payload into the overlay of every profile that keeps it
+    edited = compile_tree(
+        recipe(Variant("slow", changes=(Task.ref("tick").edit(schedule=Calendar("daily")),)))
+    )
+    assert "OnUnitActiveSec=1h" in edited.unit("tick.timer", "default")
+    assert "OnCalendar=daily" in edited.unit("tick.timer", "slow")
+    removed = compile_tree(recipe(Variant("slow", changes=(Mount.ref("/var/x").remove(),))))
+    mount = "mkosi.extra/usr/lib/systemd/system/var-x.mount"
+    assert not removed.exists(mount, "slow")
+    assert removed.exists(mount, "default")
+    assert (removed.root / "payload/mkosi.profiles/default" / mount).is_file()
 
 
 def test_example_03_health_check_runs_only_from_its_timer() -> None:

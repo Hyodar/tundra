@@ -303,19 +303,31 @@ def test_lowering_refuses_settings_summary_cannot_describe(setting: Setting, cod
         (Variant("default"), Variant("v", changes=(Hook.ref("h").edit(script="other"),))),
         (Variant("default"), Variant("v", add=Fragment("k", items=(Key("k2"),)))),
         (Variant("default"), Variant("rescue", inherits=None)),
-        (
-            Variant("default"),
-            Variant("v", add=Fragment("s", items=(Setting("Output", "Seed", ("x",)),))),
-        ),
     ],
-    ids=["chain", "sibling-of-base", "remove", "edit-hook", "child-keys", "standalone", "settings"],
+    ids=["chain", "sibling-of-base", "remove", "edit-hook", "child-keys", "standalone"],
 )
-def test_variants_a_profile_overlay_cannot_express_are_refused(
-    variants: tuple[Variant, ...],
+def test_variants_that_are_not_additions_are_lowered_whole(
+    variants: tuple[Variant, ...], tmp_path: Path
 ) -> None:
+    """A variant that extends another, removes or replaces is its whole resolved image, as a
+    standalone profile; the emitter splits what every profile shares from its overlay."""
     common = Fragment("c", items=(Package("curl"), Hook("h", "build", "make"), Key("k1")))
     recipe = Recipe("r", items=(common,), variants=variants)
-    with pytest.raises(ValidationError, match=f"Cannot emit variant '{variants[-1].name}'"):
+    lowered = lower(recipe)
+    name = variants[-1].name
+    assert name in lowered.overlays
+    assert lowered.state.ensure_profile(name).extends is None
+    effective = lowered.state.effective_profile(name)
+    resolved = {i.name for i in resolve(recipe, variant=name).items if isinstance(i, Package)}
+    assert {"curl", "d"} & effective.packages == {"curl", "d"} & resolved
+    compile(recipe).write(tmp_path)
+
+
+def test_variants_with_their_own_settings_cannot_share_a_tree() -> None:
+    common = Fragment("c", items=(Package("curl"),))
+    seeded = Fragment("s", items=(Setting("Output", "Seed", ("x",)),))
+    recipe = Recipe("r", items=(common,), variants=(Variant("default"), Variant("v", add=seeded)))
+    with pytest.raises(ValidationError, match="Cannot emit variant 'v' .*Setting\\(Output, Seed"):
         lower(recipe)
 
 
@@ -359,13 +371,17 @@ def test_mkosi_argv_selects_profiles_and_wrappers(tmp_path: Path) -> None:
         mkosi_argv(img, "nope")
 
 
-def test_lowering_selected_variants_keeps_the_default() -> None:
+def test_lowering_lowers_every_variant_whatever_the_selection() -> None:
+    """The shared payload is what every variant builds, so a selection lowers them all (and
+    still checks the names it is given)."""
     recipe = Recipe(
         "r",
         items=(Package("curl"),),
         variants=(Variant("default"), Variant("a"), Variant("b")),
     )
-    assert lower(recipe, variants=("b",)).profile_names == ("b", "default")
+    assert lower(recipe, variants=("b",)).profile_names == ("a", "b", "default")
+    with pytest.raises(ValidationError, match="ghost"):
+        lower(recipe, variants=("ghost",))
 
 
 def test_directories_units_from_paths_and_reemitted_units(tmp_path: Path) -> None:
@@ -531,8 +547,11 @@ def test_inherited_service_and_unit_wait_for_a_child_variants_first_step(
     # early needs nothing: the overlay leaves the payload's unit as it is
     assert not (boot / "early.service").exists()
     assert "runtime-init" not in (default / "early.service").read_text()
+    # the payload enables app; the overlay only ships the unit that waits for runtime-init
     postinst = (payload / "mkosi.profiles/boot/mkosi.postinst.d/50-postinst.sh").read_text()
-    assert postinst.count("systemctl enable app.service\n") == 1
+    assert "systemctl enable app.service\n" not in postinst
+    shared = (payload / "mkosi.postinst.d/50-postinst.sh").read_text()
+    assert shared.count("systemctl enable app.service\n") == 1
 
 
 def test_packaged_unit_needs_become_an_ordering_dropin() -> None:

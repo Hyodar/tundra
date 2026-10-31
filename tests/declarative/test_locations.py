@@ -30,6 +30,8 @@ recipe = Recipe(
     ),
 )
 """
+VALID = RECIPE.replace('Unit.ref("gone.service")', 'Package.ref("curl")')
+"""The same recipe, every variant resolving (lowering resolves every variant)."""
 
 
 def _finding(recipe: Recipe, code: str) -> Diagnostic:
@@ -58,13 +60,18 @@ def test_resolution_and_compiler_diagnostics_carry_the_recipe_line(recipe_path: 
     assert (missing.code, missing.location) == ("remove-missing", "recipe.py:13")
     with pytest.raises(ValidationError, match=r"which it does not inherit at recipe\.py:13"):
         resolve(recipe, variant="dev")
-    ghost = _finding(recipe, "service-user-missing")
-    assert (ghost.code, ghost.location) == ("service-user-missing", "recipe.py:4")
-    assert "    at: recipe.py:4\n" in render([ghost])
+    # the dev variant shapes the tree prod builds too: its error stops prod's lint
+    assert [d.code for d in lint(recipe, variants=["prod"])] == ["remove-missing"]
+    (recipe_path.parent / "valid").mkdir()
+    valid = load_recipe(_write(recipe_path.parent / "valid" / "recipe.py", VALID))
+    ghost = _finding(valid, "service-user-missing")
+    assert (ghost.code, ghost.location) == ("service-user-missing", "valid/recipe.py:4")
+    assert "    at: valid/recipe.py:4\n" in render([ghost])
 
 
 def test_github_annotations_name_the_file_and_line(recipe_path: Path) -> None:
-    ghost = _finding(load_recipe(recipe_path), "service-user-missing")
+    path = _write(recipe_path.parent / "recipe.py", VALID)
+    ghost = _finding(load_recipe(path), "service-user-missing")
     first = render_github([ghost], recipe_path).splitlines()[0]
     assert first.startswith("::error file=recipe.py,line=4,title=service-user-missing::")
 
@@ -72,8 +79,8 @@ def test_github_annotations_name_the_file_and_line(recipe_path: Path) -> None:
 def test_moving_a_declaration_keeps_equality_and_digests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    here = load_recipe(write_recipe_file(tmp_path, RECIPE, monkeypatch))
-    moved_source = RECIPE.replace("app = Service(", "\n\n\napp = Service(")
+    here = load_recipe(write_recipe_file(tmp_path, VALID, monkeypatch))
+    moved_source = VALID.replace("app = Service(", "\n\n\napp = Service(")
     moved = load_recipe(_write(tmp_path / "moved.py", moved_source))
     assert here.items[1].declared_at.endswith(":4")
     assert moved.items[1].declared_at.endswith(":7")

@@ -64,7 +64,7 @@ mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | while read -r bin_pa
 done
 
 # Debloat: mask unwanted systemd units
-systemd_svc_whitelist=("basic.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "serial-getty@.service" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-remount-fs.service" "systemd-sysctl.service" "timers.target")
+systemd_svc_whitelist=("basic.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-remount-fs.service" "systemd-sysctl.service" "timers.target")
 SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"
 mkdir -p "$SYSTEMD_DIR"
 # Keep the targets the enabled units order against or pull in: masking one drops the

@@ -99,11 +99,14 @@ def test_service_user_inherited_from_default() -> None:
     assert report(recipe(variants=(DEFAULT, dev)), "dev") == []
 
 
-def test_a_standalone_variant_is_refused() -> None:
+def test_a_standalone_variant_is_checked_as_its_own_image() -> None:
+    """A standalone variant is lowered whole: its service's user is missing from it even
+    though the default variant declares one."""
     items = (KERNEL, Package("curl"), Service("app", "/usr/bin/app", user="app"))
     dev = Variant("dev", inherits=None, add=Fragment("dev", items=items))
-    with pytest.raises(ValidationError, match="'dev' \\(it is standalone\\)"):
-        lower(recipe(variants=(DEFAULT, dev)))
+    subject = recipe(variants=(DEFAULT, dev))
+    assert lower(subject).state.ensure_profile("dev").extends is None
+    assert "service-user-missing" in codes(subject, "dev")
 
 
 def test_service_user_root_base_or_hook_created_is_fine() -> None:

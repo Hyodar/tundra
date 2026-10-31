@@ -319,7 +319,9 @@ def test_tdxs_accounts_use_the_account_prelude() -> None:
     assert lines[4].startswith("mkosi-chroot useradd --system --home-dir /home/tdxs --create-home")
 
 
-def test_a_variant_cannot_replace_an_account_the_payload_creates() -> None:
+def test_an_account_a_variant_replaces_moves_into_each_overlay() -> None:
+    """useradd cannot run twice: an account the profiles declare differently is created by
+    each profile's overlay, the default profile's included, and by no shared script."""
     recipe = _recipe(
         Fragment("users", items=(User("svc"),)),
         variants=(
@@ -327,8 +329,12 @@ def test_a_variant_cannot_replace_an_account_the_payload_creates() -> None:
             Variant("other", inherits="default", changes=(User.ref("svc").edit(uid=5),)),
         ),
     )
-    with pytest.raises(ValidationError, match="Cannot emit variant 'other'.*replaces User"):
-        compile(recipe)
+    tree = compile(recipe)
+    assert "useradd" not in _text(tree, "payload/mkosi.postinst.d/50-postinst.sh")
+    own = _text(tree, "payload/mkosi.profiles/default/mkosi.postinst.d/50-postinst.sh")
+    other = _text(tree, "payload/mkosi.profiles/other/mkosi.postinst.d/50-postinst.sh")
+    assert "useradd" in own and "--uid 5" not in own
+    assert "--uid 5 svc" in other
 
 
 def test_build_cache_namespace_and_unpinned_marker() -> None:

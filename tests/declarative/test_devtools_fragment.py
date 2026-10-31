@@ -62,12 +62,14 @@ def test_devtools_enables_the_serial_getty_at_build_time(tree: CompiledTree) -> 
     postinst = tree.script("postinst", variant="devtools").splitlines()
     assert f"mkosi-chroot systemctl enable {GETTY}" in postinst
     assert any("minimal.target.wants" in line and GETTY in line for line in postinst)
-    # Debloat masks systemd's units outside its keep list: every keep list the devtools
-    # build runs (the payload's included) keeps the getty's template.
-    keeps = [line for line in postinst if line.strip().startswith("systemd_svc_whitelist=")]
-    assert keeps and all('"serial-getty@.service"' in keep for keep in keeps)
-    overlay = tree.root / "payload/mkosi.profiles/devtools"
-    assert (overlay / "mkosi.postinst.d/50-postinst.sh").is_file()
+    # The shared payload's debloat masks the getty's template, which only devtools keeps:
+    # the overlay unmasks it before it enables the getty, so the payload names no profile.
+    shared = (tree.root / "payload/mkosi.postinst.d/50-postinst.sh").read_text(encoding="utf-8")
+    assert '"serial-getty@.service"' not in shared and "PROFILES" not in shared
+    overlay = tree.root / "payload/mkosi.profiles/devtools/mkosi.postinst.d/50-postinst.sh"
+    own = overlay.read_text(encoding="utf-8").splitlines()
+    unmask = own.index('for unit in "serial-getty@.service"; do')
+    assert unmask < own.index(f"mkosi-chroot systemctl enable {GETTY}")
 
 
 def test_unreproducible_devtools_keep_the_boot_time_serial_console(tmp_path: Path) -> None:

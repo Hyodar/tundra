@@ -11,9 +11,12 @@ mkosi user:
   the main image's content settings);
 - ``mkosi.images/<cloud>/``: the same disk per cloud target, converted at postoutput
   (fixed VHD for Azure, oldgnu sparse ``tar.gz`` for GCP);
-- ``payload/``: ``mkosi.conf``, one ``mkosi.conf.d/`` file per concern, the trees, the
-  phase scripts in ``mkosi.<phase>.d/`` and one ``mkosi.profiles/<variant>/`` overlay per
-  variant that adds content.
+- ``payload/``: the shared payload (what every profile builds: :mod:`._split`), as
+  ``mkosi.conf``, one ``mkosi.conf.d/`` file per concern, the trees and the phase scripts
+  in ``mkosi.<phase>.d/``; and one ``mkosi.profiles/<variant>/`` overlay per variant whose
+  content differs, with what it builds beyond the shared payload. The default profile's
+  own overlay, when it has one, is included by ``mkosi.conf.d/99-<name>.conf`` under
+  ``[Match] Profiles=`` (no profile selected), so a plain ``mkosi build`` builds it.
 """
 
 from __future__ import annotations
@@ -24,8 +27,8 @@ import shlex
 import shutil
 import textwrap
 import uuid
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 from urllib.parse import urlparse
@@ -34,10 +37,10 @@ from tundravm._options import RootLayout
 from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
 from tundravm._units import v1
 from tundravm._units.render import service_unit
+from tundravm.compiler._split import is_empty, split_profiles
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
     MODULE_SETS_VERSION,
-    NO_MODULES,
     ModuleSelection,
     debloat_paths_remove,
     module_selection,
@@ -80,6 +83,7 @@ OWNED_PATHS = (
     "mkosi.repart",
     "mkosi.sandbox",
     "mkosi.profiles",
+    "mkosi.conf.d",
     "mkosi.images",
     PAYLOAD,
 )
@@ -418,9 +422,9 @@ class EmitConfig:
     overlays: tuple[str, ...] = ()
     """The profiles emitted as ``payload/mkosi.profiles/<name>/``."""
     payload_overlays: tuple[str, ...] | None = None
-    """Every profile overlay of the recipe, emitted or not: the payload keeps the modules and
-    units they need and stands its debloat aside for theirs, so its bytes do not depend on
-    which variants a compile selects (``None``: :attr:`overlays`)."""
+    """Every profile overlay of the recipe, emitted or not: the shared payload is what all
+    of them and the default profile build, so its bytes do not depend on which variants a
+    compile selects (``None``: :attr:`overlays`)."""
     concerns: Mapping[tuple[str, str], str] = field(default_factory=dict)
     """The payload's packages by ``(name, role)``: the ``mkosi.conf.d`` concern listing each."""
     overlay_sandbox_files: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
@@ -924,6 +928,38 @@ _DEBLOAT_MASK = textwrap.dedent(r"""
 the targets the enabled units reference, then every kept trigger (socket, timer, path,
 automount) whose unit is masked."""
 
+_DEBLOAT_UNMASK = textwrap.dedent(r"""
+    # Debloat: unmask the systemd units this profile keeps beyond the shared payload
+    SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"
+    for unit in @UNMASK@; do
+        if [ "$(readlink "$SYSTEMD_DIR/$unit" || true)" = /dev/null ]; then
+            rm "$SYSTEMD_DIR/$unit"
+        fi
+    done
+    # A kept trigger is masked exactly when its unit is
+    systemd_svc_whitelist=(@KEEP@)
+    mkosi-chroot dpkg-query -L systemd |
+        grep -E '/systemd/system/[^/]+\.(socket|timer|path|automount)$' | while read -r path; do
+        trigger=${path##*/}
+        printf '%s\n' "${systemd_svc_whitelist[@]}" | grep -qx "$trigger" || continue
+        unit=$(sed -nE 's/^(Unit|Service)=//p' "$BUILDROOT$path" | tail -n 1)
+        if [ -z "$unit" ]; then
+            case $trigger in
+                *.automount) unit=${trigger%.*}.mount ;;
+                *) unit=${trigger%.*}.service ;;
+            esac
+        fi
+        if [ "$(readlink "$SYSTEMD_DIR/$unit" || true)" = /dev/null ]; then
+            ln -sf /dev/null "$SYSTEMD_DIR/$trigger"
+        elif [ "$(readlink "$SYSTEMD_DIR/$trigger" || true)" = /dev/null ]; then
+            rm "$SYSTEMD_DIR/$trigger"
+        fi
+    done
+""").strip("\n")
+"""A profile overlay's unmasking: the units it keeps that the shared payload's
+:data:`_DEBLOAT_MASK` masked (``@UNMASK@``), then each trigger in its keep list (``@KEEP@``)
+masked or unmasked with its unit, as its own whole debloat would have left them."""
+
 
 _KERNEL_MODULE_CHECK = textwrap.dedent(r"""
     # Kernel modules: mkosi kept KernelModules= and their dependencies (tundravm module sets
@@ -1020,35 +1056,29 @@ class DeterministicMkosiEmitter:
             if stale.is_dir() and not stale.is_symlink() and (stale / "mkosi.conf").is_file():
                 _remove(stale)
         default_name = recipe.default_profile
-        payload_state = recipe.effective_profile(default_name)
-        self._validate_profile_phases(profile_name=default_name, profile=payload_state)
-        overlays: dict[str, ProfileState] = {}
         for name in config.overlays:
             _require_profile(recipe, name)
-            overlays[name] = _overlay_state(recipe, name)
-            self._validate_profile_phases(profile_name=name, profile=overlays[name])
         every = config.overlays if config.payload_overlays is None else config.payload_overlays
-        every = tuple(name for name in every if name in recipe.profiles)
-        # The payload boots every profile: it keeps the modules all of them select.
-        modules = _module_selection(payload_state, config)
-        for name in every:
-            modules = modules.union(_module_selection(recipe.effective_profile(name), config))
-        if config.root == "verity" and config.bootable and modules.modules:
-            modules = modules.union(ModuleSelection(modular=True, modules=VERITY_MODULES))
+        names = (default_name, *(n for n in every if n in recipe.profiles and n != default_name))
+        effective = {name: recipe.effective_profile(name) for name in names}
+        for name, state in effective.items():
+            self._validate_profile_phases(profile_name=name, profile=state)
+        split = split_profiles(effective, default_name)
+        shared = split.shared
+        selections = {name: _module_selection(state, config) for name, state in effective.items()}
+        modules = _shared_modules(selections, config)
+        plans = _debloat_plans(effective, shared, selections)
+        extra_modules = {
+            name: tuple(sorted(set(selection.modules) - set(modules.modules)))
+            for name, selection in selections.items()
+        }
 
         if config.generate_version_script:
             _write(destination / "mkosi.version", MKOSI_VERSION_SCRIPT, EXEC_MODE)
         _write(destination / "mkosi.conf", self._render_main(config, recipe), FILE_MODE)
         if config.bootable:
             self._emit_repart(destination / "mkosi.repart", config)
-        self._emit_sandbox_tree(destination, payload_state, config, files=config.sandbox_files)
-        for name, overlay in overlays.items():
-            self._emit_sandbox_tree(
-                destination / "mkosi.profiles" / name,
-                overlay,
-                config,
-                files=config.overlay_sandbox_files.get(name, ()),
-            )
+        self._emit_sandbox_tree(destination, shared, config, files=config.sandbox_files)
         _write(
             destination / "mkosi.images" / PAYLOAD / "mkosi.conf",
             f"[Include]\nInclude=../../{PAYLOAD}\n",
@@ -1059,51 +1089,75 @@ class DeterministicMkosiEmitter:
                 self._emit_wrapper(destination / "mkosi.images" / target, target, config)
 
         payload = destination / PAYLOAD
-        own_debloat = tuple(name for name in every if recipe.profiles[name].debloat_explicit)
-        # The payload's debloat runs in every profile: it keeps what any of them enables.
-        keep_units = sorted(
-            {
-                unit
-                for name in (default_name, *every)
-                for unit in debloat_units_keep(recipe.effective_profile(name))
-            }
-        )
-        self._emit_skeleton_tree(payload, payload_state, config)
-        self._emit_extra_tree(payload, payload_state)
-        if not any(e.path == MACHINE_ID for e in payload_state.files):
+        self._emit_skeleton_tree(payload, shared, config)
+        self._emit_extra_tree(payload, shared)
+        if not any(e.path == MACHINE_ID for e in shared.files):
             _write(payload / "mkosi.extra" / MACHINE_ID.lstrip("/"), "uninitialized\n", 0o444)
         self._emit_kernel_config(payload, config)
         script_paths: dict[str, dict[Phase, Path]] = {
             default_name: self._emit_all_scripts(
                 profile_dir=payload,
-                profile=payload_state,
+                profile=shared,
                 config=config,
-                modules=modules,
+                modules=modules.modules,
                 kernel=True,
                 accounts=config.reproducible,
-                skip_debloat=own_debloat,
-                keep_units=keep_units,
+                debloat=plans[SHARED],
             )
         }
-        _write(payload / "mkosi.conf", self._render_payload(config, payload_state, modules), 0o644)
-        for name, packages in _concern_files(payload_state, config.concerns):
+        _write(payload / "mkosi.conf", self._render_payload(config, shared, modules), 0o644)
+        concerns = _concern_files(shared, config.concerns)
+        for name, packages in concerns:
             _write(payload / "mkosi.conf.d" / f"{name}.conf", packages, FILE_MODE)
         if config.root == "verity" and config.bootable:
             self._emit_payload_repart(payload / "mkosi.repart")
 
         profile_paths = {default_name: payload / "mkosi.conf"}
-        for name, overlay in overlays.items():
+        emitted = [name for name in config.overlays if name != default_name]
+        own = split.overlays[default_name]
+        if not is_empty(own) or extra_modules[default_name] or plans[default_name].active:
+            # The default profile is what mkosi builds with no --profile: [Match] Profiles=
+            # (empty) selects its overlay then, and only then.
+            emitted.insert(0, default_name)
+            digits = max([len(stem.partition("-")[0]) for stem, _ in concerns] or [2])
+            stem = f"{'9' * digits}-{default_name}.conf"
+            include = _render_sections(
+                {"Match": ["Profiles="], "Include": [f"Include=mkosi.profiles/{default_name}"]}
+            )
+            _write(payload / "mkosi.conf.d" / stem, include, FILE_MODE)
+            if own.repositories:
+                _write(destination / "mkosi.conf.d" / stem, include, FILE_MODE)
+        for name in emitted:
+            overlay = split.overlays[name]
+            self._emit_sandbox_tree(
+                destination / "mkosi.profiles" / name,
+                overlay,
+                config,
+                files=config.overlay_sandbox_files.get(name, ()),
+            )
             profile_dir = payload / "mkosi.profiles" / name
             self._emit_skeleton_tree(profile_dir, overlay, config)
             self._emit_extra_tree(profile_dir, overlay)
-            script_paths[name] = self._emit_all_scripts(
+            paths = self._emit_all_scripts(
                 profile_dir=profile_dir,
                 profile=overlay,
                 config=config,
+                modules=extra_modules[name],
+                debloat=plans[name],
             )
             conf = profile_dir / "mkosi.conf"
-            _write(conf, self._render_overlay(name, overlay), FILE_MODE)
-            profile_paths[name] = conf
+            text = self._render_overlay(
+                name,
+                overlay,
+                extra_modules[name],
+                shared=_image_packages(shared),
+                image_id=name != default_name,
+            )
+            if text.strip():
+                _write(conf, text, FILE_MODE)
+            if name != default_name:
+                script_paths[name] = paths
+                profile_paths[name] = conf
         return MkosiEmission(
             root=destination, profile_paths=profile_paths, script_paths=script_paths
         )
@@ -1250,11 +1304,23 @@ class DeterministicMkosiEmitter:
         _write(directory / "10-root.conf", VERITY_ROOT_PARTITION, FILE_MODE)
         _write(directory / "11-root-verity.conf", VERITY_HASH_PARTITION, FILE_MODE)
 
-    def _render_overlay(self, name: str, overlay: ProfileState) -> str:
-        """``payload/mkosi.profiles/<name>/mkosi.conf``: what the profile adds."""
-        content = _list_setting("Packages", _image_packages(overlay))
+    def _render_overlay(
+        self,
+        name: str,
+        overlay: ProfileState,
+        modules: Sequence[str],
+        *,
+        shared: Collection[str],
+        image_id: bool,
+    ) -> str:
+        """``payload/mkosi.profiles/<name>/mkosi.conf``: what the profile adds to the shared
+        payload (whose packages are *shared*): packages, kernel modules and, but for the
+        default profile, its ``ImageId=``."""
+        content = _list_setting("KernelModules", modules)
+        packages = [p for p in _image_packages(overlay) if p not in shared]
+        content += _list_setting("Packages", packages)
         content += _list_setting("BuildPackages", sorted(overlay.build_packages))
-        sections = {"Output": [f"ImageId=%i-{name}"], "Content": content}
+        sections = {"Output": [f"ImageId=%i-{name}"] if image_id else [], "Content": content}
         return _render_sections(sections)
 
     def _emit_sandbox_tree(
@@ -1351,19 +1417,18 @@ class DeterministicMkosiEmitter:
         profile_dir: Path,
         profile: ProfileState,
         config: EmitConfig,
-        modules: ModuleSelection = NO_MODULES,
+        modules: tuple[str, ...] = (),
         kernel: bool = False,
         accounts: bool = False,
-        skip_debloat: Sequence[str] = (),
-        keep_units: Sequence[str] | None = None,
+        debloat: DebloatPlan | None = None,
     ) -> dict[Phase, Path]:
         """Write *profile*'s scripts into ``mkosi.<phase>.d/`` (mkosi finds them there): the
         kernel build (*kernel*), the hooks, and the synthetic postinst and finalize.
 
-        *accounts* ends finalize with :data:`ACCOUNTS_FINALIZE`; *skip_debloat* names the
-        profiles that debloat on their own, for which this profile's debloat stands aside;
-        *keep_units* replaces the units the systemd debloat keeps (default: the profile's).
+        *modules* are the kernel modules the finalize checks; *accounts* ends finalize with
+        :data:`ACCOUNTS_FINALIZE`; *debloat* is what this directory's scripts debloat.
         """
+        plan = DebloatPlan() if debloat is None else debloat
         found: dict[Phase, Path] = {}
 
         def write(phase: Phase, name: str, text: str) -> None:
@@ -1385,15 +1450,12 @@ class DeterministicMkosiEmitter:
             if phase == "postinst":
                 synthetic = self._synthetic_postinst_commands(profile)
                 all_commands = synthetic + commands + _unit_state_commands(profile)
-                debloats = profile.debloat.enabled and profile.debloat.systemd_minimize
-                if all_commands or debloats:
-                    text = self._render_postinst_script(
-                        all_commands, profile, skip_debloat=skip_debloat, keep_units=keep_units
-                    )
+                if all_commands or plan.masks or plan.unmask:
+                    text = self._render_postinst_script(all_commands, plan)
                     write(phase, f"50-{phase}.sh", text)
                 continue
             if phase == "finalize":
-                lines = self._synthetic_finalize_lines(profile, modules, skip_debloat=skip_debloat)
+                lines = self._synthetic_finalize_lines(plan, modules)
                 if lines or commands or accounts:
                     text = self._render_finalize_script(lines, commands, accounts=accounts)
                     write(phase, f"50-{phase}.sh", text)
@@ -1432,28 +1494,19 @@ class DeterministicMkosiEmitter:
                 )
         return commands
 
-    def _synthetic_finalize_lines(
-        self,
-        profile: ProfileState,
-        modules: ModuleSelection = NO_MODULES,
-        *,
-        skip_debloat: Sequence[str] = (),
-    ) -> list[str]:
+    def _synthetic_finalize_lines(self, plan: DebloatPlan, modules: tuple[str, ...]) -> list[str]:
         """The kernel module check and the debloat lines of the finalize script."""
-        config = profile.debloat
-        lines = _kernel_module_check(modules.modules)
-        if not config.enabled:
-            return lines
+        config = plan.config
+        lines = _kernel_module_check(modules)
         debloat: list[str] = []
-        if config.clean_var_dirs:
+        if config.enabled and config.clean_var_dirs:
             debloat.append("# Debloat: clean files in var directories")
             for var_dir in sorted(config.clean_var_dirs):
                 debloat.append(f'find "$BUILDROOT{var_dir}" -type f -delete')
-        paths = debloat_paths_remove(config, modules, declared_paths(profile))
-        if paths:
+        if plan.paths:
             debloat += ["", "# Debloat: remove unnecessary paths"]
-            debloat += [f"rm -rf {_globbed_path(path)}" for path in sorted(paths)]
-        conditional = config.profile_conditional_paths
+            debloat += [f"rm -rf {_globbed_path(path)}" for path in plan.paths]
+        conditional = config.profile_conditional_paths if config.enabled else {}
         if conditional:
             debloat += ["", "# Debloat: profile-conditional path removal"]
             for profile_name in sorted(conditional):
@@ -1461,27 +1514,25 @@ class DeterministicMkosiEmitter:
                     debloat.append(f'if [[ " ${{PROFILES:-}} " != *" {profile_name} "* ]]; then')
                     debloat.append(f"    rm -rf {_globbed_path(path)}")
                     debloat.append("fi")
-        debloat = _unless_profiles(debloat, skip_debloat)
         if lines and debloat:
             lines.append("")
         return lines + debloat
 
-    def _render_postinst_script(
-        self,
-        commands: list[CommandSpec],
-        profile: ProfileState,
-        *,
-        skip_debloat: Sequence[str] = (),
-        keep_units: Sequence[str] | None = None,
-    ) -> str:
-        """Render postinst script with user creation, service enablement, and debloat."""
+    def _render_postinst_script(self, commands: list[CommandSpec], plan: DebloatPlan) -> str:
+        """Render postinst script with user creation, service enablement, and debloat.
+
+        The units *plan* unmasks come first, so that the enables below find them unmasked."""
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
+        if plan.unmask:
+            unmask = " ".join(f'"{u}"' for u in plan.unmask)
+            keep = " ".join(f'"{u}"' for u in plan.keep_units)
+            text = _DEBLOAT_UNMASK.replace("@UNMASK@", unmask).replace("@KEEP@", keep)
+            lines += [*text.split("\n"), ""]
         for command in commands:
             lines.append(self._render_command_line(command))
-        config = profile.debloat
-        if config.enabled and config.systemd_minimize:
+        config = plan.config
+        if plan.masks:
             bins_keep = sorted(config.systemd_bins_keep)
-            units_keep = debloat_units_keep(profile) if keep_units is None else keep_units
             debloat = ["# Debloat: remove unwanted systemd binaries"]
             bins_keep_list = " ".join(f'"{b}"' for b in bins_keep)
             debloat.append(f"systemd_bin_whitelist=({bins_keep_list})")
@@ -1498,13 +1549,13 @@ class DeterministicMkosiEmitter:
             debloat.append("    fi")
             debloat.append("done")
             debloat.append("")
-            keep_list = " ".join(f'"{u}"' for u in units_keep)
+            keep_list = " ".join(f'"{u}"' for u in plan.keep_units)
             debloat.extend(_DEBLOAT_MASK.replace("@KEEP@", keep_list).split("\n"))
             debloat.append("")
             debloat.append("# Set default systemd target")
             debloat.append('ln -sf minimal.target "$BUILDROOT/etc/systemd/system/default.target"')
             lines.append("")
-            lines.extend(_unless_profiles(debloat, skip_debloat))
+            lines.extend(debloat)
         lines.append("")
         return "\n".join(lines)
 
@@ -1547,13 +1598,108 @@ class DeterministicMkosiEmitter:
         return rendered
 
 
-def _unless_profiles(lines: list[str], profiles: Sequence[str]) -> list[str]:
-    """*lines*, run only when none of *profiles* is selected (they debloat on their own)."""
-    if not lines or not profiles:
-        return lines
-    test = " && ".join(f'[[ " ${{PROFILES:-}} " != *" {name} "* ]]' for name in profiles)
-    body = [f"    {line}" if line else "" for line in lines]
-    return [f"if {test}; then", *body, "fi"]
+SHARED = ""
+"""The key of the shared payload's :class:`DebloatPlan` (no profile is called that)."""
+
+
+@dataclass(frozen=True, slots=True)
+class DebloatPlan:
+    """What one configuration directory's scripts debloat.
+
+    The shared payload runs the debloat every profile shares (*config*), masking the units
+    every profile keeps and removing the paths every profile removes; a profile overlay
+    then unmasks the units only it keeps (*unmask*) and removes the paths only it removes.
+    When the profiles' debloat configurations differ, none is shared and each overlay runs
+    its own whole.
+    """
+
+    config: DebloatConfig = field(default_factory=lambda: DebloatConfig(enabled=False))
+    """The debloat these scripts run whole (disabled: none)."""
+    keep_units: tuple[str, ...] = ()
+    """The units the systemd debloat leaves unmasked; with *unmask*, the profile's own list,
+    whose triggers follow their units."""
+    paths: tuple[str, ...] = ()
+    """The paths the finalize removes."""
+    unmask: tuple[str, ...] = ()
+    """The units the shared payload masked that this profile keeps."""
+
+    @property
+    def masks(self) -> bool:
+        """Whether these scripts mask systemd's units."""
+        return self.config.enabled and self.config.systemd_minimize
+
+    @property
+    def active(self) -> bool:
+        """Whether these scripts debloat anything."""
+        return self.config.enabled or bool(self.paths or self.unmask)
+
+
+def _debloat_plans(
+    effective: Mapping[str, ProfileState],
+    shared: ProfileState,
+    selections: Mapping[str, ModuleSelection],
+) -> dict[str, DebloatPlan]:
+    """The shared payload's plan (:data:`SHARED`) and each profile's.
+
+    Every profile's own lists are what its whole debloat would keep and remove; the shared
+    payload masks all but the units every profile keeps and removes the paths every profile
+    removes, so each overlay only unmasks and removes more, which its later scripts can.
+    """
+    keeps = {name: set(debloat_units_keep(state)) for name, state in effective.items()}
+    paths = {
+        name: set(debloat_paths_remove(state.debloat, selections[name], declared_paths(state)))
+        for name, state in effective.items()
+    }
+    if not shared.debloat.enabled:
+        plans = {SHARED: DebloatPlan()}
+        for name, state in effective.items():
+            plans[name] = (
+                DebloatPlan(state.debloat, tuple(sorted(keeps[name])), tuple(sorted(paths[name])))
+                if state.debloat.enabled
+                else DebloatPlan()
+            )
+        return plans
+    keep = set.intersection(*keeps.values())
+    removed = set.intersection(*paths.values())
+    plans = {SHARED: DebloatPlan(shared.debloat, tuple(sorted(keep)), tuple(sorted(removed)))}
+    for name in effective:
+        unmask = tuple(sorted(keeps[name] - keep)) if shared.debloat.systemd_minimize else ()
+        plans[name] = DebloatPlan(
+            keep_units=tuple(sorted(keeps[name])) if unmask else (),
+            paths=tuple(sorted(paths[name] - removed)),
+            unmask=unmask,
+        )
+    return plans
+
+
+def _shared_modules(
+    selections: Mapping[str, ModuleSelection], config: EmitConfig
+) -> ModuleSelection:
+    """The kernel modules every profile keeps: the shared payload's ``KernelModules=``
+    (each overlay lists what only it keeps); with the verity layout, the modules the
+    initrd mounts the root with."""
+    first, *rest = selections.values()
+    if any(s.modular != first.modular or bool(s.modules) != bool(first.modules) for s in rest):
+        kinds = {name: _module_kind(s) for name, s in selections.items()}
+        raise ValidationError(
+            "Profiles keep the kernel's modules in different ways: "
+            + ", ".join(f"{name!r} keeps {kind}" for name, kind in kinds.items())
+            + ".",
+            hint="mkosi profiles can only add to KernelModules=: give every profile the same "
+            "kernel and Debian(kernel_modules=...) setting.",
+            context={"profiles": ", ".join(kinds)},
+        )
+    modules = set(first.modules).intersection(*(s.modules for s in rest))
+    selection = ModuleSelection(modular=first.modular, modules=tuple(sorted(modules)))
+    if config.root == "verity" and config.bootable and selection.modules:
+        selection = selection.union(ModuleSelection(modular=True, modules=VERITY_MODULES))
+    return selection
+
+
+def _module_kind(selection: ModuleSelection) -> str:
+    if selection.modules:
+        return "a selection"
+    return "every module" if selection.modular else "none"
 
 
 def _remove(path: Path) -> None:
@@ -1674,26 +1820,6 @@ def _module_selection(profile: ProfileState, config: EmitConfig) -> ModuleSelect
         config.kernel_modules,
         built_kernel=kernel is not None,
         loadable=kernel is not None and kernel.composed and kernel.modules,
-    )
-
-
-def _overlay_state(recipe: RecipeState, name: str) -> ProfileState:
-    """What ``payload/mkosi.profiles/<name>/`` adds on top of the payload.
-
-    Entries the payload already ships, its output targets and its debloat are left out
-    so nothing runs twice; a profile with its own debloat keeps it, and the payload's
-    stands aside for it.
-    """
-    own = recipe.profiles[name]
-    default = recipe.effective_profile(recipe.default_profile)
-    return replace(
-        own,
-        files=[f for f in own.files if f not in default.files],
-        services=[s for s in own.services if s not in default.services],
-        groups=[g for g in own.groups if g not in default.groups],
-        unit_states=[u for u in own.unit_states if u not in default.unit_states],
-        output_targets=(),
-        debloat=own.debloat if own.debloat_explicit else DebloatConfig(enabled=False),
     )
 
 

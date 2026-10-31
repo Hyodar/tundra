@@ -150,7 +150,7 @@ def test_variants_with_their_own_settings_or_kernel_are_refused(config: Path) ->
     for name in ("lts", "bare"):
         assert f"'{name}' (it has its own Kernel" in message
     assert "'dev'" not in message
-    assert "pure addition" in (err.value.hint or "")
+    assert "its own recipe" in (err.value.hint or "")
 
 
 def test_an_overlay_variant_leaves_the_payload_alone(tmp_path: Path) -> None:
@@ -239,7 +239,9 @@ def test_env_targets_may_repeat_across_secrets() -> None:
 # ── 4. Variants the payload cannot carry ─────────────────────────────
 
 
-def test_every_variant_a_profile_cannot_express_is_listed() -> None:
+def test_only_variants_with_their_own_settings_are_listed() -> None:
+    """A removal or a standalone variant is lowered whole; a variant's own settings are the
+    one thing a tree cannot carry per profile."""
     seed = Setting("Output", "Seed", ("x",))
     variants = (
         Variant("default"),
@@ -251,11 +253,10 @@ def test_every_variant_a_profile_cannot_express_is_listed() -> None:
     with pytest.raises(ValidationError) as err:
         lower(_recipe(Package("curl"), variants=variants))
     message = str(err.value)
-    assert "'slim' (it removes Package(curl, runtime))" in message
     assert "'seeded' (it has its own Setting(Output, Seed))" in message
-    assert "'rescue' (it is standalone)" in message
-    assert "'ok'" not in message
-    assert "make it its own recipe" in (err.value.hint or "")
+    for name in ("slim", "rescue", "ok"):
+        assert f"'{name}'" not in message
+    assert "make the variant its own recipe" in (err.value.hint or "")
 
 
 # ── 5. A default variant inheriting another ───────────────────────────
@@ -271,14 +272,16 @@ def test_default_variant_may_extend_another_variant(tmp_path: Path) -> None:
     assert img.default_profile == "default"
     assert img.state.effective_profile("default").packages >= {"curl", "apparmor", "vim"}
     out = tmp_path / "t"
-    compile(recipe, variants=["default"]).write(out)
-    conf = "".join(
-        _read(out, f"payload/mkosi.conf.d/{name}") for name in ("10-c.conf", "20-h.conf")
+    compile(recipe).write(out)
+    assert "    apparmor\n" in _read(out, "payload/mkosi.conf.d/20-h.conf")
+    # hardened lacks the default's vim: it moves out of the shared payload into the
+    # default's own overlay, which mkosi reads when no profile is selected
+    assert "vim" not in "".join(
+        p.read_text(encoding="utf-8") for p in (out / "payload").glob("mkosi.conf*") if p.is_file()
     )
-    assert "    apparmor\n" in conf
-    # hardened lacks the default's vim: as a profile overlay it could only add
-    with pytest.raises(ValidationError, match="'hardened' \\(it removes Package\\(vim"):
-        lower(recipe)
+    assert "    vim\n" in _read(out, "payload/mkosi.profiles/default/mkosi.conf")
+    assert "Include=mkosi.profiles/default" in _read(out, "payload/mkosi.conf.d/99-default.conf")
+    assert lower(recipe).state.ensure_profile("hardened").extends is None
 
 
 # ── 6. Policy ───────────────────────────────────────────────────────────

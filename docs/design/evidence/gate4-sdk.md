@@ -193,10 +193,9 @@ reused from the internal model are the same objects, that the new values come fr
 - The prover transcript of plan 3.1, and `tundravm.components`: part B, below.
 - A boot. The starter compiles and its tree resolves under mkosi here; CI must bake it and
   boot it, and that run is what gate 4 is accepted on.
-- Chained profiles. `Profile(extends="other")` resolves, and the compiler refuses by name to
-  emit a chain it cannot express as a single mkosi profile overlay (so does a profile that
-  removes a declaration). That restriction is the compiler's, not the model's, and plan 3.3
-  leaves it to the same gate that rewrites the overlay emission.
+- Chained profiles. `Profile(extends="other")` resolved, and the compiler refused by name to
+  emit a chain it could not express as a single mkosi profile overlay (so did a profile that
+  removed a declaration). Lifted since, see "Profile semantics" below.
 
 # Part B: the runtime slots, the component library, surge
 
@@ -357,12 +356,48 @@ the QEMU disk and both wrappers, and the `dev` profile. Byte parity with the 202
 nethermind-tdx tree is dropped, as plan decision 9.1 proposed. `compile --check` is green
 against the regenerated tree.
 
-One finding the regeneration surfaced, recorded as a test rather than fixed here
-(`test_production_alone_differs_only_in_the_shared_debloat_whitelist`): the shared payload's
-debloat whitelist is the union of what every compiled profile enables, so `production`
-compiled alone masks the `dev` profile's `serial-getty@.service` while the whole tree leaves
-it unmasked (still disabled) in production. The production payload's bytes therefore depend
-on which profiles are compiled with it; that is the compiler's to fix.
+One finding the regeneration surfaced: the shared payload's debloat whitelist was the union
+of what every compiled profile enables, so `production` compiled alone masked the `dev`
+profile's `serial-getty@.service` while the whole tree left it unmasked (still disabled) in
+production, and the production payload's bytes depended on which profiles were compiled with
+it. Fixed since, see "Profile semantics" below.
+
+## Profile semantics (plan 3.3)
+
+tundravm resolves every profile's whole image, then writes what all of them build once, in
+the shared payload, and what each builds beyond it in its own overlay
+(`src/tundravm/compiler/_split.py`):
+
+- **Every variant is lowered whatever a compile selects.** A variant that only adds extends
+  the default profile as before; one that extends another profile, removes or replaces is
+  lowered whole, as a standalone profile, from its resolved declarations (`extends` chain and
+  `changes` applied). Only a variant with its own mkosi settings, kernel or source build is
+  refused: those are the tree's.
+- **The shared payload is the intersection.** Packages, accounts, enablements, unit states
+  every profile has; each phase's commands as far as every profile runs the same ones in the
+  same order; files, templates, skeleton files, repositories and service units at paths every
+  profile ships (the default profile's content; an overlay whose content differs ships its
+  own, which mkosi copies later). A declaration one profile removes, or an account it changes,
+  moves into the overlay of every profile that keeps it, `production`'s included. The default
+  profile's overlay is `payload/mkosi.profiles/<default>/`, included by
+  `payload/mkosi.conf.d/99-<default>.conf` under `[Match] Profiles=` (empty: no profile
+  selected), so a plain `mkosi build` builds it.
+- **Debloat.** The shared payload masks all but the units every profile keeps and removes the
+  paths every profile removes; an overlay unmasks the units only it keeps (before its own
+  enables) and removes the paths only it removes. Profiles whose debloat configurations differ
+  share none: each overlay runs its own. No shared script names a profile any more (the
+  `$PROFILES` guards are gone). Kernel modules likewise: the shared `KernelModules=` is what
+  every profile keeps, an overlay lists its own.
+- **Tests.** `tests/compiler/test_profile_overlays.py`: for every example, surge, the gate 1
+  fixture and the new `tests/fixtures/profile-chain/chain.py` (`staging` edits a file and a
+  service, `bench` extends `staging` and removes `worker`), the tree outside
+  `mkosi.profiles/` is byte-identical whichever profiles are selected, alone or left out;
+  `mkosi summary --json` of each profile's selection is the shared payload's summary plus
+  exactly that profile's overlay (its extra and skeleton trees, scripts, packages, kernel
+  modules, `ImageId=`); in the chain, `worker.service` and its enablement are in the
+  `production` and `staging` overlays and nowhere in `bench`'s resolved image.
+- **The surge tree** changed in two scripts: the shared payload's debloat whitelist lost
+  `serial-getty@.service`, and the `dev` overlay unmasks it before enabling the getty.
 
 ## Backend selection
 

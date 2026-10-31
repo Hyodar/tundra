@@ -66,16 +66,14 @@ def mkosi_argv(lowered: Lowered, variant: str) -> list[str]:
 def _with_init(lowered: Lowered) -> Lowered:
     """A copy of *lowered* with runtime-init generated and wired into its services.
 
-    Covers every active profile and the default profile they extend. An
-    extending profile only gets its own runtime-init files when it adds init
-    scripts; otherwise it inherits the default profile's.
+    Covers every profile, selected or not: the shared payload is what all of them
+    build. An extending profile only gets its own runtime-init files when it adds
+    init scripts; otherwise it inherits the default profile's.
     """
     copied = replace(lowered, state=copy.deepcopy(lowered.state))
     state = copied.state
     init = Init()
-    names = list(copied.active)
-    if any(state.ensure_profile(n).extends is not None for n in names):
-        names.insert(0, state.default_profile)
+    names = [state.default_profile, *state.profiles]
     targets = [state.ensure_profile(n) for n in dict.fromkeys(names)]
     generators: list[ProfileState] = []
     for profile in targets:

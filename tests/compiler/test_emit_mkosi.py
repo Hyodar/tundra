@@ -14,7 +14,12 @@ from typing import Literal, cast
 import pytest
 
 from tests.helpers import conf_list, on_platform
-from tundravm.compiler.emit_mkosi import ARCH_TO_MKOSI, AZURE_CONVERTER, GCP_CONVERTER
+from tundravm.compiler.emit_mkosi import (
+    ARCH_TO_MKOSI,
+    AZURE_CONVERTER,
+    ESP_MKFS_ENVIRONMENT,
+    GCP_CONVERTER,
+)
 from tundravm.declarative import (
     BootStep,
     Debian,
@@ -564,7 +569,7 @@ def test_compile_kernel_passes_no_host_environment(tmp_path: Path) -> None:
     out = _compile(recipe, tmp_path / "mkosi")
     assert "Environment=" not in _conf(out)
     environment = [line for line in _main(out).splitlines() if line.startswith("Environment=")]
-    assert environment == ["Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT=-S512"]
+    assert environment == [ESP_MKFS_ENVIRONMENT]
 
 
 def test_compile_kernel_without_config_no_build_script(tmp_path: Path) -> None:
@@ -886,9 +891,10 @@ def test_compile_debloat_profile_conditional_unconditional_coexist(
     assert 'rm -rf "$BUILDROOT/usr/share/bash-completion"' in content
 
 
-def test_compile_overlay_debloat_makes_the_payloads_stand_aside(tmp_path: Path) -> None:
-    """A profile with its own Debloat runs it instead of the payload's: the payload's
-    debloat lines are guarded off for that profile."""
+def test_a_debloat_one_profile_changes_moves_out_of_the_shared_payload(tmp_path: Path) -> None:
+    """A profile that edits the Debloat leaves no debloat both share: the shared payload runs
+    none and names no profile, and the default profile's runs from its own overlay, which
+    ``[Match] Profiles=`` (no profile selected) includes."""
     debloat = Debloat(enabled=True)
     recipe = _recipe(
         Package("curl"),
@@ -900,14 +906,20 @@ def test_compile_overlay_debloat_makes_the_payloads_stand_aside(tmp_path: Path) 
         epoch=None,
     )
     out = _compile(recipe, tmp_path / "mkosi")
-    guard = 'if [[ " ${PROFILES:-} " != *" dev "* ]]; then'
-    postinst = _script(out, "postinst").read_text(encoding="utf-8")
-    finalize = _script(out, "finalize").read_text(encoding="utf-8")
-    for text in (postinst, finalize):
-        assert guard in text
-    head, _, guarded = postinst.partition(guard)
-    assert "dpkg-query" not in head and "dpkg-query" in guarded
-    assert 'rm -rf "$BUILDROOT/usr/share/doc"' in finalize.partition(guard)[2]
+    for script in (out / "payload").rglob("mkosi.*.d/*.sh"):
+        text = script.read_text(encoding="utf-8")
+        assert "PROFILES" not in text, script
+        if "mkosi.profiles/default" not in script.as_posix():
+            assert "dpkg-query" not in text and "/usr/share/doc" not in text, script
+    own = out / "payload/mkosi.profiles/default"
+    assert "dpkg-query" in (own / "mkosi.postinst.d/50-postinst.sh").read_text(encoding="utf-8")
+    finalize = (own / "mkosi.finalize.d/50-finalize.sh").read_text(encoding="utf-8")
+    assert 'rm -rf "$BUILDROOT/usr/share/doc"' in finalize
+    assert (own / "mkosi.skeleton/etc/systemd/system/minimal.target").is_file()
+    assert (out / "payload/mkosi.conf.d/99-default.conf").read_text(encoding="utf-8") == (
+        "[Match]\nProfiles=\n\n[Include]\nInclude=mkosi.profiles/default\n"
+    )
+    assert not (own / "mkosi.conf").exists()  # it adds no setting, nor an ImageId
     dev = out / "payload/mkosi.profiles/dev"
     assert not (dev / "mkosi.postinst.d").exists()
     assert not (dev / "mkosi.finalize.d").exists()

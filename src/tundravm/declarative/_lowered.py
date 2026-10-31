@@ -65,8 +65,11 @@ variant's differs from the default variant's)."""
 class Lowered:
     """A recipe lowered onto the compiler: per-profile state, mkosi options, kernel and tools.
 
-    The default profile is the payload; every other profile extends it, as a profile
-    overlay (:attr:`overlays`) or only through the outputs it selects (:attr:`targets`).
+    Every variant is lowered, whatever is selected. The default profile is the payload
+    every other builds on: a profile extends it, adding content (an overlay,
+    :attr:`overlays`) or only the outputs it selects (:attr:`targets`), or is lowered whole
+    as a standalone profile (an overlay too) when it extends another, removes or replaces.
+    The emitter writes what every profile shares once and each overlay's own beyond it.
     The mkosi options and the kernel are the payload's, so every profile's. Operations
     run on :attr:`active`, the :meth:`select`-ed profiles.
     """
@@ -82,7 +85,8 @@ class Lowered:
     """Each lowered profile's outputs (``qemu``, ``azure``, ``gcp``); the payload carries the
     glue of every target of the recipe."""
     overlays: tuple[str, ...] = ()
-    """The profiles emitted as ``payload/mkosi.profiles/<name>/`` (they add content)."""
+    """The profiles emitted as ``payload/mkosi.profiles/<name>/`` (their content differs
+    from the default profile's)."""
     overlay_sandbox_files: Mapping[str, tuple[tuple[str, str], ...]] = field(
         default_factory=dict, repr=False
     )
