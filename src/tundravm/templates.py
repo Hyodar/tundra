@@ -53,7 +53,7 @@ Run:    tundravm run --mode simulated --dev
 
 '''
 
-_MINIMAL = r"""from tundravm import TCP, File, Image, Service
+_MINIMAL = r"""from tundravm import TCP, DevAccess, File, Image, Service
 
 image = Image(
     "$title",
@@ -66,6 +66,7 @@ image = Image(
             expose=[TCP(8080)],
         ),
     ],
+    dev=DevAccess(password="tdx"),
 )
 """
 
@@ -572,7 +573,7 @@ jobs:
 """
 
 TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
-    "minimal": ("production",),
+    "minimal": ("production", "dev"),
     "service": ("production", "dev"),
     "cloud": ("production", "dev"),
     "prover": ("production", "dev"),

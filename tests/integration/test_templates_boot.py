@@ -10,7 +10,7 @@ each boot's kernel prints the command line the UKI carries plus the harness's co
 The templates are ``Image`` files, and their evidence service builds tundra-tools from its
 source repository, which the bake fetches. There is no TDX here, so a production profile is
 fail-closed (plan 6.1: ``tdx-evidence.service`` refuses and no service starts): the
-``minimal`` template, which has no other profile, is booted to show that, and the
+``minimal`` template's production profile is booted to show that, and the
 ``service`` template's ``dev`` profile, which runs simulated, serves its page.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
 ``qemu-system-x86_64`` and OVMF; skipped otherwise. ``test_fixture_boot.py`` boots the same
