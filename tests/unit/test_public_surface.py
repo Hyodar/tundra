@@ -206,7 +206,7 @@ def test_the_root_does_not_spell_a_namespaced_name() -> None:
 def test_no_private_module_looks_like_a_namespace() -> None:
     public = {name.removeprefix("tundravm.") for name in _reference.MODULES}
     # The internal modules a reader could take for a namespace of the SDK are private.
-    package = Path(importlib.import_module("tundravm").__file__).parent
+    package = Path(tundravm.__file__ or "").parent
     for gone in ("image", "observability", "platforms"):
         assert gone not in public
         # A stale ``__pycache__`` directory would import as a namespace package, so the
