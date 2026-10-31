@@ -28,7 +28,7 @@ from tundravm.declarative import (
     read_lock,
     sbom,
 )
-from tundravm.declarative.bom import SBOM_FORMATS, manifest_path, purl, read_manifest
+from tundravm.declarative.bom import manifest_path, purl, read_manifest
 from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ArtifactError
 
@@ -262,8 +262,7 @@ def test_documents_are_deterministic(
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "0")
     artifact = _artifact(tmp_path, lock=locked)
     first, second = sbom(artifact, lock=locked), sbom(artifact, lock=locked)
-    for format in SBOM_FORMATS:
-        assert first.render(format) == second.render(format)
+    assert first.render() == second.render()
     assert first.to_spdx()["creationInfo"]["created"] == "1970-01-01T00:00:00Z"
 
 
@@ -315,5 +314,4 @@ def test_moving_the_bake_directory_changes_no_document(
         for artifact in (first, second)
     ]
     assert documents[0].artifact == Path("default/output/qemu.raw")
-    for format in SBOM_FORMATS:
-        assert documents[0].render(format) == documents[1].render(format)
+    assert documents[0].render() == documents[1].render()

@@ -61,7 +61,6 @@ from tundravm.models import (
 from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 
 from . import _bake, _compile
-from ._initrd import installed_digests
 from ._lowered import LOCK_FILENAME, Lowered
 from .lower import lower
 from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
@@ -215,9 +214,6 @@ class Artifact:
     """The UKI this disk artifact boots, as the bake recorded it; ``None`` when unknown."""
     boot_payload_sha256: str | None = None
     """The sha256 of ``boot_payload`` at bake time."""
-    installed: Mapping[str, str] | None = field(default=None, hash=False)
-    """``{image path: sha256}`` of each source build's installed file, read from the UKI's
-    initrd at bake time; ``None`` when the bake could not read it (nothing recorded)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1020,7 +1016,6 @@ def bake_image(
         artifacts: list[Artifact] = []
         for name, built in sorted(result.profiles.items()):
             tree_digest = read_variant_tree(destination / "mkosi", [name], warn=warn).digest
-            installed = _installed(baking, name, built)
             for target, ref in sorted(built.artifacts.items()):
                 artifacts.append(
                     Artifact(
@@ -1038,7 +1033,6 @@ def bake_image(
                         if ref.boot_payload is None
                         else _under(Path(ref.boot_payload), destination),
                         boot_payload_sha256=ref.boot_payload_digest,
-                        installed=installed,
                     )
                 )
     return result, tuple(artifacts)
@@ -1119,27 +1113,6 @@ def bake(
         if reporter is not None:
             reporter.close()
     return artifacts
-
-
-def _installed(img: Lowered, name: str, built: ProfileBuildResult) -> dict[str, str] | None:
-    """``{path: sha256}`` of *name*'s source-build files read from its UKI's initrd;
-    ``None`` when it builds none or no UKI could be read."""
-    dests = sorted(
-        {
-            step.dest
-            for build in img.source_builds(profile=name).values()
-            for step in build.install
-            if step.kind != "tree"
-        }
-    )
-    ukis = [
-        ref.path if ref.path.suffix == ".efi" else ref.boot_payload
-        for ref in built.artifacts.values()
-    ]
-    uki = next((path for path in ukis if path is not None and path.is_file()), None)
-    if not dests or uki is None:
-        return None
-    return installed_digests(uki, dests)
 
 
 # ── measure ──────────────────────────────────────────────────────────────

@@ -220,7 +220,7 @@ def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
     assert all(e.profile == "default" for e in backend_lines)
 
     artifacts = [e for e in capture.events if e.kind == "artifact"]
-    assert [e.extra["role"] for e in artifacts] == ["image", "report"]
+    assert [e.extra["role"] for e in artifacts] == ["image"]
     image_event = artifacts[0]
     ref = result.profiles["default"].artifacts["qemu"]
     assert image_event.extra["sha256"] == ref.digest

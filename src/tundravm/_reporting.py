@@ -437,9 +437,6 @@ class StructuredLogger:
         extra["source"] = "logger"
         self.reporter.emit(Event(kind, record["profile"], str(record["message"]), elapsed, extra))
 
-    def records_for_profile(self, profile: str) -> list[dict[str, Any]]:
-        return [record for record in self.records if record.get("profile") == profile]
-
 
 def format_duration(seconds: float) -> str:
     """``0.4s``, ``12.3s``, ``4m05s``, ``1h02m``."""

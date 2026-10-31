@@ -721,7 +721,7 @@ def _sbom(artifact: Artifact, locked: Lock, img: Lowered, out: Path) -> dict[str
             os.environ.pop("SOURCE_DATE_EPOCH", None)
         else:
             os.environ["SOURCE_DATE_EPOCH"] = previous
-    (out / mf.SBOM).write_text(document.render("spdx-json"), encoding="utf-8")
+    (out / mf.SBOM).write_text(document.render(), encoding="utf-8")
     return {
         "path": mf.SBOM,
         "sha256": mf.sha256_file(out / mf.SBOM),

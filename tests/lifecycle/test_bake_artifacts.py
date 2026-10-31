@@ -33,7 +33,6 @@ def test_each_artifact_records_its_digests_and_boot_payload(tmp_path: Path) -> N
     assert artifact.build == tmp_path / "build"
     assert artifact.boot_payload is not None and artifact.boot_payload.name == "payload.efi"
     assert artifact.boot_payload_sha256 is not None and len(artifact.boot_payload_sha256) == 64
-    assert artifact.installed is None  # no source build
 
 
 def test_changed_artifact_is_refused_by_measure(tmp_path: Path) -> None:

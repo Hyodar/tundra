@@ -729,7 +729,6 @@ class ArtifactRef:
 class ProfileBuildResult:
     profile: str
     artifacts: dict[OutputTarget, ArtifactRef] = field(default_factory=dict)
-    report_path: Path | None = None
     duration_s: float | None = field(default=None, compare=False)
 
 

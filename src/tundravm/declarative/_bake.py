@@ -1,14 +1,12 @@
 """Bake a :class:`~tundravm.declarative._lowered.Lowered` recipe through its backend (internal).
 
 :func:`bake` lints, verifies the lockfile (frozen bakes), compiles, checks the
-host-fetched checkouts the build mounts, builds each active profile and writes
-its ``report.json``.
+host-fetched checkouts the build mounts and builds each active profile.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -34,7 +32,6 @@ from tundravm._source import (
 )
 from tundravm.backends.base import BuildBackend, drop_intermediates
 from tundravm.check import check
-from tundravm.compiler import PHASE_ORDER, MkosiEmission
 from tundravm.errors import LintError, LockfileError, PolicyError, StateError, ValidationError
 from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, read_lockfile, recipe_digest
 from tundravm.models import (
@@ -42,7 +39,6 @@ from tundravm.models import (
     BakeRequest,
     BakeResult,
     OutputTarget,
-    Phase,
     ProfileBuildResult,
 )
 from tundravm.policy import ensure_bake_policy
@@ -66,7 +62,7 @@ def bake(
 
     *reporter* receives progress events: lint/lock/compile phases, per-profile
     prepare and build phases with durations, every backend output line,
-    artifacts with sizes, the report path, and a final ``done``. Without a
+    artifacts with sizes, and a final ``done``. Without a
     reporter, backend output only surfaces in a failing backend's error.
     """
     progress = Progress(reporter)
@@ -89,7 +85,7 @@ def bake(
         locked_toolchain = _locked_toolchain(lowered)
         emission_root = destination / "mkosi"
         with progress.phase("compile", "compile", profile=scope):
-            _, emission = emit(lowered, emission_root)
+            emit(lowered, emission_root)
         if lowered.backend is None:
             raise ValidationError(
                 "No build backend configured.",
@@ -138,30 +134,9 @@ def bake(
             )
             result = _build(backend, request, progress)
             drop_intermediates(result.artifacts)  # azure.raw, gcp.raw: mkosi's, not artifacts
-            digests = _hash_artifacts(result, request, progress)
+            _hash_artifacts(result, request, progress)
             _hash_manifests(result)
             _hash_boot_payloads(result)
-            report = {
-                "profile": name,
-                "lock_digest": lock_digest,
-                "backend": backend.name,
-                "debloat": lowered.explain_debloat(profile=name),
-                "artifact_digests": digests,
-                "emitted_scripts": _script_checksums(emission, name),
-                "artifacts": {target: str(ref.path) for target, ref in result.artifacts.items()},
-                "logs": logger.records_for_profile(name),
-            }
-            result.report_path = destination / name / "report.json"
-            result.report_path.write_text(
-                json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-            progress.emit(
-                "artifact",
-                name,
-                f"report {display_path(result.report_path)}",
-                role="report",
-                path=str(result.report_path),
-            )
             result.duration_s = progress.elapsed() - started
             profiles[name] = result
             logger.log(
@@ -230,18 +205,14 @@ def _build(backend: BuildBackend, request: BakeRequest, progress: Progress) -> P
     return result
 
 
-def _hash_artifacts(
-    result: ProfileBuildResult, request: BakeRequest, progress: Progress
-) -> dict[str, str]:
+def _hash_artifacts(result: ProfileBuildResult, request: BakeRequest, progress: Progress) -> None:
     """Record each existing artifact's sha256 on *result* (chunked: images can be GiBs)."""
-    digests: dict[str, str] = {}
     for target, artifact in sorted(result.artifacts.items()):
         path = Path(artifact.path)
         if not path.exists():
             continue
         with path.open("rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
-        digests[target] = digest
         result.artifacts[target] = replace(artifact, digest=digest)
         size = path.stat().st_size
         progress.emit(
@@ -254,7 +225,6 @@ def _hash_artifacts(
             size_bytes=str(size),
             sha256=digest,
         )
-    return digests
 
 
 def package_manifest_candidates(artifact: Path, variant: str) -> list[Path]:
@@ -299,14 +269,6 @@ def _hash_boot_payloads(result: ProfileBuildResult) -> None:
         with path.open("rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         result.artifacts[target] = replace(artifact, boot_payload_digest=digest)
-
-
-def _script_checksums(emission: MkosiEmission, profile: str) -> dict[str, str]:
-    scripts: dict[Phase, Path] = emission.script_paths.get(profile, {})
-    return {
-        f"{phase}:{path.name}": hashlib.sha256(path.read_bytes()).hexdigest()
-        for phase, path in sorted(scripts.items(), key=lambda item: PHASE_ORDER.index(item[0]))
-    }
 
 
 def _lock_digest(lowered: Lowered) -> str:
