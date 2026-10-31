@@ -88,7 +88,7 @@ PRESETS: dict[str, dict[str, object]] = {
 its code pages writable and then executable; CPython needs the same the moment a module
 uses libffi closures (``ctypes`` callbacks, cffi), which ``cryptography`` and most database
 drivers do. The three render the same directives today and are separate names because the
-runtime class is what a reader of the recipe needs to know, and a deviation one of them
+runtime class is what a reader of the image needs to know, and a deviation one of them
 later turns out to need belongs to that name alone, not to the other two.
 
 ``dotnet``: ``MemoryDenyWriteExecute=`` goes for the same reason, and ``@resources`` comes
@@ -103,12 +103,14 @@ def _fail(owner: object, message: str, *, hint: str | None = None) -> Validation
 
 @dataclass(frozen=True, slots=True)
 class Hardening:
-    """The sandbox a generated unit runs in: one field per knob, three reviewed presets.
+    """The sandbox a generated unit runs in: one field per knob, and reviewed presets.
 
     The field defaults are :meth:`strict`; :meth:`relaxed` and :meth:`none` are the other
-    presets, and every preset takes per-field overrides (``Hardening.strict(jit=True)``), so
-    a relaxation is visible where it is made. ``devices`` replaces ``PrivateDevices=yes``
-    with ``DevicePolicy=closed`` plus one ``DeviceAllow=<dev> rw`` each; ``capabilities``
+    two levels, :meth:`preset` names one per runtime class (:data:`PRESETS`: ``static``,
+    ``jit``, ``node``, ``python``, ``dotnet``), and every one takes per-field overrides
+    (``Hardening.strict(jit=True)``), so a relaxation is visible where it is made.
+    ``devices`` replaces ``PrivateDevices=yes`` with ``DevicePolicy=closed`` plus one
+    ``DeviceAllow=<dev> rw`` each; ``capabilities``
     ``None`` leaves the bounding set alone, ``()`` empties it, names keep (and grant) those;
     ``jit=True`` drops ``MemoryDenyWriteExecute=`` (.NET, JVM, V8); ``network`` picks
     ``RestrictAddressFamilies=`` (``"any"``: no restriction); ``kernel`` covers

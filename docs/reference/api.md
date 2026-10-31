@@ -475,7 +475,7 @@ Hardening(
 )
 ```
 
-The sandbox a generated unit runs in: one field per knob, three reviewed presets.
+The sandbox a generated unit runs in: one field per knob, and reviewed presets.
 
 | Member | Does |
 |---|---|

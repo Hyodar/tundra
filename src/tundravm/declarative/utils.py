@@ -66,7 +66,7 @@ TUNDRA_TOOLS = Git("https://github.com/Hyodar/tundra-tools.git", "master")
 """The ``tundra-tools`` repository :class:`Tdxs` builds from by default."""
 
 DEFAULT_DEBIAN_MIRROR = "http://deb.debian.org/debian"
-"""The mirror :class:`Backports` uses when neither it nor the recipe sets one."""
+"""The mirror :class:`Backports` uses when neither it nor the image sets one."""
 _SNAPSHOT_ROOT = "https://snapshot.debian.org"
 """The mirror root mkosi reads a ``Snapshot=`` from when ``Mirror=`` is unset."""
 _BACKPORTS_PRIORITY = 200
@@ -99,7 +99,7 @@ class Backports(Composite):
     unstable. *archive_url* is the apt URI used
     verbatim; without it the sources follow the platform's ``mirror`` (a mirror root)
     and ``snapshot`` the way mkosi does, else ``deb.debian.org``. Without
-    *release*, the platform's release. Fragment name: ``backports`` (it declares nothing
+    *release*, the platform's release. Component name: ``backports`` (it declares nothing
     itself: lowering writes its files).
     """
 
@@ -120,8 +120,8 @@ class Backports(Composite):
     ) -> str:
         """The deb822 sources file the compiler writes into the build sandbox.
 
-        *mirror* (a mirror root), *release* and *snapshot* are the recipe's; the
-        fragment's own fields win.
+        *mirror* (a mirror root), *release* and *snapshot* are the image's; the
+        component's own fields win.
         """
         if self.archive_url:
             uri = self.archive_url
@@ -180,7 +180,7 @@ class EfiStub(Composite):
     installs the mounted copy with ``dpkg -i``, so the build sandbox downloads
     nothing. Compiled without a pin, the hook downloads it instead and fails the
     build with that advice when the download fails (see :meth:`render_script`).
-    A postinst hook. Fragment name: ``efi-stub``.
+    A postinst hook. Component name: ``efi-stub``.
     """
 
     snapshot: str
@@ -237,7 +237,7 @@ class Tdxs(Composite):
     ``Service(socket=Listen(...))``, hardened for its job (``_modules/tdxs.py``
     ``Tdxs.service`` gives the reasoning: ``CAP_DAC_OVERRIDE`` for configfs-tsm, unverified
     on TDX hardware).
-    Fragment name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
+    Component name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
 
@@ -369,16 +369,16 @@ class Tdxs(Composite):
 
 @component
 class DevTools(Composite):
-    """Debugging tools, a serial console and password root login. Never ship it: mark its
-    variant ``Variant(..., release=False)``.
+    """Debugging tools, a serial console and password root login. Never ship it: put it
+    in a non-production profile (``Profile(production=False)``, or ``dev=``).
 
-    The root password is hashed with a fixed salt, so a second build of the variant
+    The root password is hashed with a fixed salt, so a second build of the profile
     matches the first: *salt* (1 to 16 of ``[A-Za-z0-9./]``), or by default the first 16
-    hex digits of ``sha256("tundravm-devtools:<variant name>")``, computed in the
+    hex digits of ``sha256("tundravm-devtools:<profile name>")``, computed in the
     postinst script from mkosi's ``$IMAGE_ID``. The serial getty on ``ttyS0`` is enabled
     at build time. ``reproducible=False`` keeps the historical random salt and the
     ``serial-console.service`` that enables the getty at boot.
-    Fragment name: ``devtools``.
+    Component name: ``devtools``.
     """
 
     root_password: str = _DEFAULT_ROOT_PASSWORD
@@ -399,7 +399,7 @@ class DevTools(Composite):
                 f"DevTools salt {self.salt!r} must be 1 to 16 of A-Z, a-z, 0-9, '.' and '/', "
                 "with reproducible=True.",
                 hint="Pass a short salt such as salt='devtools01', or omit it for the one "
-                "derived from the variant name.",
+                "derived from the profile name.",
             )
         hashed = f'openssl passwd -6 "{self.root_password}"'
         if self.reproducible:
@@ -451,9 +451,9 @@ class GoBinary(Composite):
 
     The ``Build`` named *name* runs ``go build -trimpath -buildvcs=false`` of *package*
     (``Go``; ``CGO_ENABLED=0`` unless *cgo*) into ``build/<file name of install>`` and
-    installs it at *install* (``/usr/bin/<name>`` by default). ``executable`` is that path, for a
-    ``Service`` command: ``Service(name, f"{binary.executable} --flag")``.
-    Fragment name: *name*.
+    installs it at *install* (``/usr/bin/<name>`` by default). ``executable`` is that path,
+    the first element of a ``Service`` argv: ``Service(name, [binary.executable, "--flag"])``.
+    Component name: *name*.
     """
 
     name: str
@@ -500,7 +500,7 @@ class CargoBinary(Composite):
     ``cargo build`` with ``auditable=False``; *bin* or *package* selects the target,
     *profile* its directory) with reproducible ``rustflags`` and installs
     ``target/<profile>/<bin, package or install file name>`` at *install*
-    (``/usr/bin/<name>`` by default). Fragment name: *name*.
+    (``/usr/bin/<name>`` by default). Component name: *name*.
     """
 
     name: str
@@ -663,7 +663,7 @@ class Network(Composite):
     (pass ``dhcp=False``). With *wait_online*, ``systemd-networkd-wait-online`` holds
     ``network-online.target`` until any matched interface is configured, at most
     *wait_timeout* seconds, so a boot without a NIC continues. The implicit debloat keeps the
-    networkd units and the ``.network`` file. Fragment name: ``network``.
+    networkd units and the ``.network`` file. Component name: ``network``.
     """
 
     dhcp: bool = True
@@ -750,9 +750,9 @@ class TeeBase(Composite):
     *mask*: masks :data:`TEE_MASKED_UNITS` (apt timers, the tty1 getty).
     *network*: :class:`Network` (DHCP on every ``en*``/``eth*`` interface); pass
     ``network=False`` and add your own ``Network(...)`` to configure it.
-    *firewall*: :class:`Firewall`, which drops inbound traffic except the ports the variant's
+    *firewall*: :class:`Firewall`, which drops inbound traffic except the ports the image's
     services declare; pass ``firewall=False`` and add your own ``Firewall(...)`` to change it.
-    Fragment name: ``tee-base``.
+    Component name: ``tee-base``.
     """
 
     time: bool = True
@@ -832,8 +832,8 @@ class SshAccess(Composite):
     """Root logs in over SSH with a public key, and with nothing else.
 
     Installs ``openssh-server`` and enables Debian's ``ssh.service`` under the boot target,
-    listening on *port*: the variant's ``Firewall`` opens it and ``deploy --target qemu``
-    forwards ``ssh_port`` to it (an image without ``SshAccess`` gets no SSH forward).
+    listening on *port*: the image's ``Firewall`` opens it and ``tundravm run`` forwards it
+    from ``127.0.0.1`` (an image without ``SshAccess`` gets no SSH forward).
     The image carries no host keys (the build removes them): the ``ssh-host-keys`` task
     generates this instance's at boot (``ssh-keygen -A``, skipped when they exist) and sshd
     starts after it. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
@@ -841,9 +841,9 @@ class SshAccess(Composite):
     tundra-tools delivers a key for, and the image has no other login account, so refusing
     root would refuse everyone, while a password is never accepted.
     *authorized_keys* are public keys baked into the image
-    (``/etc/ssh/authorized_keys.d/root``); *from_secrets* accepts the key the variant's
+    (``/etc/ssh/authorized_keys.d/root``); *from_secrets* accepts the key the image's
     ``Secrets`` delivers at boot (``/root/.ssh/authorized_keys``) and makes sshd wait for
-    that step (``secrets.ready``). One of them is required. Fragment name: ``ssh-access``.
+    that step (``secrets.ready``). One of them is required. Component name: ``ssh-access``.
     """
 
     port: int = 22

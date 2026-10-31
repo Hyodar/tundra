@@ -62,7 +62,7 @@ class TeeBase(Component):
     host cannot set the guest's clock (TLS, certificates and attestation freshness
     depend on it). *journal*: journald in RAM, capped at *journal_max_use*. *sysctl*: the
     kernel hardening set. *dns*: ``/etc/resolv.conf`` naming *nameservers*. *mask*: no
-    apt timers, no getty on the host-owned console. Fragment name: ``tee-base``.
+    apt timers, no getty on the host-owned console. Component name: ``tee-base``.
     """
 
     time: bool = True
@@ -110,7 +110,7 @@ class Network(Component):
     (``Network(dhcp=False, static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1"))``);
     *egress* filters what the image may send (the image's firewall applies it).
     ``image.network`` takes it, and so does ``components=``. Exports :attr:`online`.
-    Fragment name: ``network``.
+    Component name: ``network``.
     """
 
     dhcp: bool = True
@@ -180,7 +180,7 @@ class Firewall(Component):
     the management ingress on :data:`~tundravm.image._values.MANAGEMENT_PORT` and *allow*
     (ports something other than a ``Service`` listens on: a packaged daemon). Outbound it
     filters only with *egress*. The image holds ``Firewall()`` by default;
-    ``network=Network(egress=...)`` is the usual way to set *egress*. Fragment name:
+    ``network=Network(egress=...)`` is the usual way to set *egress*. Component name:
     ``firewall``.
     """
 
@@ -239,7 +239,7 @@ class SshAccess(Component):
     control plane delivers at boot instead (today's ``secret-delivery`` bootstrap on the
     management port, which ``sshd`` waits for). One of them is required. The port is
     opened in the firewall; host keys are generated per instance at boot. Exports
-    :attr:`port`. Fragment name: ``ssh-access``.
+    :attr:`port`. Component name: ``ssh-access``.
     """
 
     keys: Sequence[str] = ()
@@ -300,7 +300,7 @@ class DevAccess(Component):
     key, or the path of a ``.pub`` file read when the image lowers; a private key is
     refused. *password* is a root password for the serial console, never a login over the
     network. It is refused in ``components=``: debug access is a profile, never the image.
-    Fragment name: ``dev-access``.
+    Component name: ``dev-access``.
     """
 
     ssh_keys: Sequence[str] = ()
@@ -394,7 +394,7 @@ class Tdxs(Component):
 
     Services that ask for quotes join the ``tdx`` group and require :data:`EVIDENCE`
     (``tdxs.ready``). It depends on nothing on a volume or a secret: the evidence is
-    what unlocks them. Fragment name: ``tdxs``.
+    what unlocks them. Component name: ``tdxs``.
     """
 
     source: dm.Git = du.TUNDRA_TOOLS
