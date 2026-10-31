@@ -4,13 +4,13 @@
 builds, so it bakes anywhere the Linux backend does. Its ``default`` variant is booted under
 QEMU with OVMF from pflash twice: the payload's UKI (``payload.efi``) through ``-kernel``,
 and ``qemu.raw`` attached as a virtio disk on a snapshot with no ``-kernel``, which OVMF
-boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI`` on the ESP (the way ``deploy --target
-qemu`` boots it without TDX). Each boot must reach ``minimal.target`` with the fixture's
+boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI`` on the ESP (the way ``run --mode
+simulated`` boots it). Each boot must reach ``minimal.target`` with the fixture's
 ``web`` service running and its page fetched by the host through a QEMU forward, and the
 kernel's command line (and ``/proc/cmdline``, which the fixture's ``boot-probe`` task prints)
 must be the UKI's own with the harness's SMBIOS console words appended.
 
-CI's ``fixture-boot`` job bakes it with ``tundravm bake`` and points
+CI's ``fixture-boot`` job builds it with ``tundravm build --profile default`` and points
 ``TUNDRAVM_FIXTURE_BUILD`` at that build directory; without it the test bakes the
 ``default`` variant itself. Needs a Linux build host, ``qemu-system-x86_64`` and OVMF.
 Run with: uv run pytest tests/integration/test_fixture_boot.py -m boot
@@ -47,8 +47,8 @@ FIXTURE = Path(__file__).parents[1] / "fixtures" / "native-tree"
 BOOT_TIMEOUT = float(os.environ.get("TUNDRAVM_BOOT_TIMEOUT", "900"))
 LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 BUILD = os.environ.get("TUNDRAVM_FIXTURE_BUILD")
-"""A build directory ``tundravm bake tests/fixtures/native-tree/recipe.py --variant default``
-wrote."""
+"""A build directory ``tundravm build tests/fixtures/native-tree/recipe.py --profile default``
+published (``payload.efi`` and ``qemu.raw`` at its top)."""
 
 WEB_PORT = 8080
 PAGE = "<!doctype html>\n<title>fixture</title>\n<h1>fixture</h1>\n"
@@ -62,7 +62,7 @@ def output(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """The ``default`` variant's output directory: ``payload.efi`` and ``qemu.raw``."""
     require_boot()
     if BUILD:
-        yield Path(BUILD) / "default" / "output"
+        yield Path(BUILD)
         return
     build = tmp_path_factory.mktemp("fixture") / "build"
     try:

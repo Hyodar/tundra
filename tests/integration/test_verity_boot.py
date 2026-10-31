@@ -8,7 +8,7 @@ mount the erofs read-only and stack ``systemd.volatile=overlay``'s tmpfs over it
 fixture's ``boot-probe`` task prints what the root really is and the tests read it, and its
 ``web`` service serves a page the host fetches through a QEMU forward.
 
-CI's ``verity`` job bakes the fixture with ``tundravm bake ... --attr verity_recipe`` and
+CI's ``verity`` job builds the fixture with ``tundravm build ... --attr verity_recipe`` and
 points ``TUNDRAVM_VERITY_BUILD`` at that build directory; without it the test bakes the
 ``default`` variant itself. Needs a Linux build host, ``qemu-system-x86_64`` and OVMF.
 Run with: uv run pytest tests/integration/test_verity_boot.py -m boot
@@ -50,7 +50,7 @@ SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
 BOOT_TIMEOUT = float(os.environ.get("TUNDRAVM_BOOT_TIMEOUT", "900"))
 LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 BUILD = os.environ.get("TUNDRAVM_VERITY_BUILD")
-"""A build directory ``tundravm bake --attr verity_recipe --variant default`` wrote."""
+"""A build directory ``tundravm build --attr verity_recipe --profile default`` published."""
 
 WEB_PORT = 8080
 PAGE = "<!doctype html>\n<title>fixture</title>\n<h1>fixture</h1>\n"
@@ -63,7 +63,7 @@ def output(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     and ``qemu.raw``."""
     require_boot()
     if BUILD:
-        yield Path(BUILD) / "default" / "output"
+        yield Path(BUILD)
         return
     build = tmp_path_factory.mktemp("verity") / "build"
     try:

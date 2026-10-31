@@ -1,11 +1,12 @@
 """The verity layout's root and hash partitions survive both cloud converters.
 
-CI's ``verity-cloud`` job bakes ``tests/fixtures/native-tree/recipe.py``'s ``verity_recipe``
-with ``--variant azure --variant gcp`` and points ``TUNDRAVM_VERITY_CLOUD_BUILD`` at the
-build directory: ``azure.vhd`` (a fixed VHD: the raw disk and a footer) and ``gcp.tar.gz``
-(a sparse ``disk.raw``) must each hold the ESP, then the root and its hash partition under
-the UUIDs the UKI names, with exactly the bytes of the payload's split partitions. Skipped
-without that build (the GCE import itself is not run here).
+CI's ``verity-cloud`` job builds ``tests/fixtures/native-tree/recipe.py``'s ``verity_recipe``
+with ``--profile azure`` and ``--profile gcp`` and points ``TUNDRAVM_VERITY_CLOUD_BUILD`` at a
+directory holding the two build directories as ``azure/`` and ``gcp/``: ``azure.vhd`` (a fixed
+VHD: the raw disk and a footer) and ``gcp.tar.gz`` (a sparse ``disk.raw``) must each hold
+the ESP, then the root and its hash partition under the UUIDs the UKI names, with exactly
+the bytes of the payload's split partitions. Skipped without that build (the GCE import
+itself is not run here).
 Run with: TUNDRAVM_VERITY_CLOUD_BUILD=BUILD uv run pytest tests/integration/test_verity_cloud.py
 """
 
@@ -68,13 +69,13 @@ def _assert_carries_the_payload(disk: IO[bytes], output: Path) -> None:
 
 
 def test_azure_vhd_carries_the_verity_partitions(build: Path) -> None:
-    output = build / "azure" / "output"
+    output = build / "azure"
     with (output / "azure.vhd").open("rb") as disk:
         _assert_carries_the_payload(disk, output)
 
 
 def test_gcp_archive_carries_the_verity_partitions(build: Path) -> None:
-    output = build / "gcp" / "output"
+    output = build / "gcp"
     with tarfile.open(output / "gcp.tar.gz", "r:gz") as archive:
         member = archive.getmember("disk.raw")
         disk = archive.extractfile(member)

@@ -44,13 +44,10 @@ jobs:
       - name: Tests
         run: uv run pytest
 
-      - name: Lint example recipes
-        # The surge recipe tracks upstream branches on purpose and ships no lockfile,
-        # so source-unpinned warnings are expected; errors still fail the step.
-        run: uv run tundravm lint examples/surge-tdx-prover/image.py
-
-      - name: Committed mkosi tree is up to date
-        run: uv run tundravm compile examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi --check
+      - name: Check the surge image and its committed tree
+        # The surge image tracks upstream branches on purpose and ships no lockfile, so
+        # source-unpinned warnings are expected; errors and tree drift fail the step.
+        run: uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
 
   boot:
     # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
@@ -116,12 +113,16 @@ jobs:
           if-no-files-found: ignore
 
   fixture-boot:
-    # Gate 1 evidence: the fixture recipe (initramfs root, no source builds) baked through
-    # tundravm and booted under QEMU with OVMF both ways: payload.efi through -kernel, and
-    # qemu.raw as a virtio disk OVMF boots through its ESP; each serves the fixture's page
-    # to the host and boots the UKI's own command line.
+    # Gate 1 and 5 evidence: the fixture recipe (initramfs root, no source builds) built
+    # into a build directory, verified against its manifest, booted under QEMU with OVMF
+    # both ways (payload.efi through -kernel, qemu.raw through its ESP) by the harness, and
+    # run as an instance with `tundravm run --mode simulated` (KVM when the runner has it,
+    # TCG otherwise) until the host fetches the fixture's page through the forward.
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    env:
+      TUNDRAVM_BACKEND: local
+      TUNDRAVM_BUILD: ${{ runner.temp }}/fixture
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -158,19 +159,49 @@ jobs:
           uv run tundravm doctor --for build
           uv run tundravm doctor --for run
 
-      - name: Bake the fixture
+      - name: Build the fixture
         run: |
-          uv run tundravm bake tests/fixtures/native-tree/recipe.py \
-            --variant default --backend local --build "$RUNNER_TEMP/fixture"
-          ls -l "$RUNNER_TEMP/fixture/default/output"
+          uv run tundravm build tests/fixtures/native-tree/recipe.py --profile default
+          ls -lL "$TUNDRAVM_BUILD/fixture/latest-production" "$TUNDRAVM_BUILD/fixture/latest-production/"
+
+      - name: Verify the build directory and show it
+        run: |
+          uv run tundravm verify latest
+          uv run tundravm show latest
+          uv run tundravm show latest --measurements
 
       - name: Boot payload.efi through -kernel and qemu.raw through its ESP
         env:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
-          TUNDRAVM_FIXTURE_BUILD: ${{ runner.temp }}/fixture
+          TUNDRAVM_FIXTURE_BUILD: ${{ runner.temp }}/fixture/fixture/latest-production
         run: uv run pytest tests/integration/test_fixture_boot.py -m boot -v -rs -rP
+
+      - name: Run the build as an instance and fetch its page
+        run: |
+          uv run tundravm run latest --mode simulated --detach
+          receipt=.tundravm/instances/fixture-1/instance.json
+          port=$(jq -r '.ports["8080"]' "$receipt")
+          for attempt in $(seq 1 150); do
+            if curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'; then
+              echo "page served on :$port after $attempt attempts"
+              break
+            fi
+            sleep 10
+          done
+          uv run tundravm run status fixture-1
+          uv run tundravm run mode fixture-1
+          curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
+
+      - name: Stop the instance
+        if: always()
+        run: |
+          uv run tundravm run logs fixture-1 > "$RUNNER_TEMP/boot-logs-run.txt" || true
+          uv run tundravm run stop fixture-1 || true
+          mkdir -p "$RUNNER_TEMP/boot-logs"
+          mv "$RUNNER_TEMP/boot-logs-run.txt" "$RUNNER_TEMP/boot-logs/run-fixture-1.console.log" || true
+          cp -r .tundravm/instances "$RUNNER_TEMP/boot-logs/instances" || true
 
       - name: Upload console logs
         if: always()
@@ -182,11 +213,14 @@ jobs:
 
   verity:
     # Gate 1 evidence: the fixture recipe with Mkosi(root="verity") (recipe.py's
-    # verity_recipe, picked with --attr) baked through tundravm, its qemu.raw booted under
+    # verity_recipe, picked with --attr) built through tundravm, its qemu.raw booted under
     # QEMU through the ESP, and the root asserted to be erofs on dm-verity under a volatile
     # overlay (the fixture's boot-probe task prints it to the console).
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      TUNDRAVM_BACKEND: local
+      TUNDRAVM_BUILD: ${{ runner.temp }}/verity
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -223,18 +257,19 @@ jobs:
           uv run tundravm doctor --for build
           uv run tundravm doctor --for run
 
-      - name: Bake the verity fixture
+      - name: Build the verity fixture
         run: |
-          uv run tundravm bake tests/fixtures/native-tree/recipe.py --attr verity_recipe \
-            --variant default --backend local --build "$RUNNER_TEMP/verity"
-          ls -l "$RUNNER_TEMP/verity/default/output"
+          uv run tundravm build tests/fixtures/native-tree/recipe.py --attr verity_recipe \
+            --profile default
+          uv run tundravm verify latest
+          ls -lL "$TUNDRAVM_BUILD/fixture/latest-production/"
 
       - name: Boot qemu.raw through its ESP
         env:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
-          TUNDRAVM_VERITY_BUILD: ${{ runner.temp }}/verity
+          TUNDRAVM_VERITY_BUILD: ${{ runner.temp }}/verity/fixture/latest-production
         run: uv run pytest tests/integration/test_verity_boot.py -m boot -v -rs -rP
 
       - name: Upload console logs
@@ -246,10 +281,12 @@ jobs:
           if-no-files-found: ignore
 
   verity-cloud:
-    # The verity layout's azure and gcp variants: both converters must keep the root and
+    # The verity layout's azure and gcp profiles: both converters must keep the root and
     # hash partitions byte for byte (tests/integration/test_verity_cloud.py).
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      TUNDRAVM_BACKEND: local
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -269,23 +306,34 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
-      - name: Bake the verity fixture's cloud variants
+      - name: Build the verity fixture's cloud profiles
         run: |
-          uv run tundravm bake tests/fixtures/native-tree/recipe.py --attr verity_recipe \
-            --variant azure --variant gcp --backend local --build "$RUNNER_TEMP/verity"
-          ls -l "$RUNNER_TEMP/verity/azure/output" "$RUNNER_TEMP/verity/gcp/output"
+          mkdir -p "$RUNNER_TEMP/verity-cloud"
+          for profile in azure gcp; do
+            TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm build \
+              tests/fixtures/native-tree/recipe.py --attr verity_recipe --profile "$profile"
+            TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm verify latest
+            ln -s "$(readlink -f "$RUNNER_TEMP/verity-$profile/fixture/latest-production")" \
+              "$RUNNER_TEMP/verity-cloud/$profile"
+          done
+          ls -lL "$RUNNER_TEMP/verity-cloud/azure/" "$RUNNER_TEMP/verity-cloud/gcp/"
 
       - name: The converters keep the verity partitions
         env:
-          TUNDRAVM_VERITY_CLOUD_BUILD: ${{ runner.temp }}/verity
+          TUNDRAVM_VERITY_CLOUD_BUILD: ${{ runner.temp }}/verity-cloud
         run: uv run pytest tests/integration/test_verity_cloud.py -v -rs
 
   reproduce:
-    # Gate 1 evidence: the fixture recipe built twice, in two independent build directories,
-    # through tundravm. The azure and gcp variants each build the payload, the QEMU disk and
-    # their wrapper (--dependency=azure, --dependency=gcp); every artifact must match.
+    # Gate 1 and 5 evidence: the fixture's azure and gcp profiles each built twice through
+    # tundravm, the second time in an independent workspace (`build --reproduce`: its own
+    # sources, mkosi state and tree); every artifact must match, which exits 1 otherwise.
+    # The comparison is recorded in each build directory's observations.json, and each
+    # build directory is then verified against its manifest.
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    env:
+      TUNDRAVM_BACKEND: local
+      TUNDRAVM_BUILD: ${{ runner.temp }}/reproduce
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -311,32 +359,29 @@ jobs:
           uv run mkosi --version
           uv run tundravm doctor --for build
 
-      - name: Build the fixture twice
+      - name: Build each cloud profile twice and compare
         run: |
-          for build in "$RUNNER_TEMP/build-a" "$RUNNER_TEMP/build-b"; do
-            uv run tundravm bake tests/fixtures/native-tree/recipe.py \
-              --variant azure --variant gcp --backend local --build "$build"
+          for profile in azure gcp; do
+            uv run tundravm build tests/fixtures/native-tree/recipe.py --profile "$profile" \
+              --reproduce
+            uv run tundravm verify latest
           done
 
-      - name: Compare the digests
+      - name: Collect the manifests and the comparisons
+        if: always()
         run: |
-          mkdir -p "$RUNNER_TEMP/reproduce-digests"
-          for build in build-a build-b; do
-            (
-              cd "$RUNNER_TEMP/$build"
-              sha256sum azure/output/payload.efi azure/output/qemu.raw azure/output/azure.vhd \
-                gcp/output/payload.efi gcp/output/qemu.raw gcp/output/gcp.tar.gz
-            ) >"$RUNNER_TEMP/reproduce-digests/$build.sha256"
-            echo "== $build"
-            cat "$RUNNER_TEMP/reproduce-digests/$build.sha256"
+          mkdir -p "$RUNNER_TEMP/reproduce-records"
+          for build in "$TUNDRAVM_BUILD"/fixture/production/*/; do
+            id=$(basename "$build")
+            cp "$build/manifest.json" "$RUNNER_TEMP/reproduce-records/$id.manifest.json"
+            cp "$build/observations.json" "$RUNNER_TEMP/reproduce-records/$id.observations.json"
+            jq '.reproduction' "$build/observations.json"
           done
-          cd "$RUNNER_TEMP/build-b"
-          sha256sum --check "$RUNNER_TEMP/reproduce-digests/build-a.sha256"
 
-      - name: Upload the digests
+      - name: Upload the records
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reproduce-digests
-          path: ${{ runner.temp }}/reproduce-digests
+          name: reproduce-records
+          path: ${{ runner.temp }}/reproduce-records
           if-no-files-found: ignore
