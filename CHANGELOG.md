@@ -2,324 +2,184 @@
 
 ## Unreleased
 
-### The mkosi-native tree (v2 gate 1, breaking)
+tundravm v2 makes mkosi accessible for confidential VMs by making the choices for you:
+Debian trixie, systemd, a measured UKI, Intel TDX. An image is one Python `Image` with a
+few typed slots. What every confidential image needs is implied, and each implied default
+has one escape hatch. The compiler writes one mkosi 27.1 tree that uses mkosi's own
+composition, so the tree stays readable and buildable without tundravm. mkosi 27.1 is a
+pinned dependency, run in-process.
 
-- `compile` writes one mkosi 27.1 project: the root `mkosi.conf` is the QEMU raw disk (`qemu.raw`, an ESP around `payload.efi`), `mkosi.images/payload/` includes `payload/` (the OS: `mkosi.conf`, one `mkosi.conf.d/NN-<concern>.conf` per fragment, trees, `mkosi.<phase>.d/` scripts), `mkosi.images/{azure,gcp}/` wrap the same payload and convert it at postoutput (`azure.vhd`, `gcp.tar.gz`), and a variant that adds content is `payload/mkosi.profiles/<variant>/`. Per-variant directories are gone.
-- The tree always writes `MinimumVersion=27.1`, `Snapshot=`/`ToolsTreeSnapshot=`, `ToolsTree=default` with its distribution and release, `SourceDateEpoch=`, `Seed=` per image, `History=no`, `WithNetwork=` (`no` unless `Mkosi(build_network=True)`, now the default) and ships `/etc/machine-id` as `uninitialized`.
-- The payload carries the glue of every cloud target the recipe names, gated at boot; a variant that only names outputs selects wrappers. `tundravm.declarative.mkosi_argv(lowered, variant)` gives the `--profile=`/`--dependency=` options that select it.
-- `Mkosi(root="verity")`: an erofs root and its dm-verity hash partition, copied beside the ESP in every disk.
-- Removed: `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)`, the `nethermind-v1` dialect, per-variant settings and kernels, a variant that replaces a source `Build`, `Tdxs(legacy_units=)`, `tundravm import`.
-- Every variant is always lowered: the shared payload is the intersection of all profiles and `payload/mkosi.profiles/<variant>/` holds what each adds, so a profile's bytes do not depend on which other profiles are compiled with it. A variant that extends another profile or removes declarations is lowered whole; what one profile removes moves into the overlays of the profiles that keep it, the default profile's overlay included through `mkosi.conf.d/99-<default>.conf`.
-- The ESP is a fixed 128M FAT32 of 512-byte clusters (`SizeMinBytes=SizeMaxBytes=128M`, `Minimize=off`, `SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"`); a UKI over about 125 MiB fails the disk build.
-- Lint: `mkosi-configure-script` and `mkosi-environment-passthrough` (errors; lowering refuses both).
-- `docs/design/evidence/gate1-tree.md`: the fixture tree and its resolved `mkosi summary`.
+The command line is the operator's loop in twelve commands. A build is an immutable
+directory with a canonical, optionally signed manifest that `verify` checks anywhere.
+`run`, `deploy`, `attest` and `secrets` work with explicit builds and write receipts.
+Nothing here keeps a compatibility alias: every old name and verb is gone, and the
+sections below say where each went. Real TDX quotes (gate 2) and the attested channel for
+delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` say
+`unverified first contact`.
 
-This release replaces the SDK's public API. An image is now an immutable value, a `Recipe`, and every lifecycle step is a function over it. The fluent `Image`/`Profile`/`Module` builder is gone from the public surface.
+### The mkosi-native tree
 
-### Added
+- One mkosi 27.1 project per image. The root `mkosi.conf` is the QEMU raw disk
+  (`qemu.raw`: an ESP around `payload.efi` through `ExtraTrees=%O/payload.efi`).
+  `mkosi.images/payload/` includes `payload/`, the OS: `mkosi.conf` (`Format=uki`), one
+  `mkosi.conf.d/NN-<concern>.conf` per component, the trees and the `mkosi.<phase>.d/`
+  scripts. `mkosi.images/azure/` and `mkosi.images/gcp/` wrap the same payload and
+  convert it at postoutput into `azure.vhd` (fixed VHD) and `gcp.tar.gz` (oldgnu sparse).
+- Every tree pins `MinimumVersion=27.1`, `Snapshot=`, `ToolsTree=default` with its
+  distribution, release and snapshot, `SourceDateEpoch=`, a `Seed=` per image,
+  `History=no` and `WithNetwork=`, and ships `/etc/machine-id` as `uninitialized`.
+- The payload carries the provisioning glue of every cloud target the image names,
+  inert elsewhere through `ConditionVirtualization=`, so one UKI and one set of
+  measurements cover every disk.
+- `RootFS.verity()`: an erofs root and its dm-verity hash partition beside the ESP in
+  every disk, the root hash on the UKI command line, a volatile overlay on top. CI builds
+  it, boots it from dm-verity, and checks that both converters keep the partitions.
+- Lint `mkosi-configure-script` and `mkosi-environment-passthrough` refuse what would make
+  `mkosi summary` lie or leak the host.
+- The Linux backend runs the pinned mkosi in a child forked by mkosi's `fork_and_wait`,
+  never from `PATH`; every other tool comes from the pinned tools tree. The Lima backend
+  runs the same mkosi commit in an x86-64 Debian guest. Builds never switch backend.
+- `doctor` prints one row per capability (`build:x86-64`, `run:simulated`, `run:tdx`,
+  `deploy:gcp`, `deploy:azure`, `verify:*`), each failure with its fix; `--for` picks one.
+- Evidence: `docs/design/evidence/gate1-tree.md`.
 
-- **Declarative API** (`tundravm`, `tundravm.declarative`). A `Recipe` holds recipe-wide settings (`base`, `arch`, `mirror`, `tools_mirror`, `epoch`, `Mkosi`, `Policy`), a `common` `Fragment` and its `Variant`s. Declarations are frozen dataclasses that validate at construction: `Package`, `File`, `Directory`, `Template`, `Group`, `User`, `Service` (a generated unit), `Unit` (verbatim text or a packaged unit's state), `Hook`, `Init`, `Repository`, `Partition`, `Debloat`, `Setting`, `Kernel`, `Build` (`Git`/`Http` source, a `script` or a `Go`/`Cargo`/`Dotnet` recipe, `Install` map, `cache_key`), and the `Key`, `Disk` and `Secrets` trio (`Secret`, `SecretFile`, `SecretEnv`, `Schema`, `RuntimeTools`), which reference each other by object. Fragments group declarations and carry `requires` and `checks` (functions of the `Resolved` variant). Variants overlay a parent (`base`, another variant, or `None`) with `add`, `replace` and `remove`, and pick their output with `target` or `targets`. `resolve`/`resolve_all` expand fragments, apply ancestry and check references; identity is type plus natural key, so collisions are errors and changes are explicit. `tundravm.declarative.utils` ships the `Tdxs`, `DevTools`, `EfiStub` and `Backports` fragments.
-- **Lifecycle functions** with explicit inputs and results: `lint(recipe, lock=)`, `compile(recipe, lock=) -> Tree`, `diff(tree, against)`, `lock(recipe, previous=, update=, offline=) -> Lock`, `lock_status`, `read_lock`/`write_lock`, `bake(recipe, lock=, backend=Backend(kind), out=) -> tuple[Artifact, ...]`, `read_artifacts`, `measure(artifact) -> Measurements`, `deploy(artifact, using=Qemu()/Azure()/Gcp()) -> Deployment`, `doctor(backend)`, `load(path)`. Artifacts record the recipe, lockfile and tree digests; simulated (in-process) artifacts are refused by `measure` unless `allow_placeholder=True` and by `deploy` unless `allow_simulated=True`.
-- **Build recipes**: `Build(name, source, script=None, install=(), packages=(), env=(), cache_key=None, recipe=None)` takes exactly one of `script` and `recipe`. `Go`, `Cargo` and `Dotnet` (exported from `tundravm`) render the toolchain's build command and carry their own `packages` and `env`; their output is at `build/<output>` (`Go`), `target/<profile>/<bin>` (`Cargo`) or `publish/<output>` (`Dotnet`) for `Install` to copy.
-- **`Composite`** (`tundravm.declarative.utils`): a `Fragment` subclass whose configuration is its own dataclass fields and whose contents come from `compose()`. The shipped fragments are `Composite`s, and so are the examples'.
-- **CLI grammar**: `init`, `inspect`, `lint`, `compile`, `diff`, `lock`, `bake`, `measure`, `deploy`, `doctor`, `ci`. Every recipe command takes a repeatable `--variant` and runs on every variant without it. `--format auto|text|json|github|markdown` for review output (`auto` picks GitHub annotations under `GITHUB_ACTIONS=true`). `lint` reports resolution, fragment-check and compiler diagnostics together. `bake` is frozen whenever `build/tundravm.lock` exists, takes `--backend lima|nix|local|inprocess`, and reports progress (`-v`, `-q`, `--json-logs`). `measure` and `deploy` read `bake-result.json` (`measure --scheme`, `--allow-placeholder`; `deploy --target`, `--param KEY=VALUE`, `--allow-simulated-artifact`). `ci` runs `lint --strict`, `compile --check` and `lock --check`. `init --ci github` writes a workflow that calls it.
-- **Testing**: `tundravm.testing` works on lifecycle values: `assert_clean`/`assert_diagnostic` take `lint()` diagnostics, `assert_tree(tree, golden)` compares every path, byte, exec bit and symlink (`TUNDRAVM_UPDATE_GOLDEN=1` rewrites), `compile_tree`, `fake_bake`, `bake_in_process`, `fake_fragment`, `recipe_file`, `run_cli`. Pytest fixtures `recipe`, `compiled`, `run_cli`.
-- Lockfile section digests (`variants.<variant>.<section>`) and source pins (`fetches`); `lock --check` names the drifted sections, `lock --update NAME` re-resolves one source, `lock --offline` reuses pins.
-- A lock written for every variant covers a subset: a frozen `bake --variant X`, `lock --check --variant X` and `lock_status(recipe, locked, variants=("X",))` compare only the selected variants' sections and the recipe-wide ones, and the whole-recipe digest only when the selection is every variant the lock holds.
-- `lock_status(recipe, locked, *, variants=None, resolver=None)`: with a `resolver`, git refs that moved since the lock are reported too.
-- `Measurements.to_json(path=None)` returns the measurements as JSON (and writes them to `path`); `Measurements.verify(expected)` returns the registers that differ from `expected`, empty when all match.
-- Measurement provenance: `Measurements.tool` names `measured-boot`, `dstack-mr` or `placeholder`; placeholders print a banner and emit `PlaceholderMeasurementWarning`.
-- `StateError` (`E_STATE`) for a missing or unreadable `bake-result.json`, `LintError` (`E_LINT`) for a bake refused by the linter.
-- `Kernel` sources beyond tag `v<version>`: any git branch, tag or full commit hash, with `subdir` and `submodules`, or an `Http` tarball checked against its `sha256` (required, since the lockfile does not pin kernel sources). An `Http` kernel adds `curl` to the build packages.
-- Per-variant settings and kernels: a variant whose `Setting`s or `Kernel` differ from the default variant's lowers standalone with its own `mkosi.conf` lines, kernel build and kernel config.
-- A `Setting` without a compiler mapping is written verbatim into its variant's `mkosi.conf`, under its section. Keys the compiler writes itself (`Packages`, `Mirror`, `Format`, the phase script keys, ...) raise and name the declaration to use.
-- Several `Secrets` per variant. With more than one, each writes `<stem>-<name>` config and manifest paths (`/etc/tdx/secrets-api.yaml`) and gets its own runtime-init step; overlapping paths raise naming both declarations.
-- The default variant may have any parent; the parent lowers like any other variant.
-- A `base`-parented variant may leave a cloud-targeted default variant's targets; it lowers standalone.
-- `examples/surge-tdx-prover` is a declarative recipe that compiles byte-for-byte to the committed nethermind-tdx tree for `default`, `azure`, `gcp` and `devtools`; `examples/fragments` holds `Raiko`, `TaikoClient` and `Nethermind`, and `examples/nethermind_base.py` holds `NethermindBase`.
+### The concise SDK
 
-- `tundravm completion bash|zsh|fish` prints a completion script generated from the parser; bare `tundravm` prints help plus a quickstart; unknown verbs and flags exit 2 with a "did you mean" suggestion; `init` ends with a `doctor` probe of the chosen backend (`--no-doctor` skips it); `inspect --diff-variants A B` lists declarations that differ between two variants; `main(runner=)` for tests.
-- Every error raised by the package carries a hint; `tests/lint/test_error_hints.py` enforces it.
-- `tundravm lock` tries every source and reports all failures in one `E_LOCKFILE` error (`<name>: git <url> @ <ref>: <reason>` lines, `K of M sources resolved; nothing written.`); `LockfileError.failures` maps names to the new `SourceError` (`E_SOURCE`, `.source`, `.reason`). `lock --format github` adds an `::error title=E_SOURCE::` line per failure, and `lock --offline` lists every unpinned source at once.
-- `init --template minimal|service|cloud|prover` and `init --list-templates`. `init` scaffolds a project: the recipe, `tests/test_NAME.py` (`--with-tests`/`--no-tests`), and `pyproject.toml` and `README.md` when absent.
+- `Image`, `Service`, `Component` and `Profile` are the public surface. `tundravm`
+  exports 73 names (was 126); `tundravm.components` exports 13.
+- `Image(name, ...)` slots: `base`, `packages`, `files`, `services`, `components`,
+  `volumes`, `secrets`, `ingress`, `network`, `users`, `groups`, `kernel`, `rootfs`,
+  `observability`, `targets`, `dev`, `profiles`, `mkosi`. Implied: Debian trixie from the
+  locked snapshot, the TEE baseline, a curated kernel module set, a firewall that opens
+  only exposed ports and the management port 8745, one hardened user per service, and the
+  `tdxs` evidence service. `Image`'s docstring lists each with its escape hatch.
+- `Service(name, argv, ...)` takes an argv, never a command line. `requires=[x.ready]`
+  waits for real readiness (`Notify()`, `HttpProbe`, `TcpProbe`); `expose=` opens the
+  firewall; `state=`, `credentials=`, `resources=`, `shutdown=`, `timer=`, `socket=` and
+  `unit=DropIn(...)` group the rest.
+- `Hardening.preset("static" | "dotnet" | "jit" | "node" | "python")` names the runtime
+  class; each preset's deviation from `static` is written beside it.
+- `Component` is a class with configuration fields, `compose()`, typed exports
+  (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()` lint rule.
+- `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)` and
+  `value.ref.remove()`. `dev=DevAccess(...)` is the non-production `dev` profile.
+- The runtime slots: `Volume(name, mount=, unlock=OperatorKey() | TpmSeal(...) | BrokerKey(...))`
+  with `volume.directory(...)` as a service's state; `Secret(name, required=, rotation=)`
+  read as a systemd credential; `AttestedTLS(port, upstream=)` and `TLS`, refused unless
+  they are the only path to a loopback upstream; `RootFS.initramfs()` and
+  `RootFS.verity()`; `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))`.
+  The image records all of them in `/etc/tundravm/runtime.json`.
+- `tundravm.components`: `TeeBase`, `Network`, `Firewall`, `Tdxs` (implied, replaced by
+  passing one), `SshAccess`, `DevAccess`, `Observability`, and the surge workloads
+  `Nethermind`, `TaikoClient` and `Raiko`, each with exports and a `check()`.
+- The templates (`service`, `prover`), the examples and surge are `Image` files.
+  `examples/surge-tdx-prover/image.py` is 33 lines (was 151 plus 500 more in helpers);
+  byte parity with the 2024 nethermind-tdx tree is dropped.
+- An image file names no backend: `TUNDRAVM_BACKEND`, else `local` on Linux x86-64 and
+  `lima` elsewhere.
+- `tundravm.testing.plan(image)` takes an `Image`; the planned value is `PlannedImage`.
+- Evidence: `docs/design/evidence/gate4-sdk.md`.
 
-- `kernel-missing` lint error: a bootable variant must declare `Kernel(...)` or install a `linux-image-*` package; `Setting("Content", "Bootable", ("no",))` builds a non-bootable disk instead. `init` templates install the Debian kernel (`linux-image-amd64`, `systemd-sysv`, `udev`, `kmod`, `systemd-boot-efi`) so they bake a bootable UKI.
-- Examples consolidated into six numbered teaching recipes (`01_minimal` … `06_attestation`) plus `nethermind_base.py`, `fragments/` and the flagship; `examples/*.py` are loaded, linted and compiled by the test suite.
+### Profiles and the ESP
 
-- `tundravm fetch RECIPE [--lockfile] [--out] [--variant]` checks every source build out on the host as the invoking user (git: pinned commit; http: sha256-verified download) into `build/.sources/<name>-<pin12>-<id8>/`, idempotently; `bake` runs it first (`--no-fetch` to skip) and mounts `.sources` ephemerally into the build, so the sandbox never fetches sources and private repositories work. `lifecycle.fetch()` / `FetchedSource`; `bake(..., fetch=True)`; `BakeRequest.sources_dir`.
+- Every profile is lowered whatever a compile selects (35a24b1). The shared payload is
+  the intersection of all profiles; `payload/mkosi.profiles/<name>/` holds what each
+  builds beyond it. A declaration one profile removes moves into the overlays of the
+  profiles that keep it, the default profile's included through
+  `payload/mkosi.conf.d/99-<default>.conf`. A profile's build no longer depends on which
+  other profiles are compiled with it, and no shared script names a profile.
+- The ESP is a fixed 128M FAT32 of 512-byte clusters (9894da4):
+  `SizeMinBytes=SizeMaxBytes=128M`, `Minimize=off`,
+  `SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"`. OVMF reads it as FAT32 by cluster count,
+  and the disks no longer carry a 481 MiB ESP. A UKI over about 125 MiB fails the disk
+  build; `RootFS.verity()` keeps the OS out of the UKI.
+- The changelog and plan record both (79dd67a).
 
-- `tundravm status RECIPE [--format text|json|markdown]`: a read-only, network-free report with a verdict per item (recipe, lint, lock drift and unpinned sources, source checkouts in `OUT/.sources`, the `OUT/mkosi` tree, each baked artifact with staleness, the backend's host tools) and `next:` with the single most useful command; always exits 0.
-- `tundravm clean RECIPE|--out DIR` removes build output by part (`--sources`, `--tree`, `--artifacts`, `--state` incl. the cached tools tree, `--all`), lists what it would remove with no part flag or `--dry-run`, keeps the lockfile unless `--lockfile` names it, and falls back to `sudo rm -rf` for root-owned paths.
+### The operator's loop
 
-- Lockfile version 4 covers every image-defining input: a `distribution` section (base, arch, mirror, tools mirror, snapshot, epoch), a `compiler` section (tundravm version, dialect, mkosi options), and per variant `variants.<name>.kernel` (version, source identity, cmdline, tdx, config bytes sha256), `variants.<name>.mkosi` (where it differs from the default variant's) and the complete `variants.<name>.debloat`; the `base` and `arch` sections are gone, and file entries carry their `kind` (`file`, `symlink`, `directory`). Version 3 lockfiles load, drift as `~ version: 3 -> 4` with the new sections added, and frozen bakes refuse them until re-locked.
-- Source checkouts live at `.sources/<name>-<pin12>-<id8>` (`id8` hashes the url, kind, subdirectory and submodules) with a JSON `.tundravm-complete` marker, and are verified before reuse by `fetch`, `bake --no-fetch` and `status`: git `HEAD` at the pin, a clean `git status` (untracked and ignored files included), submodules at their recorded commits, http files matching the manifest recorded at fetch time. A modified checkout is `E_SOURCE`; `tundravm fetch --force` (`fetch(force=True)`) checks every source out again. `status` reports a modified checkout as `stale`.
-- Variant-local pins: a build whose source differs between variants is pinned once per variant as `<variant>/<name>` (drift line `sources.<variant>.<name>`); `lock --update dev/app` re-resolves one variant's pin, `--update app` every variant's.
-- Fingerprinted build cache keys: outside `nethermind-v1` a build caches under `<namespace>-<fingerprint16>`, a sha256 over the source pin, build recipe, install steps, arch and toolchain; `cache_key` is the namespace (default: the build's name). `nethermind-v1` keys are unchanged.
-- `Go`, `Cargo` and `Dotnet` copy `env` (and `properties`) into an immutable mapping at construction, so mutating the dict passed in changes nothing.
-- `tundravm lint --lockfile PATH`: lint applies the lockfile's source pins before the compiler rules, so a pinned source never reports `source-unpinned`. `tundravm ci` loads one lockfile and shares it between its lint, tree and lock checks.
-- `verify_artifact(artifact)` and `ArtifactError` (`E_ARTIFACT_CHANGED`): `measure` and `deploy` check the artifact's bytes against the sha256 in `bake-result.json` before they start. `tundravm status --verify` hashes each artifact (`integrity verified`/`mismatch`; a mismatch is `stale`).
-- `SecretEnv(service=)` is delivered per service: the env target in the secrets manifest carries `service` and `env_file` (`/run/secrets/<service>.env`), and a `<service>.service.d/tundravm-secrets.conf` drop-in makes the unit read it (`EnvironmentFile=`, optional unless the secret is required). New lint error `secret-env-service-unknown` for a service the variant neither generates, ships nor enables. The `tundra-tools` `secret-delivery` binary does not deliver manifest targets yet.
-- `Directory` preserves what it imports: permission bits (without `mode`), symlinks and empty directories. `Directory(symlinks="preserve"|"follow")` (default `preserve`).
-- `recipe-arch-unsupported` lint error: `Recipe(arch="aarch64")` with `EfiStub` (amd64 systemd-boot-efi only) or a `qemu` target (`qemu-system-x86_64`).
+- Twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`,
+  `secrets`, `verify`, `convert`, `doctor`. Shell completion is
+  `python -m tundravm.completion bash|zsh|fish`.
+- `build` writes `BUILD/<image>/production/<id>/` (`development/` for a non-production
+  profile): `payload.efi`, `qemu.raw`, each target's disk, `packages.json`,
+  `measurements.json`, `sbom.spdx.json`, `inputs/`, `tree/`, `manifest.json`,
+  `manifest.sig` with `--sign`, `observations.json`. It is published with one rename, made
+  read-only and never written again. `<id>` is the manifest's digest; `latest-production`
+  and `latest-development` point at the newest. A stale lock is refused, a missing one is
+  written first.
+- `manifest.json` (`tundravm.manifest/1`) binds every artifact and input by sha256, the
+  tree by a digest over paths, modes, contents and symlink targets, the UKI and its root
+  hash, the lock, the sources, the package manifest, the SBOM, the measurement records
+  and the toolchain, with explicit `missing` and `unchecked` states. `verify` checks it
+  offline, a signature against an OpenSSH allowed-signers file, and `--rebuild`
+  reproduces it. A signed manifest was verified from a second checkout.
+- `build --reproduce` builds again in an independent workspace and records the comparison
+  in `observations.json`.
+- `measurements.json` holds one record per target and boot path: predictions, unknowns
+  with their reason, RTMR3 outside the policy, and a `tundravm.policy/2` policy that
+  `attest --policy` takes.
+- `run [BUILD] --mode simulated|tdx` boots `qemu.raw` through OVMF from its ESP as a named
+  instance with receipts under `.tundravm/instances/`; `run status|logs|stop|ssh|mode`.
+- `deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID]` publishes and
+  starts an explicit build with a receipt; `deploy status|logs|mode|upgrade|rollback`.
+  `upgrade` and `rollback` run the one replacement workflow on GCP.
+- `attest INSTANCE --policy FILE` verifies fresh evidence and delivers nothing.
+  `secrets deliver` and `secrets unlock` attest again first; production delivery needs
+  `trusted`. Values travel on the SSH command's stdin only.
+- `[tool.tundravm]` keeps `image`, `build` and `backend`, under `TUNDRAVM_IMAGE`,
+  `TUNDRAVM_BUILD` and `TUNDRAVM_BACKEND`.
+- Where each removed verb went:
 
-- `tundravm inspect RECIPE --variant V --why SUBJECT` (path, `unit:`, `package:`, `hook:`, `init:`) and `explain_why()`/`Why`: which declarations produced an emitted object, the fragment chain (Composite classes named), overlay actions (declared/added/replaced/removed, via `resolve.provenance()`), generated dependencies and destination files; unknown subjects list close matches.
-- `[tool.tundravm]` in the generated `pyproject.toml` (`recipe`, `out`, `tree`, `lockfile`, `backend`); every verb accepts RECIPE omitted when the table is found in the working directory or a parent, flags override; `tundravm config` prints the values the commands resolve with their origin (`flag`, `pyproject`, `default`, or `recipe` for the recipe file's backend) and whether the recipe and lockfile exist.
-- `tundravm measure MANIFEST --scheme rtmr --export-policy FILE` writes a normalised policy (schema, scheme, tool, artifact sha256, RTMR registers; placeholders refused unless allowed and then marked) and `Tdxs.from_policy()`/`Tdxs.from_measurements()` build the verifier fragment with the register names the validator expects (`mrtd=` optional); `examples/06_attestation.py` uses `examples/peer.policy.json`.
-- `status` suggests `fetch --force` for a modified checkout; `lint --lockfile` reports lock drift like the Python API.
+  | Removed | Now |
+  |---|---|
+  | `init` | `new NAME [--template service\|prover] [--ci]` |
+  | `inspect`, `explore`, `preview`, `explain` | `show [IMAGE]`, `--units`, `--tree`, `--json` |
+  | `status` | `show BUILD`, `run status`, `deploy status` |
+  | `diff`, `changes` | `check --tree DIR`, `show --diff OLD NEW` |
+  | `lint`, `compile --check`, `ci` | `check [--profile P] [--tree DIR]` |
+  | `compile` | `build --tree-only DIR` |
+  | `fetch` | `build` fetches; `lock --update`; `build --offline` |
+  | `bake`, `bake --verify-reproducible` | `build`, `build --reproduce` |
+  | `measure`, `measure --export-policy` | `measurements.json` in every build |
+  | `sbom` | `sbom.spdx.json` in every build |
+  | `evidence`, `release`, `witness`, `verify` (bundles) | `manifest.json`, `manifest.sig`, `verify BUILD` |
+  | `deploy qemu` | `run [BUILD] --mode simulated\|tdx` |
+  | `deploy azure\|gcp --param` | `deploy azure\|gcp --build BUILD` with `[tool.tundravm.azure\|gcp]` |
+  | `clean` | `build --clean-cache` |
+  | `config` | the resolution rule in every `--help` epilog |
+  | `completion` | `python -m tundravm.completion SHELL` |
+  | `units convert` | `convert PATH --from systemd` |
+  | `units render` | `show IMAGE --units` |
+  | `import` | `convert PATH --from mkosi` |
 
-- Hermetic builds: `fetch` prefetches each build's dependencies with the host toolchain when present (`go mod download` into `OUT/.sources/deps/go`, `cargo fetch` into `deps/cargo`, `dotnet restore --packages deps/nuget`; skipped with a notice otherwise) and the current-dialect hook points the toolchain at the mounted cache; `bake --offline` (or `Policy(network_mode="offline")`) runs mkosi with `--with-network=no` and refuses before mkosi (`E_STATE`) when a cache is missing. `EfiStub` is a locked `efi-stub` http source fetched on the host and installed from the mounted `.deb` (re-lock current-dialect recipes that use it).
-- `disk-auto-format` (warning; `Policy(storage_safety="error")` promotes it): `Disk(device=None)` with any format but `never` can pick the boot disk and format it. Docstrings and example 04 now describe what the runtime tools do today.
-- Deploy adapters: QEMU detaches with a serial log, monitor socket and pid file under `OUT/<variant>` (`deploy --attach` for the foreground), boots TDVF via `-bios` with `kernel-irqchip=split` for `tdx=true`, forwards every `Secrets` port plus `Qemu(forward=...)`, and copies OVMF vars to a writable file; Azure deploys TDX confidential VMs (`Standard_DC2es_v5`) from a Compute Gallery image version and creates the container (`Azure(gallery=, secure_boot=False, signed=False)`: Secure Boot stays off unless the UKI was signed outside tundravm, `signed=True`); GCP requests `--confidential-compute-type=TDX` on `c3-standard-4` and uploads with `gcloud storage cp` (never `gsutil`); `bake-result.json` records Secrets ports; `status` without RECIPE shows the configured recipe path. Unverified against real clouds; command lines are tested with recording runners.
+- Evidence: `docs/design/evidence/gate5-cli.md`.
 
-- `tundravm sbom` and `sbom()`/`Sbom`: an SPDX 2.3 JSON (default), CycloneDX 1.5 JSON, text or Markdown bill of materials for a baked variant, merged from mkosi's package manifest, the lockfile's pins (builds with install destinations, kernel, efi-stub) and recipe metadata; sorted and reproducible under `SOURCE_DATE_EPOCH`; without a manifest it notes this and lists the declared packages.
-- `tundravm attest` / `attest()` / `Attestation`: ask a running image's `tdxs` issuer (unix socket, tcp or an http gateway) for a quote bound to a fresh nonce, parse MRTD and RTMR0–3 from the DCAP quote (v4/v5), compare against a `measure --export-policy` file and report per-register verdicts and trusted/untrusted (exit 0/1/2; measurements only, collateral verification stays with a `Tdxs` validator).
-- `bake --verify-reproducible` / `bake(verify_reproducible=True)`: bake the selection twice (sources hard-linked, mkosi state fresh) and compare artifact sha256s; `E_REPRODUCIBILITY` with a per-artifact table and a hint on diffing the two trees; `declarative.reproducible` recorded in `bake-result.json` and shown by `status`; `clean --state` removes `OUT/.reproduce`.
+### Documentation
 
-- `tundravm evidence` / `evidence()` / `Evidence`: an auditor record of a bake (`evidence.json` index with member sha256s; lockfile verbatim with drift verdict; each artifact re-hashed; reproducibility verdict; measurements policy; SPDX SBOM; lint and provenance summaries; tool versions), `--bundle` as a byte-reproducible tar.gz under `SOURCE_DATE_EPOCH`, `--html` as one self-contained page with a pass/fail banner; exit 1 when the verdict fails.
-- Lint `secret-in-file` and `secret-in-env` (errors): private keys, cloud and GitHub tokens and literal passwords baked into files, units or service environments; `allow_secret=True` on `File`, `Template`, `Directory`, `Unit` and `Service` exempts a declaration without changing the digest.
-- `attest` speaks only what tdxs serves (`unix:PATH` or `tcp://HOST:PORT`); the http mode and `--insecure` are gone. `status` lists mkosi's package manifest per baked variant (`manifests` in JSON).
-
-- `tundravm watch [RECIPE] [--out DIR] [--variant NAME]... [--interval SECONDS] [--write]`: polls the recipe file and every `.py` under its directory and on each change re-runs lint and the tree check against `OUT/mkosi` (or recompiles it with `--write`), one `HH:MM:SS lint N errors N warnings; tree ...` line per change; Ctrl-C exits 0. Counts match `tundravm lint` (lockfile drift included, shown as `lock drifted (N sections)`) and a check that keeps the recipe from loading shows as `lint 1 error (code: …)`.
-- `tundravm init --ci github` adds an opt-in `bake` job (repository variable `TUNDRAVM_BAKE_BACKEND`): installs mkosi, runs `fetch`, `bake --verify-reproducible` and `evidence --bundle --html`, and uploads the evidence bundle, the HTML report, `bake-result.json` and every backend's artifacts. On an existing project `init --ci github` writes only the workflow (`--recipe` or the `[tool.tundravm]` recipe; `--force` overwrites just the workflow).
-
-- `tundravm import TREE [--out FILE] [--name NAME] [--dialect] [--format text|json]` and `import_tree()`/`Imported`: read an existing mkosi tree (one variant directory or a `compile` output) into a readable recipe module; configuration keys, packages, files and units become declarations, what tundravm generated itself becomes the declaration that generates it again, the rest stays verbatim; every tree tundravm writes, the surge example included, round-trips with an empty `diff`.
-
-- **Breaking:** `tundravm attest --endpoint` is now `--issuer`. A new `--validator ENDPOINT` sends the attestation document and nonce to a `tdxs` validator, and only its acceptance plus matching registers gives `trusted`. Without one the verdict is `measurements-match`/`measurements-mismatch` (`signature_status: "unchecked"`). A simulator is `simulated` (exit 1 unless `--allow-simulated`). The full 64-byte `report_data` is compared. Transport failures raise the new `AttestationError` (`E_ATTESTATION`) instead of `DeploymentError`. The JSON gains `issuer`, `validator`, `signature_status`, `validator_error`, `reasons`, `passed` and `nonce.expected_report_data`, and drops `endpoint`.
-
-- `evidence`: the verdict fails on recorded contradictions (recipe or tree changed since the bake, a placeholder or mismatched policy, a different second build) and carries `reasons` with stable codes; `--require reproducible,measured,real,lock` / `require=` turns missing checks into `incomplete` (exit 1). A missing lockfile is now a note unless required.
-- `sbom` and `evidence` are bound to the bake: `bake-result.json` records `lock_sha256` and per-artifact `manifest_digests`; a different lockfile or manifest is `E_ARTIFACT_CHANGED` unless `--allow-unbound` / `allow_unbound=True` (document marked incomplete). `sbom` verifies the artifact first, and its paths are relative to OUT, so relocating a build leaves the document byte-identical.
-- `bake --verify-reproducible` finalizes the first build's record before the second build and records `declarative.reproducibility` as a state (`running`, `matched`, `different`, `error`, `interrupted`) written atomically at each step, replacing `declarative.reproducible`; a differing second build exits 1. `status` shows `reproducibility STATE`.
-- **Breaking:** `bake-result.json` is schema 2 and names its per-variant section `variants` (was `profiles`); bake again to read an older build.
-- The generated workflow collects and uploads evidence after a failed bake, requires `reproducible,lock,real` (`reproducible,lock` on inprocess), and uploads `build/.reproduce/**/bake-result.json`.
-- `watch` polls everything its verdict depends on: every host path the recipe's declarations read (`recipe_inputs()` in `tundravm.declarative.inputs`: `File`/`Unit`/`Template` sources, `Kernel.config`, `Tdxs.from_policy` files, `Directory` trees entry by entry), the lockfile, `pyproject.toml` (re-read on each check) and the checked tree.
-- The secrets lint scans the rendered unit of a `Service` the same way as a verbatim `Unit`, so a token in `exec_start`, `exec_start_pre` or the environment is found whichever declaration ships it.
-
-- **Breaking:** One naming convention for destinations: `--tree DIR` is the compiled mkosi tree (compile, diff, ci, watch, status, config; replaces `compile`/`ci --out` and `diff --against`). `--build DIR` is the build directory holding `bake-result.json` (fetch, bake, measure, deploy, sbom, evidence, changes, status, watch, clean, config; replaces `--out`). `--output FILE` is a written document (sbom, and `import`, replacing its `--out`).
-- **Breaking:** `measure` and `sbom` drop the MANIFEST positional, and `deploy` takes TARGET as a positional instead of `--target` (`tundravm deploy qemu --variant default`). All three read `--build`, defaulting to the configured `build`, else `build`.
-- **Breaking:** The `[tool.tundravm]` key `out` is renamed `build`; a table that still has `out` fails with E_VALIDATION naming the new key. Every command now reads the table, including measure, deploy and sbom. `clean` no longer needs RECIPE or a build directory.
-- **Breaking:** Python `out=` becomes `build=` in `fetch`, `bake`, `evidence`, `testing.fake_bake` and `testing.bake_in_process`; also `read_artifacts(build)`, `Artifact.out` → `Artifact.build`, `import_tree(out=)` → `output=`, and `project_status(out=)` → `build=`.
-- **Breaking:** One `tundravm.Diagnostic(code, severity, message, subject, location, hint, context)` replaces both diagnostic types (`level` → `severity`, `variant`/`profile` → `location`), and `lint()` now returns the compiler rules' hints. `lint --format json` entries use these keys, the markdown columns are Severity/Location, and `assert_diagnostic` takes `severity=`/`location=`.
-- **Breaking:** Every `--format json` report carries `"schema": "tundravm.<verb>/1"`, and `evidence.json` carries it too. With `--format json` or `--json`, an SDK error prints a single `tundravm.error/1` JSON line on stderr instead of the text block (exit 2).
-- **Breaking:** `measure --json` becomes `measure --format text|json|markdown`. `Measurements.to_json()` becomes `to_dict()`, plus `to_policy()`, which returns exactly what `--export-policy` writes and `Tdxs.from_policy` reads. `Measurements` gains `artifact_path`.
-- `tundravm verify EVIDENCE` / `verify_evidence()` / `EvidenceVerification`: checks an evidence bundle or directory without the recipe: member sha256s, index consistency (lockfile vs `lock_sha256`, SBOM and policy vs artifact, `tree.json` digests, the verdict recomputed from the recorded facts), `--artifacts` re-hashed, `--require`; stable reason codes (`member-hash-mismatch`, `member-missing`, `index-inconsistent`, `artifact-hash-mismatch`, `signature-invalid`, `signature-missing`, plus evidence's own); `--html FILE`.
-- Signed evidence: `evidence --sign KEY` / `Evidence.sign(key)` signs `evidence.json` with `ssh-keygen -Y sign -n tundravm-evidence` into `evidence.json.sig` (directory and bundle); `verify --allowed-signers FILE [--signer PRINCIPAL]` checks it. No new Python dependency.
-- Evidence holds `variants/<variant>/tree.json`: every emitted file of the compiled tree with type, mode and sha256, plus the variant and whole-tree digests.
-- `tundravm changes [RECIPE] --since EVIDENCE` / `changes()` / `ChangeReport`: recipe and tree digests, lockfile sections, source pins, packages (versioned with `--build DIR`), emitted files annotated with their declaring fragment, and measurement registers since a previous release; text, JSON or Markdown for a pull request.
-
-- `tundravm release [RECIPE] --version X` / `release()` / `Release`: one resumable, immutable release directory `releases/<recipe>-<X>/` from a locked recipe: lock check (never updates the lock), fetch, a bake checked by a second build, measure, SPDX SBOMs, evidence (optionally signed), verify of the bundle just written, changes since the previous release and `RELEASE.md`; `release.json` (`tundravm.release/1`) records every stage with its input and output hashes; `release.state.json` lets a failed or interrupted run resume where its inputs changed; a passing release is final and the same version is refused; in-process releases are marked simulated and fail `--require real`.
-- **Breaking:** `verify --artifacts DIR` is `verify --build DIR` (`verify_evidence(build=)`); `clean` part flags become `clean --what sources,tree,artifacts,evidence,state,reproduce|all` with `evidence` and `reproduce` as new parts; `inspect --json` and `lint --json` are gone (use `--format json`).
-- `init` pins tundravm in the generated `pyproject.toml` as `tundravm @ git+https://github.com/Hyodar/tundra@<commit>`, the commit of the running tundravm (from `direct_url.json` for a git install, or an editable checkout's `HEAD` when a remote branch has it; otherwise `master` with a printed note); the generated workflow syncs with `uv sync --frozen` once `uv.lock` is committed and pins mkosi `v26` in its bake job.
-- `changes` notes declared variants the evidence did not bake instead of reporting them added; `evidence(variants=...)` in any order verifies; the evidence note's `measure` command uses `--build`/`--variant`.
-- Docs: an Install section and a lifecycle-order quickstart in the README, serialization round trips in docs/api.md, the tutorial re-run on the current CLI with a "Review the next change" step, and "Cutting a release" and "Reviewing a release" in concepts.
-
-- `tundravm explore [RECIPE]` / `explore()` / `Exploration`: one self-contained, escaped HTML page (inline CSS and a small script, readable without JS) with an overview (settings, lint findings with hints, lock state and pins, bake artifacts), a declarations × variants matrix with provenance, each variant's emitted tree annotated with the declarations behind every file and cross-linked both ways, and hooks and builds in run order; `--format json` prints the same model (`tundravm.explore/1`).
-- `tundravm import` recovers source builds: current-dialect build hooks start with a `# tundravm build: <json>` declaration line that is read back into the exact `Build` (recipe, install, cache key), so an imported locked tree re-locks to the same pins and compiles back byte-identical; nethermind-v1 hooks come back as `Build(..., script=)` with notes on what they lose. `Install(..., artifact=True)` installs a recipe's own output. `Imported.coverage["lost"]` and `Imported.grouped_notes()`; the text report groups notes by reason.
-- **Breaking:** recipe digests of current-dialect recipes with source builds change (the new hook line): re-lock them.
-
-- **Breaking:** a resumed `release` inherits the spec it started with (variants, `--require`, signing key, `--since`, backend settings, build dir, `--allow-ineligible`); a different value, including dropping a check or signing, needs `--change-spec` and is recorded in `release.json` `spec_history`. `release(require=None)`; new `unsigned`, `change_spec`, `allow_ineligible`; CLI `--no-sign`, `--change-spec`, `--allow-ineligible`.
-- `release-manifest.json` (`tundravm.release-manifest/1`) lists every published file of a release with its sha256, signed as `release-manifest.json.sig` (namespace `tundravm-release`); `tundravm verify RELEASE_DIR` / `verify_release()` / `ReleaseVerification` checks every file, unlisted files, the signature, `release.json` against the manifest and the embedded evidence (`file-hash-mismatch`, `file-missing`, `file-unlisted`, `manifest-signature-invalid`, `manifest-unsigned`, `release-inconsistent`).
-- `Variant(release=False)` marks a variant ineligible: `release` skips it and says why, naming it needs `--allow-ineligible`; the scaffolds' `dev` variants are marked ineligible.
-- Release resume inputs include a backend fingerprint (`FingerprintedBackend.fingerprint()`, `backend_fingerprint()`: privilege, mkosi args, tools tree, mkosi version) and the build directory; the sbom stage watches the package manifests it reads.
-- **Breaking:** release stage records replace `status` with `execution` (`completed|skipped|failed`) plus `verdict`; `clean --lockfile` is `clean --remove-lockfile`, and `clean` never removes a release directory. `DevTools()` hashes the root password with a fixed salt derived from the image id (`salt=`; `reproducible=False` for a random one), so dev variants rebuild identically; their digests change.
-- **Breaking:** `evidence.json` is `tundravm.evidence/2` and drops `schema_version`; `verify` refuses any other schema (`schema-unsupported`), requires the core members (`core-member-missing`) and derives every fact its verdict uses from the members, reporting each disagreeing index field as `index-inconsistent`.
-- **Breaking:** evidence SBOM entries replace `manifest_found` with `complete`, `missing` and `manifest_member`; the bake's mkosi manifest is bundled as `variants/<v>/manifest-<target>.json` and `verify` re-derives the SBOM's packages from it. A manifest the bake recorded that is gone unbinds the SBOM (`sbom-material-missing`); `--require installed` (`sbom-incomplete`); `Sbom.missing`, `Sbom.complete`.
-- Evidence records which artifact each policy measures and per-artifact `coverage`; `--require measured` needs every artifact measured (`artifact-unmeasured`); the verdict gains `measured` (`none`/`partial`/`full`) and `sbom`.
-- **Breaking:** `changes --format json` is `tundravm.changes/2`: `packages` compares declarations only, `installed` compares installed inventories, and a side without data is an `unknown` comparison instead of removals; `--build` is used only when its recipe, tree and lockfile are current; `--since` accepts a release directory.
-- Fixed: a bake of some variants into a build directory holding a bake of all of them recorded the whole on-disk tree's digest, so evidence and `release --variant` failed with `tree-mismatch`; `Evidence.write` removes a previous run's members it no longer holds.
-
-- `attest --record FILE` (`Attestation.record()`/`save()`) keeps a `tundravm.attestation/1` record: the tdxs document as received, nonce, report_data, registers, the policy's sha256 and artifact, the validator's whole reply, verdict and `observed_at`. `read_attestation(path, policy=)` / `AttestationRecord` re-derive it offline and list any field that disagrees; the quote's signature and collateral are only as trusted as the recorded validator reply.
-- `evidence --attestation FILE` / `--max-age DURATION` and the `attested` requirement: every variant with a verified policy needs a consistent, trusted, fresh record of that policy (`attestation-missing`, `-untrusted`, `-stale`, `-policy-mismatch`, `-inconsistent`). `verify` re-derives each bundled record; `verify_evidence(max_age=)` judges with another window. `release --attestation FILE` / `--max-age` pass records to the evidence stage as part of the spec, and a resume inherits them.
-- **Breaking:** the evidence index is `tundravm.evidence/3` (per-variant `attestations`, top-level `attestation`, verdict `attested`) and `verify` refuses `/2`.
-- **Breaking:** `Diagnostic.location` is split into `variant` (the variant name) and `location` (a `file:line` source position, empty for built-in checks); `lint --format json` is `tundravm.lint/2`, `explore` is `tundravm.explore/2`, markdown's Location column becomes Variant, and `assert_diagnostic(location=)` becomes `assert_diagnostic(variant=)`.
-- **Breaking:** SDK errors are one `tundravm.error/1` JSON line on stderr under every machine-readable format, including `sbom`'s `spdx-json` (the default) and `cyclonedx-json`.
-
-- `status` is a release-readiness view: one `release` line per eligible variant, `ready` or `blocked (CODES)` with evidence's reason codes against `[tool.tundravm] require` (default `reproducible,lock`), a `pending` line per unfinished release with its `resume with:` command, and `--releases DIR`; JSON adds `release`, `release_require` and `releases_in_progress`. `next` follows the lifecycle past the bake (second build, measure, attest, resume, release) and says `everything is up to date` only when every eligible variant is ready and the newest release matches the recipe and lockfile. An `attest --record` at `BUILD/<variant>/attestation.json` counts towards readiness.
-- `[tool.tundravm] require = [...]`: a validated list of evidence checks for `status`.
-- Docs: the README quickstart hands the policy to evidence through `build/<variant>/policy.json`, keeps one `--variant`, verifies with `--build` and ends with `release --require reproducible,measured,lock,attested`; a "Real TDX" guide in docs/cli.md with its unverified steps marked; the `ssh -L` route to tdxs (refused by the delivered key's `no-port-forwarding`) is replaced by an SSH command-channel relay; tutorial step 19 cuts, resumes and verifies a release.
-
-- `tundravm witness RELEASE_DIR [RECIPE]` / `witness()` / `Witness`: rebuild a release from your own checkout with the release's own lockfile (its recipe digest and lockfile sha256 must match the release's) and compare every artifact's sha256; `witness-<builder>.json` (`tundravm.witness/1`) and with `--sign` its `.sig` (namespace `tundravm-witness`) go beside the release in `RELEASES/<name>.witnesses/`; exit 0 matched, 1 different (the build is kept, with `diffoscope`/`diff --tree` hints), 2 error.
-- `tundravm verify RELEASE_DIR --min-witnesses N [--witnesses DIR] [--allow-simulated]` / `verify_witnesses()` / `WitnessVerification`: N distinct principals must have signed matching witnesses of this manifest; the publisher never counts (`witness-self`), simulated rebuilds count only with `--allow-simulated`; reasons `witness-insufficient`, `-mismatch`, `-wrong-release`, `-signature-invalid`, `-unsigned`, `-self`, `-simulated`. `verify --max-age DURATION` judges bundled attestations with another window (`verify_release(max_age=)`).
-- **Breaking:** `evidence` and `release` without `--require` require the `[tool.tundravm]` table's `require`, else `reproducible,lock`, the set `status` judges against; `--require ''` requires none. A new release records the resolved list in its spec; a resume keeps its own. `tundravm config` is `tundravm.config/2` and shows `require`.
-- **Breaking:** `bake-result.json` is schema 3: a bake of some variants keeps the other variants' entries, `variants_baked` names the ones it built, and each variant entry carries its own `declarative` record whose `tree_digest` covers that variant's directory only. Older files are refused; bake again.
-- `status` caches artifact sha256s in `BUILD/.tundravm-hashes.json` (by path, size, mtime and inode); `--verify` bypasses it, and `evidence`, `verify`, `measure`, `deploy` and `sbom` always hash. `clean --what state` removes it.
-- `deploy qemu --param firmware=PATH` (`Qemu(firmware=)`) boots that TDVF (with `tdx=true`) or OVMF image; a path that is not a file fails before QEMU starts. The `prover` template installs `openssh-server` and `socat`, which its SSH relay needs.
-- Docs: the tutorial is re-run end to end on the current CLI.
-
-- **Breaking:** lint error `secret-target-unsupported`: a `SecretFile` or `SecretEnv` whose provider does not write it at boot. The built-in `tundra-tools` delivery writes only the SSH key (`BUILTIN_SECRET_CAPABILITIES`), so file or env targets need `Secrets(delivery=ExternalDelivery(name, supports=...))` naming what writes them, or must go.
-- `ExternalDelivery(name, supports=("file", "env"))` and `Secrets(delivery=)` declare who delivers a `Secrets` block's targets, without changing the tree or recipe digest. `secret-in-file`/`secret-in-env` hints name only the target kinds the variant's provider writes. The evidence index records each variant's `secrets` (kind, location, provider, supported, required).
-- **Breaking:** the `prover` init template provisions the SSH key only; it no longer declares an `app_token` `SecretFile` nothing would write.
-
-- `tundravm.testing.fragment_plan(*items, include=, base=, variant=)` and `plan(recipe, variant)` return an `Image`: one variant compiled in memory with typed queries (`packages`, `file()`/`files` returning `ImageFile`, `unit()`/`service()` returning `UnitView` with `requires`/`after`/`wanted_by`/`exec_start`/`environment`/`enabled`, `users`, `groups`, `init_steps`, `hooks(stage)`, `builds`, `settings(section)`, `lint()`, `tree`), so a fragment test needs no hand-made bootable recipe or temp directory.
-- **Breaking:** `assert_clean` fails on warnings for every input (Recipe, Image, lint findings); `warnings="allow"` fails on errors only.
-- **Breaking:** `CompiledTree` speaks variants: `variants`, `variant(name)`, `default_variant` and `variant=` on every reader (were `profiles`, `profile()`, `default_profile`, `profile=`).
-
-- **Breaking:** `Variant(target=, targets=)` is `outputs=` (a sequence of targets) and `parent=` is `inherits=` (`None` = standalone); `Resolved.target`/`.targets` are `Resolved.outputs`.
-- **Breaking:** `Recipe(common=Fragment(...))` is `Recipe(items=...)`; direct items have no fragment path (provenance level `common`) and `Resolved.fragments` no longer lists a root fragment.
-- **Breaking:** `Build(recipe=, cache_key=)` is `using=` and `cache_namespace=` (a namespace; the cache key is fingerprinted). `Directory` is `FileTree`.
-- **Breaking:** `Service.env`/`limits`, `Template.variables`, `Hook.env`, `Build.env`, `Debloat.keep_paths_by_variant` and `Tdxs.expected_measurements` take a Mapping only, frozen into an immutable copy; tuple-of-pairs input is refused. `assert_clean` drops `strict=` (use `warnings="allow"`).
-- **Breaking:** `inspect --format json` is `tundravm.inspect/2` (`inherits`, diff `outputs`), `explore` is `tundravm.explore/3`, and inspect text prints `Inherits:`.
-- `packages(*names, role="runtime")`: a frozen fragment of `Package`s, usable in `items=` and `Variant(add=)`. `Backports(include_sid=True)`: `False` drops the sid source and its pin.
-- `bake-result.json` records the UKI each disk artifact boots (`boot_payloads`: path and sha256, found beside the disk in mkosi's output; the in-process backend simulates `disk.efi`). `measure` measures a disk no tool reads through its recorded UKI and policies record it as `boot_payload`; `evidence` counts a disk booting the measured UKI as `measured (via boot payload <sha12>)`, so one UKI measurement covers its disks under `--require measured`, and `verify` re-derives the relation from the bundled bake record.
-
-- **Breaking:** `Variant(replace=, remove=)` are gone: `changes=(value.ref.edit(field=...), value.ref.remove(), Type.ref(key).remove())` apply after inheritance and before `add=`. A whole replacement becomes an edit of the fields that differ; changing an identity is a removal plus an addition. Edits of identity or unknown fields, two edits of one field, and editing or removing what the variant does not inherit are errors (`edit-missing`, `edit-invalid`, `remove-missing`). `Ref`, `Edit` and `Remove` are public; every declaration has `.ref`, and `Unit.ref("ssh.service")`-style constructors build one from the identity fields.
-- **Breaking:** `Disk.key` and `Secrets.store` hold a `Ref` (a `Key` or `Disk` passed in is stored as its ref); lowering binds it to the variant's final value (`Resolved.bind(ref)`), so editing a key no longer means rebuilding the disk and secrets. Lint codes `replace-missing`, `disk-key-mismatch` and `secret-store-mismatch` are removed. Provenance's action `replaced` is `edited` with the edited `fields`; `inspect --format json` is `tundravm.inspect/3` and `explore` is `tundravm.explore/4`.
-- `Resources.from_module(__name__)` resolves host files next to the declaring module, from a checkout or an installed package (`file()`, `directory()`, `text()`; paths cannot leave the module's directory), and `watch` polls what it reads. `File.text()`, `File.copy()` (`mode=None` ships 0755 or 0644 from the source's execute bit) and `Unit.from_file()` say which kind of content a declaration holds.
-- `GoBinary` and `CargoBinary` (`tundravm.declarative.utils`) build one program, install it at `/usr/bin/<name>` and expose `.executable` for the `Service` command; they lower exactly like the hand-written `Build`.
-- Examples: the nethermind kernel config moved to `examples/nethermind-base/kernel/` and the surge system files are files under `examples/surge-tdx-prover/files/`, read through `Resources`.
-
-- **Breaking:** `Recipe(base=, arch=, mirror=, tools_mirror=, snapshot=, epoch=)` is `Recipe(platform=Debian(release, arch=, mirror=, tools_mirror=, snapshot=, epoch=))`; `recipe.base` and the others are `recipe.platform.name`, `.arch`, `.mirror`. `Debian(boot="systemd")` (the default) installs the kernel and systemd boot set in every variant, `boot="uki"` the minimal UKI set, `boot=None` none. `Debian(efi_stub=VERSION)` pins the EFI stub from the platform's own snapshot or archive mirror. What a platform declares has provenance level `platform`, reaches standalone variants, and a `Platform` subclass can carry fragments and settings (`items=`). `init --base debian/X` is `--release X`; `import` emits `platform=Debian(...)`.
-- **Breaking:** `@component` turns an annotated class into a frozen, keyword-only `Composite` whose `compose()` yields items; primitive fields are type-checked, `requires=`/`check()` replace `Fragment(requires=, checks=)`, and the fragment is named from `name=`, an `id`/`name` field or the class. `Export`/`HttpEndpoint` are typed values a component publishes; holding one requires its provider. `EfiStub`, `Tdxs`, `Backports` and `DevTools` use it; `Composite` lives in `declarative._component` (still exported from `declarative.utils`).
-- `ConfigFile.yaml/toml/json/ini/env` render configuration deterministically (keys sorted unless `sort_keys=False`) into ordinary `File`s with the same digest as the hand-written bytes.
-- The `nethermind_base` example now pins the snapshot mirror its EFI stub comes from (its digest changes).
-
-- **Breaking:** `Init(name, script, priority=, after=)` is `BootStep(name, script, after=[...], before=[...])`: boot steps form a graph ordered topologically (built-ins first, then declaration order), with `step-cycle`/`step-undefined` replacing `init-order`/`init-after-undefined` and `init-priority-collision` removed. `.ready` on `Key`, `Disk`, `Secrets` and `BootStep`; `RuntimeDirectory` and `RuntimeFile` expand to steps; `RUNTIME_INIT` means every step.
-- **Breaking:** `Unit`/`Service`/`Tdxs(after_init=)` is `needs=[handle, ...]`: a unit waits only for the steps it names (`Service` defaults to `needs=(RUNTIME_INIT,)`); lint codes `needs-undefined` and `needs-without-init`. The current dialect emits one `runtime-init-<step>.service` and `/usr/lib/runtime-init/<step>` per step plus an aggregate `runtime-init.service`; nethermind-v1 keeps the single `/usr/bin/runtime-init`. Lockfile `init_scripts` entries are `{step, sha256}`, so recipes with boot steps re-lock. `testing.InitStep` loses `priority`.
-- `tundravm init --app go --source URL@REF | --path DIR [--package PKG] [--port N] [--disk NAME] [--secret NAME --delivery external:AGENT]` writes a recipe that builds one Go program with `GoBinary` and runs it as a service under its own user with a state directory, optionally on an encrypted disk whose device is a `DISK_DEVICE` constant and with a secret file written by an `ExternalDelivery`; its generated tests check the planned image with `tundravm.testing`.
-- Docs: README, the concepts introduction ("The model in one recipe") and every tutorial transcript are refreshed for the platform/items/variants/components API and boot-step ordering.
-
-- Declarations, fragments, components, variants, platforms and changes record the `file:line` that constructed them (`declared_at`, kept out of equality, hashing, payloads and digests). Lint findings carry it as `Diagnostic.location`, shown as `at: FILE:LINE` in text and as `file=`/`line=` in `--format github`; `inspect --why` and `explore` show "declared at FILE:LINE" and "edited at FILE:LINE in variant X" for each origin (`tundravm.inspect/4`, `tundravm.explore/5`); resolution errors name the line at fault. Evidence's `lint.json` records no locations, so bundles stay deterministic.
-- `tundravm preview [RECIPE]` serves the explore page on `127.0.0.1:8765` (`--host`, `--port`, `--open`, `--interval`), re-renders it whenever anything `watch` polls changes and reloads the open page through `/version`; a recipe that fails to load keeps the last good page under an error banner (message, `file:line`, hint), lint errors show the banner above the fresh page, and a non-loopback `--host` needs `--allow-remote`. Standard library only.
-
-- Witness verification identifies the publisher by the key `release-manifest.json.sig` was made with; `verify` rejects `signer` metadata that contradicts that key (`release-inconsistent`).
-- `--require attested` implies `measured` and needs a trusted record for every selected variant's measured subject; a variant without a policy is `attestation-missing`.
-- **Breaking:** attestation freshness is judged at the wall-clock `attestation.evaluated_at` (signed, injectable `clock=`), not the `SOURCE_DATE_EPOCH`-pinned `created`; `verify --now TIME` re-judges at another moment. Evidence is `tundravm.evidence/4`.
-- `Mkosi(layout="native")`: tree digests, evidence `tree.json`, verify, `changes` and `testing.Image` read each variant as the root plus its `mkosi.profiles/<variant>/` overlay (`Tree.layout`); native bakes from earlier versions need a re-bake.
-- Fixed: a `Service`/`Unit` inherited from the default variant waits for runtime-init in a child variant that adds the first `BootStep`; a packaged `Unit(name, needs=[...])` honours `needs` through `/usr/lib/systemd/system/<unit>.d/10-tundravm-needs.conf`; `Edit` deep-freezes nested values; `ConfigFile.json` renders component mappings; `recipe_inputs()` (and `watch`) include platform items.
-- `executable-stale` (error) when a variant edits or removes the `Build` a service command's path came from; `Export(provider=self)` binds an export to its provider instance and `export-stale` reports a different provider configuration (error) or edits inside it (warning).
-- `ExternalDelivery(unit=... | ready_path=...)` adds a `delivery-<name>` boot step with `delivery.ready`; `external-delivery-unwired` warns when neither is given; `secrets.ready` is the built-in SSH-key step. The Go app scaffold waits for `delivery.ready`.
-- Docs: `docs/design/systemd-units.md`, the design for typed, opinionated systemd units (Service, Task with schedules, socket activation, Mount, drop-ins, `Hardening.strict()` by default) and the migration plan.
-
-- `tundravm lint` parses every systemd unit a variant ships (raw `Unit` text, unit files shipped as `File`, generated services) against systemd 257's directive table and reports `unit-section-invalid`, `unit-directive-unknown`, `unit-value-invalid`, `unit-exec-relative`, `socket-service-unpaired`, `socket-service-started`, `unit-enable-noop`, `timer-unit-missing`, `timer-service-enabled`, `relation-conflict`, `requires-without-after`, `state-dir-mkdir`, `unit-raw` and `unit-as-file`; `service-user-missing` also checks `User=`/`Group=`/`SocketUser=`/`SocketGroup=` in unit text. Style codes are off under `nethermind-v1`.
-- Fixed: `Service` commands keep every argument: `ExecStart=`/`ExecStartPre=` quote arguments with whitespace, quotes or backslashes, double `%`, and double `$` outside `${NAME}`/whole-word `$NAME` references (the argv used to be joined with spaces). Generated units go through one canonical renderer; the historical units of the golden tree are pinned literals.
-- `tundravm.testing`'s `UnitView` uses the package's lossless unit parser (comment lines inside a continuation are skipped, as systemd does).
-- `Mkosi(seed=, output_dir=, package_cache=, compress=, manifest=, build_network=)` and `Debian(clean_package_metadata=)`: typed build settings with opinionated defaults; a `Setting` of the same key still wins for its variant.
-- `Run(command, *, stage="postinst", user=None, name=None, after=())` in `tundravm.declarative.utils` runs a build-time command inside the image without the `mkosi-chroot` prefix (word lists are quoted; shell syntax runs under `bash -euo pipefail -c`); no example or template spells `mkosi-chroot` any more.
-- Lint `setting-raw` and `hook-covered` (info, silent under `nethermind-v1`) point a raw `Setting` or hook at the declaration that covers it.
-- The service, cloud and prover `init` templates create `/var/lib/app` with `RuntimeDirectory` (tree digests move); `examples/nethermind_base.py` sets its seed and build directories on `NETHERMIND_V1` and drops a redundant `Build.Environment` (the surge tree is unchanged).
-
-- `Service` grows typed fields: `user=Dynamic()`, `groups`, `exec_start_post`, `exec_reload`, `credentials` (LoadCredential, also from `SecretFile`), `state`/`logs`/`runtime`/`cache` directories, `write_paths`, `restart_sec`, `timeout_start`/`timeout_stop`, `hardening=Hardening.strict()|.relaxed()|.none()` with per-field overrides, relations by name or ref (`after`, `requires`, `wants`, `before`, `part_of`, `binds_to`, `conflicts`; `requires`/`binds_to` also order `After=`), `enabled=False`, and `extra=` validated against systemd 257 (`unit-extra` info). Defaults are unchanged, so recipe and tree digests don't move; an unmatched ref fails with `unit-ref-undefined`.
-- `Unit(name, dropin=DropIn(...))` changes a packaged unit through a typed drop-in at `<unit>.d/20-tundravm.conf`.
-- `Task(name, command, schedule=None | Every(...) | Calendar(...))`: a hardened oneshot that runs at boot with its own user (`.ready` lets others wait for it), or with a schedule a `<name>.timer` that is the only thing enabled. `Service(socket=Listen(port | path, kind=, accept=, user=, group=, mode=))` renders and enables `<name>.socket` and leaves the service to it. `Mount(where, what, type=, options=)` computes the unit name with `systemd-escape --path` rules.
-- Example 03's health check is a scheduled `Task`, so it no longer also runs at boot.
-
-- **Breaking:** `Service` defaults are secure: `Type=exec`, `Restart=on-failure` with `RestartSec=5s`, the `Hardening.strict()` sandbox and a dedicated system user named after the service, declared automatically when `user=` is omitted. `user="root"` opts out (`service-runs-as-root` info); `type=None`, `restart="no"`, `restart_sec=None` and `hardening=Hardening.none()` (`hardening-disabled` warning; `hardening-relaxed` info lists what a relaxed profile drops) restore the old lines. The service template's `app.service` scores 1.4 (OK) in `systemd-analyze security`, down from 9.0 (UNSAFE). Tree digests of recipes that use `Service` change.
-- **Breaking:** `Service(wants=...)` also orders `After=` the wanted units; `state=` makes `/var/lib/<state>` the default `WorkingDirectory=`; `Service(remain_after_exit=)` is new; `Service(security=...)` is deprecated in favour of `hardening=`.
-- Debloat's default keep list includes `timers.target`, so generated timers start through it (every debloated non-`nethermind-v1` tree changes by one line).
-- The `minimal` template's hello unit is a `Task`; the service, cloud and prover templates use `state="app"` and the new defaults instead of a boot step; `init --app` uses `state=`/`write_paths=` and `credentials=`. Examples 04–06 use `credentials=`, `Dynamic()` users and typed relations; no hand-written unit text remains outside the surge golden fragments. `Task`, `Every`, `Calendar`, `Listen`, `Mount`, `DropIn`, `Hardening` and `Dynamic` are exported from `tundravm`.
-- `Unit.parse(text, name=, mode="exact"|"semantic")` converts unit text to `Service`, `Task`, `Mount` or `Unit(dropin=DropIn(...))` (exact: typed only when the bytes match; semantic: same directives and values, unowned ones in `extra=`). `tundravm units convert FILE... [--mode] [--adopt-defaults]` prints typed declarations, pairing sockets and timers with their services, and with `--adopt-defaults` shows what the opinionated defaults add; `tundravm units render RECIPE --variant V --unit NAME` prints a generated unit. `tundravm import` emits typed units whenever the round trip is exact.
-- The real-bake integration test runs `systemd-analyze verify` on every generated unit and requires `systemd-analyze security` to rate the template service OK.
-
-- **Breaking:** `Tdxs()` emits a typed, hardened, socket-activated `tdxs.service` (systemd-analyze security 9.0 → 1.3; `DeviceAllow=/dev/tdx_guest`, optional configfs-tsm write path, `AF_UNIX` unless a cloud issuer or collateral fetch needs `inet`), started on demand rather than at boot; `Tdxs(legacy_units=True)` keeps the `nethermind-v1` texts. Running as user `tdxs` with configfs-tsm is unverified on TDX hardware.
-- `DevTools()` enables `serial-getty@ttyS0.service` at build time and debloat keeps the templates of enabled packaged instances (the getty used to be masked); the Azure provisioning unit and current-dialect runtime-init step units render as typed root oneshots. Digests move for recipes using these.
-- `user=Root()` renders no `User=` line (`Unit.parse` types root oneshots); `write_paths` on a declared `Disk`/`Mount` mount point creates the directory before start and adds `RequiresMountsFor=` (a leading `-` marks an optional path).
-- **Breaking:** lockfile version 5 records the build `toolchain` (mkosi, systemd, nixpkgs rev and narHash, tundravm version and commit, measurement tools); older lockfiles no longer load (`E_LOCKFILE`: re-lock). `toolchain-drift` in `lint` and `lock --check` is a warning, an error with `--strict` or `[tool.tundravm] strict_toolchain = true`; `lock --update toolchain` records the running toolchain.
-- **Breaking:** the nix and lima backends pin nixpkgs to the locked rev with a `flake.lock` and run mkosi with a PATH of Nix tools only; Lima runs without Rosetta by default (`LimaMkosiBackend(rosetta=True)` opts in and is recorded as `reproducible: not guaranteed (rosetta)`).
-- Bakes record their toolchain; evidence shows it and witnesses compare it. `verify --min-witnesses` counts only witnesses on the release's toolchain by default (`--same-toolchain`); `--distinct-toolchains` counts one per distinct toolchain.
-
-- **Breaking:** reproducible current-dialect finalize scripts end with a deterministic accounts step (`passwd`/`group` by id, `shadow`/`gshadow` in that order, `subuid`/`subgid`, `/etc/*-` backups removed); the current dialect's azure and gcp postoutput scripts are byte-reproducible (UKI-sized ESP, `mkfs.vfat --invariant` with a serial from the UKI hash, `mcopy -m` at `SOURCE_DATE_EPOCH`, `sgdisk` with fixed GUIDs, a pinned VHD footer, a sorted owner-fixed `tar` piped to `gzip -n`); azure now needs `sgdisk`. The UKI's `.osrel` stays as built (systemd ≥ 257 passes it to the kernel unmeasured; see reproducibility.md).
-- `Debloat(keep_modules=...)` and lint `debloat-removes-modules` (error) for a declared `Debloat` that deletes `/usr/lib/modules` under the distribution's modular kernel.
-- **Breaking:** policy files are `tundravm.policy/2`: each register holds a list of accepted values (optionally labelled `firmware`/`label`) and an `unverifiable` map gives reasons; schema 1 files are refused with a hint to re-export. `measure --scheme qemu|gcp|azure|portable` computes registers in pure Python (ports of Easy-TEE attest and flashbots dstack-mr-gcp; measured-boot is no longer used): qemu and portable give RTMR1/RTMR2, gcp gives Google's published per-firmware MRTD/RTMR0 sets plus RTMR1/RTMR2, azure marks the TDX registers unverifiable (its paravisor owns the TD) and records vTPM PCR4/9/11. The GCP/Azure placeholders and their PCR register names are gone.
-- `attest` accepts any listed value and reports the label that matched (MRTD and RTMR0 from different firmwares do not pair); `evidence --require measured` reports `policy-unverifiable`; `toolchain.measure` records `tundravm-measure` and the GCP firmware table. `Tdxs.from_policy(firmware=, label=)` narrows a multi-value policy to the one value per register the tdxs validator compares.
-
-- Fixed: the `init` templates shipped no kernel modules (the implicit debloat deleted `/usr/lib/modules` under Debian's modular kernel), so their images had no virtio, `tdx_guest`, Hyper-V or gVNIC drivers. `Debian(kernel_modules=...)` now keeps a curated set per output (every TDX guest: `tdx_guest`, `virtio_net`, `virtio_blk`, `virtio_scsi`, `sd_mod`, `nvme`, `efivarfs`; Azure adds `hv_*`, `pci_hyperv`, `mana`; GCP adds `gve`; a `Disk` adds dm-crypt and friends), written as mkosi `KernelModules=` and checked at finalize; a tuple adds names, `"all"` keeps everything. `debloat-removes-modules` checks the effective removal list, declared or implicit; `tundravm import` maps `KernelModules=` back.
-- **Breaking:** the cloud and prover templates build one UKI for every cloud: `Variant("default", outputs=("qemu", "azure", "gcp"))` replaces the separate `azure`/`gcp` variants (use `--variant default`).
-- **Breaking:** cloud glue is gated at boot: `azure-complete-provisioning.service` has `ConditionVirtualization=microsoft`, and GCP's metadata DNS is installed by `gcp-metadata-dns.service` (`ConditionVirtualization=google`) instead of a static `/etc/resolv.conf` that would break DNS elsewhere. `Service`/`Task` take `conditions=(Condition.virtualization(...), Condition.path_exists(...), ...)`; lint `cloud-glue-unconditional` warns about one-cloud units without a matching condition; `measure` reports which outputs one UKI covers. `nethermind-v1` keeps its historical bytes.
-
-- `Kernel(base=DebianConfig("6.12.48-1") | Path, fragments=, patches=, modules=False)` composes a kernel config from Debian's pinned `linux-config` package (locked by sha256, fetched on the host), `KernelConfig` declarations any component can add (conflicts are `kernel-option-conflict`, naming both declarations) and `KernelPatch` (local or `Http`) applied in order; monolithic by default. The build checks that every requested `CONFIG_*` value survived `olddefconfig` and fails with `kernel-option-dropped`. The kernel cache key and lockfile cover base, fragments, patches and module mode; lint `kernel-modules-ignored`. `config=` keeps the whole-file mode.
-- `KernelHardening(allow=())` in `declarative.utils`: flashbots-images' attack-surface deny list (94 options) plus lockdown, init_on_alloc/free, randomized kstack, no kexec, no /dev/mem and other hardening (27 options, each with its reason).
-- `TeeBase()` in `declarative.utils`: NTS-authenticated time (chrony), a volatile capped journal, sysctl hardening, a static resolver and masked apt timers / tty1 getty, each with its own opt-out; used by the `service`, `cloud` and `prover` templates and `init --app`.
-- Go and Cargo builds are reproducible by default in the current dialect (Go: `-trimpath -buildvcs=false`, `CGO_ENABLED=0` unless `cgo=True`, `SOURCE_DATE_EPOCH`; Cargo: `cargo auditable build --frozen` with merged reproducible rustflags, one codegen unit, no incremental build); `nethermind-v1` hooks are unchanged. `tundravm sbom --binaries DIR` (`sbom(binaries=)`) adds the Go modules and crates recorded in built binaries as nested components.
-
-- `Network()` in `declarative.utils`: systemd-networkd DHCP (or `StaticAddress`) on `en*`/`eth*`, with `systemd-networkd-wait-online --any --timeout=30` so a NIC-less boot continues. `Firewall()` and `Port`: an nftables ruleset that drops inbound by default and opens the ports from `Service(ports=)`, non-loopback `Listen` sockets and the `Secrets` SSH-key step (outbound unfiltered), keeping the `nf_tables`/`nft_ct`/`nft_reject_inet` modules. `TeeBase(network=True, firewall=True)`, so the templates and `init --app` boot reachable with the app port open. Lint `network-missing` and `port-unreachable` (warnings).
-- Debloat: the implicit default keeps paths that hold declared files, and enabled packaged `systemd-*` units are never masked.
-- `tundravm.testing.boot()` boots a baked UKI or disk under QEMU with OVMF (KVM or TCG), reads its serial console and returns a `BootResult` (units started and failed, fatal lines, missing markers, duration); the `boot` fixture and marker, `BootUnavailable`/`boot_unavailable()`. Integration tests bake and boot the `minimal` and `service` templates, and a CI `boot` job runs them and uploads console logs on failure. `fragment_plan`'s test platform includes `Network()`.
-
-- Fixed (found by the first real boots): a Firewall's `nftables.service` failed because `libcrc32c`'s alias softdep (`crc32c`) is not followed by mkosi; the curated firewall modules include `crc32c_generic` (module sets v2), and finalize fails the build on a missing `modules.dep` dependency or an unprovided `pre:` softdep, then re-runs `depmod` over the kept modules (mkosi skips depmod when only `KernelModules=` is set, leaving a stale index).
-- Fixed: current-dialect debloat masks packaged `.path`/`.automount` units and any kept trigger whose unit it masks (`systemd-ask-password-console.path` failed every boot), keeps the targets enabled units reference (`network-pre.target`, `network.target`), and expands removal globs (`/etc/ssh/ssh_host_*_key*` was never removed). With a Firewall, systemd-networkd requires and starts after `nftables.service`, so a failed firewall keeps the network down.
-- Lint `unit-collision` (error) for two declarations writing one unit file (`Service("app")` + `Unit("app.service", text)`; a `Task` and a `Service` of one name used to raise).
-- The boot harness forwards the journal to the console, treats a unit that fails or exits after starting as a failure, fails on a non-zero QEMU exit, and prints each failed unit's own lines.
-- **Breaking:** `attest` trusts a quote only when MRTD, RTMR0, RTMR1 and RTMR2 each match an accepted value; when nothing disagrees but one is unverified the verdict is the new `partial` (`platform-unverified`, `image-unverified`; exit 1 unless `--accept-partial`). QEMU/portable policies are trusted only with an operator's `measure --export-policy FILE --approve-mrtd HEX --approve-rtmr0 HEX` (`platform_approval`, also checked by `Tdxs.from_policy`). Azure policies are refused (`E_ATTESTATION`: vTPM evidence is not supported yet). Attestation records are `tundravm.attestation/2` (v1 refused), `attest --format json` is `tundravm.attest/2`, and `--require attested` reports `attestation-partial`.
-- **Breaking:** `sbom --binaries` takes a binary's dependencies only when its sha256 matches the digest the bake recorded from the UKI's initrd (`bake-result.json` `installed`); other binaries are listed as unbound with path and sha256 and the document is incomplete.
-- **Breaking:** the nix backend always runs mkosi inside the pinned `nix develop`, even inside another Nix shell; after each build the nix and Lima backends check which mkosi ran (in `/nix/store`, the locked version) and record it as `toolchain.mkosi.path`.
-
-- **Breaking:** the `init` templates serve a real page: `App` runs Debian busybox's `httpd` on the app port from `/srv/www` under the strict sandbox, so there is no `/usr/bin/app` to supply; the template boot test fetches the page from the host (`tundravm.testing.boot(forward=, wait_http=)`, `BootResult.http_get()`).
-- `SshAccess(port=22, authorized_keys=(), from_secrets=False)`: `openssh-server`, per-instance host keys generated at first boot, key-only root login, `ssh.service` ordered after the key (and secrets) steps, and its port in the firewall (`Unit(ports=...)` opens a packaged unit's ports); the prover template uses it. QEMU deploy forwards SSH only for images with `SshAccess`.
-- **Breaking:** `Disk` defaults to `format="never"`; formatting needs an explicit `device=` (`disk-device-guessed` error, replacing `disk-auto-format`; `disk-device-unstable` warns about `/dev/sd*`; `Policy.storage_safety` defaults to `"error"`). The prover template uses `/dev/disk/by-id/virtio-tundra-data`, and QEMU deploy attaches a sparse data disk per `virtio-SERIAL` device (`data_disk_size`).
-- Tdxs: quoting issuers get `CAP_DAC_OVERRIDE` inside the sandbox (configfs-tsm creates root-owned report entries per quote) and ship `/usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules` (`/dev/tdx_guest` `root:tdx 0660`); validator-only and simulator services lose device and write access. Unverified on TDX hardware.
-- `DropIn(hardening=...)` is a patch: only the fields passed render, switches as `yes`/`no`, list settings after an empty reset, presets replace the inherited sandbox (`Hardening.patch_entries`, `Hardening.explicit`).
-- A composed `Kernel` adds its Debian build packages and the nix tools env gains a kernel toolchain; `Kernel(modules=True)` keeps `/usr/lib/modules` under the default debloat. `needs-without-init` no longer fires for task-only needs.
-
-- Fixed (found by the boot test fetching the starter page): the strict hardening profile killed busybox `httpd` with `SIGSYS`, because `~@privileged` denies `setuid` and busybox calls `setuid(getuid())` at every start. Without `CAP_SETUID`/`CAP_SETGID` in the bounding set the setuid family can only drop to the caller's own ids, so the strict profile now allows `@setuid` back after the `@privileged` deny, and denied calls fail with `SystemCallErrorNumber=EPERM` instead of killing the process. The boot harness also strips systemd's colon-separated colour codes from unit names.
-
-### Changed
-
-- **Breaking:** mkosi 27.1 is a dependency of tundravm (its git tag, mkosi is not on PyPI) and runs in-process: `tundravm._mkosi` is the only importer of mkosi and runs `parse_config` + `run_verb` in a child forked by mkosi's `fork_and_wait`, logging to `BUILD/<variant>/mkosi.log` and raising `MkosiError` with the log. `LocalLinuxBackend` never looks for mkosi on `PATH`, always builds with `--tools-tree=default` (no host `ukify`/`pefile`/`systemd-repart`), runs `summary --json` before each build (`BUILD/<variant>/mkosi-summary.json`), and takes `privilege="auto"` (user namespaces, else `sudo -E PYTHON -m tundravm._mkosi`) or `"none"`. The Lima guest is x86-64 Debian with the same mkosi commit (TCG emulation on Apple Silicon). The lockfile's `toolchain` records `mkosi` (version and commit) and `tools_tree` (distribution, release, snapshot) instead of `systemd` and `nixpkgs`.
-- **Breaking:** `tundravm doctor` prints one row per capability (`build:x86-64`, `run:simulated`, `run:tdx`, `deploy:gcp`, `deploy:azure`, `verify:*`), each failure naming its fix; `--for build|run|deploy|verify` limits it to one area. `tundravm.testing.FakeMkosi` (fixture `fake_mkosi`) fakes mkosi at the adapter for backend tests, and `build_unavailable()` says why a host cannot run a real build.
-- The current-dialect kernel cache key covers the distribution (pinned kernels rebuild once) and each variant's per-directory tree keys inherited builds by its own distribution; `Mkosi(layout="native")` refuses a variant that builds against a different distribution than the default variant's root kernel and source builds.
-- The lock records the resolved `runtime-init` run order (equal-priority steps in registration order; recipes with such steps get a new digest), the current-dialect cache key covers the distribution (base, arch, mirror, snapshot, repositories, build packages, Build settings; builds run once more), directory caches keep dotfiles, links, modes and empty directories (`cp -a "$src/."`), dependency caches are verified by content (`fetch` reports `incomplete`, re-prefetches or warns; `fetch --force` refreshes them; an offline bake names the missing entry), and `load()` is `load_recipe()` with the CLI's discovery.
-- `[tool.tundravm]` lockfile paths are never silently replaced: inspect/lint/compile/diff/fetch note a missing configured lockfile and run unpinned, `bake` refuses with `E_LOCKFILE`, `status` says so, drift diagnostics apply to project-selected locks too, and `config` reports the recipe's backend kind and whether the recipe and lockfile exist. `status` lints with the lock it selected (`NO_LOCK` when none). `inspect --why` matches a `Directory` descendant only when that path is emitted. Azure `secure_boot` defaults to off and `secure_boot=true` requires `signed=true` before any upload; GCP uploads with `gcloud storage cp` only.
-- `source-unpinned` also reports an unpinned `EfiStub` package (`efi-stub`), so the `cloud` template lints with that warning until locked; .NET builds restore offline from the prefetched packages folder (`RestoreSources`) when the sandbox has no network.
-- Internal: `_image.py` is gone; `lower()` returns the frozen `Lowered` (selection, lockfile and build dir are copies), compiling lives in `declarative/_compile.py` and baking in `declarative/_bake.py`; the unused compile cache is removed. No output change.
-- `inspect --lockfile`: inspect renders Hooks at the lockfile's pins, as compile does. `fetch` and `FetchedSource` are exported from `tundravm` and `tundravm.declarative`. The Http-kernel-without-sha256 error names `sha256=` or a git source.
-- Internal: lowering writes `RecipeState` directly from resolved declarations (`declarative/state.py`); the retired fluent declaration methods, `Module.apply`/`configure` and the platform classes are gone; lifecycle glue now lives in `declarative/_lowered.py`, `_compile.py` and `_bake.py`. No output change (parity fixture over 12 recipes and 29 variants).
-- Kernel sources are locked and fetched on the host in the current dialect: `kernel` (or `kernel-<variant>` when a variant's source differs) lockfile pins, the build script copies the mounted checkout (no `.git`, so the version string stays clean), `inspect` shows `pinned=`, `source-unpinned` covers kernels; http kernels no longer pull `curl` into the build. Re-lock recipes with a built kernel.
-- Current-dialect source hooks copy host-fetched checkouts instead of cloning; unpinned hooks fail with a pointer to `tundravm lock` and `tundravm fetch`; `$BUILDDIR` falls back to `$BUILDROOT/build` in source and kernel scripts (mkosi 26 sets it only with `BuildDirectory=`); existing locks for current-dialect recipes with source builds need re-locking.
-
-- Lockfile version 1 → 4. Per-variant sections are named `variants.<variant>.<section>` (version 2 said `profiles.`). Version 2 files still load with their sections renamed and digests unchanged; version 1 files load too, and `lock --check` reports every section as added until you re-lock.
-- User-facing output says variant: `inspect` prints `variant=NAME`, `Parent:` and `Fragments:` (JSON keys `variant`, `parent`, `fragments`; Markdown heading `## Variant`), the bake summary has a `variant` column and ends `baked N variants`, and `lint --format json` and `bake --json-logs` use `variant`. The lint code `profile-empty` is now `variant-empty`.
-- `Recipe.epoch` other than `0` or `None` emits `SourceDateEpoch=<epoch>` as well as `SOURCE_DATE_EPOCH`.
-- Diagnostic hints name the declarative API and current commands (frozen-lock policy, missing backend, `source-unpinned`, `init-priority-collision`, `disk-key-undefined`, `secret-store-undefined`).
-- Recipe files bind a `Recipe` to `recipe` (or `RECIPE`, or a `build()` factory). A module-level `backend` is the bake backend. `load_recipe()` returns the `Recipe`.
-- `Recipe.base` defaults to `debian/trixie`.
-- `compile()` recreates each variant directory, so stale files are removed.
-- The `BuildBackend` protocol has `requirements()`, which `doctor` probes.
-- `Mkosi(layout="native")` refuses a recipe with standalone variants in one error that lists each offending variant with its reason (`'solo' (it is parentless)`).
-- `inspect --format json`: the kernel's `source_repo` key is replaced by a `source` object (`repo`, `ref`, `subdir`, `submodules` for git; `url`, `sha256` for a tarball).
-- The hint for a `Build` that passes `packages`/`env` beside a `recipe` names `Go`, `Cargo` or `Dotnet`, not the internal build class.
-- `default_resolver` raises `SourceError` (was `ValidationError`), never prompts for git credentials, and times out network calls after 60s. An unpinned source drifts as `+ sources.<name>: source <name> is not pinned`.
-- `init` starts from the `service` template by default; it prints the lint summary, then a numbered `next:` list, then the backend probe. The `uv sync` note is replaced by a note when `pyproject.toml` already exists (`uv add tundravm`, `uv add --dev pytest`).
-- `init`'s next steps are lock, compile, pytest, ci, bake (lock first, so a recipe with source builds compiles its pins).
-- Renames: `tundravm lock --path` is `--lockfile`; `locked=` is `lock=` in `bake`, `fetch` and `testing.bake_in_process`; `load_recipe(attr=)` is `attribute=`; `deploy --allow-placeholder` is `--allow-simulated-artifact` and `deploy(allow_placeholder=)` is `allow_simulated=` (`measure` keeps `allow_placeholder`); `Backports(mirror=)` is `archive_url=`.
-- `tundravm compile` prints `variants:`, `recipe_digest:` (the digest the lockfile records) and `tree_digest:` (was a single `digest:` line holding the tree digest).
-- Recipe digests change: they cover the lock v4 payload, including the tundravm version in the `compiler` section, so every lockfile needs `tundravm lock` again, and upgrading tundravm drifts the `compiler` section.
+- `README.md` is one screen: what tundravm is, install, the quickstart and its transcript.
+- `docs/guide.md` is the one guide, task-ordered, with what is proven and what is not.
+- `docs/trust.md` is the threat model, the platform limits and recovery.
+- `docs/reference/cli.md` and `docs/reference/api.md` are generated by
+  `python -m tundravm._reference docs/reference` from the parser and the three `__all__`
+  lists; `tests/docs/test_reference.py` fails when they are stale.
+- `tests/docs/test_docs.py` runs every Python block of the prose pages, parses every
+  documented command with the real parser, and resolves every relative link and anchor.
+- Deleted: `docs/tutorial.md`, `docs/api.md`, `docs/cli.md`, `docs/concepts.md`,
+  `docs/module-authoring.md`, `docs/testing.md`, `docs/policy.md` and
+  `docs/reproducibility.md`, 63 000 words written for the pre-v2 SDK and CLI.
 
 ### Removed
 
-- The nix backend (`NixMkosiBackend`, `Backend("nix")`, `--backend nix`), the generated `flake.nix`/`flake.lock`, the nixpkgs pin and resolver, Lima's Rosetta option (`LimaMkosiBackend(rosetta=)`, `reproducible: not guaranteed (rosetta)`), and the repository's `flake.nix`.
-- The fluent `Image`, `Profile` and `Module` API (`img.install()`, `img.service()`, `img.profile()`, `img.apply()`, `Module` subclasses, `MkosiOptions`, `SourceBuild`/`GitSource`/`HttpSource`/`GoBuild`/`CargoBuild`/`DotnetBuild`/`ScriptBuild`). It remains as internal lowering machinery (`tundravm.declarative._lowered`, `tundravm._modules`, ...), not as API. Use `Recipe`, `Fragment` and the declarations.
-- `tundravm.modules` and its module classes: `KeyGeneration`, `DiskEncryption` and `SecretDelivery` (use the `Key`, `Disk` and `Secrets` declarations), `AzurePlatform` and `GcpPlatform` (use `Variant(target="azure"|"gcp")`). `Tdxs` and `DevTools` are now fragments in `tundravm.declarative.utils`, next to `EfiStub` and `Backports`.
-- CLI verbs `explain` (use `inspect`), `check` (use `lint`), `digest` (use `inspect --json`, key `digest`) and `new` (use `init`), with no aliases.
-- `--profile`/`-p` and `--all-profiles` (use repeatable `--variant`; omit it for every variant), `bake --lock`/`--frozen`/`--force`, `measure --backend` (use `--scheme`), `deploy --memory`/`--cpus` (use `--param`), `measure --out`/`deploy --out` (pass the bake directory).
-- The lint rules `output-target-platform-mismatch`, `platform-target-missing` and `secret-undelivered`, which a declarative recipe cannot trigger, and `backend-missing`: a recipe holds no backend, and `bake` reports a missing one.
-- `tundravm.builders` and `tundravm.fetch`. Builds are `Build(script=...)` or `Build(recipe=Go(...) | Cargo(...) | Dotnet(...))`, and `tundravm lock` resolves pins itself (`git ls-remote` for a git ref, the sha256 of the download for http).
-- The `cbor2` dependency, which nothing used: tundravm has no runtime dependencies.
-- `tundravm.testing.FakeModule` (use `fake_fragment`) and the `image`/`inprocess_image` fixtures (use `recipe`).
-- `Policy.require_integrity`, inert since `tundravm.fetch` went away. `Policy` has `require_frozen_lock`, `mutable_ref_policy` and `network_mode`.
-- `SPEC.md`, which described the fluent API. The design record is `docs/design/declarative-api.md`.
-
-### Fixed
-- The emitter sets every file and directory mode explicitly, so compiled trees and `Tree.digest` no longer depend on the umask (002 and 022 produced different tree digests). `Tree.digest` covers each file's exec bit, not its full mode; tree digests recorded on a umask-002 host change, and artifacts baked from them show as stale in `status` until rebaked.
-- Debian snapshots on mkosi 26: `Recipe.snapshot` (a snapshot ID such as `20251113T083151Z`) lowers to mkosi's `Snapshot=`; `mirror`/`tools_mirror` are mirror roots that mkosi completes itself. Templates use a (snapshot, `systemd-boot-efi` version) pair that exists.
-- `EfiStub` in the current dialect installs the package from `$BUILDROOT/` because `mkosi-chroot` mounts its own `/tmp`.
-- `Backports()` pins backports to 200 and sid to 100 through `preferences.d`, so images no longer drift to sid.
-- `Repository()` declarations reach the build's apt (written under `mkosi.sandbox/` in the current dialect) and, with `in_image=True` (default), the image's `/etc/apt`.
-- The Azure provisioning unit depends on `network-online.target` unless the variant ships `network-setup.service`.
-- `Backports()` works on mkosi 26: the current dialect writes `mkosi.sandbox/etc/apt/sources.list.d/debian-backports.sources` at compile time (mirror from the fragment, the recipe or deb.debian.org; release from the recipe base) instead of a sync hook that mkosi 26 cannot run.
-- Azure/GCP conversions run inside mkosi's tools tree when one is used: the local backend adds `--tools-tree-package=qemu-utils,gdisk,parted`, reuses a cached tree only when it has those tools, and skips the host pre-check in that case (azure VHD and gcp tar.gz bake for real on a host without qemu-img).
-- Current-dialect postoutput scripts name the UKI `${IMAGE_ID}${IMAGE_VERSION:+_$IMAGE_VERSION}`, so recipes without a version no longer die under `set -u`.
-- `runtime-init.service` requires `network-setup.service` only when the variant ships that unit; otherwise it orders after `network-online.target`.
-- `doctor` probes `pefile` under mkosi's own Python; the local backend adds the tools tree when the host lacks pefile for a bootable build.
-- Images that declare users or groups install `passwd`, so `useradd` in postinst no longer exits 127 (the service template bakes for real).
-- `bake` with the local backend fails before mkosi when an azure/gcp variant's disk tool (`qemu-img`/`sgdisk`) is missing on the host; `doctor` lists those tools for cloud variants.
-
-- Local bakes: artifacts landed inside the mkosi tree and `bake-result.json` listed none, because mkosi received a relative `--output-dir`; all backends now pass absolute paths. Lima ignored the per-variant directory.
-- A tools-tree bake left root-owned `mkosi.tools` in the compiled tree and the post-build tree read crashed with `PermissionError`; mkosi state now lives under `OUT/.mkosi/`, sudo output is chowned back, unreadable leftovers are warnings.
-- `‣ Could not find ukify`: the local backend adds `--tools-tree=default` when the host lacks `ukify` and the recipe sets no `ToolsTree`; `doctor` checks `ukify`, `systemd-repart` and `apt`.
-- A recipe file with a syntax, import or runtime error printed a Python traceback (exit 1); it is now `E_VALIDATION` (exit 2) with `location` and `error`, and `--traceback` re-raises.
-- Recipes are compiled from source on every load, so a same-size edit within the same second is never hidden by stale `__pycache__`.
-
-- `runtime-init.service` is registered once per variant, so compiling one variant and then all of them no longer fails with a duplicate service.
-- A file removed from the recipe no longer lingers in the compiled tree or in `compile --check`.
-- `tundravm ci` no longer reports false lock drift on recipes with runtime-init steps: its compile step works on a copy of the lowered recipe instead of changing what the lock step compares.
-- A frozen bake of some variants against a lock of every variant no longer fails at `verify lockfile`.
-- `bake --lockfile PATH` no longer overwrites a different `<out>/tundravm.lock`: it bakes against `PATH` and leaves that file alone. `bake-result.json` records the lockfile used as `declarative.lockfile`.
+- The per-variant tree layouts: `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)`,
+  the `nethermind-v1` dialect (sandbox-fetching hooks, legacy units and debloat list,
+  historical cloud scripts), per-variant settings, kernels and source keys,
+  `Tdxs(legacy_units=)`, the lowering-parity and byte-identical nethermind golden tests.
+- The tree importer and `tundravm import` (now `convert --from mkosi`).
+- The nix backend, the generated `flake.nix` and `flake.lock`, the nixpkgs pin and
+  resolver, Lima's Rosetta option, the repository's `flake.nix`.
+- `Recipe`, `Variant`, `Fragment`, `Task`, `Unit`, `Disk`, `Key`, `Secrets`, `Firewall`
+  and the other internal model names from the top level of `tundravm`.
+- The 23 old CLI verbs, without aliases (table above).
+- `evidence.py`, `release.py`, `witness.py`, `verify.py`, `changes.py`, `explore.py`,
+  `preview.py`, `watch.py`, `status.py` and `clean.py`, with their bundle schemas, which
+  had no consumer.
