@@ -137,11 +137,12 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "48a867ab04cd6dc3c53f05eb92e5bc6a0b74536dfccac2bb88ccd72544bcb82a"
-EQUIVALENCE_RECIPE = "51394ca2d4424ed7676cf241e482572587f1322435922ff13ae2ac21f062c9a6"
+EQUIVALENCE_TREE = "6260e23503411c60a5914dcd203ce0fd040cdb818e12f60d6e8129fd64438f65"
+EQUIVALENCE_RECIPE = "ba8275af7d1c1e31f0cc7f8d1aa2f0d28df9d948d3e1b8e4a6a531ec214e797d"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
-overlay), and re-recorded when the ESP became a fixed 128M FAT32."""
+overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned
+build scripts' hint named ``tundravm build`` instead of the removed ``fetch``."""
 
 
 def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:

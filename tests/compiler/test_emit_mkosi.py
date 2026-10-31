@@ -531,7 +531,7 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
 
     assert 'KERNEL_VERSION="6.13.12"' in script_text
     # Unpinned: the script fails naming lock and fetch; it never clones in the sandbox
-    assert "kernel 6.13.12 is not pinned: run tundravm lock, then tundravm fetch" in script_text
+    assert "kernel 6.13.12 is not pinned: run tundravm lock, then tundravm build" in script_text
     assert "git clone" not in script_text
     assert 'cp payload/kernel/kernel.config "$KERNEL_CACHE/src/.config"' in script_text
     assert "make olddefconfig" in script_text

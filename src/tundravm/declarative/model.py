@@ -1070,7 +1070,7 @@ class Unit(Declared):
 class Service(Declared):
     """A generated systemd service: the compiler renders the unit from these fields.
 
-    Every field maps to one directive (docs/api.md has the table). The defaults are
+    Every field maps to one directive (``docs/guide.md``, Services). The defaults are
     opinionated: ``Type=exec``, ``Restart=on-failure`` with ``RestartSec=5s``, the
     ``Hardening.strict()`` sandbox (``hardening=None``) and a dedicated system user named
     after the service, declared for you unless the variant declares it (``user="root"``

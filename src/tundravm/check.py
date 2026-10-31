@@ -897,7 +897,7 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             subject=name,
             variant=variant,
             hint="Each relaxed knob widens what a compromised process can do; keep the ones "
-            "the program does not need (docs/api.md: Hardening).",
+            "the program does not need (docs/reference/api.md: Hardening).",
         )
 
 
@@ -911,7 +911,7 @@ def _unit_extra(name: str, extra: Mapping[str, Mapping[str, object]], variant: s
         variant=variant,
         hint=(
             "extra= is for directives no typed field covers; prefer a field when one exists "
-            "(docs/api.md lists them), so the setting stays typed and validated."
+            "(docs/reference/api.md lists them), so the setting stays typed and validated."
         ),
     )
 

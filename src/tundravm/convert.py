@@ -127,7 +127,7 @@ def _unit_files(path: Path) -> dict[str, Path]:
 
 
 def from_systemd(path: Path, *, mode: str = "exact") -> Converted:
-    """Unit files at *path* as typed declarations (``tundravm units convert``'s rules)."""
+    """Unit files at *path* as typed declarations (``convert --from systemd``)."""
     from ._units.parse import convert
     from .declarative._writer import declarations_source
 

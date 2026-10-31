@@ -7,7 +7,7 @@ SSH access by public key only) and two variants that only add outputs (the ``azu
 ``tree-verity/`` beside this file and asserts every file and the resolved mkosi summary.
 
 ``recipe`` is the ``initramfs`` layout and ``verity_recipe`` the ``verity`` one, which
-``tundravm bake ... --attr verity_recipe`` selects. Both boot in CI from ``qemu.raw``
+``tundravm build ... --attr verity_recipe`` selects. Both boot in CI from ``qemu.raw``
 through the ESP (``tests/integration/test_fixture_boot.py``, ``test_verity_boot.py``):
 ``Web`` serves a page the host fetches, and ``BootProbe`` prints the command line and what
 the root is on the console.

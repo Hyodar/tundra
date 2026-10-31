@@ -685,12 +685,12 @@ class KernelFile(NamedSource):
         """``(path, shell lines)``: the sha256-checked copy at *path*, else lines that fail."""
         effective = self.source.inline_pin or pin
         if effective is None:
-            message = f"tundravm: {self.name} is not pinned: run tundravm lock, then tundravm fetch"
+            message = f"tundravm: {self.name} is not pinned: run tundravm lock, then tundravm build"
             return "", (f"echo {shlex.quote(message)} >&2", "exit 1")
         directory = f"$SRCDIR/{SOURCES_MOUNT}/{self.pin_dir(effective)}"
         path = f'"{directory}/{self.source.filename}"'
         missing = shlex.quote(
-            f"tundravm: {self.pin_dir(effective)} is not fetched: run tundravm fetch RECIPE"
+            f"tundravm: {self.pin_dir(effective)} is not fetched: run tundravm build"
         )
         return path, (
             f'[ -f "{directory}/{FETCH_MARKER}" ] || {{ echo {missing} >&2; exit 1; }}',
@@ -721,7 +721,7 @@ class DebFile(NamedSource):
             return self.script
         directory = f"{SOURCES_MOUNT}/{self.pin_dir(effective)}"
         deb = f"{directory}/{self.source.filename}"
-        missing = f"tundravm: {self.pin_dir(effective)} is not fetched: run tundravm fetch RECIPE"
+        missing = f"tundravm: {self.pin_dir(effective)} is not fetched: run tundravm build"
         return (
             f'if [ ! -f "$SRCDIR/{directory}/{FETCH_MARKER}" ]; then\n'
             f"    echo {shlex.quote(missing)} >&2\n"
@@ -828,7 +828,7 @@ class SourceBuild(NamedSource):
 
         *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins. The hook
         copies the host-fetched checkout ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``;
-        unpinned, it only fails, naming ``tundravm lock`` and ``tundravm fetch``.
+        unpinned, it only fails, naming ``tundravm lock`` and ``tundravm build``.
         *distribution* (the variant's ``Lowered.build_distribution``) enters the cache
         fingerprint.
         """
@@ -864,7 +864,7 @@ class SourceBuild(NamedSource):
         if effective is None:
             message = (
                 f"tundravm: source build {self.name} is not pinned: "
-                "run tundravm lock, then tundravm fetch"
+                "run tundravm lock, then tundravm build"
             )
             unpinned = f"# unpinned: {self.source.requested}\n"
             return f"{unpinned}echo {shlex.quote(message)} >&2 && exit 1"
@@ -879,7 +879,7 @@ class SourceBuild(NamedSource):
         """Copy the mounted checkout of *pin* to the build tree, without its marker."""
         source = f'"$SRCDIR/{SOURCES_MOUNT}/{self.pin_dir(pin)}"'
         target = f'"{Build.build_path(self.name)}"'
-        missing = f"tundravm: {self.pin_dir(pin)} is not fetched: run tundravm fetch RECIPE"
+        missing = f"tundravm: {self.pin_dir(pin)} is not fetched: run tundravm build"
         return (
             f"[ -f {source}/{FETCH_MARKER} ] || {{ echo {shlex.quote(missing)} >&2; exit 1; }}"
             f" && mkdir -p {target} && cp -a --no-preserve=ownership {source}/. {target}/"

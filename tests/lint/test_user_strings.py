@@ -18,13 +18,6 @@ EXAMPLES = REPO_ROOT / "examples"
 REMOVED_VERB = "removed CLI verb (new, check, lock, build, show, run, deploy, attest, ...)"
 """The verbs folded into the twelve commands (plan 3.4): no hint, template or doc names one."""
 
-TREE_EMBEDDED = (
-    "run tundravm lock, then tundravm fetch",
-    "is not fetched: run tundravm fetch RECIPE",
-)
-"""Messages the build scripts of emitted trees print: the committed trees and the compiler's
-golden tests pin their bytes, so they change together with the compiler, not here."""
-
 DENYLIST = {
     "fluent method call": re.compile(r"\bimg\.[a-z_]+\("),
     "fluent profile block": re.compile(r"\bwith img\b"),
@@ -46,6 +39,9 @@ DENYLIST = {
     ),
     "elided measure flags (--build, --variant)": re.compile(r"\bmeasure \.\.\."),
     "removed init --base flag (--release)": re.compile(r"\binit\b[^\n]*--base\b"),
+    "removed doc (docs/guide.md, docs/reference/)": re.compile(
+        r"\bdocs/(?:api|cli|concepts|tutorial|testing|reproducibility|policy|module-authoring)\.md"
+    ),
     REMOVED_VERB: re.compile(
         r"(?<!from )\btundravm (?:init|inspect|lint|compile|diff|fetch|bake|measure|sbom|evidence"
         r"|changes|release|witness|explore|preview|watch|status|clean|config|ci|completion|units"
@@ -122,8 +118,6 @@ def _runtime_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
 
 
 def _hits(text: str) -> list[str]:
-    for phrase in TREE_EMBEDDED:
-        text = text.replace(phrase, "")
     return [what for what, pattern in DENYLIST.items() if pattern.search(text)]
 
 
@@ -188,10 +182,18 @@ def test_cli_docs_cite_only_the_twelve_commands(path: Path) -> None:
         "tundravm measure --export-policy FILE",
         "uv run tundravm ci node.py",
         "tundravm import ./tree",
+        "echo 'tundravm: tool is not pinned: run tundravm lock, then tundravm fetch' >&2",
+        "tundravm: tool-0123 is not fetched: run tundravm fetch RECIPE",
     ],
 )
 def test_removed_verbs_are_caught(text: str) -> None:
     assert REMOVED_VERB in _hits(text)
+
+
+def test_removed_docs_are_caught() -> None:
+    assert _hits("keep the ones the program does not need (docs/api.md: Hardening)") == [
+        "removed doc (docs/guide.md, docs/reference/)"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -202,7 +204,7 @@ def test_removed_verbs_are_caught(text: str) -> None:
         "tundravm show --diff OLD NEW",
         "tundravm check --tree mkosi",
         "tundravm convert ./units --from systemd",
-        "echo 'tundravm: tool is not pinned: run tundravm lock, then tundravm fetch' >&2",
+        "echo 'tundravm: tool is not pinned: run tundravm lock, then tundravm build' >&2",
     ],
 )
 def test_the_twelve_commands_pass(text: str) -> None:

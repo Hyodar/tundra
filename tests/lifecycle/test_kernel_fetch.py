@@ -282,7 +282,7 @@ def test_an_unpinned_current_kernel_script_only_fails(tmp_path: Path, config: Pa
     recipe = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config))
     script = _script(recipe, tmp_path / "tree")
     assert (
-        "echo 'tundravm: kernel 6.1 is not pinned: run tundravm lock, then tundravm fetch' >&2\n"
+        "echo 'tundravm: kernel 6.1 is not pinned: run tundravm lock, then tundravm build' >&2\n"
     ) in script
     assert "git clone" not in script and "tundravm-sources" not in script
 

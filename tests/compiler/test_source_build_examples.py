@@ -61,11 +61,11 @@ def _surge_stack() -> Recipe:
     return load_recipe(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
 
 
-def test_unpinned_app_builds_fail_naming_lock_and_fetch() -> None:
+def test_unpinned_app_builds_fail_naming_lock_and_build() -> None:
     hooks = _hooks(compile(_surge_stack()))
     assert (
         "\n# unpinned: feat/tdx-proving\necho 'tundravm: source build taiko-client is not "
-        "pinned: run tundravm lock, then tundravm fetch' >&2 && exit 1\n"
+        "pinned: run tundravm lock, then tundravm build' >&2 && exit 1\n"
     ) in hooks
 
 
@@ -220,7 +220,7 @@ def test_install_steps_render_files_modes_and_directories() -> None:
     assert hook == (
         f'if ! ([ -d {key} ] && [ "$(ls -A {key} 2>/dev/null)" ]); then '
         f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: "
-        "app-aaaaaaaaaaaa-26961656 is not fetched: run tundravm fetch RECIPE' >&2; exit 1; } && "
+        "app-aaaaaaaaaaaa-26961656 is not fetched: run tundravm build' >&2; exit 1; } && "
         f'mkdir -p "$BUILDROOT/build/app" && cp -a --no-preserve=ownership {checkout}/. '
         '"$BUILDROOT/build/app"/ && rm -f "$BUILDROOT/build/app"/.tundravm-complete && '
         "mkosi-chroot bash -c 'cd /build/app && make' && "

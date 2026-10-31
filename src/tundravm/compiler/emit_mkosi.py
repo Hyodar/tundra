@@ -619,11 +619,11 @@ def _kernel_copy(kernel: Kernel, checkout: str | None) -> list[str]:
     if checkout is None:
         version = kernel.version or "unknown"
         message = (
-            f"tundravm: kernel {version} is not pinned: run tundravm lock, then tundravm fetch"
+            f"tundravm: kernel {version} is not pinned: run tundravm lock, then tundravm build"
         )
         return [f"echo {shlex.quote(message)} >&2", "exit 1"]
     source = f'"$SRCDIR/{SOURCES_MOUNT}/{checkout}"'
-    missing = f"tundravm: {checkout} is not fetched: run tundravm fetch RECIPE"
+    missing = f"tundravm: {checkout} is not fetched: run tundravm build"
     dest = '"$KERNEL_CACHE/repo"' if kernel.source_subdir else '"$KERNEL_CACHE/src"'
     skip = [".git", FETCH_MARKER]
     if kernel.source_archive is not None:
@@ -711,7 +711,7 @@ def _kernel_file(
     for found, path, lines in files:
         if found == url:
             return path, list(lines)
-    message = f"tundravm: {url} is not pinned: run tundravm lock, then tundravm fetch"
+    message = f"tundravm: {url} is not pinned: run tundravm lock, then tundravm build"
     return "", [f"echo {shlex.quote(message)} >&2", "exit 1"]
 
 

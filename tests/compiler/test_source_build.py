@@ -238,7 +238,7 @@ def test_hooks_copy_the_fetched_checkout() -> None:
         f"{TOOL_MARKER}\n"
         "# unpinned: main\n"
         "echo 'tundravm: source build tool is not pinned: run tundravm lock, then "
-        "tundravm fetch' >&2 && exit 1"
+        "tundravm build' >&2 && exit 1"
     )
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_Fixed(SHA_A))))
     directory = source_dir("tool", SHA_A, REPO)
@@ -248,7 +248,7 @@ def test_hooks_copy_the_fetched_checkout() -> None:
         f"{TOOL_MARKER}\n"
         f'if ! ([ -d {cache} ] && [ "$(ls -A {cache} 2>/dev/null)" ]); then '
         f"[ -f {checkout}/.tundravm-complete ] || {{ echo 'tundravm: {directory} is not "
-        "fetched: run tundravm fetch RECIPE' >&2; exit 1; } && "
+        "fetched: run tundravm build' >&2; exit 1; } && "
         f'mkdir -p "$BUILDROOT/build/tool" && cp -a --no-preserve=ownership {checkout}/. '
         '"$BUILDROOT/build/tool"/ && rm -f "$BUILDROOT/build/tool"/.tundravm-complete && '
         f"mkosi-chroot bash -c 'cd /build/tool && {GO_SCRIPT}' && mkdir -p {cache} && "
@@ -321,7 +321,7 @@ def test_tdxs_hook_copies_the_fetched_checkout() -> None:
     assert current == lower(recipe).source_builds()["tdxs"].render()
     assert current.startswith('# tundravm build: {"build":{"kind":"script"')
     assert current.split("\n", 1)[1].startswith("# unpinned: master\n")
-    assert "run tundravm lock, then tundravm fetch" in current
+    assert "run tundravm lock, then tundravm build" in current
 
 
 def _runtime_recipe() -> Recipe:
@@ -376,7 +376,7 @@ def test_lock_records_fetches_and_compile_uses_pin() -> None:
 def test_unpinned_compile_emits_marker() -> None:
     script = _hooks(compile(_recipe(_build())))
     assert "# unpinned: main" in script
-    assert "tundravm fetch" in script
+    assert "then tundravm build" in script
     assert script == _spec().render()
 
 
