@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import re
 import tomllib
 from pathlib import Path
@@ -72,3 +74,31 @@ def test_a_non_empty_directory_is_refused(here: Path, cli: Cli) -> None:
 def test_an_empty_directory_is_used(here: Path, cli: Cli) -> None:
     (here / "demo").mkdir()
     assert cli("new", "demo").code == EXIT_OK
+
+
+@pytest.mark.parametrize("template", ["service", "prover"])
+def test_the_generated_tests_use_the_public_api_and_pass(
+    here: Path, cli: Cli, template: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert cli("new", "demo", "--template", template).code == EXIT_OK
+    path = here / "demo" / "tests" / "test_demo.py"
+    tree = ast.parse(path.read_text())
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    imported |= {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert imported - {"os", "pathlib"} == {"tundravm", "tundravm.testing"}
+    spec = importlib.util.spec_from_file_location("generated_test_demo", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tests = [getattr(module, name) for name in dir(module) if name.startswith("test_")]
+    assert len(tests) == 3
+    monkeypatch.setenv("TUNDRAVM_UPDATE_GOLDEN", "1")
+    module.test_matches_committed_tree()
+    monkeypatch.delenv("TUNDRAVM_UPDATE_GOLDEN")
+    for test in tests:
+        test()

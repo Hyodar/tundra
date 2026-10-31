@@ -1,6 +1,6 @@
 """File templates for ``tundravm new``: the starter images and the project scaffold.
 
-Each recipe template is assembled from the sections below with
+Each image template is assembled from the sections below with
 :class:`string.Template` (``$name`` placeholders; the generated Python holds no
 ``$``), so the rendered source is a pure function of its arguments.
 """
@@ -24,7 +24,7 @@ EXPLICIT_BACKENDS: dict[str, tuple[str, str]] = {
     "lima": ("LimaMkosiBackend", 'LimaMkosiBackend(cpus=6, memory="12GiB", disk="100GiB")'),
     "local": ("LocalLinuxBackend", "LocalLinuxBackend()"),
 }
-"""``render_recipe_template(backend=KIND)``: the class and the instance a file that must bake
+"""``render_recipe_template(backend=KIND)``: the class and the instance a file that must build
 with one backend, whatever the host, binds to ``backend``."""
 
 TemplateName = Literal["minimal", "service", "cloud", "prover"]
@@ -38,7 +38,8 @@ TEMPLATES: dict[str, str] = {
     "prover": "cloud with the app behind an attested TLS ingress, its state on a volume an "
     "operator unlocks, and a token delivered after attestation",
 }
-"""Template name -> one-line description, in ``init --list-templates`` order."""
+"""Template name -> one-line description; ``new --template`` offers ``service`` and
+``prover``, and the tests render all four."""
 
 DEFAULT_TEMPLATE: TemplateName = "service"
 
@@ -133,7 +134,7 @@ class App(Component):
     """The app: a web page busybox httpd serves, its readiness, and a lint rule.
 
     Swap in your program: ship it with a GoBinary, a CargoBinary or a Package and point
-    the service at it. Fragment name: ``app``.
+    the service at it. Component name: ``app``.
     """
 
     version: str
@@ -214,7 +215,7 @@ class App(Component):
     volume and a token delivered after attestation.
 
     Swap in your program: ship it with a GoBinary, a CargoBinary or a Package and point
-    the service at it; it reads the token at ``self.token.path``. Fragment name: ``app``.
+    the service at it; it reads the token at ``self.token.path``. Component name: ``app``.
     """
 
     version: str
@@ -305,33 +306,34 @@ TEST_TEMPLATE = r'''"""Tests for $filename: check, compile and the committed mko
 import os
 from pathlib import Path
 
-from tundravm.declarative import compile, read_lock
-from tundravm.recipe import load_recipe
-from tundravm.testing import UPDATE_GOLDEN_ENV, assert_clean, assert_tree, compile_tree
+import tundravm
+from tundravm.testing import UPDATE_GOLDEN_ENV, assert_clean, assert_tree, plan, read_lock
 
 PROJECT = Path(__file__).resolve().parent.parent
-RECIPE = load_recipe(PROJECT / "$filename")
+IMAGE = tundravm.load(PROJECT / "$filename")
+PROFILES = ($profiles)
 GOLDEN = PROJECT / "mkosi"
 LOCKFILE = PROJECT / "build" / "tundravm.lock"
 
 
 def test_lints_clean() -> None:
+    for profile in PROFILES:
 $lint_call
 
 
-def test_compiles_every_variant(tmp_path: Path) -> None:
-    tree = compile_tree(RECIPE, path=tmp_path)
-    assert set(tree.variants) == {$variants}
-    assert tree.conf()
+def test_compiles_every_profile() -> None:
+    for profile in PROFILES:
+        app = plan(IMAGE, profile).service("app")
+        assert app.user == "app"
 
 
 def test_matches_committed_tree() -> None:
     # mkosi/ is the committed output of `tundravm build $filename --tree-only mkosi`. After an
-    # intended recipe change, rewrite it with: TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests
+    # intended image change, rewrite it with: TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests
     if not GOLDEN.is_dir() and os.environ.get(UPDATE_GOLDEN_ENV) != "1":
         raise AssertionError(f"{GOLDEN} is missing: run `tundravm build --tree-only mkosi`")
     lock = read_lock(LOCKFILE) if LOCKFILE.exists() else None
-    assert_tree(compile(RECIPE, lock=lock), GOLDEN)
+    assert_tree(tundravm.compile(IMAGE, lock=lock), GOLDEN)
 '''
 
 EDITABLE_INSTALL = "uv add --editable PATH/TO/tundravm"
@@ -583,16 +585,16 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
     "cloud": ("source-unpinned",),
     "prover": ("source-unpinned",),
 }
-"""Lint codes a freshly generated template reports by design: ``tundravm lock`` clears
+"""Lint codes a freshly generated image reports by design: ``tundravm lock`` clears
 ``source-unpinned``."""
 
 _ALLOW_COMMENTS: dict[str, str] = {
-    "minimal": "    # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
-    "service": "    # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
-    "cloud": "    # The EfiStub package stays unpinned until `tundravm lock` pins its sha256.\n",
+    "minimal": "        # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
+    "service": "        # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
+    "cloud": "        # The EFI stub stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
-        "    # The tundra-tools builds (evidence, volume and delivery tools) and the EfiStub\n"
-        "    # package stay unpinned until `tundravm lock` pins them.\n"
+        "        # The tundra-tools builds (evidence, volume and delivery tools) and the EFI\n"
+        "        # stub package stay unpinned until `tundravm lock` pins them.\n"
     ),
 }
 """The comment above ``allow=`` in the test module of a template with :data:`EXPECTED_FINDINGS`."""
@@ -633,16 +635,21 @@ def render_recipe_template(
 
 
 def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> str:
-    """Return ``tests/test_<name>.py``: lint, compile and golden-tree tests for the recipe."""
+    """Return ``tests/test_<name>.py``: lint, compile and golden-tree tests for the image.
+
+    It imports only ``tundravm`` and ``tundravm.testing``.
+    """
     expected = EXPECTED_FINDINGS[template]
+    subject = "plan(IMAGE, profile)"
     if expected:
         codes = ", ".join(f'"{code}"' for code in expected)
-        lint_call = f"{_ALLOW_COMMENTS[template]}    assert_clean(RECIPE, allow=({codes},))"
+        lint_call = f"{_ALLOW_COMMENTS[template]}        assert_clean({subject}, allow=({codes},))"
     else:
-        lint_call = "    assert_clean(RECIPE)"
-    variants = ", ".join(f'"{name}"' for name in TEMPLATE_VARIANTS[template])
+        lint_call = f"        assert_clean({subject})"
+    names = [f'"{name}"' for name in TEMPLATE_VARIANTS[template]]
+    profiles = ", ".join(names) + ("," if len(names) == 1 else "")
     return Template(TEST_TEMPLATE).substitute(
-        filename=filename, lint_call=lint_call, variants=variants
+        filename=filename, lint_call=lint_call, profiles=profiles
     )
 
 
