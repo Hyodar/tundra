@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import source_dir
+from tests.helpers import fetch, source_dir
 from tundravm import _source
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.base import MountSpec, Requirement
@@ -37,7 +37,7 @@ from tundravm.declarative import (
     lock_status,
     lower,
 )
-from tundravm.declarative.lifecycle import bake_image, check_report, compile_image, fetch
+from tundravm.declarative.lifecycle import bake_image, check_report, compile_image
 from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ErrorCode, PolicyError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
@@ -315,22 +315,6 @@ def test_fetch_keeps_the_deps_only_while_their_manifest_is_complete(
     _GoModules(monkeypatch, [])
     (unrepaired,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert unrepaired.deps == f"go: incomplete (deps/go/{MODULE_DIR} is missing or changed)"
-
-
-def test_fetch_force_refills_the_dependency_caches(
-    tmp_path: Path, go_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    url, first = go_repo
-    tools = _GoModules(monkeypatch, ["go"])
-    recipe = _recipe(_build(url, "go"))
-    out = tmp_path / "out"
-    fetch(recipe, lock=_locked(recipe, first), build=out)
-    stale = out / ".sources" / "deps" / "go" / "stale"
-    stale.write_text("left over\n", encoding="utf-8")
-    (forced,) = fetch(recipe, lock=_locked(recipe, first), build=out, force=True)
-    assert forced.deps == "go: prefetched" and len(tools.calls) == 2
-    assert not stale.exists()
-    assert (out / ".sources" / "deps" / "go" / MODULE_DIR / "dep.go").is_file()
 
 
 def test_a_marker_without_a_manifest_is_prefetched_again(

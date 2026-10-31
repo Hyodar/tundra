@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import json
 import sys
 import time
 from dataclasses import dataclass, field
@@ -17,16 +16,14 @@ from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Backend, File, Package, Recipe, bake, lock, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.errors import BackendExecutionError, LintError
-from tundravm.models import ArtifactRef, BakeRequest, BakeResult, ProfileBuildResult
+from tundravm.models import BakeRequest, BakeResult
 from tundravm.observability import (
     Event,
-    JsonReporter,
     Progress,
     StructuredLogger,
     TextReporter,
     format_duration,
     format_size,
-    render_bake_summary,
 )
 from tundravm.testing import FakeMkosi
 
@@ -141,27 +138,6 @@ def test_text_reporter_survives_a_closed_stream() -> None:
     reporter = TextReporter(Broken(), live=False)
     _feed(reporter, lines=1, status="ok")
     reporter.close()
-
-
-# -- JsonReporter -------------------------------------------------------------
-
-
-def test_json_reporter_writes_one_object_per_line() -> None:
-    stream = io.StringIO()
-    reporter = JsonReporter(stream)
-    reporter.emit(_phase("start"))
-    reporter.emit(_output("hello"))
-    reporter.emit(Event("done", None, "baked 1 variant in 0.1s", 0.1234, {"status": "ok"}))
-    payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
-    assert [p["kind"] for p in payloads] == ["phase", "log", "done"]
-    assert payloads[1] == {
-        "kind": "log",
-        "variant": "default",
-        "message": "hello",
-        "elapsed_s": 0.0,
-        "extra": {"source": "backend"},
-    }
-    assert payloads[2]["elapsed_s"] == 0.123
 
 
 # -- backend streaming --------------------------------------------------------
@@ -302,10 +278,6 @@ def test_bake_without_reporter_records_digests_and_durations(tmp_path: Path) -> 
     assert len(profile.artifacts["qemu"].digest or "") == 64
     assert profile.duration_s is not None and result.duration_s is not None
     assert result.duration_s >= profile.duration_s
-    saved = json.loads((tmp_path / "build" / "bake-result.json").read_text())
-    assert (
-        saved["variants"]["default"]["artifact_digests"]["qemu"] == profile.artifacts["qemu"].digest
-    )
 
 
 def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
@@ -320,8 +292,7 @@ def test_public_bake_reports_progress_lines(tmp_path: Path) -> None:
     )
     assert any(line.startswith("[default] build via local_linux ... ok") for line in progress)
     assert (artifact.variant, artifact.target) == ("default", "qemu")
-    saved = json.loads((tmp_path / "out" / "bake-result.json").read_text())
-    assert saved["variants"]["default"]["artifact_digests"]["qemu"] == artifact.sha256
+    assert len(artifact.sha256) == 64
 
 
 def test_bake_lint_failure_emits_failed_phase_and_done(tmp_path: Path) -> None:
@@ -374,26 +345,6 @@ def test_format_helpers() -> None:
     assert format_size(93) == "93 B"
     assert format_size(1536) == "1.5 KiB"
     assert format_size(3 * 1024**3) == "3.0 GiB"
-
-
-def test_render_bake_summary_aligns_columns(tmp_path: Path) -> None:
-    disk = tmp_path / "disk.qcow2"
-    disk.write_bytes(b"x" * 2048)
-    result = BakeResult(
-        profiles={
-            "default": ProfileBuildResult(
-                profile="default",
-                artifacts={"qemu": ArtifactRef(target="qemu", path=disk, digest="ab" * 32)},
-                duration_s=75.0,
-            ),
-            "empty": ProfileBuildResult(profile="empty"),
-        }
-    )
-    lines = render_bake_summary(result).splitlines()
-    assert lines[0].split() == ["variant", "target", "artifact", "size", "sha256", "time"]
-    assert lines[1].split() == ["default", "qemu", str(disk), "2.0", "KiB", "abababababab", "1m15s"]
-    assert lines[2].split() == ["empty", "-", "(no", "artifacts)", "-", "-", "-"]
-    assert lines[0].index("target") == lines[1].index("qemu") == lines[2].index("-")
 
 
 def test_backend_notices_show_unless_quiet() -> None:

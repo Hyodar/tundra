@@ -18,7 +18,6 @@ from tundravm.toolchain import (
     Toolchain,
     ToolsTree,
     compare_toolchains,
-    describe_changes,
     installed_mkosi,
     lock_toolchain,
     running_toolchain,
@@ -89,11 +88,11 @@ def test_compare_names_each_differing_field() -> None:
 
     changes = compare_toolchains(a, b)
 
-    assert describe_changes(changes) == (
-        f"different (mkosi 27.1 @{'a' * 12} vs 26, tools_tree "
-        "debian/trixie@20251020T000000Z vs debian/trixie@20250101T000000Z)"
-    )
-    assert describe_changes(compare_toolchains(a, a)) == "same"
+    assert [change.render() for change in changes] == [
+        f"mkosi 27.1 @{'a' * 12} vs 26",
+        "tools_tree debian/trixie@20251020T000000Z vs debian/trixie@20250101T000000Z",
+    ]
+    assert not compare_toolchains(a, a)
     assert {d.severity for d in toolchain_drift(a, b)} == {"warning"}
     assert {d.severity for d in toolchain_drift(a, b, strict=True)} == {"error"}
     assert {d.code for d in toolchain_drift(a, b)} == {"toolchain-drift"}

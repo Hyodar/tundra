@@ -7,7 +7,6 @@ machines (one JSON object per line), :class:`NullReporter` to discard.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -21,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TextIO
 
 if TYPE_CHECKING:
-    from .models import BakeResult
+    pass
 
 EventKind = Literal["phase", "log", "artifact", "warning", "done"]
 PhaseStatus = Literal["start", "ok", "fail"]
@@ -77,30 +76,6 @@ class NullReporter:
 
     def close(self) -> None:
         pass
-
-
-class JsonReporter:
-    """Write each event as one JSON object per line."""
-
-    def __init__(self, stream: TextIO) -> None:
-        self._stream = stream
-        self._broken = False
-
-    def emit(self, event: Event) -> None:
-        if self._broken:
-            return
-        try:
-            self._stream.write(json.dumps(event.to_dict(), sort_keys=True) + "\n")
-            self._stream.flush()
-        except BrokenPipeError:
-            self._broken = True
-
-    def close(self) -> None:
-        if not self._broken:
-            try:
-                self._stream.flush()
-            except BrokenPipeError:
-                self._broken = True
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -487,27 +462,6 @@ def format_size(size: int) -> str:
     return f"{value:.1f} TiB"
 
 
-def render_bake_summary(result: BakeResult) -> str:
-    """Aligned table: variant, target, artifact, size, sha256 prefix, duration."""
-    rows = [("variant", "target", "artifact", "size", "sha256", "time")]
-    for name in sorted(result.profiles):
-        profile = result.profiles[name]
-        took = "-" if profile.duration_s is None else format_duration(profile.duration_s)
-        if not profile.artifacts:
-            rows.append((name, "-", "(no artifacts)", "-", "-", took))
-        for target in sorted(profile.artifacts):
-            ref = profile.artifacts[target]
-            path = Path(ref.path)
-            size = format_size(path.stat().st_size) if path.exists() else "-"
-            digest = ref.digest[:12] if ref.digest else "-"
-            rows.append((name, target, display_path(path), size, digest, took))
-    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
-    return "\n".join(
-        "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip()
-        for row in rows
-    )
-
-
 def display_path(path: Path) -> str:
     """*path* relative to the working directory when it lies inside it, else as given."""
     try:
@@ -521,7 +475,6 @@ __all__ = [
     "TAIL_LINES",
     "Event",
     "EventKind",
-    "JsonReporter",
     "NullReporter",
     "Phase",
     "Progress",
@@ -531,5 +484,4 @@ __all__ = [
     "display_path",
     "format_duration",
     "format_size",
-    "render_bake_summary",
 ]

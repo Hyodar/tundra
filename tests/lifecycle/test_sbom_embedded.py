@@ -23,7 +23,6 @@ from tundravm.declarative import (
     bake,
     lock,
     lower,
-    read_artifacts,
     sbom,
 )
 from tundravm.declarative._embedded import cargo_crates, embedded_dependencies, go_modules
@@ -237,8 +236,7 @@ def test_the_bake_records_installed_digests_from_the_ukis_initrd(
     monkeypatch.setattr(LocalLinuxBackend, "execute", execute)
     recipe = bootable()
     locked = lock(recipe, resolver=_resolve)
-    bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path / "build")
-    (artifact,) = read_artifacts(tmp_path / "build")
+    (artifact,) = bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path / "build")
     assert artifact.installed == {"/etc/app.conf": sha(b"conf"), "/usr/bin/app": sha(binary)}
     (tmp_path / "bins").mkdir()
     (tmp_path / "bins" / "app").write_bytes(binary)
@@ -249,8 +247,5 @@ def test_the_bake_records_installed_digests_from_the_ukis_initrd(
 def test_a_uki_without_a_readable_initrd_records_no_installed_digests(tmp_path: Path) -> None:
     recipe = bootable()
     locked = lock(recipe, resolver=_resolve)
-    bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path)
-    (artifact,) = read_artifacts(tmp_path)
+    (artifact,) = bake(recipe, lock=locked, backend=Backend("local"), build=tmp_path)
     assert artifact.installed is None
-    payload = json.loads((tmp_path / "bake-result.json").read_text(encoding="utf-8"))
-    assert "installed" not in payload["variants"]["default"]["declarative"]

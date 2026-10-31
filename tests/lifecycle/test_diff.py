@@ -1,5 +1,4 @@
-"""Tests for compiled-tree diffing (``tundravm.declarative.diff``, ``tundravm diff``,
-``compile --check``)."""
+"""Compiled-tree diffing: what ``check --tree`` reports against a committed tree."""
 
 from __future__ import annotations
 
@@ -146,13 +145,11 @@ def test_diff_reports_new_package(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     tv.compile(make_recipe()).write(tree)
     assert diff_against(lower(make_recipe()), tree).is_clean
-    assert tv.diff(tv.compile(make_recipe()), tree) == ""
 
     changed = make_recipe(Package("extra"))
     diff = diff_against(lower(changed), tree)
     assert [(c.path, c.status) for c in diff.changes] == [("payload/mkosi.conf", "modified")]
     assert "+    extra\n" in diff.unified()
-    assert tv.diff(tv.compile(changed), tree) == diff.unified()
     assert "    extra\n" not in (tree / "payload" / "mkosi.conf").read_text(encoding="utf-8")
 
 
@@ -169,7 +166,6 @@ def test_diff_ignores_variants_that_were_not_compiled(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     tv.compile(recipe).write(tree)
     assert (tree / "payload" / "mkosi.profiles" / "other" / "mkosi.conf").is_file()
-    assert tv.diff(tv.compile(recipe, variants=["default"]), tree) == ""
     assert diff_against(lower(recipe), tree, profiles=["default"]).is_clean
 
 
@@ -183,17 +179,18 @@ def test_diff_leaves_the_tree_alone_until_written(tmp_path: Path) -> None:
     assert [c.path for c in diff_against(lower(make_recipe()), tree).changes] == [
         "payload/mkosi.conf"
     ]
-    assert "-hand edit\n" in tv.diff(first, tree)
+    assert "-hand edit\n" in diff_against(lower(make_recipe()), tree).unified()
     assert conf.read_text(encoding="utf-8") == "hand edit\n"  # diffing never writes
     first.write(tree)
-    assert tv.diff(first, tree) == ""
+    assert diff_against(lower(make_recipe()), tree).is_clean
 
-    changed = tv.compile(make_recipe(Package("extra")))
+    extra = make_recipe(Package("extra"))
+    changed = tv.compile(extra)
     assert changed.digest != first.digest
-    assert "+    extra\n" in tv.diff(changed, tree)
+    assert "+    extra\n" in diff_against(lower(extra), tree).unified()
     changed.write(tree)
     assert "    extra\n" in conf.read_text(encoding="utf-8")
-    assert tv.diff(changed, tree) == ""
+    assert diff_against(lower(extra), tree).is_clean
 
 
 @pytest.fixture

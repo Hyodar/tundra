@@ -26,7 +26,7 @@ __version__ = '0.1.0'
 class ArtifactError(TdxError)
 ```
 
-A baked artifact's bytes no longer match the sha256 `bake-result.json` recorded. Code `E_ARTIFACT_CHANGED`.
+A baked artifact's bytes no longer match the sha256 the bake recorded. Code `E_ARTIFACT_CHANGED`.
 
 ### `AttestationError`
 
@@ -1014,7 +1014,7 @@ A source build's source could not be resolved to a pin.
 class StateError(TdxError)
 ```
 
-Persisted SDK state (such as `bake-result.json`) is missing or unreadable. Code `E_STATE`.
+Persisted state (a build directory, an instance receipt, a checkout) is missing or unreadable. Code `E_STATE`.
 
 ### `StaticAddress`
 

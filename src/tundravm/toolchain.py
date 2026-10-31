@@ -5,9 +5,8 @@ tundravm, pinned to a release tag (:data:`MKOSI_PIN`), and every build tool besi
 (systemd, ukify, systemd-boot, kmod, qemu, OVMF, pefile) comes from mkosi's tools tree
 (``ToolsTree=default``), whose distribution, release and snapshot are pinned explicitly.
 ``tundravm lock`` records the toolchain (:class:`Toolchain`) beside the recipe; ``lock
---check`` and ``lint`` report ``toolchain-drift`` when the running one differs; a bake
-records the toolchain it used in ``bake-result.json``, and ``evidence`` and ``witness``
-compare theirs field by field.
+--check`` and ``check`` report ``toolchain-drift`` when the running one differs; a
+build records the lock's in its manifest (``inputs/toolchain.json``).
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from __future__ import annotations
 import functools
 import json
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
@@ -108,7 +107,7 @@ class Toolchain:
     measure: tuple[tuple[str, str], ...] = field(default=())
 
     def payload(self) -> dict[str, Any]:
-        """The JSON form the lockfile, ``bake-result.json``, evidence and witnesses hold."""
+        """The JSON form the lockfile and a build's ``inputs/toolchain.json`` hold."""
         out: dict[str, Any] = {"tundravm": self.tundravm}
         if self.mkosi is not None:
             mkosi: dict[str, Any] = {"version": self.mkosi.version}
@@ -195,13 +194,6 @@ def compare_toolchains(left: Toolchain, right: Toolchain) -> tuple[ToolchainChan
         for name in sorted({*a, *b})
         if a.get(name) != b.get(name)
     )
-
-
-def describe_changes(changes: Sequence[ToolchainChange]) -> str:
-    """``same`` or ``different (mkosi 27.1 vs 26, …)``."""
-    if not changes:
-        return "same"
-    return "different (" + ", ".join(change.render() for change in changes) + ")"
 
 
 def drift_severity(*, strict: bool) -> Severity:

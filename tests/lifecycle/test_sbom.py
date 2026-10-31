@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,6 @@ from tundravm.declarative import (
     bake,
     lock,
     lower,
-    read_artifacts,
     read_lock,
     sbom,
 )
@@ -360,11 +360,13 @@ def test_moving_the_bake_directory_changes_no_document(
 ) -> None:
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "0")
     recipe = Recipe("node", items=(Package("curl"), Package("linux-image-amd64")))
-    bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "one")
-    shutil.copytree(tmp_path / "one", tmp_path / "elsewhere" / "two")
+    (first,) = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "one")
+    moved = tmp_path / "elsewhere" / "two"
+    shutil.copytree(tmp_path / "one", moved)
+    second = replace(first, path=moved / first.path.relative_to(tmp_path / "one"), build=moved)
     documents = [
-        sbom(read_artifacts(out)[0], lock=read_lock(out / "tundravm.lock"))
-        for out in (tmp_path / "one", tmp_path / "elsewhere" / "two")
+        sbom(artifact, lock=read_lock(Path(artifact.build or ".") / "tundravm.lock"))
+        for artifact in (first, second)
     ]
     assert documents[0].artifact == Path("default/output/qemu.raw")
     for format in SBOM_FORMATS:

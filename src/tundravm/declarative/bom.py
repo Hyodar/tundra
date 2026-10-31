@@ -377,8 +377,8 @@ def sbom(
     A lowered recipe must have one active variant (``lower(recipe, variants=[...])``).
 
     An artifact is checked first (:func:`verify_artifact`). Its document is bound to
-    the bake: *lock* must hash to the lockfile sha256 ``bake-result.json`` records
-    and the manifest to the one recorded beside the artifact, else ``ArtifactError``
+    the bake: *lock* must hash to the lockfile sha256 the bake recorded and the
+    manifest to the one recorded beside the artifact, else ``ArtifactError``
     (``E_ARTIFACT_CHANGED``). *allow_unbound* accepts them instead, with a note,
     and marks the document incomplete (``bound`` is false). Paths in the document
     are relative to the bake output directory, so moving it changes nothing.
@@ -787,22 +787,6 @@ def _created() -> str:
         datetime.fromtimestamp(int(epoch), UTC) if epoch.isdigit() else datetime.now(UTC)
     ).replace(microsecond=0)
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def spdx_packages(document: Mapping[str, Any]) -> dict[str, str]:
-    """Name to version (empty when unknown) of each package an SPDX *document*'s image
-    ``CONTAINS``, as :meth:`Sbom.to_spdx` writes it."""
-    contained = {
-        r.get("relatedSpdxElement")
-        for r in document.get("relationships") or []
-        if isinstance(r, dict) and r.get("relationshipType") == "CONTAINS"
-    }
-    found: dict[str, str] = {}
-    for package in document.get("packages") or []:
-        if isinstance(package, dict) and package.get("SPDXID") in contained:
-            version = str(package.get("versionInfo") or "")
-            found[str(package.get("name"))] = "" if version == "NOASSERTION" else version
-    return found
 
 
 # ── PURLs and serializers ────────────────────────────────────────────────

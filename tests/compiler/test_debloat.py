@@ -13,7 +13,7 @@ from tundravm.declarative import (
     lock,
     lower,
 )
-from tundravm.models import BakeResult, DebloatConfig
+from tundravm.models import DebloatConfig
 
 
 def _recipe(*variants: Variant) -> Recipe:
@@ -55,9 +55,8 @@ def test_bake_report_contains_debloat_section(tmp_path: Path) -> None:
 
     bake(recipe, lock=lock(recipe), backend=Backend("local"), build=out)
 
-    result = BakeResult.load(out)
-    default_report = _read_report(result.profiles["default"].report_path)
-    prod_report = _read_report(result.profiles["prod"].report_path)
+    default_report = _read_report(out / "default" / "report.json")
+    prod_report = _read_report(out / "prod" / "report.json")
 
     assert default_report["debloat"]["enabled"] is True
     assert prod_report["debloat"]["enabled"] is False

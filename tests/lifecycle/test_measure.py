@@ -16,10 +16,9 @@ from tundravm.declarative import (
     bake,
     lock,
     measure,
-    read_artifacts,
 )
 from tundravm.declarative.utils import Tdxs
-from tundravm.errors import MeasurementError, StateError
+from tundravm.errors import MeasurementError
 from tundravm.measure import (
     MEASURE_TOOL,
     MEASURE_VERSION,
@@ -131,11 +130,6 @@ def _derived(artifact: Artifact, scheme: MeasurementBackend) -> Measurements:
 
 def _hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == 96 and int(value, 16) >= 0
-
-
-def test_measure_requires_baked_artifacts(tmp_path: Path) -> None:
-    with pytest.raises(StateError, match="No bake result found"):
-        read_artifacts(tmp_path / "build")
 
 
 @pytest.mark.parametrize("scheme", ["qemu", "portable"])

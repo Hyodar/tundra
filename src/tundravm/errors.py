@@ -183,7 +183,7 @@ class AttestationError(TdxError):
 
 
 class ArtifactError(TdxError):
-    """A baked artifact's bytes no longer match the sha256 ``bake-result.json`` recorded."""
+    """A baked artifact's bytes no longer match the sha256 the bake recorded."""
 
     def __init__(
         self,
@@ -207,7 +207,8 @@ class PolicyError(TdxError):
 
 
 class StateError(TdxError):
-    """Persisted SDK state (such as ``bake-result.json``) is missing or unreadable."""
+    """Persisted state (a build directory, an instance receipt, a checkout) is missing or
+    unreadable."""
 
     def __init__(
         self,

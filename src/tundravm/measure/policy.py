@@ -164,13 +164,6 @@ def policy_payload(
     return _checked(payload, where="the measurements")
 
 
-def write_policy(payload: Mapping[str, object], path: Path) -> None:
-    """Write *payload* as sorted, indented JSON with a trailing newline."""
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
 def read_policy(source: str | Path | Mapping[str, object]) -> dict[str, object]:
     """A policy file (or its parsed dict), checked: schema, scheme, registers, unverifiable."""
     where = "the policy"
@@ -385,5 +378,4 @@ __all__ = [
     "single_values",
     "unverifiable",
     "validator_measurements",
-    "write_policy",
 ]

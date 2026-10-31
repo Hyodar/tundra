@@ -55,7 +55,6 @@ from .model import (
     Key,
     Mount,
     Platform,
-    Port,
     Recipe,
     Repository,
     Resolved,
@@ -263,9 +262,6 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         concerns=_concerns(recipe, default.name, glue),
         deb_files=_efi_stub_debs(recipe),
         secret_allowed={name: _secret_allowed(r.items) for name, r in resolved.items()},
-        ssh_ports={
-            name: port for name, r in resolved.items() if (port := _ssh_port(r.items)) is not None
-        },
         unreleased=frozenset(variant.name for variant in selected if not variant.release),
         **extra,
     )
@@ -595,15 +591,6 @@ def _kernel(
         source_subdir=source.subdir,
         source_submodules=source.submodules,
     )
-
-
-def _ssh_port(items: Sequence[Declaration]) -> int | None:
-    """The port an enabled ``ssh.service`` among *items* names (see ``Lowered.ssh_ports``)."""
-    for item in items:
-        if isinstance(item, Unit) and unit_name(item.name) == "ssh.service" and item.enabled:
-            ports = [port.number for port in item.ports if isinstance(port, Port)]
-            return ports[0] if ports else None
-    return None
 
 
 def _secret_allowed(items: Sequence[Declaration]) -> frozenset[str]:

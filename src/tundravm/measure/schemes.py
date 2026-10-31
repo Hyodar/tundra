@@ -21,9 +21,6 @@ from tundravm.measure.model import (
     Measurements,
 )
 
-DISK_SUFFIXES = frozenset({".raw", ".img", ".vhd", ".qcow2", ".gz"})
-MEASURABLE_SUFFIXES = DISK_SUFFIXES | {".efi"}
-"""Artifacts ``measure`` reads: a UKI, or a disk image whose UKI the bake recorded."""
 _HEAD = 34 * 512
 HOST_FIRMWARE = (
     "depends on the host's TDVF/OVMF build, its ACPI tables and the VM's memory layout; "
@@ -42,11 +39,6 @@ REASONS: dict[str, dict[str, str]] = {
     },
     "gcp": {},
 }
-
-
-def measurable(path: str | Path) -> bool:
-    """Whether ``measure`` reads the artifact at *path*, by its suffix."""
-    return Path(path).suffix in MEASURABLE_SUFFIXES
 
 
 def derive(

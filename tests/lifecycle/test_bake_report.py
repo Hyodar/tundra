@@ -3,17 +3,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from tundravm.declarative import Backend, Hook, Package, Recipe, bake, lock
-from tundravm.models import BakeResult
 
 
 def _bake(tmp_path: Path, *items: Hook) -> Path:
-    """Bake a qemu recipe in-process; return the default variant's ``report.json``."""
+    """Bake a qemu recipe against the fake mkosi; the default variant's ``report.json``."""
     recipe = Recipe("report", items=(Package("linux-image-amd64"), *items))
     out = tmp_path / "build"
     bake(recipe, lock=lock(recipe), backend=Backend("local"), build=out)
-    report_path = BakeResult.load(out).profiles["default"].report_path
-    assert report_path is not None
-    return report_path
+    return out / "default" / "report.json"
 
 
 def test_bake_report_schema_contains_observability_fields(tmp_path: Path) -> None:

@@ -14,9 +14,7 @@ from tundravm.declarative import (
     Secrets,
     compile,
     lint,
-    lower,
 )
-from tundravm.declarative.lifecycle import data_disk_serials
 from tundravm.declarative.utils import SshAccess, TeeBase
 from tundravm.errors import ValidationError
 
@@ -62,16 +60,6 @@ def test_from_secrets_waits_for_the_delivered_key() -> None:
     assert "runtime-init-secrets.service" in needs
     assert "Port 2200\n" in files["/etc/ssh/sshd_config.d/50-tundravm.conf"]
     assert "/etc/ssh/authorized_keys.d/root" not in files
-
-
-def test_the_image_records_its_ssh_port_and_data_disk() -> None:
-    key = Key("k", output="/run/k")
-    disk = Disk("d", mount="/data", key=key, device="/dev/disk/by-id/virtio-tundra-data")
-    items = (TeeBase(), TOOLS, key, disk, SshAccess(port=2200, authorized_keys=(KEY,)))
-    img = lower(Recipe("ssh", platform=Debian("trixie"), items=items))
-    assert img.ssh_ports == {"default": 2200}
-    assert data_disk_serials(img, "default") == ("tundra-data",)
-    assert lower(Recipe("plain", platform=Debian("trixie"), items=(TeeBase(),))).ssh_ports == {}
 
 
 def test_a_lone_ssh_access_lints_clean_with_tee_base() -> None:

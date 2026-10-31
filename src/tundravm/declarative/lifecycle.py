@@ -12,22 +12,18 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Final, Literal, get_args
+from typing import Final, Literal, get_args
 
 from tundravm import check as _check
-from tundravm._hashes import artifact_sha256
-from tundravm._modules import DiskEncryption, SecretDelivery
 from tundravm._source import (
     SOURCES_DIRNAME,
     GitSource,
@@ -47,15 +43,10 @@ from tundravm.backends import (
     Requirement,
 )
 from tundravm.backends.base import BuildBackend, is_mkosi_state
-from tundravm.deploy import DeployAdapter, get_adapter
-from tundravm.diff import diff_trees
 from tundravm.errors import (
     ArtifactError,
-    DeploymentError,
     LockfileError,
     PolicyError,
-    ReproducibilityError,
-    StateError,
     ValidationError,
 )
 from tundravm.lockfile import (
@@ -67,15 +58,11 @@ from tundravm.lockfile import (
 from tundravm.measure import derive_measurements
 from tundravm.measure.policy import policy_payload, single_values
 from tundravm.models import (
-    BAKE_RESULT_FILENAME,
-    BAKE_RESULT_SCHEMA_VERSION,
-    REPRODUCE_DIRNAME,
     ArtifactRef,
     BakeResult,
-    DeployRequest,
     ProfileBuildResult,
 )
-from tundravm.observability import Event, Progress, Reporter, TextReporter, display_path
+from tundravm.observability import Event, Progress, Reporter, TextReporter
 from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 
 from . import _bake, _compile
@@ -89,9 +76,6 @@ from .resolve import locate, resolve
 Scheme = Literal["qemu", "gcp", "azure", "portable"]
 BackendKind = Literal["lima", "local"]
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
-
-MANIFEST_KEY = "declarative"
-"""Top-level ``bake-result.json`` key holding the recipe and tree digests."""
 
 
 def _version() -> str:
@@ -225,21 +209,13 @@ class Artifact:
     recipe_digest: str
     lock_digest: str
     tree_digest: str
-    ports: tuple[int, ...] = ()
-    """Guest ports the variant's ``Secrets`` deliveries listen on; ``deploy`` forwards them."""
-    ssh_port: int | None = None
-    """The guest port the variant's ``SshAccess`` listens on; ``None``: no SSH, and QEMU
-    ``deploy`` forwards none."""
-    data_disks: tuple[str, ...] = ()
-    """Serials of the virtio data disks the variant's ``Disk`` devices name
-    (``/dev/disk/by-id/virtio-SERIAL``); QEMU ``deploy`` attaches one disk each."""
     lock_sha256: str | None = None
     """The sha256 of the lockfile the bake read; ``None`` when it read none."""
     manifest_sha256: str | None = None
     """The sha256 of mkosi's package manifest beside the artifact at bake time; ``None``
     when there was none."""
     build: Path | None = None
-    """The build directory holding ``bake-result.json``."""
+    """The build directory the bake ran in."""
     boot_payload: Path | None = None
     """The UKI this disk artifact boots, as the bake recorded it; ``None`` when unknown."""
     boot_payload_sha256: str | None = None
@@ -326,65 +302,7 @@ class Measurements:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class Qemu:
-    memory: str = "2G"
-    cpus: int = 2
-    ssh_port: int = 2222
-    """The host port forwarded to the image's SSH port, when the image declares ``SshAccess``."""
-    tdx: bool = False
-    daemonize: bool = True
-    """``False`` runs QEMU in the foreground with its console on this terminal."""
-    forward: tuple[tuple[int, int], ...] = ()
-    """``(host, guest)`` TCP ports forwarded besides ``ssh_port``; ``Secrets`` ports are added."""
-    firmware: str | None = None
-    """The firmware image to boot instead of the first one installed: TDVF with ``tdx``
-    (``-bios``), else OVMF (the code pflash of a UKI, ``-bios`` for a disk image)."""
-    data_disk_size: str = "16G"
-    """The size of each data disk created for the image's ``Disk`` serials (sparse, kept)."""
-
-
-@dataclass(frozen=True, slots=True)
-class Azure:
-    storage_account: str
-    resource_group: str = "tdx-vms"
-    location: str = "eastus"
-    vm_size: str = "Standard_DC2es_v5"
-    """A TDX confidential VM size: the DCesv5/DCedsv5 or ECesv5/ECedsv5 series."""
-    gallery: str = "tdx_images"
-    """The Compute Gallery (in ``resource_group``) the image version is published to."""
-    secure_boot: bool = False
-    """Create the VM with Secure Boot on; requires ``signed`` (an unsigned UKI cannot boot)."""
-    signed: bool = False
-    """The UKI was signed, outside tundravm, with keys Azure's Secure Boot firmware trusts."""
-
-
-@dataclass(frozen=True, slots=True)
-class Gcp:
-    project: str
-    bucket: str
-    zone: str = "us-central1-a"
-    machine_type: str = "c3-standard-4"
-    """An Intel TDX machine type: the C3 series."""
-
-
-DeployTarget = Qemu | Azure | Gcp
-DEPLOY_TARGETS: dict[Target, type[Qemu] | type[Azure] | type[Gcp]] = {
-    "qemu": Qemu,
-    "azure": Azure,
-    "gcp": Gcp,
-}
-
-
-@dataclass(frozen=True, slots=True)
-class Deployment:
-    id: str
-    target: Target
-    endpoint: str | None
-    metadata: Pairs
-
-
-# ── compile / diff ───────────────────────────────────────────────────────
+# ── compile ──────────────────────────────────────────────────────────────
 
 
 def variant_names(recipe: Recipe, variants: Sequence[str] | None) -> tuple[str, ...]:
@@ -521,18 +439,6 @@ def variant_layers(tree: Tree, variant: str) -> tuple[dict[str, Entry], ...]:
     return (root, payload, overlay)
 
 
-def variant_entries(tree: Tree, variant: str) -> list[Entry]:
-    """The entries of *tree* that make up *variant*, by their tree path, in tree order: what
-    every variant builds and the variant's own profile directories."""
-    return [e for e in tree.entries if _layer_of(e.path) in ("", variant)]
-
-
-def variant_tree_digest(tree: Tree, variant: str) -> str:
-    """The digest of *variant*'s effective contents of *tree* alone (:func:`variant_entries`),
-    as a bake records it per variant."""
-    return _tree_digest(variant_entries(tree, variant))
-
-
 def _digest_mode(entry: Entry) -> int:
     """*entry*'s mode as the tree digest sees it: ``0755``/``0644`` by exec bit for files."""
     if entry.symlink is not None:
@@ -569,29 +475,6 @@ def compile(
     """
     names = variant_names(recipe, variants)
     return compile_image(lower(recipe, variants=names), names, locked=lock)
-
-
-def diff(tree: Tree, against: Tree | Path) -> str:
-    """A unified diff from *against* to *tree*; empty when they match.
-
-    Variant directories in *against* that *tree* does not hold are not compared.
-    """
-    with tempfile.TemporaryDirectory(prefix="tundravm-diff-") as tmp:
-        new = Path(tmp) / "new"
-        tree.write(new)
-        if isinstance(against, Tree):
-            old = Path(tmp) / "old"
-            against.write(old)
-        else:
-            old = Path(against)
-        ignore = _foreign_variant_globs(old, tree.variants)
-        return diff_trees(old, new, ignore=ignore).unified()
-
-
-def _foreign_variant_globs(root: Path, compiled: Sequence[str]) -> list[str]:
-    from tundravm.diff import _foreign_profile_globs
-
-    return _foreign_profile_globs(root, compiled) if compiled else []
 
 
 # ── lint ─────────────────────────────────────────────────────────────────
@@ -906,7 +789,6 @@ def fetch_image(
     build: Path,
     resolver: Resolver | None = None,
     reporter: Reporter | None = None,
-    force: bool = False,
 ) -> tuple[FetchedSource, ...]:
     """Check out every source of *img*'s *profiles* under ``<build>/.sources``.
 
@@ -914,15 +796,14 @@ def fetch_image(
     packages (``Lowered.lock_sources``). Each Go,
     Cargo and .NET build's dependencies are then prefetched into
     ``<build>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
-    it the build downloads them as before. *force* also refills the dependency
-    caches.
+    it the build downloads them as before.
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
     refuses. A complete checkout is verified (``is_fetched``) and kept; one that
-    changed since it was fetched raises ``SourceError`` unless *force*, which
-    checks every source out again. Sources with the same checkout (the same
-    source and pin, e.g. a build pinned per variant) share one.
+    changed since it was fetched raises ``SourceError`` (``build --clean-cache``
+    fetches again). Sources with the same checkout (the same source and pin, e.g. a
+    build pinned per variant) share one.
     """
     builds = img.select(profiles).lock_sources()
     if not builds:
@@ -944,8 +825,6 @@ def fetch_image(
     fetched: list[FetchedSource] = []
     noun = "source" if len(builds) == 1 else "sources"
     copies: dict[tuple[object, str], Path] = {}
-    done: set[Path] = set()
-    cleared: set[str] = set()
     with progress.phase("fetch", f"fetch {len(builds)} {noun}", profile=None):
         for name, source_build in builds.items():
             source = _checkout(
@@ -955,20 +834,10 @@ def fetch_image(
                 progress,
                 offline=offline,
                 copies=copies,
-                force=force and root / source_build.pin_dir(pins[name]) not in done,
             )
             copies.setdefault((source_build.source, source.pin), source.path)
-            done.add(source.path)
             if isinstance(source_build, SourceBuild):
-                deps = _prefetch(
-                    source_build,
-                    source,
-                    root,
-                    progress,
-                    offline=offline,
-                    force=force,
-                    cleared=cleared,
-                )
+                deps = _prefetch(source_build, source, root, progress, offline=offline)
                 source = replace(source, deps=deps)
             fetched.append(source)
     return tuple(fetched)
@@ -981,22 +850,12 @@ def _prefetch(
     progress: Progress,
     *,
     offline: bool,
-    force: bool,
-    cleared: set[str],
 ) -> str | None:
-    """Prefetch *build*'s dependencies next to its checkout (``prefetch_deps``), with a notice.
-
-    With *force* each dependency cache is removed before its first prefetch of
-    this fetch (*cleared* names the caches already removed) and prefetched again.
-    """
+    """Prefetch *build*'s dependencies next to its checkout (``prefetch_deps``), with a notice."""
     cache = build.build.deps if isinstance(build.build, LanguageBuild) else None
-    clear = force and cache is not None and cache not in cleared
-    outcome = prefetch_deps(
-        build, source.pin, source.path, root, offline=offline, force=force, clear=clear
-    )
+    outcome = prefetch_deps(build, source.pin, source.path, root, offline=offline)
     if outcome is None or cache is None:
         return None
-    cleared.add(cache)
     message = f"{build.key}: deps: {outcome}"
     if outcome.startswith("failed") or ": incomplete" in outcome:
         progress.emit("warning", None, f"{message}; the build downloads them", level="warning")
@@ -1036,19 +895,17 @@ def _checkout(
     *,
     offline: bool,
     copies: Mapping[tuple[object, str], Path],
-    force: bool = False,
 ) -> FetchedSource:
     """*build*'s checkout of *pin* under *root*: kept when complete, else fetched afresh.
 
     A complete checkout is verified first (``is_fetched``: a changed one raises
-    ``SourceError``); *force* replaces it without looking. A complete checkout
-    of the same source and pin in *copies* is copied instead of fetched again
-    (builds of one repository share it).
+    ``SourceError``). A complete checkout of the same source and pin in *copies* is
+    copied instead of fetched again (builds of one repository share it).
     """
     path = root / build.pin_dir(pin)
     ref = build.source.ref if isinstance(build.source, GitSource) else None
     result = FetchedSource(build.key, build.source.kind, build.source.url, pin, path, ref=ref)
-    if not force and is_fetched(path, pin, build.source, name=build.key):
+    if is_fetched(path, pin, build.source, name=build.key):
         progress.emit("log", None, f"{build.key}: {pin[:12]} already fetched", source="notice")
         return replace(result, cached=True)
     donor = copies.get((build.source, pin))
@@ -1067,7 +924,7 @@ def _checkout(
             fetch_source(build.source, pin, scratch / "tree")
         write_marker(scratch / "tree", build.source, pin)
         if path.exists():
-            shutil.rmtree(path)  # incomplete (an interrupted fetch), or replaced by force
+            shutil.rmtree(path)  # incomplete: an interrupted fetch
         (scratch / "tree").rename(path)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -1076,51 +933,6 @@ def _checkout(
         "log", None, f"{build.key}: {how} {build.source.describe()} at {pin[:12]}", source="notice"
     )
     return result
-
-
-def fetch(
-    recipe: Recipe,
-    *,
-    lock: Lock | None,
-    build: Path,
-    variants: Sequence[str] | None = None,
-    resolver: Resolver | None = None,
-    force: bool = False,
-) -> tuple[FetchedSource, ...]:
-    """Check out the sources of *variants* (default: all) under ``<build>/.sources``.
-
-    The sources are the source builds and the built kernel's source (git ref or
-    commit with its submodules, or the sha256-checked tarball), named ``kernel``. Each
-    lands in ``<build>/.sources/<name>-<pin[:12]>-<id[:8]>`` (*id*
-    the source's url, subdirectory and submodules), fetched
-    on this host as the invoking user (git credentials and SSH agent apply) at
-    *lock*'s pin. Sources *lock* does not pin (or every source, without
-    *lock*) are resolved first through *resolver* (default: the network),
-    which ``mutable_ref_policy="error"`` refuses. Complete checkouts are verified
-    and kept, so a second fetch touches nothing: git ``HEAD`` must be the pin with
-    a clean tree (and initialised submodules when asked for), an http checkout
-    must match the file manifest written when it was fetched. A checkout that
-    changed raises ``SourceError``; *force* checks every source out again.
-    The bake mounts ``<build>/.sources`` into the build
-    and the build hooks and kernel build script copy their checkout from it;
-    :func:`bake` fetches first. Each Go, Cargo and .NET build's dependencies are
-    prefetched with the host's ``go``, ``cargo`` or ``dotnet`` into
-    ``<build>/.sources/deps/{go,cargo,nuget}``, which the build hooks copy and point
-    the toolchain at; a host without the toolchain skips it (``FetchedSource.deps``)
-    and the build downloads them, unless it bakes offline. A cache is kept only
-    while every entry of its content manifest (the modules ``go.sum`` names, the
-    crates of ``Cargo.lock``, the restored NuGet packages) is still there; an
-    incomplete one is prefetched again, and *force* refills every cache.
-    """
-    names = variant_names(recipe, variants)
-    return fetch_image(
-        lower(recipe, variants=names),
-        names,
-        locked=lock,
-        build=build,
-        resolver=resolver,
-        force=force,
-    )
 
 
 # ── bake ─────────────────────────────────────────────────────────────────
@@ -1158,15 +970,14 @@ def bake_image(
     fetch: bool = True,
     resolver: Resolver | None = None,
     offline: bool = False,
-    verify_reproducible: bool = False,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
-    """Bake *img* into *build*, frozen against *locked*, and record the artifact manifest.
+    """Bake *img* into *build*, frozen against *locked*; the result and its artifacts.
 
     *locked* (read from *lock_source*, when it came from a file) is written to
     ``build/tundravm.lock`` when that file is absent or identical. A different
     lockfile already there is left alone: the bake reads *lock_source* (or a
-    scratch copy of *locked*) instead, and ``bake-result.json`` records which
-    lockfile it used. ``None`` bakes unfrozen with whatever lockfile ``build`` holds.
+    scratch copy of *locked*) instead. ``None`` bakes unfrozen with whatever
+    lockfile ``build`` holds.
 
     *fetch* first checks the source builds out under
     ``build/.sources`` (:func:`fetch_image`, at the pins the bake builds; an
@@ -1177,16 +988,6 @@ def bake_image(
     complete checkouts and downloads nothing, every Go, Cargo and .NET build must
     find its prefetched dependencies (else ``E_STATE`` before mkosi runs), and
     mkosi runs the build scripts with ``--with-network=no``.
-
-    *verify_reproducible* bakes the same selection a second time into
-    ``build/.reproduce`` (same lockfile, the same ``build/.sources`` checkouts
-    hard-linked, everything compiled and built again) and compares every
-    artifact's sha256. The first build's ``bake-result.json`` is complete before
-    the second build starts; its ``declarative.reproducibility`` is rewritten
-    atomically at each step: ``running``, then ``matched``, ``different``,
-    ``error`` (the second build failed) or ``interrupted``. A mismatch raises
-    ``ReproducibilityError`` with a per-artifact table, keeping the second build
-    for comparison (it is removed when all match).
     """
     if offline and img.policy.network_mode != "offline":
         img = replace(img, policy=replace(img.policy, network_mode="offline"))
@@ -1212,282 +1013,46 @@ def bake_image(
                 reporter=reporter,
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
-        manifest = destination / BAKE_RESULT_FILENAME
-        kept = _kept_variants(manifest)
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
         recipe_digest = (
             locked.recipe_digest
             if locked is not None
             else (read_lock(lock_path).recipe_digest if lock_path.is_file() else "")
         )
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-        lockfile = None
-        if locked is not None:
-            source = lock_source if lock_source is not None else lock_path
-            # None: an in-memory Lock read through a scratch copy
-            lockfile = str(source) if lock_source is not None or used == lock_path else None
-        payload[MANIFEST_KEY] = {"recipe_digest": recipe_digest}
-        if locked is not None:
-            payload[MANIFEST_KEY]["lockfile"] = lockfile
         warn = _tree_warning(reporter)
-        for name in sorted(result.profiles):
-            tree = read_variant_tree(destination / "mkosi", [name], warn=warn)
-            payload["variants"][name][MANIFEST_KEY] = {
-                **payload[MANIFEST_KEY],
-                "baked_at": payload.get("created_at"),
-                "backend": payload.get("backend"),
-                "lock_digest": payload.get("lock_digest"),
-                "lock_sha256": payload.get("lock_sha256"),
-                "tree_digest": tree.digest,
-                "ports": list(secret_ports(baking, name)),
-                "ssh_port": baking.ssh_ports.get(name),
-                "data_disks": list(data_disk_serials(baking, name)),
-                "reproducibility": None,
-                **_installed_record(baking, name, result.profiles[name]),
-            }
-        for name, entry in kept.items():
-            if name in img.state.profiles:  # a variant the recipe dropped goes
-                payload["variants"].setdefault(name, entry)
-        _write_json(manifest, payload)
-        if verify_reproducible:
-            _verify_reproducible(
-                baking, result, used, manifest, frozen=locked is not None, reporter=reporter
-            )
-    return result, tuple(a for a in read_artifacts(destination) if a.variant in result.profiles)
+        artifacts: list[Artifact] = []
+        for name, built in sorted(result.profiles.items()):
+            tree_digest = read_variant_tree(destination / "mkosi", [name], warn=warn).digest
+            installed = _installed(baking, name, built)
+            for target, ref in sorted(built.artifacts.items()):
+                artifacts.append(
+                    Artifact(
+                        path=_under(Path(ref.path), destination),
+                        variant=name,
+                        target=target,
+                        sha256=ref.digest or "",
+                        recipe_digest=recipe_digest,
+                        lock_digest=result.lock_digest or "",
+                        tree_digest=tree_digest,
+                        lock_sha256=result.lock_sha256,
+                        manifest_sha256=ref.manifest_digest,
+                        build=destination,
+                        boot_payload=None
+                        if ref.boot_payload is None
+                        else _under(Path(ref.boot_payload), destination),
+                        boot_payload_sha256=ref.boot_payload_digest,
+                        installed=installed,
+                    )
+                )
+    return result, tuple(artifacts)
 
 
-def _kept_variants(manifest: Path) -> dict[str, Any]:
-    """The variant entries of the ``bake-result.json`` already at *manifest* that carry their
-    own provenance: what a bake of other variants keeps. Empty when it is absent, unreadable
-    or from an older schema."""
+def _under(path: Path, base: Path) -> Path:
+    """*path* as *base* joined with its path below it, when it is under *base*."""
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    if payload.get("schema_version") != BAKE_RESULT_SCHEMA_VERSION:
-        return {}
-    found = payload.get("variants")
-    if not isinstance(found, dict):
-        return {}
-    return {
-        str(name): entry
-        for name, entry in found.items()
-        if isinstance(entry, dict) and isinstance(entry.get(MANIFEST_KEY), dict)
-    }
-
-
-def variant_provenance(payload: Mapping[str, Any], variant: str) -> Mapping[str, Any]:
-    """*variant*'s own ``declarative`` record in a ``bake-result.json`` *payload*: the digests,
-    backend, lockfile and reproducibility of the bake that built it; empty when absent."""
-    variants = payload.get("variants")
-    entry = variants.get(variant) if isinstance(variants, Mapping) else None
-    found = entry.get(MANIFEST_KEY) if isinstance(entry, Mapping) else None
-    return found if isinstance(found, Mapping) else {}
-
-
-ReproducibilityState = Literal["running", "matched", "different", "error", "interrupted"]
-
-
-REPRODUCIBILITY_STATES: tuple[ReproducibilityState, ...] = get_args(ReproducibilityState)
-
-
-def recorded_reproducibility(extra: Mapping[str, object]) -> dict[str, object] | None:
-    """``declarative.reproducibility`` of a ``bake-result.json``, ``None`` when not checked."""
-    found = extra.get("reproducibility")
-    if not isinstance(found, dict) or found.get("state") not in REPRODUCIBILITY_STATES:
-        return None
-    return found
-
-
-def reproducibility_of(recorded: Mapping[str, object] | None, subject: str) -> str | None:
-    """The recorded state for *subject* (``variant`` or ``variant/target``): a ``different``
-    comparison is ``matched`` for a subject none of whose artifacts differ."""
-    if recorded is None:
-        return None
-    state = str(recorded["state"])
-    if state != "different":
-        return state
-    differ = recorded.get("differ")
-    names = [str(item) for item in differ] if isinstance(differ, list) else []
-    hit = any(name == subject or name.startswith(f"{subject}/") for name in names)
-    return "different" if hit else "matched"
-
-
-def _write_json(path: Path, payload: object) -> None:
-    """Write *payload* to *path* atomically: a sibling temporary file renamed over it."""
-    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    handle, scratch = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.chmod(scratch, mode)
-        os.replace(scratch, path)
-    except BaseException:
-        Path(scratch).unlink(missing_ok=True)
-        raise
-
-
-def _record_reproducibility(
-    manifest: Path,
-    state: ReproducibilityState,
-    *,
-    second_build: str | None,
-    differ: Sequence[str] = (),
-    error: str | None = None,
-) -> None:
-    """Set ``declarative.reproducibility`` of *manifest* to *state*, atomically: the bake's,
-    and each baked variant's (``variants_baked``), listing that variant's artifacts that differ."""
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    record = {"state": state, "second_build": second_build, "differ": list(differ), "error": error}
-    payload[MANIFEST_KEY]["reproducibility"] = record
-    for name in payload.get("variants_baked") or ():
-        own = [item for item in differ if item.startswith(f"{name}/")]
-        payload["variants"][name][MANIFEST_KEY]["reproducibility"] = {**record, "differ": own}
-    _write_json(manifest, payload)
-
-
-def _verify_reproducible(
-    baking: Lowered,
-    result: BakeResult,
-    used: Path,
-    manifest: Path,
-    *,
-    frozen: bool,
-    reporter: Reporter | None,
-) -> None:
-    """Bake again into ``BUILD/.reproduce``, record each state of the comparison, compare."""
-    scratch = manifest.parent / REPRODUCE_DIRNAME
-    _record_reproducibility(manifest, "running", second_build=REPRODUCE_DIRNAME)
-    try:
-        again = _rebake(baking, scratch, used, frozen=frozen, reporter=reporter)
-    except KeyboardInterrupt:
-        _record_reproducibility(manifest, "interrupted", second_build=REPRODUCE_DIRNAME)
-        raise
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}".splitlines()[0]
-        _record_reproducibility(manifest, "error", second_build=REPRODUCE_DIRNAME, error=message)
-        raise
-    rows = _compare_digests(result, again)
-    differ = [f"{variant}/{target}" for variant, target, *_, verdict in rows if verdict != "match"]
-    if differ:
-        _record_reproducibility(
-            manifest, "different", second_build=REPRODUCE_DIRNAME, differ=differ
-        )
-    else:
-        _record_reproducibility(manifest, "matched", second_build=None)
-    _report_reproducibility(rows, scratch, reporter)
-
-
-def _rebake(
-    baking: Lowered, scratch: Path, used: Path, *, frozen: bool, reporter: Reporter | None
-) -> BakeResult:
-    """Bake *baking* again into *scratch*, against lockfile *used* and the same checkouts."""
-    try:
-        if scratch.exists():
-            shutil.rmtree(scratch)
-        scratch.mkdir(parents=True)
-    except OSError as exc:
-        raise StateError(
-            f"Cannot reset {scratch} for the second build: {exc.strerror or exc}.",
-            hint=f"Remove it as its owner (`sudo rm -rf -- {scratch}`), then build again.",
-            context={"path": str(exc.filename or scratch)},
-        ) from exc
-    sources = Path(baking.build_dir) / SOURCES_DIRNAME
-    if sources.is_dir():
-        try:
-            shutil.copytree(sources, scratch / SOURCES_DIRNAME, symlinks=True, copy_function=_link)
-        except (OSError, shutil.Error) as exc:
-            raise StateError(
-                f"Cannot link the fetched sources into {scratch} for the second build: {exc}",
-                hint="Make BUILD/.sources readable by this user (`tundravm build --clean-cache` "
-                "checks it out again), then build again.",
-                context={"sources": str(sources)},
-            ) from exc
-    if reporter is not None:
-        message = f"verify reproducibility: baking again into {display_path(scratch)}"
-        reporter.emit(Event("log", None, message, 0.0, {"source": "notice"}))
-    again = replace(baking, build_dir=scratch, lock_file=used)
-    return _bake.bake(again, scratch, frozen=frozen, reporter=reporter)
-
-
-def _link(source: str, target: str) -> object:
-    """Hard-link *source* to *target* (the build mounts sources ephemerally), else copy it."""
-    try:
-        os.link(source, target)
-    except OSError:
-        return shutil.copy2(source, target)
-    return target
-
-
-def _compare_digests(first: BakeResult, second: BakeResult) -> list[tuple[str, str, str, str, str]]:
-    """``(variant, target, first sha256, second sha256, match|mismatch)`` per artifact."""
-    rows: list[tuple[str, str, str, str, str]] = []
-    for variant in sorted({*first.profiles, *second.profiles}):
-        ours = first.profiles.get(variant)
-        theirs = second.profiles.get(variant)
-        a = {} if ours is None else {t: r.digest or "" for t, r in ours.artifacts.items()}
-        b = {} if theirs is None else {t: r.digest or "" for t, r in theirs.artifacts.items()}
-        for target in sorted({*a, *b}):
-            left, right = a.get(target, ""), b.get(target, "")
-            verdict = "match" if left and left == right else "mismatch"
-            rows.append((variant, target, left or "-", right or "-", verdict))
-    return rows
-
-
-def _report_reproducibility(
-    rows: Sequence[tuple[str, str, str, str, str]], scratch: Path, reporter: Reporter | None
-) -> None:
-    """Remove *scratch* when every row matches, else raise ``ReproducibilityError``."""
-    differing = [row for row in rows if row[4] != "match"]
-    if not differing:
-        shutil.rmtree(scratch, ignore_errors=True)
-        if reporter is not None:
-            message = f"reproducible: {len(rows)} artifact(s) match a second build"
-            reporter.emit(Event("log", None, message, 0.0, {"source": "notice"}))
-        return
-    header = ("variant", "target", "first", "second", "")
-    table = [header, *((v, t, a[:12], b[:12], verdict) for v, t, a, b, verdict in rows)]
-    widths = [max(len(row[i]) for row in table) for i in range(len(header))]
-    lines = [
-        "  " + "  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip()
-        for row in table
-    ]
-    raise ReproducibilityError(
-        f"The bake is not reproducible: {len(differing)} of {len(rows)} artifact(s) differ "
-        "between two builds.\n" + "\n".join(lines),
-        hint=(
-            f"The second build is kept in {scratch}. Compare the compiled trees with "
-            f"`tundravm check RECIPE --tree {scratch / 'mkosi'}` and the images with "
-            "diffoscope. Usual causes: timestamps (set SOURCE_DATE_EPOCH), build ids, and "
-            "packages installed without a snapshot (Debian(snapshot=...))."
-        ),
-        context={
-            "second_build": str(scratch),
-            "differ": ", ".join(f"{v}/{t}" for v, t, *_ in differing),
-        },
-    )
-
-
-_VIRTIO_BY_ID = re.compile(r"/dev/disk/by-id/(?:virtio|\*)-([A-Za-z0-9_.-]{1,20})")
-"""A virtio disk's udev link: QEMU's ``serial=`` (at most 20 bytes) names it. A
-``Volume``'s ``/dev/disk/by-id/*-SERIAL`` glob names it on every target, QEMU included."""
-
-
-def data_disk_serials(img: Lowered, variant: str) -> tuple[str, ...]:
-    """The virtio serials *variant*'s ``Disk`` devices name, in declaration order."""
-    modules = img.applied_modules(variant, inherited=True)
-    devices = [d.device for m in modules if isinstance(m, DiskEncryption) for d in m.disks]
-    found = (_VIRTIO_BY_ID.fullmatch(device or "") for device in devices)
-    return tuple(dict.fromkeys(match[1] for match in found if match))
-
-
-def secret_ports(img: Lowered, variant: str) -> tuple[int, ...]:
-    """The guest ports *variant*'s ``Secrets`` deliveries listen on, sorted."""
-    modules = img.applied_modules(variant, inherited=True)
-    return tuple(sorted({m.port for m in modules if isinstance(m, SecretDelivery)}))
+        return base / path.resolve().relative_to(base.resolve())
+    except ValueError:
+        return path
 
 
 def _lock_at(path: Path) -> Lock | None:
@@ -1532,23 +1097,14 @@ def bake(
     variants: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
-    offline: bool = False,
-    verify_reproducible: bool = False,
 ) -> tuple[Artifact, ...]:
     """Build *variants* (default: all) with *backend* into *build*, frozen against *lock*.
 
     Fails before building when the recipe has error diagnostics or drifted
-    from *lock*. The source builds are fetched first (:func:`fetch`); ``fetch=False``
+    from *lock*. The source builds are fetched first (:func:`fetch_image`); ``fetch=False``
     builds from the checkouts already in
     ``build/.sources`` and fails with ``E_STATE`` when one is missing.
-    ``offline=True`` (or ``Policy(network_mode="offline")``) gives the build
-    sandbox no network: :func:`fetch` must have checked out every source and
-    prefetched every Go, Cargo and .NET build's dependencies, else ``E_STATE``.
-    *progress* receives the CLI's progress lines. Writes
-    ``build/bake-result.json``, which :func:`read_artifacts` reads back.
-    *verify_reproducible* bakes a
-    second time into ``build/.reproduce`` and raises ``ReproducibilityError``
-    unless every artifact's sha256 matches (see :func:`bake_image`).
+    *progress* receives the CLI's progress lines.
     """
     names = variant_names(recipe, variants)
     reporter = None if progress is None else TextReporter(_LineStream(progress), live=False)
@@ -1561,8 +1117,6 @@ def bake(
             build=build,
             reporter=reporter,
             fetch=fetch,
-            offline=offline,
-            verify_reproducible=verify_reproducible,
         )
     finally:
         if reporter is not None:
@@ -1570,51 +1124,9 @@ def bake(
     return artifacts
 
 
-def read_artifacts(build: Path) -> tuple[Artifact, ...]:
-    """The artifacts the bake into the build directory *build* recorded in ``bake-result.json``."""
-    base = path = Path(build)
-    result = BakeResult.load(base)
-    try:
-        payload = json.loads((base / BAKE_RESULT_FILENAME).read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("not a JSON object")
-    except (OSError, ValueError) as exc:
-        raise StateError(
-            f"Unreadable bake result: {exc}",
-            hint="Run `tundravm build` again to rewrite bake-result.json.",
-            context={"path": str(path)},
-        ) from exc
-    artifacts: list[Artifact] = []
-    for variant, profile in sorted(result.profiles.items()):
-        own = variant_provenance(payload, variant)
-        lock_sha256 = own.get("lock_sha256", result.lock_sha256)
-        for target, ref in sorted(profile.artifacts.items()):
-            artifacts.append(
-                Artifact(
-                    path=Path(ref.path),
-                    variant=variant,
-                    target=target,
-                    sha256=ref.digest or "",
-                    recipe_digest=str(own.get("recipe_digest") or ""),
-                    lock_digest=str(own.get("lock_digest") or result.lock_digest or ""),
-                    tree_digest=str(own.get("tree_digest") or ""),
-                    ports=tuple(int(port) for port in own.get("ports") or ()),
-                    ssh_port=None if own.get("ssh_port") is None else int(own["ssh_port"]),
-                    data_disks=tuple(str(serial) for serial in own.get("data_disks") or ()),
-                    lock_sha256=None if lock_sha256 is None else str(lock_sha256),
-                    manifest_sha256=ref.manifest_digest,
-                    build=base,
-                    boot_payload=ref.boot_payload,
-                    boot_payload_sha256=ref.boot_payload_digest,
-                    installed=_recorded_installed(own.get("installed")),
-                )
-            )
-    return tuple(artifacts)
-
-
-def _installed_record(img: Lowered, name: str, built: ProfileBuildResult) -> dict[str, object]:
-    """``{"installed": {path: sha256}}`` for *name*'s source-build files read from its UKI's
-    initrd; empty when it builds none or no UKI could be read (nothing is recorded)."""
+def _installed(img: Lowered, name: str, built: ProfileBuildResult) -> dict[str, str] | None:
+    """``{path: sha256}`` of *name*'s source-build files read from its UKI's initrd;
+    ``None`` when it builds none or no UKI could be read."""
     dests = sorted(
         {
             step.dest
@@ -1629,38 +1141,11 @@ def _installed_record(img: Lowered, name: str, built: ProfileBuildResult) -> dic
     ]
     uki = next((path for path in ukis if path is not None and path.is_file()), None)
     if not dests or uki is None:
-        return {}
-    found = installed_digests(uki, dests)
-    return {} if found is None else {"installed": found}
-
-
-def _recorded_installed(value: object) -> dict[str, str] | None:
-    """A bake record's ``installed`` map, ``None`` when it holds none."""
-    if not isinstance(value, Mapping):
         return None
-    return {str(path): str(sha) for path, sha in value.items()}
+    return installed_digests(uki, dests)
 
 
-def select_artifact(
-    artifacts: Sequence[Artifact], *, variant: str, target: Target | None = None
-) -> Artifact:
-    """The artifact of *variant* (for *target*, else its only or ``qemu`` one)."""
-    found = [a for a in artifacts if a.variant == variant]
-    if target is not None:
-        found = [a for a in found if a.target == target]
-    elif len(found) > 1:
-        found = [a for a in found if a.target == "qemu"] or found[:1]
-    if not found:
-        known = ", ".join(sorted({f"{a.variant}/{a.target}" for a in artifacts})) or "(none)"
-        wanted = variant if target is None else f"{variant}/{target}"
-        raise StateError(
-            f"No baked artifact for {wanted}.",
-            hint=f"Baked: {known}. Bake that variant and target first.",
-        )
-    return found[0]
-
-
-# ── measure / deploy ─────────────────────────────────────────────────────
+# ── measure ──────────────────────────────────────────────────────────────
 
 
 def verify_artifact(artifact: Artifact) -> None:
@@ -1674,7 +1159,8 @@ def verify_artifact(artifact: Artifact) -> None:
             context=context,
         )
     try:
-        actual = artifact_sha256(artifact.path)
+        with artifact.path.open("rb") as handle:
+            actual = hashlib.file_digest(handle, "sha256").hexdigest()
     except OSError as exc:
         raise ArtifactError(
             f"Cannot read artifact {artifact.path}: {exc.strerror or exc}.",
@@ -1684,7 +1170,7 @@ def verify_artifact(artifact: Artifact) -> None:
     if actual != artifact.sha256:
         raise ArtifactError(
             f"Artifact {artifact.path} changed since the bake.",
-            hint=f"bake-result.json records sha256 {artifact.sha256[:12]}; {rebake}",
+            hint=f"The bake recorded sha256 {artifact.sha256[:12]}; {rebake}",
             context={**context, "recorded": artifact.sha256, "actual": actual},
         )
 
@@ -1753,88 +1239,6 @@ def _measured_uki(artifact: Artifact) -> tuple[Path, str] | None:
     return payload, artifact.boot_payload_sha256
 
 
-def deploy_parameters(using: DeployTarget) -> dict[str, str]:
-    """*using*'s fields as the adapter's string parameters (``forward`` as ``HOST:GUEST,...``;
-    an unset ``None`` field is left out)."""
-    params: dict[str, str] = {}
-    for item in fields(using):
-        value = getattr(using, item.name)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            params[item.name] = str(value).lower()
-        elif isinstance(value, tuple):
-            params[item.name] = ",".join(f"{host}:{guest}" for host, guest in value)
-        else:
-            params[item.name] = str(value)
-    return params
-
-
-def with_secret_ports(using: DeployTarget, ports: Sequence[int]) -> DeployTarget:
-    """*using* forwarding every guest port in *ports* it does not forward yet, host port = guest."""
-    if not isinstance(using, Qemu):
-        return using
-    taken = {guest for _, guest in using.forward}
-    added = tuple((port, port) for port in ports if port not in taken)
-    return replace(using, forward=using.forward + added) if added else using
-
-
-def qemu_image_parameters(artifact: Artifact) -> dict[str, str]:
-    """What the QEMU adapter reads from the image itself: ``ssh_guest_port`` (forward
-    ``ssh_port`` there; absent: no SSH forward) and ``data_disks`` (serials to attach)."""
-    params: dict[str, str] = {}
-    if artifact.ssh_port is not None:
-        params["ssh_guest_port"] = str(artifact.ssh_port)
-    if artifact.data_disks:
-        params["data_disks"] = ",".join(artifact.data_disks)
-    return params
-
-
-def target_of(using: DeployTarget) -> Target:
-    return next(name for name, kind in DEPLOY_TARGETS.items() if isinstance(using, kind))
-
-
-def deploy(
-    artifact: Artifact,
-    *,
-    using: DeployTarget,
-    adapter: DeployAdapter | None = None,
-) -> Deployment:
-    """Deploy *artifact* with *using*'s settings; its target must match the artifact's.
-
-    The artifact's bytes are checked against their recorded sha256 first
-    (``verify_artifact``). *adapter* replaces the target's default adapter (tests).
-    On QEMU every port in ``artifact.ports`` that ``using.forward`` does not
-    forward is forwarded from the same host port, ``ssh_port`` reaches SSH only when the
-    variant declares it (``SshAccess``), and each ``artifact.data_disks`` serial gets a
-    data disk.
-    """
-    verify_artifact(artifact)
-    target = target_of(using)
-    if artifact.target != target:
-        raise DeploymentError(
-            f"Cannot deploy a {artifact.target} artifact to {target}.",
-            hint=f"Deploy the variant's {target} artifact.",
-            context={"variant": artifact.variant},
-        )
-    parameters = deploy_parameters(with_secret_ports(using, artifact.ports))
-    if isinstance(using, Qemu):
-        parameters.update(qemu_image_parameters(artifact))
-    request = DeployRequest(
-        profile=artifact.variant,
-        target=target,
-        artifact_path=artifact.path,
-        parameters=parameters,
-    )
-    result = (adapter if adapter is not None else get_adapter(target)).deploy(request)
-    return Deployment(
-        id=result.deployment_id,
-        target=target,
-        endpoint=result.endpoint,
-        metadata=tuple(sorted(result.metadata.items())),
-    )
-
-
 # ── doctor ───────────────────────────────────────────────────────────────
 
 
@@ -1882,30 +1286,22 @@ def doctor(backend: Backend, *, runner: ProbeRunner | None = None) -> tuple[Diag
 
 __all__ = [
     "Artifact",
-    "Azure",
     "Backend",
     "BackendKind",
-    "Deployment",
     "Entry",
     "FetchedSource",
-    "Gcp",
     "Lock",
     "Measurements",
     "Pin",
-    "Qemu",
     "Scheme",
     "Tree",
     "bake",
     "compile",
-    "deploy",
-    "diff",
     "doctor",
-    "fetch",
     "lint",
     "lock",
     "lock_status",
     "measure",
-    "read_artifacts",
     "read_lock",
     "read_tree",
     "verify_artifact",

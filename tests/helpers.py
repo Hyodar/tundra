@@ -9,9 +9,10 @@ from typing import Any
 
 import pytest
 
-from tundravm._source import GitSource, HttpSource, checkout_identity
+from tundravm._source import GitSource, HttpSource, Resolver, checkout_identity
 from tundravm.cli import main
-from tundravm.declarative import Recipe
+from tundravm.declarative import Lock, Recipe, lower
+from tundravm.declarative.lifecycle import FetchedSource, fetch_image, variant_names
 from tundravm.models import BakeRequest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -20,6 +21,21 @@ EXAMPLE_RECIPES = tuple(
     path for path in sorted((REPO_ROOT / "examples").glob("*.py")) if path.name != "__init__.py"
 )
 """The top-level example recipe files (the surge flagship lives in its own directory)."""
+
+
+def fetch(
+    recipe: Recipe,
+    *,
+    lock: Lock | None,
+    build: Path,
+    variants: tuple[str, ...] | None = None,
+    resolver: Resolver | None = None,
+) -> tuple[FetchedSource, ...]:
+    """Check *recipe*'s sources out under ``build/.sources``: a bake's fetch step alone."""
+    names = variant_names(recipe, variants)
+    return fetch_image(
+        lower(recipe, variants=names), names, locked=lock, build=build, resolver=resolver
+    )
 
 
 def fake_ovmf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:

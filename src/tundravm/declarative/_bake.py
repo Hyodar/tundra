@@ -2,7 +2,7 @@
 
 :func:`bake` lints, verifies the lockfile (frozen bakes), compiles, checks the
 host-fetched checkouts the build mounts, builds each active profile and writes
-its ``report.json`` and the ``bake-result.json`` manifest.
+its ``report.json``.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 
 from tundravm._source import (
@@ -47,7 +46,7 @@ from tundravm.observability import (
     format_size,
 )
 from tundravm.policy import ensure_bake_policy
-from tundravm.toolchain import Toolchain, running_toolchain
+from tundravm.toolchain import Toolchain
 
 from ._compile import emit, mkosi_argv
 from ._lowered import Lowered
@@ -179,11 +178,8 @@ def bake(
             lock_digest=lock_digest,
             lock_sha256=lock_sha256,
             backend=backend.name,
-            toolchain=running_toolchain(backend, locked=locked_toolchain),
-            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             duration_s=total,
         )
-        baked.save(destination)
         noun = "variant" if len(profiles) == 1 else "variants"
         progress.emit(
             "done",

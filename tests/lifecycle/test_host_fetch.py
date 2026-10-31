@@ -1,10 +1,11 @@
-"""Host-side source fetch: ``fetch()``, the ``.sources`` checkouts, their mount and the CLI."""
+"""Host-side source fetch: a bake's fetch step, the ``.sources`` checkouts and their mount."""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import shutil
 import subprocess
 import tarfile
 import threading
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import source_dir
+from tests.helpers import fetch, source_dir
 from tundravm._source import GitSource, fetch_source
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.backends.base import MountSpec, Requirement
@@ -32,7 +33,7 @@ from tundravm.declarative import (
     lock,
     lower,
 )
-from tundravm.declarative.lifecycle import FetchedSource, bake_image, fetch
+from tundravm.declarative.lifecycle import FetchedSource, bake_image
 from tundravm.errors import ErrorCode, PolicyError, SourceError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -362,7 +363,7 @@ recipe = Recipe(
 # ── checkout verification ────────────────────────────────────────────
 
 
-def test_a_modified_git_checkout_fails_until_fetch_force_repairs_it(
+def test_a_modified_git_checkout_fails_until_a_clean_cache_fetches_it_again(
     tmp_path: Path, repo: tuple[str, str]
 ) -> None:
     url, first = repo
@@ -381,7 +382,8 @@ def test_a_modified_git_checkout_fails_until_fetch_force_repairs_it(
         bake_image(
             lower(recipe), None, locked=locked, backend=_Recording(), build=tmp_path, fetch=False
         )
-    (repaired,) = fetch(recipe, lock=locked, build=tmp_path, force=True)
+    shutil.rmtree(tmp_path / ".sources")  # what `build --clean-cache` does
+    (repaired,) = fetch(recipe, lock=locked, build=tmp_path)
     assert not repaired.cached
     assert (repaired.path / "main.go").read_text(encoding="utf-8") == "package main\n"
     (again,) = fetch(recipe, lock=locked, build=tmp_path)
@@ -420,7 +422,8 @@ def test_a_modified_http_checkout_fails_against_its_manifest(
     with pytest.raises(SourceError, match="modified/incomplete") as modified:
         fetch(recipe, lock=locked, build=tmp_path)
     assert modified.value.reason == "1 file changed since the fetch: bin/tool"
-    (repaired,) = fetch(recipe, lock=locked, build=tmp_path, force=True)
+    shutil.rmtree(tmp_path / ".sources")
+    (repaired,) = fetch(recipe, lock=locked, build=tmp_path)
     assert (repaired.path / "bin" / "tool").read_bytes() == b"#!/bin/sh\necho tool\n"
 
 

@@ -4,9 +4,9 @@ A :class:`Recipe` is an immutable value: recipe-wide settings, its own ``items``
 (declarations and :class:`Fragment` groups) and the :class:`Variant` overlays.
 :func:`resolve` expands one variant, :func:`lint` reports every problem as a
 :class:`Diagnostic`, and :func:`lower` hands it to the compiler, which every CLI
-command consumes. The lifecycle (:func:`compile`, :func:`lint`, :func:`lock`,
-:func:`fetch`, :func:`bake`, :func:`measure`, :func:`deploy`, :func:`doctor`) takes
-a recipe and explicit inputs and returns explicit results.
+command consumes. The lifecycle (:func:`compile`, :func:`lint`, :func:`lock`, :func:`bake`,
+:func:`measure`, :func:`doctor`) takes a recipe and explicit inputs and returns explicit
+results.
 """
 
 from tundravm.policy import Policy
@@ -17,28 +17,20 @@ from ._component import component
 from .bom import Sbom, sbom
 from .lifecycle import (
     Artifact,
-    Azure,
     Backend,
-    Deployment,
     Entry,
     FetchedSource,
-    Gcp,
     Lock,
     Measurements,
     Pin,
-    Qemu,
     Tree,
     bake,
     compile,
-    deploy,
-    diff,
     doctor,
-    fetch,
     lint,
     lock,
     lock_status,
     measure,
-    read_artifacts,
     read_lock,
     verify_artifact,
     write_lock,
@@ -115,7 +107,6 @@ from .systemd import Condition, Dynamic, Hardening, Root
 
 __all__ = [
     "Artifact",
-    "Azure",
     "Backend",
     "Boot",
     "Build",
@@ -125,7 +116,6 @@ __all__ = [
     "Debian",
     "Debloat",
     "Declaration",
-    "Deployment",
     "Diagnostic",
     "Disk",
     "Dotnet",
@@ -137,7 +127,6 @@ __all__ = [
     "FileTree",
     "Firewall",
     "Fragment",
-    "Gcp",
     "Git",
     "Go",
     "Group",
@@ -163,7 +152,6 @@ __all__ = [
     "Platform",
     "Port",
     "Policy",
-    "Qemu",
     "Recipe",
     "Ref",
     "Remove",
@@ -198,10 +186,7 @@ __all__ = [
     "bake",
     "compile",
     "component",
-    "deploy",
-    "diff",
     "doctor",
-    "fetch",
     "identity",
     "lint",
     "load",
@@ -211,7 +196,6 @@ __all__ = [
     "measure",
     "mkosi_argv",
     "packages",
-    "read_artifacts",
     "read_lock",
     "resolve",
     "resolve_all",

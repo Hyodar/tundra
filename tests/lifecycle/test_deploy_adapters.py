@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.declarative.lifecycle import Qemu, deploy_parameters
 from tundravm.deploy import get_adapter
 from tundravm.deploy.azure import AzureDeployAdapter
 from tundravm.deploy.gcp import GcpDeployAdapter
@@ -243,11 +242,6 @@ def test_qemu_refuses_a_missing_firmware_before_launching(
     assert "TDVF" in (excinfo.value.hint or "")
     assert excinfo.value.context["firmware"] == str(missing)
     assert run.calls == []
-
-
-def test_qemu_deploy_parameters_leave_an_unset_firmware_out() -> None:
-    assert "firmware" not in deploy_parameters(Qemu())
-    assert deploy_parameters(Qemu(firmware="/fw/OVMF.fd"))["firmware"] == "/fw/OVMF.fd"
 
 
 def test_qemu_forwards_every_port_besides_ssh(tmp_path: Path, firmware: dict[str, str]) -> None:

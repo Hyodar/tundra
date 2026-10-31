@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import on_platform, source_dir
+from tests.helpers import fetch, on_platform, source_dir
 from tundravm._describe import describe, render
 from tundravm._source import GitSource
 from tundravm.backends.base import MountSpec, Requirement
@@ -36,7 +36,7 @@ from tundravm.declarative import (
     lock_status,
     lower,
 )
-from tundravm.declarative.lifecycle import FetchedSource, bake_image, fetch, write_lock
+from tundravm.declarative.lifecycle import FetchedSource, bake_image, write_lock
 from tundravm.errors import ErrorCode, StateError, ValidationError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 

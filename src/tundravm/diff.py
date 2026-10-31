@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import difflib
 import glob
 import os
@@ -13,10 +12,10 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TextIO
+from typing import TYPE_CHECKING, Literal
 
 from .backends.base import is_mkosi_state
-from .formats import annotation_path, md_cell, md_fence, md_table, resolve_format, workflow_command
+from .formats import md_cell, md_fence, md_table, workflow_command
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -178,20 +177,6 @@ def diff_against(
         return diff_trees(root, Path(tmp), ignore=ignore)
 
 
-def cmd_diff(
-    args: argparse.Namespace, out: TextIO, img: Lowered, *, profiles: Sequence[str] | None = None
-) -> int:
-    against = args.tree if args.tree is not None else Path(img.build_dir) / "mkosi"
-    result = diff_against(img, against, profiles=profiles)
-    if result.is_clean:
-        print("tree is up to date with the recipe", file=out)
-        return 0
-    fmt = resolve_format(args.format, alias="stat" if args.stat else None)
-    root = annotation_path(against)
-    out.write(result.render(fmt, root=root, color=_wants_color(args.color, out)))
-    return 1
-
-
 @dataclass(frozen=True, slots=True)
 class _Entry:
     data: bytes
@@ -310,12 +295,4 @@ def _foreign_profile_globs(root: Path, compiled: Sequence[str]) -> list[str]:
     return sorted(globs)
 
 
-def _wants_color(mode: str, out: TextIO) -> bool:
-    if mode == "always":
-        return True
-    if mode == "never" or os.environ.get("NO_COLOR"):
-        return False
-    return out.isatty()
-
-
-__all__ = ["ChangeStatus", "FileChange", "TreeDiff", "cmd_diff", "diff_against", "diff_trees"]
+__all__ = ["ChangeStatus", "FileChange", "TreeDiff", "diff_against", "diff_trees"]

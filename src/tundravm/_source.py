@@ -1230,11 +1230,6 @@ def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
     return None
 
 
-def deps_prefetched(build: SourceBuild, pin: str, root: Path) -> bool:
-    """Whether ``<root>/deps`` holds *build*'s dependencies for *pin* (:func:`deps_problem`)."""
-    return deps_problem(build, pin, root) is None
-
-
 def _cache_entry(path: Path) -> str | None:
     """A content-manifest value: ``dir`` (non-empty directory) or ``<size> <sha256>``."""
     if path.is_dir():
@@ -1334,8 +1329,6 @@ def prefetch_deps(
     root: Path,
     *,
     offline: bool = False,
-    force: bool = False,
-    clear: bool = False,
 ) -> str | None:
     """Fill ``<root>/deps/<cache>`` with *build*'s dependencies; the outcome, for the notice.
 
@@ -1349,8 +1342,7 @@ def prefetch_deps(
     (...)"`` when an incomplete cache cannot be prefetched again, ``"skipped (no
     host <tool>)"`` when the toolchain is not on ``PATH``, ``"skipped (offline)"``
     under an offline policy, or ``"failed (<reason>)"``; the build then fetches
-    its dependencies online. *force* prefetches even a complete cache; *clear*
-    first removes the cache and every marker of it (``fetch --force``).
+    its dependencies online.
     """
     marker = build.deps_marker(pin)
     if marker is None or not isinstance(build.build, LanguageBuild):
@@ -1358,20 +1350,14 @@ def prefetch_deps(
     recipe = build.build
     deps = root / DEPS_DIRNAME
     problem = deps_problem(build, pin, root)
-    if problem is None and not force:
+    if problem is None:
         return f"{recipe.deps}: kept"
     incomplete = problem not in (None, NOT_PREFETCHED)
     if offline or shutil.which(recipe.tool) is None:
-        if problem is None:
-            return f"{recipe.deps}: kept"
         if incomplete:
             return f"{recipe.deps}: incomplete ({problem})"
         return "skipped (offline)" if offline else f"skipped (no host {recipe.tool})"
     cache = deps / recipe.deps
-    if clear:
-        shutil.rmtree(cache, ignore_errors=True)
-        for stale in deps.glob(f"*.{recipe.deps}.json"):
-            stale.unlink()
     cache.mkdir(parents=True, exist_ok=True)
     argv, env = recipe.prefetch(str(cache.resolve()))
     scratch = Path(tempfile.mkdtemp(prefix=f".{build.pin_dir(pin)}.", dir=deps))
@@ -1742,7 +1728,6 @@ __all__ = [
     "SourceBuild",
     "checkout_identity",
     "default_resolver",
-    "deps_prefetched",
     "deps_problem",
     "fetch_source",
     "fingerprint",

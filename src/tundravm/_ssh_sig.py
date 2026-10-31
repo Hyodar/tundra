@@ -1,8 +1,7 @@
 """SSH signatures over evidence: ``ssh-keygen -Y sign`` and ``-Y verify``, no Python dependency.
 
-The namespace is :data:`NAMESPACE` (a release manifest's :data:`RELEASE_NAMESPACE`), so
-a signature made for evidence cannot be replayed as a git commit or file signature, nor
-one of those as evidence, nor an evidence signature as a release manifest's.
+The namespace is :data:`NAMESPACE`, so a signature made for a build manifest cannot be
+replayed as a git commit or file signature, nor one of those as a manifest's.
 """
 
 from __future__ import annotations
@@ -22,8 +21,6 @@ from .errors import StateError, ValidationError
 
 NAMESPACE = "tundravm-evidence"
 """The ``-n`` namespace every evidence signature is made and checked in."""
-RELEASE_NAMESPACE = "tundravm-release"
-"""The ``-n`` namespace a release manifest (``release-manifest.json.sig``) is signed in."""
 TOOL = "ssh-keygen"
 _TIMEOUT = 60
 

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import posixpath
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Literal, get_args
 
-from .errors import StateError, ValidationError
+from .errors import ValidationError
 from .toolchain import Toolchain
 
 if TYPE_CHECKING:
@@ -749,141 +748,14 @@ class CompileResult:
         return str(self.path)
 
 
-BAKE_RESULT_FILENAME = "bake-result.json"
-REPRODUCE_DIRNAME = ".reproduce"
-"""Where ``bake --verify-reproducible`` builds the second time (``BUILD/.reproduce``)."""
-BAKE_RESULT_SCHEMA_VERSION = 3
-"""3: a bake of some variants keeps the others' entries; ``variants_baked`` names the ones
-it built, and each variant entry's ``declarative`` record holds its own provenance. A variant
-entry's optional ``boot_payloads`` maps a disk artifact's target to the UKI it boots
-(``path``, ``sha256``); a bake result without it reads as recording none."""
-
-
 @dataclass(slots=True)
 class BakeResult:
     profiles: dict[str, ProfileBuildResult] = field(default_factory=dict)
     lock_digest: str | None = None
     backend: str | None = None
-    created_at: str | None = None
     duration_s: float | None = field(default=None, compare=False)
     lock_sha256: str | None = None
     """The sha256 of the lockfile bytes the bake read; ``None`` when it read none."""
-    toolchain: Toolchain | None = None
-    """The toolchain the bake ran (``toolchain`` in bake-result.json); ``None``: not recorded."""
-
-    def save(self, build_dir: str | Path) -> Path:
-        """Write ``<build_dir>/bake-result.json``; paths inside build_dir are stored relative."""
-        base = Path(build_dir)
-        base.mkdir(parents=True, exist_ok=True)
-        profiles: dict[str, object] = {}
-        for name, result in sorted(self.profiles.items()):
-            artifacts = sorted(result.artifacts.items())
-            entry: dict[str, object] = {
-                "artifacts": {target: _portable_path(ref.path, base) for target, ref in artifacts},
-                "report_path": (
-                    None if result.report_path is None else _portable_path(result.report_path, base)
-                ),
-            }
-            digests = {target: ref.digest for target, ref in artifacts if ref.digest is not None}
-            if digests:
-                entry["artifact_digests"] = digests
-            entry["manifest_digests"] = {target: ref.manifest_digest for target, ref in artifacts}
-            payloads = {
-                target: {"path": _portable_path(ref.boot_payload, base), "sha256": digest}
-                for target, ref in artifacts
-                if ref.boot_payload is not None and (digest := ref.boot_payload_digest)
-            }
-            if payloads:
-                entry["boot_payloads"] = payloads
-            profiles[name] = entry
-        payload = {
-            "schema_version": BAKE_RESULT_SCHEMA_VERSION,
-            "created_at": self.created_at,
-            "backend": self.backend,
-            "lock_digest": self.lock_digest,
-            "lock_sha256": self.lock_sha256,
-            "variants": profiles,
-            "variants_baked": sorted(self.profiles),
-        }
-        if self.toolchain is not None:
-            payload["toolchain"] = self.toolchain.payload()
-        path = base / BAKE_RESULT_FILENAME
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return path
-
-    @classmethod
-    def load(cls, build_dir: str | Path) -> BakeResult:
-        """Read ``<build_dir>/bake-result.json`` written by :meth:`save`."""
-        base = Path(build_dir)
-        path = base / BAKE_RESULT_FILENAME
-        context = {"path": str(path)}
-        if not path.is_file():
-            raise StateError(
-                "No bake result found.",
-                hint="Run bake() / tundravm build first.",
-                context=context,
-            )
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            return cls._from_payload(payload, base)
-        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-            raise StateError(
-                f"Unreadable bake result: {exc}",
-                hint="Run bake() / tundravm build again to regenerate it.",
-                context=context,
-            ) from exc
-
-    @classmethod
-    def _from_payload(cls, payload: Any, base: Path) -> BakeResult:
-        if payload.get("schema_version") != BAKE_RESULT_SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema_version {payload.get('schema_version')!r}")
-        profiles: dict[str, ProfileBuildResult] = {}
-        for name, entry in payload["variants"].items():
-            digests: dict[str, str] = entry.get("artifact_digests", {})
-            manifests: dict[str, str | None] = entry.get("manifest_digests", {})
-            payloads: dict[str, dict[str, str]] = entry.get("boot_payloads", {})
-            artifacts: dict[OutputTarget, ArtifactRef] = {}
-            for target, raw_path in entry["artifacts"].items():
-                if target not in get_args(OutputTarget):
-                    raise ValueError(f"unknown output target {target!r}")
-                typed = cast(OutputTarget, target)
-                boot = payloads.get(target)
-                artifacts[typed] = ArtifactRef(
-                    target=typed,
-                    path=_resolve_path(raw_path, base),
-                    digest=digests.get(target),
-                    manifest_digest=manifests.get(target),
-                    boot_payload=None if boot is None else _resolve_path(boot["path"], base),
-                    boot_payload_digest=None if boot is None else boot["sha256"],
-                )
-            report = entry.get("report_path")
-            profiles[str(name)] = ProfileBuildResult(
-                profile=str(name),
-                artifacts=artifacts,
-                report_path=None if report is None else _resolve_path(report, base),
-            )
-        return cls(
-            profiles=profiles,
-            lock_digest=payload.get("lock_digest"),
-            backend=payload.get("backend"),
-            created_at=payload.get("created_at"),
-            lock_sha256=payload.get("lock_sha256"),
-            toolchain=None
-            if payload.get("toolchain") is None
-            else Toolchain.from_payload(payload["toolchain"]),
-        )
-
-
-def _portable_path(path: Path, base: Path) -> str:
-    try:
-        return Path(path).resolve().relative_to(base.resolve()).as_posix()
-    except ValueError:
-        return str(Path(path).resolve())
-
-
-def _resolve_path(raw: str, base: Path) -> Path:
-    path = Path(raw)
-    return path if path.is_absolute() else base / path
 
 
 @dataclass(frozen=True, slots=True)
@@ -907,8 +779,6 @@ __all__ = [
     "Arch",
     "ArtifactRef",
     "BakeRequest",
-    "BAKE_RESULT_FILENAME",
-    "REPRODUCE_DIRNAME",
     "BakeResult",
     "CommandSpec",
     "CompileResult",

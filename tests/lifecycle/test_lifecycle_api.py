@@ -1,7 +1,8 @@
-"""The declarative lifecycle functions: compile, lint, lock, bake, measure, deploy, doctor."""
+"""The declarative lifecycle functions: compile, lint, lock, bake, measure, doctor."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import replace
@@ -10,25 +11,21 @@ from pathlib import Path
 import pytest
 
 import tundravm
-from tests.helpers import fake_ovmf
 from tundravm._source import Source
 from tundravm.backends import Requirement
 from tundravm.declarative import (
     Artifact,
-    Azure,
     Backend,
     Build,
     Debloat,
     Diagnostic,
     File,
     Fragment,
-    Gcp,
     Git,
     Install,
     Lock,
     Measurements,
     Package,
-    Qemu,
     Recipe,
     Tree,
     Unit,
@@ -36,22 +33,18 @@ from tundravm.declarative import (
     Variant,
     bake,
     compile,
-    deploy,
-    diff,
     doctor,
     lint,
     lock,
     lock_status,
     lower,
-    read_artifacts,
     read_lock,
     write_lock,
 )
 from tundravm.declarative._compile import emit
 from tundravm.declarative.utils import Tdxs
-from tundravm.deploy.qemu import QemuDeployAdapter
-from tundravm.errors import DeploymentError, LockfileError, MeasurementError, ValidationError
-from tundravm.measure.policy import read_policy, write_policy
+from tundravm.errors import LockfileError, MeasurementError, ValidationError
+from tundravm.measure.policy import read_policy
 from tundravm.testing import assert_clean, assert_diagnostic, assert_tree
 
 APP_UNIT = "[Unit]\nDescription=app\n\n[Service]\nUser=app\nExecStart=/usr/bin/true\n"
@@ -91,7 +84,7 @@ def _resolver(calls: list[str]) -> object:
     return resolve
 
 
-# ── compile / diff ───────────────────────────────────────────────────────
+# ── compile ──────────────────────────────────────────────────────────────
 
 
 def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None:
@@ -110,10 +103,9 @@ def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None
     tree.write(written)
     assert not (written / "stale").exists()
     assert_tree(tree, expected)
-    assert diff(tree, expected) == ""
 
 
-def test_compile_selected_variants_and_diff(tmp_path: Path) -> None:
+def test_compile_selected_variants(tmp_path: Path) -> None:
     only = compile(_recipe(), variants=("default",))
     assert only.variants == ("default",)
     # without profile overlays a variant's tree is the whole tree: the payload and every
@@ -123,11 +115,9 @@ def test_compile_selected_variants_and_diff(tmp_path: Path) -> None:
         compile(_recipe(), variants=("gcp",))
 
     changed = compile(_recipe(motd="bye\n"), variants=("default",))
-    text = diff(changed, only)
-    assert "-hi" in text and "+bye" in text
+    assert changed.digest != only.digest
     on_disk = tmp_path / "golden"
     only.write(on_disk)
-    assert diff(changed, on_disk) == text
     with pytest.raises(AssertionError, match="content differs"):
         assert_tree(changed, on_disk)
 
@@ -212,7 +202,7 @@ def test_lock_keeps_previous_pins_unless_updated() -> None:
     assert lock(_recipe(build=True), previous=locked, offline=True) == locked
 
 
-# ── bake / measure / deploy / doctor ─────────────────────────────────────
+# ── bake / measure / doctor ──────────────────────────────────────────────
 
 
 def _baked(tmp_path: Path, lines: list[str] | None = None) -> tuple[Artifact, ...]:
@@ -235,7 +225,6 @@ def test_bake_writes_the_outputs_each_variant_declares(tmp_path: Path) -> None:
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
     assert any("baked 2 variants" in line for line in lines)
-    assert read_artifacts(tmp_path / "out") == artifacts
 
 
 def test_bake_refuses_a_stale_lock(tmp_path: Path) -> None:
@@ -327,7 +316,7 @@ def test_measurements_policy_round_trips_into_a_tdxs_verifier(tmp_path: Path) ->
         "firmware_table": "t1",
     }
     path = tmp_path / "policy.json"
-    write_policy(policy, path)
+    path.write_text(json.dumps(policy), encoding="utf-8")
     assert read_policy(path) == policy
     with pytest.raises(MeasurementError, match="one value per register"):
         Tdxs.from_policy(path)
@@ -339,29 +328,6 @@ def test_measurements_policy_round_trips_into_a_tdxs_verifier(tmp_path: Path) ->
     placeholder = replace(found, tool="placeholder")
     with pytest.raises(MeasurementError, match="placeholder"):
         placeholder.to_policy()
-
-
-def test_deploy_with_fake_qemu_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    artifact = next(a for a in _baked(tmp_path) if a.target == "qemu")
-    fake_ovmf(tmp_path, monkeypatch)
-    seen: list[Sequence[str]] = []
-
-    def fake_qemu(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        seen.append(argv)
-        return subprocess.CompletedProcess(list(argv), 0, "", "")
-
-    adapter = QemuDeployAdapter(runner=fake_qemu)
-    with pytest.raises(DeploymentError, match="Cannot deploy a qemu artifact to azure"):
-        deploy(artifact, using=Azure("acct"), adapter=adapter)
-    found = deploy(artifact, using=Qemu(memory="4G", ssh_port=2223), adapter=adapter)
-    assert found.target == "qemu" and found.id.startswith("qemu-default-")
-    assert seen and "4G" in " ".join(seen[0]) and "2223" not in " ".join(seen[0])
-    assert found.endpoint is None  # the recipe declares no SshAccess: no SSH forward
-    with_ssh = replace(artifact, ssh_port=22, data_disks=("tundra-data",))
-    found = deploy(with_ssh, using=Qemu(ssh_port=2223), adapter=adapter)
-    assert "user,id=net0,hostfwd=tcp::2223-:22" in seen[-1]
-    assert "virtio-blk-pci,drive=data0,serial=tundra-data" in seen[-1]
-    assert found.endpoint == "ssh://localhost:2223"
 
 
 def test_doctor_with_fake_probe_runner() -> None:
@@ -378,7 +344,3 @@ def test_doctor_with_fake_probe_runner() -> None:
     with pytest.raises(ValidationError, match="Unknown backend"):
         Backend("docker")  # type: ignore[arg-type]
     assert isinstance(Requirement, type)
-
-
-def test_gcp_defaults_its_zone() -> None:
-    assert Gcp("p", "b").zone == "us-central1-a"
