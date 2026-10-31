@@ -183,3 +183,21 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - `evidence.py`, `release.py`, `witness.py`, `verify.py`, `changes.py`, `explore.py`,
   `preview.py`, `watch.py`, `status.py` and `clean.py`, with their bundle schemas, which
   had no consumer.
+- The in-process backend: `TUNDRAVM_BACKEND`, `[tool.tundravm] backend` and
+  `Backend(...)` take `local` or `lima`. Builds no longer produce simulated artifacts, and
+  the manifest has no `simulated` field (`run --mode simulated` is unchanged).
+- `tundravm.testing.fake_bake` and `bake_in_process`; `FakeMkosi` (mkosi) and the new
+  `FakeSources` (git and http fetches) let a test run a real build with nothing forked or
+  fetched.
+- Placeholder measurements: `measure()` drops `allow_placeholder=` and
+  `PlaceholderMeasurementWarning`, and an artifact that is no UKI or disk is always refused.
+  `Tdxs.from_policy(allow_placeholder=True)` still reads a committed placeholder policy.
+- `bake-result.json`: a build's record is its build directory's `manifest.json`.
+  `tundravm.bake()` drops `verify_reproducible=` and `offline=` (`tundravm build --reproduce`
+  and `--offline`).
+- `tundravm.declarative.deploy`, `Qemu`, `Azure`, `Gcp`, `Deployment`, `diff`, `fetch` and
+  `read_artifacts`: `tundravm run`, `tundravm deploy`, `tundravm check --tree` and
+  `tundravm build` replace them.
+- `explain.py`: `show` keeps the description and provenance rendering it needs.
+- The `tundravm fetch` hints in emitted build scripts and source errors: they now say
+  `run tundravm lock, then tundravm build` and `is not fetched: run tundravm build`.
