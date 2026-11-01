@@ -57,7 +57,8 @@ a `tundravm.declarative.Unit`, which no `Image` slot takes. Proposal: treat a mi
   and each drifted file says missing, extra or modified.
 - Image-wide findings were labelled `[common]`; they are `[image]`, and the guide says so.
 - `check --explain UNKNOWN` dumped eighty codes; it names the closest and the lint
-  reference, and says a Component's own codes are not registered.
+  reference. Fixed later on `component-rules`: a component declares its codes on its class,
+  and `--explain` finds an image's own through the image.
 - Lock drift findings had no hint; they say to review and lock again.
 - `deploy` of a target the build lacks said `build --target`, which refuses an undeclared
   target; it says to add it to `targets=` first.

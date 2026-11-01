@@ -399,6 +399,11 @@ The rules:
 - `class X(Component, build_network=True)` says its builds fetch dependencies, so the
   tree builds with `WithNetwork=yes`.
 
+Each code `check()` reports is declared in `rules`, as `App` declares
+`app-privileged-port`: `--explain` prints it, and an undeclared code is a
+`rule-undeclared` error. A code reported at several levels lists them, default first, with
+a `when=` phrase per other.
+
 ### The shipped library
 
 `tundravm.components`:

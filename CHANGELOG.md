@@ -74,8 +74,8 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   contents `Package`, `File`, `Tree`, `User`, `Group`, the foundation `Debian`, `Kernel`,
   `RootFS`, `Mkosi`, and `load`, `lower`, `compile`, `bake`, `doctor`), `tundravm.ports`
   (`TCP`, `UDP`, `AttestedTLS`, `TLS`), `tundravm.systemd` (what `Service` keywords take),
-  `tundravm.components` (`Component`, its exports, `Resolved`, `Diagnostic` and the
-  shipped library), `tundravm.storage` (`Volume`, `VolumeDirectory`, `OperatorKey`,
+  `tundravm.components` (`Component`, its exports, `Resolved`, `Diagnostic`, `Rule` and
+  the shipped library), `tundravm.storage` (`Volume`, `VolumeDirectory`, `OperatorKey`,
   `TpmSeal`, `BrokerKey`), `tundravm.secrets` (`Secret`, `Credential`), `tundravm.sources`
   (`GoBinary`, `CargoBinary`, `Build`, `Install`, `Local`, `Git`, `Http`) and
   `tundravm.errors`. The
@@ -177,11 +177,25 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   one target is reported instead of colliding. On a tree tundravm wrote it converts the
   payload (`Verity=hash` as `RootFS.verity()`), and notes the QEMU disk, the cloud wrappers and
   the payload's generated trees and scripts instead of copying them or converting mkosi's
-  `default-initrd`; the converted surge tree passes `check`.
+  `default-initrd`; the cloud wrappers present become `targets=`, so the converted surge
+  tree builds the same outputs and passes `check`.
 - `show IMAGE` leads with the image: its name and file on the first line (`file` in
   `--json`), then the production profile and the others in declaration order, each block
   headed `profile=NAME  debian/trixie (x86_64)`; `--dev` picks the image's dev profile (it was
   ignored).
+- A component declares the codes its `check()` reports on its class:
+  `rules = (Rule(code, severity, summary, fix),)`. A code it does not declare is
+  `rule-undeclared`, an error naming the class and the code. The shipped components carry
+  their own rules (the registry keeps tundravm's), and `docs/reference/lint.md` lists them
+  by component.
+- `check --explain CODE` explains a code an image's own component declares, through the
+  image given or the project's, and says where it comes from (`declared by App in
+  demo.py`); the report's `explain:` line names component codes too.
+- `Rule.severity` is every level a code reports at, the default first, with a `when=`
+  phrase for each other one; `lint.md` and `--explain` print
+  `error (warning under Policy(storage_safety='warn'))` from them, and the registry test
+  checks the levels against the reporters. `toolchain-drift` is a warning: the strict
+  path that made it an error had no caller.
 - Evidence: `docs/design/evidence/gate4-sdk.md`.
 
 ### Profiles and the ESP
