@@ -582,9 +582,7 @@ WORKFLOW_TEMPLATE = """\
 # TUNDRAVM_BACKEND (Settings > Secrets and variables > Actions > Variables) names the
 # backend: local (the runner has no Lima). It builds the production profile twice in
 # independent workspaces (`build --reproduce`), verifies the build directory against its
-# manifest and uploads it. Every image builds the evidence service from the private repository
-# Hyodar/tundra-tools: add a fine-grained token with read-only Contents on it as the
-# repository secret TUNDRA_TOOLS_TOKEN, or the build cannot fetch it.
+# manifest and uploads it.
 name: tundravm
 
 on:
@@ -640,19 +638,6 @@ jobs:
           sudo apt-get install -y -qq debian-archive-keyring
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
-        env:
-          TUNDRA_TOOLS_TOKEN: ${{{{ secrets.TUNDRA_TOOLS_TOKEN }}}}
-        run: |
-          [ -n "$TUNDRA_TOOLS_TOKEN" ] || {{
-            echo "::warning::no TUNDRA_TOOLS_TOKEN secret: the build reads tundra-tools only" \\
-              "through a mirror (Tdxs(source=Git(mirror, ref))); see the header to add it"
-            exit 0
-          }}
-          repo=github.com/Hyodar/tundra-tools
-          git config --global \\
-            url."https://x-access-token:${{TUNDRA_TOOLS_TOKEN}}@$repo".insteadOf "https://$repo"
-
       - name: Sync dependencies
         run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
@@ -688,12 +673,12 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
 ``source-unpinned``."""
 
 _ALLOW_COMMENTS: dict[str, str] = {
-    "minimal": "        # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
-    "service": "        # app/ and tundra-tools: `tundravm lock` pins both.\n",
+    "minimal": "        # A tundravm checkout's tools/ is unpinned until `tundravm lock`.\n",
+    "service": "        # app/ (and a checkout's tools/) until `tundravm lock` pins them.\n",
     "cloud": "        # The EFI stub stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
-        "        # The tundra-tools builds (evidence, volume and delivery tools) stay unpinned\n"
-        "        # until `tundravm lock` pins them.\n"
+        "        # The evidence, volume and delivery tools of a tundravm checkout's tools/ stay\n"
+        "        # unpinned until `tundravm lock` pins them.\n"
     ),
 }
 """The comment above ``allow=`` in the test module of a template with :data:`EXPECTED_FINDINGS`."""
@@ -792,7 +777,7 @@ def render_pyproject(
 
 
 FIRST_STEPS: tuple[tuple[str, str], ...] = (
-    ("uv run tundravm lock", "pin every source (tundra-tools needs git read access)"),
+    ("uv run tundravm lock", "pin every source"),
     ("uv run tundravm build --tree-only mkosi", "the tree the tests and CI compare; commit it"),
     ("uv run pytest", "lint, compile and committed-tree tests"),
     ("uv run tundravm build --dev", "build the dev profile"),

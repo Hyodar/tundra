@@ -38,6 +38,9 @@ DENYLIST = {
     "fluent profile block": re.compile(r"\bwith img\b"),
     "frozen bake flag": re.compile(r"\bbake\([^)]*\bfrozen=True\b"),
     "internal source class": re.compile(r"\b(?:Http|Git|Local)Source\("),
+    "the tundra-tools repository (tools/ of this repository)": re.compile(
+        r"\bHyodar/tundra-tools\b|\bTUNDRA_TOOLS\b"
+    ),
     "removed init hook": re.compile(r"\badd_init_script\b"),
     "module application": re.compile(r"\.apply\("),
     "internal module spec": re.compile(r"\b(?:Key|Disk|Secret)Spec\("),

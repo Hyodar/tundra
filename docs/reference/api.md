@@ -1005,7 +1005,7 @@ The `taiko-client` driver: follows L1 and drives the execution client's Engine A
 ```python
 Tdxs(
     *,
-    source: dm.Git = Git(url='https://github.com/Hyodar/tundra-tools.git', ref='master', subdir=None, submodules=False),
+    source: dm.Git | dm.Local = tools_source(),
     issuer: du.TdxsType | None = 'tdx',
     validator: du.TdxsType | None = None,
     expected_measurements: Mapping[str, str] = FrozenMap({}),
@@ -1016,7 +1016,7 @@ Tdxs(
 )
 ```
 
-The evidence service: `tdxs` from tundra-tools, socket-activated on `/var/tdxs.sock`, which produces the TDX quote an attestation is checked against.
+The evidence service: `tdxs` from `tools/` of tundravm's repository, socket-activated on `/var/tdxs.sock`, which produces the TDX quote an attestation is checked against.
 
 | Member | Does |
 |---|---|

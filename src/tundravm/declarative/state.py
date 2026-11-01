@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
 from tundravm._modules import execution as gate
 from tundravm._modules import probe as probe_module
-from tundravm._modules.base import TUNDRA_TOOLS, Module
+from tundravm._modules.base import Module, tools_source
 from tundravm._modules.disk_encryption import (
     DISK_ENCRYPTION_BUILD_PACKAGES,
 )
@@ -118,6 +118,7 @@ from .model import (
     UnitOutput,
     UnitReady,
     User,
+    recorded_local,
 )
 from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
 from .systemd import UNIT_REF_KINDS, Condition, Dynamic, Root, UnitTarget, target_unit
@@ -400,8 +401,8 @@ class StateBuilder:
         *after* maps each built-in step to the steps it runs after.
         """
         tools = next((item for item in items if isinstance(item, RuntimeTools)), None)
-        source = TUNDRA_TOOLS if tools is None else _git(tools.source)
-        paths = tools or RuntimeTools(Git(TUNDRA_TOOLS.url, TUNDRA_TOOLS.ref))
+        source = tools_source() if tools is None else _lowered_source(tools.source)
+        paths = tools or RuntimeTools(_declared(source))
         keys = [item for item in items if isinstance(item, Key)]
         disks = [item for item in items if isinstance(item, Disk)]
         secrets = [item for item in items if isinstance(item, Secrets)]
@@ -1151,13 +1152,23 @@ def _git(source: Git) -> GitSource:
     return GitSource(source.url, source.ref, subdir=source.subdir, submodules=source.submodules)
 
 
+def _lowered_source(source: Git | Local) -> GitSource | LocalSource:
+    if isinstance(source, Local):
+        return LocalSource(source.path, directory=source.directory)
+    return _git(source)
+
+
+def _declared(source: GitSource | LocalSource) -> Git | Local:
+    if isinstance(source, LocalSource):
+        return recorded_local(source.path, source.directory)
+    return Git(source.url, source.ref, subdir=source.subdir, submodules=source.submodules)
+
+
 def source_build(build: Build) -> SourceBuild:
     """The compiler's source build for *build*."""
     source: GitSource | HttpSource | LocalSource
-    if isinstance(build.source, Git):
-        source = _git(build.source)
-    elif isinstance(build.source, Local):
-        source = LocalSource(build.source.path, directory=build.source.directory)
+    if isinstance(build.source, (Git, Local)):
+        source = _lowered_source(build.source)
     else:
         source = HttpSource(build.source.url, sha256=build.source.sha256)
     steps = tuple(

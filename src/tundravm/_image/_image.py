@@ -122,7 +122,7 @@ class Image(Located):
       outbound too.
     - *One generated system user per service*, the preset sandbox and ``Restart=on-failure``.
       Escape: ``Service(user=...)``, ``hardening=``, ``unit=DropIn(...)``.
-    - *The evidence service* (``tdxs`` from tundra-tools, socket-activated on
+    - *The evidence service* (``tdxs`` from tools/, socket-activated on
       ``/var/tdxs.sock``), which
       produces the quote an attestation is checked against. Escape:
       ``components=[Tdxs(source=Git(mirror, ref))]`` to build it from a mirror or a

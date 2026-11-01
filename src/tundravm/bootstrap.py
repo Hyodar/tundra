@@ -1,7 +1,7 @@
 """``attest`` and ``secrets``: today's control-plane bootstrap, said to be what it is.
 
 Until gate 3's attested endpoint exists (plan 6.3), the way into an instance is the one
-gate 4B lowered: an image with a volume or a secret runs tundra-tools' ``secret-delivery``
+gate 4B lowered: an image with a volume or a secret runs ``secret-delivery`` (``tools/``)
 on the management port :data:`~tundravm.instances.MANAGEMENT_PORT`, which takes the
 operator's SSH public key once (an HTTP ``POST`` of its base64 body) and lets that key in
 as root. That first contact is **unverified**: nothing binds the key exchange, the SSH host

@@ -11,6 +11,7 @@ import pytest
 from tundravm import File as PublicFile
 from tundravm import Image, Profile
 from tundravm import Service as PublicService
+from tundravm._modules.base import tools_source
 from tundravm.components import Component, Egress, Network
 from tundravm.declarative import (
     BootStep,
@@ -301,7 +302,7 @@ from tundravm import Image, Service
 
 image = Image("demo", packages=["busybox"], services=[Service("app", ["/usr/bin/busybox"])])
 """
-"""An image: it implies the evidence service, which builds from a git source."""
+"""An image: it implies the evidence service, which builds from this checkout's tools/."""
 
 
 def test_the_fakes_run_a_whole_build_with_nothing_forked_or_fetched(
@@ -318,7 +319,7 @@ def test_the_fakes_run_a_whole_build_with_nothing_forked_or_fetched(
     assert "built build/demo/production/" in out
     assert mkosi.verbs() == ["summary", "build", "summary"]
     (fetched,) = sources.fetched
-    assert fetched.url == "https://github.com/Hyodar/tundra-tools.git"
+    assert fetched.url == tools_source().url
     assert fetched.path.is_relative_to(tmp_path / "build" / "demo" / ".work" / ".sources")
 
     code, _, err = run_cli("build", "demo.py")

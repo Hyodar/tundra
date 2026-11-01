@@ -9,6 +9,7 @@ The committed ``examples/surge-tdx-prover/mkosi`` tree pins their output.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import posixpath
 import re
@@ -20,7 +21,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from tundravm._modules import devtools as _devtools
 from tundravm._modules import tdxs as _tdxs
-from tundravm._source import FrozenMap
+from tundravm._modules.base import tools_source as _tools_source
+from tundravm._source import FrozenMap, LocalSource
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import (
     approved_registers,
@@ -55,6 +57,7 @@ from .model import (
     Task,
     Unit,
     User,
+    recorded_local,
 )
 from .systemd import Condition, Hardening, Root
 
@@ -63,8 +66,22 @@ if TYPE_CHECKING:
 
 TdxsType = Literal["tdx", "azure", "gcp", "simulator"]
 
-TUNDRA_TOOLS = Git("https://github.com/Hyodar/tundra-tools.git", "master")
-"""The ``tundra-tools`` repository :class:`Tdxs` builds from by default."""
+
+@functools.cache
+def tools_source() -> Git | Local:
+    """What :class:`Tdxs` and the volume and delivery tools build from by default:
+    ``tools/`` of tundravm's repository.
+
+    Run from a checkout of the repository, ``Local`` of its ``tools/`` (the lock pins its
+    content digest, so an edit there is drift); installed from git, ``Git(url, commit,
+    subdir="tools")`` at the commit installed. Raises ``ValidationError`` naming the fix
+    when the install records no commit.
+    """
+    source = _tools_source()
+    if isinstance(source, LocalSource):
+        return recorded_local(source.path, source.directory)
+    return Git(source.url, source.ref, subdir=source.subdir)
+
 
 DEFAULT_DEBIAN_MIRROR = "http://deb.debian.org/debian"
 """The mirror :class:`Backports` uses when neither it nor the image sets one."""
@@ -242,7 +259,7 @@ class Tdxs(Composite):
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
 
-    source: Git = TUNDRA_TOOLS
+    source: Git | Local = field(default_factory=tools_source)
     issuer: TdxsType | None = "tdx"
     validator: TdxsType | None = None
     expected_measurements: Mapping[str, str] = field(default_factory=FrozenMap)
@@ -834,7 +851,7 @@ class SshAccess(Composite):
     generates this instance's at boot (``ssh-keygen -A``, skipped when they exist) and sshd
     starts after it. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
     only and root by key only (``PermitRootLogin prohibit-password``): root is the account
-    tundra-tools delivers a key for, and the image has no other login account, so refusing
+    secret-delivery delivers a key for, and the image has no other login account, so refusing
     root would refuse everyone, while a password is never accepted.
     *authorized_keys* are public keys baked into the image
     (``/etc/ssh/authorized_keys.d/root``); *from_secrets* accepts the key the image's
@@ -1073,7 +1090,6 @@ def _step_name(prefix: str, path: str) -> str:
 
 
 __all__ = [
-    "TUNDRA_TOOLS",
     "Backports",
     "CargoBinary",
     "Composite",
@@ -1105,4 +1121,5 @@ __all__ = [
     "Tdxs",
     "TdxsType",
     "TeeBase",
+    "tools_source",
 ]

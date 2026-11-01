@@ -10,7 +10,6 @@ import pytest
 
 import tundravm
 from tests.compiler.test_native_tree import by_image, mkosi_summary
-from tests.conftest import TUNDRA_TOOLS_COMMIT
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm import capabilities
 from tundravm._image import recipe_of
@@ -99,7 +98,7 @@ def test_the_prover_locks_without_the_network(prover_file: Path) -> None:
 
     def resolver(source: object) -> str:
         url = getattr(source, "url", "")
-        return pins.get(url) or TUNDRA_TOOLS_COMMIT
+        return pins[url]
 
     payload = json.loads(lock(recipe, resolver=resolver).text())
     builds = payload["recipe"]["profiles"]["production"]["source_builds"]

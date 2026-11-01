@@ -58,7 +58,7 @@ class AttestedTLS(Located):
     listener, as its own unprivileged user with only ``CAP_NET_BIND_SERVICE``), open the
     firewall rule, and record the ingress in the runtime manifest.
 
-    What gate 3 adds (tundra-tools, plan section 6.3): the attested endpoint on :8745
+    What gate 3 adds (tools/, plan section 6.3): the attested endpoint on :8745
     binds the listener's public key into the quote's ``report_data``
     (``sha512(purpose ‖ nonce ‖ public key ‖ SSH host keys)``), so ``tundravm attest``
     hands the client a certificate it can verify against the operator's policy and a

@@ -54,7 +54,7 @@ def test_the_prover_template_with_ci(here: Path, cli: Cli) -> None:
     workflow = (root / ".github" / "workflows" / "tundravm.yml").read_text()
     for verb in ("check", "lock", "build", "verify", "show"):
         assert f"tundravm {verb} " in workflow or f"tundravm {verb}\n" in workflow, verb
-    assert "secrets.TUNDRA_TOOLS_TOKEN" in workflow
+    assert "TUNDRA_TOOLS_TOKEN" not in workflow
     for verb in REMOVED:
         assert not re.search(rf"tundravm {verb}\b", workflow), verb
     header = (root / "vault.py").read_text().split('"""')[1]

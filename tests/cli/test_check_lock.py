@@ -20,6 +20,24 @@ recipe = Recipe("b", items=(Disk("d", "/data", key=Key("k")),))
 """
 
 
+MIRRORED = STARTER.replace(
+    "from tundravm.components import DevAccess\n",
+    "from tundravm.components import DevAccess, Tdxs\nfrom tundravm.sources import Git\n",
+).replace(
+    '    dev=DevAccess(password="tdx"),\n',
+    '    dev=DevAccess(password="tdx"),\n'
+    '    components=[Tdxs(source=Git("https://mirror.example/tundra", "main", subdir="tools"))],\n',
+)
+"""The starter building its tools from a git mirror: a source ``lock`` resolves."""
+
+
+def _mirrored(project: Path, monkeypatch: pytest.MonkeyPatch, pin: str) -> None:
+    import tundravm._source as source_module
+
+    (project / "demo.py").write_text(MIRRORED, encoding="utf-8")
+    monkeypatch.setattr(source_module, "default_resolver", lambda source: pin)
+
+
 def _change(project: Path) -> None:
     (project / "demo.py").write_text(
         STARTER.replace('packages=["busybox"]', 'packages=["busybox", "jq"]'), encoding="utf-8"
@@ -120,7 +138,7 @@ def test_lock_writes_then_check_reports_drift(project: Path, cli: Cli) -> None:
     assert said[0] == "locked build/tundravm.lock"
     assert re.fullmatch(r"  snapshot: debian/trixie \d{8}T\d{6}Z", said[1])
     assert re.fullmatch(r"  source +kind +ref +pin", said[2])
-    assert re.fullmatch(r"    tdxs +git +master +1{12}", said[3])
+    assert re.fullmatch(r"    tdxs +local +- +[0-9a-f]{12}", said[3])
     assert (project / "build" / "tundravm.lock").is_file()
     clean = cli("lock", "--check")
     assert clean.code == EXIT_OK and "up to date" in clean.out
@@ -143,10 +161,9 @@ def test_lock_check_without_a_lock_is_drift(project: Path, cli: Cli) -> None:
 def test_lock_update_resolves_again(
     project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _mirrored(project, monkeypatch, "1" * 40)
     assert cli("lock").code == EXIT_OK
-    import tundravm._source as source_module
-
-    monkeypatch.setattr(source_module, "default_resolver", lambda source: "2" * 40)
+    _mirrored(project, monkeypatch, "2" * 40)
     kept = cli("lock")
     assert kept.code == EXIT_OK
     assert "1" * 40 in (project / "build" / "tundravm.lock").read_text()
@@ -158,10 +175,9 @@ def test_lock_update_resolves_again(
 def test_lock_update_without_names_updates_every_input(
     project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _mirrored(project, monkeypatch, "1" * 40)
     assert cli("lock").code == EXIT_OK
-    import tundravm._source as source_module
-
-    monkeypatch.setattr(source_module, "default_resolver", lambda source: "3" * 40)
+    _mirrored(project, monkeypatch, "3" * 40)
     result = cli("lock", "--update", "--json")
     assert result.code == EXIT_OK, result.err
     assert json.loads(result.out)["updated"]
@@ -222,7 +238,7 @@ def test_a_hint_names_the_lock_command_that_runs_here(
 ) -> None:
     (project / "other.py").write_text(STARTER, encoding="utf-8")
     checked = cli("check", *given)
-    assert f"hint: Run `{command}` to pin it " in checked.out
+    assert f"hint: Run `{command}` to pin its content digest " in checked.out
     assert f"`{command}` writes it" in checked.err
     assert "IMAGE" not in checked.out + checked.err
 

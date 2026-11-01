@@ -5,7 +5,7 @@ Packages (9): ca-certificates chrony kmod linux-image-amd64 nftables systemd sys
 Build packages (1): golang
 Sources (2):
   server  local app  pinned=-
-  tdxs    git https://github.com/Hyodar/tundra-tools.git  ref=master  pinned=-
+  tdxs    local tundravm:tools  pinned=-
 Files (12):
   /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
   /etc/nftables.conf                                                                       0755  1408B  sha256:855d89cd4114
@@ -47,7 +47,7 @@ Packages (22): apt bash-completion ca-certificates chrony curl dnsutils iputils-
 Build packages (1): golang
 Sources (2):
   server  local app  pinned=-
-  tdxs    git https://github.com/Hyodar/tundra-tools.git  ref=master  pinned=-
+  tdxs    local tundravm:tools  pinned=-
 Files (14):
   /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
   /etc/nftables.conf                                                                       0755  1408B  sha256:855d89cd4114

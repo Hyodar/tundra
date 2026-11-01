@@ -13,7 +13,7 @@ The checks, each only when its declaration exists (:func:`derive`):
 
 - ``mode``: ``/run/tundravm/mode`` says ``simulated`` or ``tdx`` (the gate, always);
 - ``rtmr``: always ``skip``, with the reason: the guest reads its registers only from a
-  quote, which ``tdxs`` (tundra-tools) makes; ``tundravm attest`` compares them with
+  quote, which ``tdxs`` (tools/) makes; ``tundravm attest`` compares them with
   ``measurements.json``;
 - ``service:UNIT``: each ``Service`` is active (or exited 0), ``socket:UNIT`` its socket
   when socket-activated, ``timer:UNIT`` the timer of a scheduled one;

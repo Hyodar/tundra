@@ -3,7 +3,7 @@
 A volume is a logical disk with a stable identity (plan section 6.2): the image says
 what it is called, where it mounts and how its LUKS2 key arrives; capacity and the
 attachment itself are deployment configuration. Today's ``key-gen`` and ``disk-setup``
-(tundra-tools) are the in-image half: the volume lowers onto them in
+(tools/) are the in-image half: the volume lowers onto them in
 :mod:`tundravm._image._runtime`.
 """
 
@@ -63,7 +63,7 @@ class OperatorKey:
     the instance has proved what it runs; nothing about it is in the image. The volume
     stays closed, and every service bound to it waits, until it arrives. Today the image
     waits on a FIFO (``/run/tundravm/unlock/<volume>``, ``key-gen``'s pipe strategy) that
-    the operator writes over the control plane; gate 3's tundra-tools work adds the
+    the operator writes over the control plane; gate 3's tools/ work adds the
     attested endpoint that writes it, and keeps the SSH public key in a LUKS2 token so
     the control plane works before the disk opens.
     """
@@ -86,7 +86,7 @@ class TpmSeal:
       and a key sealed on one platform does not open on another.
     - *pcrs*: the PCR policy the seal is bound to. Today's ``key-gen`` keeps the key in the
       vTPM's NV storage without a PCR policy; the runtime manifest records *pcrs* and gate
-      3's tundra-tools work enforces it.
+      3's tools/ work enforces it.
     - *recovery*: what happens when the vTPM state is lost. ``"none"`` is the only method
       today: the data is gone, and the volume is never reformatted for it (plan 6.2: an
       unlock failure is never permission to format).

@@ -17,6 +17,8 @@ import pytest
 from tests.cli.conftest import Cli
 from tundravm import manifest as mf
 from tundravm._mkosi import MkosiResult
+from tundravm._modules.base import tools_source
+from tundravm._source import LocalSource
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
 from tundravm.errors import StateError
@@ -57,7 +59,9 @@ def test_the_manifest_binds_the_directory(built: Build) -> None:
     assert payload["measurements"]["records"] == {"qemu/disk": "predicted", "qemu/uki": "predicted"}
     assert payload["root_hash"] is None and payload["rootfs"] == "initramfs"
     sources = json.loads((built.path / "inputs/sources.json").read_text())["sources"]
-    assert payload["sources"] == sources and sources[0]["pin"] == "1" * 40
+    tools = tools_source()  # this checkout's tools/, pinned by its digest
+    assert isinstance(tools, LocalSource)
+    assert payload["sources"] == sources and sources[0]["pin"] == tools.digest()
 
 
 def test_observations_are_not_identity(built: Build) -> None:

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list, source_dir
+from tundravm._modules.base import tools_source
 from tundravm._source import (
     GitSource,
     ScriptBuild,
@@ -267,7 +268,7 @@ def test_tdxs_hook_copies_the_fetched_checkout() -> None:
     current = _hooks(compile(recipe))
     assert current == lower(recipe).source_builds()["tdxs"].render()
     assert current.startswith('# tundravm build: {"build":{"env":{},"kind":"go"')
-    assert current.split("\n", 1)[1].startswith("# unpinned: master\n")
+    assert current.split("\n", 1)[1].startswith(f"# unpinned: {tools_source().requested}\n")
     assert "run tundravm lock, then tundravm build" in current
 
 

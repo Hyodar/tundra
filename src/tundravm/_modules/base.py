@@ -1,19 +1,71 @@
-"""The ``Module`` base class of the runtime tools lowering configures."""
+"""The ``Module`` base class of the runtime tools lowering configures, and their source."""
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Iterable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tundravm._source import GitSource
+from tundravm._source import GitSource, LocalSource
+from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
     from tundravm.declarative._lowered import Lowered
     from tundravm.diagnostics import Diagnostic
 
-TUNDRA_TOOLS = GitSource("https://github.com/Hyodar/tundra-tools.git", "master")
-"""The ``tundra-tools`` repository Tdxs, KeyGeneration, DiskEncryption and
-SecretDelivery build from by default; pass ``source=`` to pin another ref."""
+TOOLS_SUBDIR = "tools"
+"""The directory of this repository that holds the Go module the runtime tools build from."""
+TOOLS_LOCAL = "tundravm:tools"
+"""The path the lock records for the tools of the checkout tundravm runs from."""
+
+
+def tools_checkout() -> Path | None:
+    """``<checkout>/tools`` when tundravm runs from a checkout of its repository, else None.
+
+    A checkout is the directory holding ``src/tundravm`` (this package) and ``tools/go.mod``.
+    """
+    package = Path(__file__).resolve().parents[1]
+    root = package.parents[1]
+    tools = root / TOOLS_SUBDIR
+    if package.parent.name == "src" and (tools / "go.mod").is_file():
+        return tools
+    return None
+
+
+def tools_commit() -> tuple[str, str]:
+    """``(repository url, commit)`` of the installed tundravm, as ``tundravm new`` pins it.
+
+    Raises :class:`~tundravm.errors.ValidationError` naming the fix when the install
+    records no commit (an editable install of a copy that is not a git checkout).
+    """
+    from tundravm.templates import tundravm_source
+
+    installed = tundravm_source()
+    if installed.pinned:
+        return installed.url, installed.rev
+    raise ValidationError(
+        "Cannot tell which tundravm commit is installed, so the image cannot build its "
+        "evidence, key, disk and secret tools from tools/ at that commit.",
+        hint=f'Install tundravm from git (uv add "tundravm @ git+{installed.url}@COMMIT"), '
+        f'or pass the tools source: Tdxs(source=Git("{installed.url}", COMMIT, '
+        f'subdir="{TOOLS_SUBDIR}")).',
+    )
+
+
+@functools.cache
+def tools_source() -> GitSource | LocalSource:
+    """The source the runtime tools build from by default: this repository's ``tools/``.
+
+    From a checkout (:func:`tools_checkout`), that directory as a local source, pinned by
+    its content digest; otherwise the repository at the installed commit
+    (:func:`tools_commit`), ``subdir="tools"``.
+    """
+    checkout = tools_checkout()
+    if checkout is not None:
+        return LocalSource(TOOLS_LOCAL, directory=checkout)
+    url, commit = tools_commit()
+    return GitSource(url, commit, subdir=TOOLS_SUBDIR)
 
 
 class Module:
@@ -35,4 +87,11 @@ class Module:
         return ()
 
 
-__all__ = ["TUNDRA_TOOLS", "Module"]
+__all__ = [
+    "TOOLS_LOCAL",
+    "TOOLS_SUBDIR",
+    "Module",
+    "tools_checkout",
+    "tools_commit",
+    "tools_source",
+]

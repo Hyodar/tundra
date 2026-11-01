@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -482,23 +483,25 @@ class DevAccess(Component):
 
 
 class Tdxs(Component):
-    """The evidence service: ``tdxs`` from tundra-tools, socket-activated on
-    ``/var/tdxs.sock``, which produces the TDX quote an attestation is checked against.
+    """The evidence service: ``tdxs`` from ``tools/`` of tundravm's repository,
+    socket-activated on ``/var/tdxs.sock``, which produces the TDX quote an attestation is
+    checked against.
 
-    Every image holds ``Tdxs()``; passing one in ``components=`` replaces it, which is how
-    an image points at a mirror or a vendored checkout of tundra-tools
-    (``Tdxs(source=Git("https://mirror.example/tundra-tools.git", "master"))``; the lock
-    pins it) or also validates peers' quotes (*validator*, *expected_measurements*, or
-    :meth:`from_policy`). The same *source* builds the volume and delivery tools
-    (``key-gen``, ``disk-setup``, ``secret-delivery``) when the image has volumes or
-    secrets, so one input names all of tundra-tools.
+    *source* defaults to ``tools/`` at the installed SDK's own commit, or the checkout's
+    ``tools/`` when tundravm runs from one (``tools_source()``); the lock pins it. Every
+    image holds ``Tdxs()``; passing one in ``components=`` replaces it, which is how an
+    image points at a mirror (``Tdxs(source=Git("https://mirror.example/tundra", COMMIT,
+    subdir="tools"))``) or also validates peers' quotes (*validator*,
+    *expected_measurements*, or :meth:`from_policy`). The same *source* builds the volume
+    and delivery tools (``key-gen``, ``disk-setup``, ``secret-delivery``) when the image has
+    volumes or secrets, so one input names all of them.
 
     Services that ask for quotes join the ``tdx`` group and require :data:`EVIDENCE`
     (``tdxs.ready``). It depends on nothing on a volume or a secret: the evidence is
     what unlocks them. Component name: ``tdxs``.
     """
 
-    source: dm.Git = du.TUNDRA_TOOLS
+    source: dm.Git | dm.Local = field(default_factory=du.tools_source)
     issuer: du.TdxsType | None = "tdx"
     validator: du.TdxsType | None = None
     expected_measurements: Mapping[str, str] = FrozenMap()
@@ -525,7 +528,7 @@ class Tdxs(Component):
         """
         fields = {k: kwargs.pop(k) for k in ("source", "issuer") if k in kwargs}
         reader = du.Tdxs.from_policy(
-            policy, validator=validator, allow_placeholder=allow_placeholder, **kwargs
+            policy, validator=validator, allow_placeholder=allow_placeholder, **fields, **kwargs
         )
         return cls(
             validator=validator,
@@ -558,10 +561,10 @@ class Tdxs(Component):
         return Egress(hosts=[*hosts, INTEL_CERTIFICATES] if self.check_revocations else hosts)
 
     def compose(self) -> Iterator[object]:
-        if not isinstance(self.source, dm.Git):
+        if not isinstance(self.source, (dm.Git, dm.Local)):
             raise ValidationError(
-                f"Tdxs: source {self.source!r} is not a Git source.",
-                hint="Pass source=Git(url, ref): a mirror or a local checkout of tundra-tools.",
+                f"Tdxs: source {self.source!r} is not a Git or a Local source.",
+                hint='Pass source=Git(url, COMMIT, subdir="tools"): a mirror of the tools.',
             )
         service = du.Tdxs(
             source=self.source,

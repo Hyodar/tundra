@@ -2,13 +2,12 @@
 
 Teaches:
 
-- the evidence service: every image holds ``Tdxs()`` (tundra-tools' ``tdxs``,
+- the evidence service: every image holds ``Tdxs()`` (``tdxs`` from ``tools/``,
   socket-activated on ``/var/tdxs.sock``), which produces the quote an attestation is
   checked against. Passing a ``Tdxs`` in ``components=`` replaces it: here one that also
   validates peers' quotes against the measurements of a policy file
   (``Tdxs.from_policy()``; a build's ``measurements.json`` holds one). The same
-  component's ``source=`` points the build at a mirror or a vendored checkout of
-  tundra-tools.
+  component's ``source=`` points the build at a mirror of ``tools/``.
 - ``quotes=True``: a service that asks for quotes joins the ``tdx`` group and requires
   ``EVIDENCE``, the evidence service's readiness.
 - ``AttestedTLS(443, upstream=...)``: TLS relayed to a service that listens on the
@@ -18,7 +17,7 @@ The committed ``peer.policy.json`` is a placeholder (its ``note`` says so: no TE
 reproduces its registers), and the verifier below accepts it only because it passes
 ``allow_placeholder=True``; a real one is a record's ``policy`` from a build.
 
-    tundravm lock examples/06_attestation.py      # pin tundra-tools (network)
+    tundravm lock examples/06_attestation.py      # pin the sources
     tundravm build examples/06_attestation.py --tree-only build/attestation/mkosi
     tundravm build examples/06_attestation.py
 """

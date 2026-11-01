@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import shlex
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
-from tundravm._modules.base import TUNDRA_TOOLS, Module
+from tundravm._modules.base import Module, tools_source
 from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
-from tundravm._source import GitSource, GoBuild, Install, SourceBuild
+from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm._units.render import render
 from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
@@ -33,7 +33,7 @@ SECRET_ENV_DIRECTORY = "/run/secrets"
 _UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 BUILTIN_SECRET_PROVIDER = "tundra-tools"
-"""The provider of a ``Secrets`` without ``delivery=``: tundra-tools' ``secret-delivery``."""
+"""The provider of a ``Secrets`` without ``delivery=``: ``secret-delivery`` from ``tools/``."""
 
 BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
     {"ssh-key": True, "file": False, "env": False}
@@ -41,7 +41,7 @@ BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
 """What the built-in provider writes at boot, by target kind.
 
 ``ssh-key``: one ed25519 public key POSTed to ``host:port``, written to
-``<ssh_dir>/authorized_keys`` and ``key_path`` (tundra-tools ``pkg/secrets``
+``<ssh_dir>/authorized_keys`` and ``key_path`` (``tools/pkg/secrets``
 ``Manager.Setup``). The binary never reads the manifest, so ``file``
 (``SecretFile``) and ``env`` (``SecretEnv``) targets are not written.
 """
@@ -90,7 +90,7 @@ class SecretDelivery(Module):
     store_at: str | DiskSpec | None = "disk_persistent"
     config_path: str = SECRET_DELIVERY_DEFAULT_CONFIG_PATH
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
-    source: GitSource = TUNDRA_TOOLS
+    source: GitSource | LocalSource = field(default_factory=tools_source)
     env_suffix: str | None = None
     provider: str = BUILTIN_SECRET_PROVIDER
     provider_supports: tuple[str, ...] = ()
@@ -152,7 +152,7 @@ class SecretDelivery(Module):
 
     @property
     def external(self) -> bool:
-        """Whether something other than tundra-tools writes the targets."""
+        """Whether something other than ``secret-delivery`` writes the targets."""
         return self.provider != BUILTIN_SECRET_PROVIDER
 
     def delivers(self, kind: str) -> bool:

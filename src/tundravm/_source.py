@@ -2331,18 +2331,6 @@ def default_resolver(source: Source) -> str:
     return _download_digest(source)
 
 
-def _unreachable_hint(url: str) -> str:
-    """What to do when git cannot read *url*: tundra-tools, which every image builds, is
-    private, so its usual cause is a missing read access."""
-    if "github.com/Hyodar/tundra-tools" in url:
-        return (
-            "tundra-tools is private: give git read access to github.com/Hyodar/tundra-tools "
-            "(a credential helper or an SSH insteadOf), or build from a mirror with "
-            "Tdxs(source=Git(mirror, ref))."
-        )
-    return "Check the repository URL, its access rights and the network."
-
-
 def _ls_remote(source: GitSource) -> str:
     """The commit *source*'s ref points at, without prompting for credentials."""
     command = ["git", "ls-remote", source.url, source.ref]
@@ -2378,7 +2366,7 @@ def _ls_remote(source: GitSource) -> str:
             f"Cannot resolve {described}: {reason}.",
             source=described,
             reason=reason,
-            hint=_unreachable_hint(source.url),
+            hint="Check the repository URL, its access rights and the network.",
             context={"argv": " ".join(command)},
         )
     lines = [line for line in completed.stdout.splitlines() if line.strip()]

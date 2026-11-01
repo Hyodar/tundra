@@ -74,8 +74,8 @@ built build/demo/production/<hex>
   qemu.raw       17.0 KiB  sha256 <hex>
   azure.vhd      17.0 KiB  sha256 <hex>
   gcp.tar.gz      <size>  sha256 <hex>
-source  kind  ref     pin           toolchain  checkout  deps
-  tdxs  git   master  111111111111  local      fetched   fetched
+source  kind   ref  pin           toolchain  checkout  deps
+  tdxs  local  -    <pin>         local      fetched   fetched
 time  checkouts <t>  prefetch <t>  mkosi <t>  measurements <t>  total <t>
 measured  payload.efi authenticode sha384 <sha384>
   qemu   uki   RTMR1      <sha384>
@@ -88,13 +88,14 @@ measured  payload.efi authenticode sha384 <sha384>
   gcp    disk  RTMR2      <sha384>
   unchecked: RTMR3: outside the policy: no event schema is defined for RTMR3
 """
-"""What ``build`` prints of a fake build of every target: digests, the gzip's size and
-durations masked."""
+"""What ``build`` prints of a fake build of every target: digests (the tools' pin is
+this checkout's tools/ digest), the gzip's size and durations masked."""
 
 
 def _masked(text: str) -> str:
     text = re.sub(r"\b[0-9a-f]{96}\b", "<sha384>", text)
     text = re.sub(r"\b[0-9a-f]{16}\b", "<hex>", text)
+    text = re.sub(r"(  tdxs  local  -    )[0-9a-f]{12}", r"\1<pin>       ", text)
     text = re.sub(r"\d+(?:\.\d+s|m\d\ds|h\d\dm)", "<t>", text)
     return re.sub(r"(gcp\.tar\.gz) +[\d.]+ \w?B", r"\1      <size>", text)
 

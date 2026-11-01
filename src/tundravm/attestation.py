@@ -1,6 +1,6 @@
 """``attest``: ask a running image's ``tdxs`` issuer for a quote, have a validator judge it.
 
-The ``tdxs`` service (``tundra-tools``) speaks newline-delimited JSON over a
+The ``tdxs`` service (``tools/``) speaks newline-delimited JSON over a
 stream socket (``/var/tdxs.sock`` in the image, socket-activated). A request
 is ``{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}`` and the
 reply ``{"data": {"document": HEX}, "error": null}``, where *document* is the

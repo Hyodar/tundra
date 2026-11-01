@@ -4,7 +4,7 @@ release them.
 A secret is a requirement of the image, never a value in it: the value arrives at run
 time in ``/run/tundravm/credentials/<name>`` and a service reads it as a systemd
 credential. Plan section 6.3 is the contract; the attested channel that writes the file
-is gate 3 (tundra-tools), and today's ``secret-delivery`` manifest is what records the
+is gate 3 (tools/), and today's ``secret-delivery`` manifest is what records the
 requirement in the image.
 """
 
@@ -56,7 +56,7 @@ class BrokerKey(Located):
     broker releases, for unattended fleets; ``Secret(name, source=BrokerKey(...))``
     takes a secret from it instead of from an operator. The broker speaks the same
     protocol as ``tundravm secrets deliver`` (plan section 6.3) with a pull client in the
-    image; that client is gate 3 (tundra-tools). Until it lands the image records the
+    image; that client is gate 3 (tools/). Until it lands the image records the
     broker in its runtime manifest and waits for the value exactly as it waits for an
     operator's delivery, so an operator can stand in for the broker.
     """

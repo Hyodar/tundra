@@ -30,7 +30,7 @@ QUOTE_ISSUERS = frozenset({"tdx", "azure", "gcp"})
 
 @dataclass(slots=True)
 class Tdxs:
-    """The ``tundra-tools`` TDX attestation service's config and unit files."""
+    """The ``tools/`` TDX attestation service's config and unit files."""
 
     issuer_type: (
         Literal["tdx", "azure", "gcp", "simulator", "dcap", "azure-tdx", "gcp-tdx"] | None
@@ -115,7 +115,7 @@ class Tdxs:
     def service(self, needs: Sequence[Ready]) -> Service:
         """The typed socket-activated ``tdxs`` service, waiting for *needs*.
 
-        Least privilege from tundra-tools' source (unverified on TDX hardware):
+        Least privilege from the source in tools/ (unverified on TDX hardware):
 
         - The ``tdx``, ``azure`` and ``gcp`` issuers quote through go-tdx-guest v0.3.1. It
           uses configfs-tsm whenever ``/sys/kernel/config/tsm/report`` exists, with no

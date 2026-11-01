@@ -9,9 +9,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from tundravm._modules.base import TUNDRA_TOOLS, Module
+from tundravm._modules.base import Module, tools_source
 from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
-from tundravm._source import GitSource, GoBuild, Install, SourceBuild
+from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
 
@@ -101,7 +101,7 @@ class DiskSpec:
 
 @dataclass(slots=True)
 class DiskEncryption(Module):
-    """Configure one or more disks via ``tundra-tools`` ``disk-setup``.
+    """Configure one or more disks via ``disk-setup`` (``tools/``).
 
     ``check()`` verifies that the keys disks reference through ``key=`` or
     ``key_name`` are declared by a ``KeyGeneration`` applied to the profile.
@@ -109,7 +109,7 @@ class DiskEncryption(Module):
 
     disks: tuple[DiskSpec, ...]
     config_path: str = DISK_ENCRYPTION_DEFAULT_CONFIG_PATH
-    source: GitSource = TUNDRA_TOOLS
+    source: GitSource | LocalSource = field(default_factory=tools_source)
 
     def __post_init__(self) -> None:
         self.disks = tuple(self.disks)

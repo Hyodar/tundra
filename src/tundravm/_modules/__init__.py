@@ -5,13 +5,12 @@ from __future__ import annotations
 from tundravm._source import GitSource
 from tundravm.models import SecretSpec
 
-from .base import TUNDRA_TOOLS, Module
+from .base import Module, tools_source
 from .disk_encryption import DiskEncryption, DiskSpec
 from .key_generation import KeyGeneration, KeySpec
 from .secret_delivery import SecretDelivery
 
 __all__ = [
-    "TUNDRA_TOOLS",
     "DiskEncryption",
     "DiskSpec",
     "GitSource",
@@ -20,4 +19,5 @@ __all__ = [
     "Module",
     "SecretDelivery",
     "SecretSpec",
+    "tools_source",
 ]

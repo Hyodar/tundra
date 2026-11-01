@@ -1735,11 +1735,11 @@ SecretTargetKind = Literal["file", "env"]
 
 @dataclass(frozen=True, slots=True)
 class ExternalDelivery:
-    """Something other than tundra-tools writes a ``Secrets`` block's targets at boot.
+    """Something other than secret-delivery writes a ``Secrets`` block's targets at boot.
 
     *name* says what (``"gcp-secret-manager"``, ``"app-secrets.service"``); *supports*
     the target kinds it writes: ``"file"`` (``SecretFile``), ``"env"`` (``SecretEnv``).
-    The SSH key flow still runs through tundra-tools (``Secrets.ready``).
+    The SSH key flow still runs through secret-delivery (``Secrets.ready``).
 
     Say how to tell it is done with *unit* (a unit the image ships or packages,
     which the ``delivery-<name>`` runtime-init step starts and waits for:
@@ -1803,7 +1803,7 @@ class ExternalDelivery:
 class Secrets(Declared):
     """The secrets a variant expects at boot; *delivery* is who writes their targets.
 
-    ``delivery=None`` is the built-in tundra-tools provider, which provisions only
+    ``delivery=None`` is the built-in secret-delivery provider, which provisions only
     the SSH key (``BUILTIN_SECRET_CAPABILITIES``): a ``SecretFile`` or ``SecretEnv``
     entry needs an :class:`ExternalDelivery` that writes it (lint:
     ``secret-target-unsupported``).
@@ -1854,7 +1854,7 @@ class Secrets(Declared):
 
     @property
     def ready(self) -> Ready:
-        """The handle of the ``secrets`` runtime-init step: tundra-tools' built-in setup.
+        """The handle of the ``secrets`` runtime-init step: secret-delivery's built-in setup.
 
         It receives the SSH key (and writes the secret configuration); it does
         not wait for an :class:`ExternalDelivery`, whose own ``delivery.ready``
@@ -1865,15 +1865,15 @@ class Secrets(Declared):
 
 @dataclass(frozen=True, slots=True)
 class RuntimeTools(Declared):
-    source: Git
+    source: Git | Local
     key_config: str = "/etc/tdx/key-gen.yaml"
     disk_config: str = "/etc/tdx/disk-setup.yaml"
     secret_config: str = "/etc/tdx/secrets.yaml"
     secret_manifest: str = "/etc/tdx/secrets.json"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.source, Git):
-            raise _fail(self, "source must be a Git source.")
+        if not isinstance(self.source, (Git, Local)):
+            raise _fail(self, "source must be a Git or a Local source.")
         for what in ("key_config", "disk_config", "secret_config", "secret_manifest"):
             _require_absolute(self, getattr(self, what), what)
 
@@ -1970,11 +1970,12 @@ class Local:
         object.__setattr__(self, "directory", directory)
 
 
-def recorded_local(path: str) -> Local:
-    """The :class:`Local` a lockfile entry names: its path alone, not resolved on this host."""
+def recorded_local(path: str, directory: Path | None = None) -> Local:
+    """The :class:`Local` a lockfile entry names: its path alone, not resolved on this host,
+    or held in *directory* (tundravm's own ``tools/``, outside any project)."""
     found = object.__new__(Local)
     object.__setattr__(found, "path", path)
-    object.__setattr__(found, "directory", Path(path))
+    object.__setattr__(found, "directory", Path(path) if directory is None else directory)
     return found
 
 
@@ -1990,7 +1991,7 @@ class Install:
 
     ``artifact=True`` installs the output of the toolchain the build is ``using``:
     *source* is its ``artifact`` path (``build/<output>`` for ``Go``), and the
-    build caches it as the artifact, the way the image's own tundra-tools builds are cached.
+    build caches it as the artifact, the way the image's own tools/ builds are cached.
     """
 
     source: str

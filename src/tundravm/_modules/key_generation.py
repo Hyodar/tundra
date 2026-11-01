@@ -8,8 +8,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from tundravm._modules.base import TUNDRA_TOOLS, Module
-from tundravm._source import GitSource, GoBuild, Install, SourceBuild
+from tundravm._modules.base import Module, tools_source
+from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
 
@@ -86,14 +86,14 @@ class KeySpec:
 class KeyGeneration(Module):
     """Generate one or more cryptographic keys at boot time.
 
-    The underlying ``tundra-tools`` binary supports the ``random`` and ``pipe``
+    The underlying ``key-gen`` binary supports the ``random`` and ``pipe``
     strategies, with TPM persistence controlled separately. ``strategy='tpm'``
     is kept as a compatibility alias for ``random`` with TPM persistence.
     """
 
     keys: tuple[KeySpec, ...]
     config_path: str = KEY_GENERATION_DEFAULT_CONFIG_PATH
-    source: GitSource = TUNDRA_TOOLS
+    source: GitSource | LocalSource = field(default_factory=tools_source)
 
     def __post_init__(self) -> None:
         self.keys = tuple(self.keys)

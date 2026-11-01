@@ -69,32 +69,14 @@ def _no_network_resolution(request: pytest.FixtureRequest, monkeypatch: pytest.M
     """
     if request.node.get_closest_marker("integration") is not None:
         return
-    pin_tundra_tools_only(monkeypatch)
-
-
-def pin_tundra_tools_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolve the implied evidence service's source to a fixed commit and refuse every
-    other network resolution. Module-scoped fixtures that run ``lock`` call this
-    themselves: the autouse guard above is function-scoped and is not active yet when
-    they are set up (tundra-tools is a private repository, so CI cannot reach it)."""
     import tundravm._source as source_module
-    from tundravm.declarative.utils import TUNDRA_TOOLS
 
     def _refuse(source: object) -> str:
-        # Every image implies the evidence service, which builds tundra-tools, so a
-        # `lock` of any image reaches that one source. It resolves to a fixed commit
-        # here; anything else is a test reaching the network by accident.
-        if getattr(source, "url", None) == TUNDRA_TOOLS.url:
-            return TUNDRA_TOOLS_COMMIT
         raise AssertionError(
             f"test tried to resolve {source!r} over the network; pass resolver= to lock()"
         )
 
     monkeypatch.setattr(source_module, "default_resolver", _refuse)
-
-
-TUNDRA_TOOLS_COMMIT = "1" * 40
-"""What the hermetic resolver pins the implied evidence service's source to."""
 
 
 @pytest.fixture

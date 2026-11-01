@@ -1,7 +1,7 @@
 """The runtime contracts (volumes, secrets, ingress) checked and lowered onto today's stack.
 
 An image's :class:`~tundravm.storage.Volume`, :class:`~tundravm.secrets.Secret` and ingress
-values become the declarations tundra-tools and systemd already understand:
+values become the declarations the tools and systemd already understand:
 
 - a volume is a ``Key`` (``key-gen``: a FIFO for ``OperatorKey``/``BrokerKey``, a
   vTPM-persisted random key for ``TpmSeal``) and a LUKS2 ``Disk`` (``disk-setup``, found
@@ -184,7 +184,7 @@ class Runtime:
     secrets: tuple[Secret, ...]
     ingress: tuple[AttestedTLS | TLS, ...]
     services: tuple[Service, ...]
-    tools: dm.Git
+    tools: dm.Git | dm.Local
     rootfs: str
 
     @property
