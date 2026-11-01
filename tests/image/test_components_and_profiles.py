@@ -20,7 +20,7 @@ from tundravm.components import (
 )
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
-from tundravm.systemd import TcpProbe
+from tundravm.systemd import Resources, TcpProbe
 from tundravm.testing import plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -179,6 +179,41 @@ def test_a_profile_removes_a_service_by_reference() -> None:
         if type(item).__name__ == "Service"
     }
     assert "app" not in units
+
+
+@pytest.mark.parametrize(
+    ("target", "fields", "expected"),
+    [
+        ("app", {"environment": {"STAGE": "staging"}}, ("Environment", "STAGE=staging")),
+        ("app", {"argv": ["/usr/bin/app", "--verbose"]}, ("ExecStart", "/usr/bin/app --verbose")),
+        ("app", {"resources": Resources(memory_max="1G")}, ("MemoryMax", "1G")),
+        ("db", {"user": "postgres"}, ("User", "postgres")),
+        ("app", {"env": {"STAGE": "staging"}}, "sets: argv, requires, state, expose"),
+        ("app", {"exec_start": ["/usr/bin/app"]}, "sets: argv, requires, state, expose"),
+        ("app", {"readiness": TcpProbe(8080)}, "cannot set Service readiness="),
+        ("app", {"expose": [TCP(8080)]}, "changes nothing"),
+    ],
+)
+def test_a_profile_edits_a_service_by_its_public_keywords(
+    target: str, fields: dict[str, object], expected: tuple[str, str] | str
+) -> None:
+    app = Service("app", ["/usr/bin/app"], expose=[TCP(8080)])
+    ref = app.ref if target == "app" else Database().service("db").ref
+    if isinstance(expected, str):
+        with pytest.raises(ValidationError) as caught:
+            ref.edit(**fields)
+        assert expected in str(caught.value)
+        assert "env_file" not in str(caught.value)  # the internal unit's fields stay unnamed
+        return
+    image = Image(
+        "x",
+        services=[app],
+        components=[Database()],
+        profiles={"staging": Profile(changes=[ref.edit(**fields)])},
+    )
+    key, value = expected
+    assert value in plan(image, "staging").service(target).values("Service", key)
+    assert value not in plan(image, "production").service(target).values("Service", key)
 
 
 def test_a_profile_that_is_not_production_is_marked() -> None:

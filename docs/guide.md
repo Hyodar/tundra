@@ -445,7 +445,7 @@ image = Image(
     profiles={
         "staging": Profile(
             add=["strace"],
-            changes=[motd.ref.edit(content="staging\n"), web.ref.edit(env={"STAGE": "staging"})],
+            changes=[motd.ref.edit(content="staging\n"), web.ref.edit(environment={"STAGE": "staging"})],
         ),
         "bench": Profile(
             extends="staging", add=["fio"], changes=[worker.ref.remove()], production=False
@@ -463,9 +463,14 @@ image = Image(
 
 A change names a declaration that exists, or the image does not resolve. Removing a
 service removes its unit, its user, its firewall rule and the dependencies nothing else
-uses. A component's service is `component.service("name").ref`. An edit names the fields
-of the lowered unit declaration, which are not yet the public `Service`'s: `env=`, not
-`environment=`; the error lists the valid ones.
+uses. A component's service is `component.service("name").ref`. An edit takes the keywords
+of the value's own constructor, and the edited value is checked like a new one. A
+`Service` edit sets `argv`, `requires`, `state`, `expose`, `resources`, `shutdown`,
+`hardening`, `timer`, `socket`, `user`, `groups`, `working_directory`, `environment`,
+`logs` or `runtime`; a `File` edit `content` or `mode`; a `Tree` edit `src` or `exclude`.
+What decides other units (`readiness=`, `credentials=`, `unit=`, a timer turned on or off,
+another built binary, a state moved onto a volume) is refused: remove the value and add
+the new one in `add=`.
 
 How profiles lower: tundravm resolves every profile's whole image, writes what all of them
 build once in the shared `payload/`, and puts what each builds beyond that in

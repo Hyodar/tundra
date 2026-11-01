@@ -28,7 +28,7 @@ image = Image(
             add=["strace"],
             changes=[
                 motd.ref.edit(content="staging\n"),
-                web.ref.edit(env={"STAGE": "staging"}),
+                web.ref.edit(environment={"STAGE": "staging"}),
             ],
         ),
         "bench": Profile(

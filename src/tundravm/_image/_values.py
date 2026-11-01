@@ -18,9 +18,12 @@ from pathlib import Path
 from typing import ClassVar, Literal
 
 from tundravm._location import Located
-from tundravm.declarative.model import Git, Http, Ref
+from tundravm.declarative import model as dm
+from tundravm.declarative.model import Git, Http
 from tundravm.declarative.utils import StaticAddress
 from tundravm.errors import ValidationError
+
+from ._change import Ref
 
 __all__ = [
     "LOCKED_SNAPSHOT",
@@ -137,7 +140,7 @@ class Package(Located):
     @property
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""
-        return Ref("Package", (self.name, "runtime"))
+        return Ref(self, dm.Ref("Package", (self.name, "runtime")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +208,7 @@ class File(Located):
     @property
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""
-        return Ref("File", ("extra", self.path))
+        return Ref(self, dm.Ref("File", ("extra", self.path)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +235,7 @@ class Tree(Located):
     @property
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""
-        return Ref("FileTree", ("extra", self.dst))
+        return Ref(self, dm.Ref("FileTree", ("extra", self.dst)))
 
 
 def _check_owner(owner: object, value: object) -> None:

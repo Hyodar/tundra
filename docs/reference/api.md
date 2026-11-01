@@ -234,7 +234,7 @@ Profile(
     *,
     extends: str | None = None,
     add: Sequence[Content] = (),
-    changes: Sequence[Edit | Remove] = (),
+    changes: Sequence[Change] = (),
     production: bool = True,
 )
 ```
@@ -906,7 +906,7 @@ ServiceReady(unit: str, probe: Readiness | None = None)
 *dataclass*
 
 ```python
-ServiceRef(unit: str, probe: Readiness | None = None)
+ServiceRef(unit: str, probe: Readiness | None = None, service: Service | None = None)
 ```
 
 A service a component composed, named from outside: `raiko.service("raiko")`.

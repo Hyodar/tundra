@@ -88,6 +88,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()` lint rule.
 - `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)` and
   `value.ref.remove()`. `dev=DevAccess(...)` is the non-production `dev` profile.
+- `value.ref.edit(...)` takes the keywords of the value's own constructor
+  (`service.ref.edit(environment={...})`, not the lowered unit's `env=`). The edited value
+  is checked like a new one, and anything else is refused with the keywords an edit of
+  that kind sets.
 - The runtime slots: `Volume(name, mount=, unlock=OperatorKey() | TpmSeal(...) | BrokerKey(...))`
   with `volume.directory(...)` as a service's state; `Secret(name, required=, rotation=)`
   read as a systemd credential; `AttestedTLS(port, upstream=)` and `TLS`, refused unless

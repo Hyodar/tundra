@@ -1,0 +1,206 @@
+"""What a :class:`~tundravm.Profile` changes: a value the image declares, by reference.
+
+``value.ref`` names a :class:`~tundravm.Service`, :class:`~tundravm.File`,
+:class:`~tundravm.Tree` or :class:`~tundravm.Package`; ``ref.edit(...)`` takes the keyword
+names of that value's own constructor, and ``ref.remove()`` drops it. An edit is applied to
+the value at once, so the edited value is checked like any other; the lowering then changes
+the declaration the value lowers to by exactly what the edit changed.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from tundravm._location import Located
+from tundravm._source import FrozenMap
+from tundravm.declarative import model as dm
+from tundravm.errors import ValidationError
+
+__all__ = ["EDITABLE", "Change", "Edit", "Ref", "Remove"]
+
+EDITABLE: Mapping[str, tuple[str, ...]] = {
+    "Service": (
+        "argv",
+        "requires",
+        "state",
+        "expose",
+        "resources",
+        "shutdown",
+        "hardening",
+        "timer",
+        "socket",
+        "user",
+        "groups",
+        "working_directory",
+        "environment",
+        "logs",
+        "runtime",
+    ),
+    "File": ("content", "mode"),
+    "Tree": ("src", "exclude"),
+    "Package": (),
+}
+"""The constructor keywords an edit may set, per kind of value."""
+
+_FIXED: Mapping[str, Mapping[str, str]] = {
+    "Service": {
+        "name": "it names the service",
+        "readiness": "it decides the unit's type and its probe unit",
+        "credentials": "each binding adds the delivery units the service waits for",
+        "unit": "it is a drop-in of its own",
+    },
+    "File": {
+        "path": "it names the file",
+        "owner": "the owner is applied at boot, from the image's own files",
+    },
+    "Tree": {
+        "dst": "it names the tree",
+        "owner": "the owner is applied at boot, from the image's own files",
+    },
+    "Package": {
+        "name": "it names the package",
+        "backports": "the archive is chosen once, for the whole image",
+    },
+}
+"""Constructor keywords an edit cannot set, each with the reason."""
+
+
+@dataclass(frozen=True, slots=True)
+class Ref:
+    """A value the image declares, named for a :class:`~tundravm.Profile` change.
+
+    ``value.ref.edit(...)`` sets keywords of the value's constructor;
+    ``value.ref.remove()`` drops it, and what only it needed.
+    """
+
+    value: object = field(repr=False)
+    """The :class:`~tundravm.Service`, :class:`~tundravm.File`, :class:`~tundravm.Tree` or
+    :class:`~tundravm.Package` named, ``None`` for a bare
+    :class:`~tundravm.components.ServiceRef`."""
+    target: dm.Ref = field(repr=False)
+    """The declaration the value lowers to."""
+
+    def __str__(self) -> str:
+        if self.value is None:
+            return f"Service({self.target.identity[0]!r})"
+        key = next(
+            getattr(self.value, name)
+            for name in ("name", "path", "dst")
+            if hasattr(self.value, name)
+        )
+        return f"{type(self.value).__name__}({key!r})"
+
+    def __repr__(self) -> str:
+        return f"<ref to {self}>"
+
+    def edit(self, **fields: object) -> Edit:
+        """A change that sets *fields*, keywords of the value's constructor."""
+        return Edit(self, fields)
+
+    def remove(self) -> Remove:
+        """A change that drops the value."""
+        return Remove(self)
+
+
+@dataclass(frozen=True, slots=True)
+class Edit(Located):
+    """Set constructor keywords of a value the image declares: ``app.ref.edit(user="www")``.
+
+    :attr:`edited` is the value with them set, built and checked at once.
+    """
+
+    ref: Ref
+    fields: Mapping[str, object]
+    edited: Any = field(init=False, repr=False, compare=False)
+    """The value with :attr:`fields` set."""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ref, Ref):
+            raise ValidationError(f"Edit: {self.ref!r} is not a value's ref.", hint=_HINT)
+        object.__setattr__(self, "fields", FrozenMap(dict(self.fields)))
+        value = self.ref.value
+        if value is None:
+            raise ValidationError(
+                f"The edit of {self.ref} names a service whose value it does not carry.",
+                hint="Take the ref from the component: component.service('name').ref.",
+            )
+        kind = type(value).__name__
+        accepted = EDITABLE.get(kind, ())
+        if not self.fields:
+            raise ValidationError(f"The edit of {self.ref} sets nothing.", hint=_listing(kind))
+        for name in self.fields:
+            if name in accepted:
+                continue
+            reason = _FIXED.get(kind, {}).get(name)
+            if reason is not None:
+                raise ValidationError(
+                    f"An edit cannot set {kind} {name}=: {reason}.",
+                    hint=f"Remove the {kind.lower()} and add one with the new {name}= in add=.",
+                )
+            raise ValidationError(
+                f"{kind} takes no keyword {name!r} an edit can set.", hint=_listing(kind)
+            )
+        edited = dataclasses.replace(value, **self.fields)  # type: ignore[type-var]
+        if edited == value:
+            raise ValidationError(
+                f"The edit of {self.ref} changes nothing.",
+                hint="Drop it, or set a keyword to a value it does not have yet.",
+            )
+        if kind == "Service":
+            _check_service_edit(self.ref, value, edited)
+        object.__setattr__(self, "edited", edited)
+
+
+@dataclass(frozen=True, slots=True)
+class Remove(Located):
+    """Drop a value the image declares: ``worker.ref.remove()``."""
+
+    ref: Ref
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ref, Ref):
+            raise ValidationError(f"Remove: {self.ref!r} is not a value's ref.", hint=_HINT)
+
+
+type Change = Edit | Remove | dm.Edit | dm.Remove
+"""What ``Profile(changes=)`` holds: ``value.ref.edit(...)`` or ``value.ref.remove()`` (a
+:class:`~tundravm.User` or :class:`~tundravm.Group` ref makes the declaration's own)."""
+
+_HINT = "Use value.ref.edit(...) or value.ref.remove()."
+
+
+def _listing(kind: str) -> str:
+    accepted = EDITABLE.get(kind, ())
+    if not accepted:
+        return f"A {kind} has nothing an edit can set: remove it and add another in add=."
+    return f"An edit of a {kind} sets: {', '.join(accepted)}."
+
+
+def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
+    """What a service edit cannot carry: a different built binary, a timer switched on or
+    off, a state moved onto or off a volume."""
+    from ._storage import VolumeDirectory
+
+    if edited.binaries() != value.binaries():
+        raise ValidationError(
+            f"The edit of {ref} changes the built binary it runs, whose build the image "
+            "already declares.",
+            hint="Remove the service and add one that runs the new binary in add=.",
+        )
+    if (edited.timer is None) != (value.timer is None):
+        raise ValidationError(
+            f"The edit of {ref} turns its timer {'on' if value.timer is None else 'off'}, "
+            "which makes it another kind of unit.",
+            hint="Remove the service and add the new one in add=.",
+        )
+    if edited.state != value.state and (
+        isinstance(edited.state, VolumeDirectory) or isinstance(value.state, VolumeDirectory)
+    ):
+        raise ValidationError(
+            f"The edit of {ref} moves its state onto or off a volume, whose directories the "
+            "image prepares at boot.",
+            hint="Remove the service and add one with the new state in add=.",
+        )

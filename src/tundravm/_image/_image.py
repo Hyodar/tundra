@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING
 
 from tundravm._location import Located
 from tundravm._source import FrozenMap
-from tundravm.declarative.model import TARGETS, Edit, Group, Remove, Target, User
+from tundravm.declarative import model as dm
+from tundravm.declarative.model import TARGETS, Group, Target, User
 from tundravm.errors import ValidationError
 
+from ._change import Change, Edit, Remove
 from ._component import Component
 from ._ingress import TLS, AttestedTLS, Ingress
 from ._rootfs import RootFS
@@ -60,8 +62,9 @@ class Profile(Located):
     and what each builds beyond it in its own mkosi profile overlay; a declaration one
     profile removes leaves the shared payload for the overlays of the profiles that keep
     it, ``production``'s included. *add* is more content. *changes* edit or remove what the
-    image declares, by reference: ``service.ref.edit(...)``, ``component.service("x").ref
-    .remove()``; removing a service removes its unit, its user, its firewall rule and the
+    image declares, by reference: ``service.ref.edit(environment={...})``,
+    ``component.service("x").ref.remove()``. An edit takes the keywords of the value's own
+    constructor; removing a service removes its unit, its user, its firewall rule and the
     dependencies that are now unused. There is no string-keyed ``set``: a change names a
     declaration that exists, or the image does not resolve.
 
@@ -72,7 +75,7 @@ class Profile(Located):
     _: KW_ONLY
     extends: str | None = None
     add: Sequence[Content] = ()
-    changes: Sequence[Edit | Remove] = ()
+    changes: Sequence[Change] = ()
     production: bool = True
 
     def __post_init__(self) -> None:
@@ -84,7 +87,7 @@ class Profile(Located):
         if not isinstance(self.production, bool):
             raise _fail(self, "production= must be True or False.")
         for change in self.changes:
-            if not isinstance(change, (Edit, Remove)):
+            if not isinstance(change, (Edit, Remove, dm.Edit, dm.Remove)):
                 raise _fail(
                     self,
                     f"changes= holds {change!r}, which is not an edit or a removal.",

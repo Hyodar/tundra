@@ -18,9 +18,10 @@ from typing import TYPE_CHECKING, Any, dataclass_transform
 
 from tundravm._location import Located
 from tundravm._source import FrozenMap
-from tundravm.declarative.model import Ref
+from tundravm.declarative import model as dm
 from tundravm.errors import ValidationError
 
+from ._change import Ref
 from ._values import Readiness
 
 if TYPE_CHECKING:
@@ -184,6 +185,9 @@ class ServiceRef:
 
     unit: str
     probe: Readiness | None = field(default=None, compare=False, repr=False)
+    service: Service | None = field(default=None, compare=False, repr=False)
+    """The composed :class:`~tundravm.Service`, which an edit through :attr:`ref` starts
+    from."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.unit, str) or not self.unit:
@@ -202,7 +206,9 @@ class ServiceRef:
     @property
     def ref(self) -> Ref:
         """The reference a profile change targets."""
-        return Ref("Service", (self.unit,))
+        if self.service is not None:
+            return self.service.ref
+        return Ref(None, dm.Ref("Service", (self.unit,)))
 
 
 # ── The base class ──────────────────────────────────────────────────────
@@ -318,7 +324,7 @@ class Component(Located, metaclass=_ComponentMeta):
         unit = name if name.endswith(".service") else f"{name}.service"
         for item in services:
             if item.unit_name == unit:
-                return ServiceRef(unit, item.readiness)
+                return ServiceRef(unit, item.readiness, item)
         known = ", ".join(sorted(item.unit_name for item in services)) or "none"
         raise ValidationError(
             f"{type(self).__name__} composes no service {name!r}.",

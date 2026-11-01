@@ -91,7 +91,9 @@ def services_of(items: Iterable[object]) -> Iterator[Service]:
 
 
 def _image_services(image: object) -> tuple[Service, ...]:
-    """The services of the image and of every profile it declares."""
+    """The services of the image and of every profile it declares, each profile's edits of
+    them included."""
+    from ._change import Edit
     from ._image import Image
 
     assert isinstance(image, Image)
@@ -100,6 +102,7 @@ def _image_services(image: object) -> tuple[Service, ...]:
         items.append(image.observability)
     for profile in image.profiles.values():
         items.extend(profile.add)
+        items.extend(change.edited for change in profile.changes if isinstance(change, Edit))
     return tuple(services_of(items))
 
 

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import cast
 
@@ -22,6 +23,7 @@ from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
 from tundravm.errors import ValidationError
 
+from ._change import Edit, Remove
 from ._component import (
     BootReady,
     Component,
@@ -273,9 +275,76 @@ class _Lowering:
             name,
             inherits=profile.extends or BASE_PROFILE,
             add=dm.Fragment(name, items=tuple(items)),
-            changes=tuple(profile.changes),
+            changes=self.changes(profile),
             release=profile.production,
         )
+
+    def changes(self, profile: Profile) -> tuple[dm.Edit | dm.Remove, ...]:
+        """*profile*'s changes on the declarations their values lower to.
+
+        An edit changes what the value its profile sees lowers to: the image's value with
+        the edits of the profiles it extends applied, so two edits that land on the same
+        directive (``resources=`` and ``shutdown=`` both write ``[Service]`` lines) add up.
+        """
+        current: dict[dm.Ref, object] = {}
+        for ancestor in self.ancestors(profile):
+            for change in ancestor.changes:
+                if isinstance(change, Edit):
+                    target = change.ref.target
+                    current[target] = replace(
+                        current.get(target, change.ref.value), **change.fields
+                    )  # type: ignore[type-var]
+        found: list[dm.Edit | dm.Remove] = []
+        for change in profile.changes:
+            if isinstance(change, (dm.Edit, dm.Remove)):
+                found.append(change)
+                continue
+            with _at(change):
+                if isinstance(change, Remove):
+                    found.append(dm.Remove(change.ref.target))
+                    continue
+                target = change.ref.target
+                before = current.get(target, change.ref.value)
+                after = current[target] = replace(before, **change.fields)  # type: ignore[type-var]
+                found.append(self.edit(change, before, after))
+        return tuple(found)
+
+    def ancestors(self, profile: Profile) -> tuple[Profile, ...]:
+        """The profiles *profile* extends, the image's nearest first."""
+        found: list[Profile] = []
+        parent = self.image.profiles.get(profile.extends or BASE_PROFILE)
+        while parent is not None and parent not in found:
+            found.insert(0, parent)
+            parent = self.image.profiles.get(parent.extends or BASE_PROFILE)
+        return tuple(found)
+
+    def edit(self, change: Edit, before: object, after: object) -> dm.Edit:
+        """The internal edit that turns what *before* lowers to into what *after* does."""
+        old, new = self.declaration(before), self.declaration(after)
+        keys = dm.key_fields(change.ref.target.kind)
+        fields = {
+            item.name: getattr(new, item.name)
+            for item in dataclass_fields(new)
+            if item.init
+            and item.name not in keys
+            and getattr(new, item.name) != getattr(old, item.name)
+        }
+        if not fields:
+            raise ValidationError(
+                f"The edit of {change.ref} changes nothing the image builds.",
+                hint="Drop it, or set a keyword whose value differs.",
+            )
+        return dm.Edit(change.ref.target, fields)
+
+    def declaration(self, value: object) -> dm.Declaration:
+        """The one declaration a public value an edit names lowers to."""
+        if isinstance(value, Service):
+            return self.timer_task(value) if value.timer is not None else self.unit(value)
+        if isinstance(value, File):
+            return dm.File(value.path, value.content, value.mode)
+        assert isinstance(value, Tree)
+        assert isinstance(value.src, Path)
+        return dm.FileTree(value.dst, value.src, exclude=tuple(value.exclude))
 
     def dev_variant(self) -> dm.Variant:
         """``dev=DevAccess(...)`` as a non-production profile.
@@ -340,14 +409,13 @@ class _Lowering:
         """A ``File`` as the declaration that ships it, plus its ownership line."""
         if item.owner is not None:
             self.owned.append((item.path, item.owner))
-        yield dm.File(item.path, item.content, item.mode)
+        yield self.declaration(item)
 
     def tree(self, item: Tree) -> Iterator[dm.Declaration]:
         """A ``Tree`` as the host directory it ships."""
         if item.owner is not None:
             self.owned.append((item.dst + "/", item.owner))
-        assert isinstance(item.src, Path)
-        yield dm.FileTree(item.dst, item.src, exclude=tuple(item.exclude))
+        yield self.declaration(item)
 
     def component(self, item: Component) -> dm.Fragment:
         """A ``Component`` as the fragment it is, nested components included."""

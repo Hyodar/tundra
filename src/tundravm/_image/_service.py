@@ -15,10 +15,12 @@ from typing import Any, Protocol
 
 from tundravm._location import Located
 from tundravm._source import FrozenMap
-from tundravm.declarative.model import Calendar, DropIn, Every, Listen, Ref
+from tundravm.declarative import model as dm
+from tundravm.declarative.model import Calendar, DropIn, Every, Listen
 from tundravm.declarative.systemd import Hardening
 from tundravm.errors import ValidationError
 
+from ._change import Ref
 from ._component import BootReady, Component, ComponentReady, Endpoint, ServiceReady, ServiceRef
 from ._secrets import CREDENTIAL_REFERENCE, Secret
 from ._storage import VolumeDirectory
@@ -313,7 +315,7 @@ class Service(Located):
     @property
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""
-        return Ref("Service", (self.unit_name,))
+        return Ref(self, dm.Ref("Task" if self.timer is not None else "Service", (self.unit_name,)))
 
     @property
     def stem(self) -> str:
