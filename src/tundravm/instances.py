@@ -224,9 +224,9 @@ def _firmware(mode: Mode) -> tuple[str, str | None]:
                 context={"searched": ", ".join(paths)},
             )
         return found, None
-    for code, store in zip(qemu_paths.OVMF_CODE_PATHS, qemu_paths.OVMF_VARS_PATHS, strict=True):
-        if Path(code).is_file() and Path(store).is_file():
-            return code, store
+    found_pair = qemu_paths.ovmf_firmware()
+    if found_pair is not None:
+        return found_pair
     raise DeploymentError(
         "No OVMF firmware found.",
         hint="Install ovmf (`tundravm doctor --for run`).",
@@ -291,8 +291,10 @@ def tdx_refusal() -> str | None:
 
 def require_host(mode: Mode, *, command: str) -> None:
     """Refuse *mode* where this host cannot run it: ``tdx`` unless ``doctor --for tdx`` is
-    ready, either mode without QEMU; ``dev`` asks before it builds. *command* is the
-    command the refusal names (``run``, ``dev``)."""
+    ready, ``simulated`` without QEMU and OVMF, all missing packages named at once; ``dev``
+    asks before it builds. *command* is the command the refusal names (``run``, ``dev``)."""
+    from .capabilities import apt_install
+
     if mode == "tdx":
         refused = tdx_refusal()
         if refused is not None:
@@ -301,10 +303,18 @@ def require_host(mode: Mode, *, command: str) -> None:
                 hint="Run `tundravm doctor --for tdx` for the missing prerequisite, or use "
                 "--mode simulated (no TDX, verdicts are `simulated`).",
             )
-    if shutil.which(QEMU) is None:
+    missing = [
+        (what, package)
+        for what, package, lacking in (
+            (QEMU, "qemu-system-x86", shutil.which(QEMU) is None),
+            ("OVMF firmware", "ovmf", mode == "simulated" and qemu_paths.ovmf_firmware() is None),
+        )
+        if lacking
+    ]
+    if missing:
         raise DeploymentError(
-            f"{QEMU} is not installed.",
-            hint="Install qemu-system-x86 (`tundravm doctor --for run`).",
+            f"{command} cannot boot the image here: no {', no '.join(w for w, _ in missing)}.",
+            hint=f"{apt_install([p for _, p in missing])}, then `tundravm doctor --for run`.",
         )
 
 

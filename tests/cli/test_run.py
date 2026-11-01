@@ -163,7 +163,8 @@ def test_a_missing_qemu_is_named(
 ) -> None:
     monkeypatch.setenv("PATH", "/nonexistent")
     result = cli("run", "--mode", "simulated")
-    assert result.code == EXIT_ERROR and "qemu-system-x86_64 is not installed" in result.err
+    assert result.code == EXIT_ERROR
+    assert "run cannot boot the image here: no qemu-system-x86_64" in result.err
 
 
 def test_a_volume_gets_a_disk_of_its_own(prover: Path, cli: Cli, qemu: Path) -> None:

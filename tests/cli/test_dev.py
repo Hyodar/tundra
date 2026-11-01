@@ -154,3 +154,35 @@ def test_a_host_that_cannot_run_the_mode_is_refused_before_the_build(
     assert result.code == EXIT_ERROR
     assert "dev --mode tdx cannot run here" in result.err and "doctor --for tdx" in result.err
     assert not (project / "build").exists()
+
+
+@pytest.mark.parametrize(
+    ("lacking", "line", "fix"),
+    [
+        (("qemu",), "no qemu-system-x86_64", "sudo apt install qemu-system-x86"),
+        (("ovmf",), "no OVMF firmware", "sudo apt install ovmf"),
+        (
+            ("qemu", "ovmf"),
+            "no qemu-system-x86_64, no OVMF firmware",
+            "sudo apt install qemu-system-x86 ovmf",
+        ),
+    ],
+    ids=["no-qemu", "no-ovmf", "neither"],
+)
+def test_a_host_without_qemu_or_ovmf_hears_every_package_before_the_build(
+    project: Path,
+    cli: Cli,
+    qemu: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lacking: tuple[str, ...],
+    line: str,
+    fix: str,
+) -> None:
+    if "qemu" in lacking:
+        monkeypatch.setenv("PATH", "/nonexistent")
+    if "ovmf" in lacking:
+        monkeypatch.setattr("tundravm.deploy.qemu.OVMF_CODE_PATHS", ("/nonexistent",))
+    result = cli("dev")
+    assert result.code == EXIT_ERROR
+    assert f"dev cannot boot the image here: {line}.\nfix: {fix}, then" in result.err
+    assert not (project / "build").exists()
