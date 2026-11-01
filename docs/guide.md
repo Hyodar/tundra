@@ -336,9 +336,9 @@ The rules:
 - `compose()` yields declarations and nested components. They resolve before validation,
   so a component never hides in `services=`.
 - Exports are properties returning an `Endpoint` (`self.service("app").endpoint(port)`), a
-  `ServiceRef` (`self.service("app")`) or a `ServiceReady`. A caller writes
-  `requires=[app.http]` or puts `app.http` in an argv, where it renders as its URL. Nobody
-  outside names a unit, a port or a path inside it.
+  `ServiceRef` or a `ServiceReady`. A caller writes `requires=[app.http]` or puts `app.http`
+  in an argv, where it renders as its URL. Nobody outside names a unit, a port or a path
+  inside it.
 - `check(resolved)` returns diagnostics. It becomes a lint rule that `tundravm check` runs,
   once per profile: `resolved.profile` names it, and a finding without `profile=` is that
   profile's.
@@ -369,8 +369,9 @@ a `when=` phrase per other.
 | `TaikoClient` | the taiko-client driver, built with Go | none |
 | `Raiko` | the Raiko TDX prover, built with Cargo | `http` |
 
-A service that asks for quotes joins the `tdx` group and requires `EVIDENCE`. The evidence
-service depends on nothing on a volume or a secret: the evidence is what unlocks them.
+A service that asks for quotes (`quotes=True`) joins the `tdx` group and requires
+`EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
+them.
 
 `Tdxs` builds from the private `https://github.com/Hyodar/tundra-tools.git`, so `lock` and
 `build` need read access to it. `Tdxs(source=Git(mirror, ref))` points every tundra-tools
@@ -644,26 +645,25 @@ $ tundravm lock --check
 ```
 
 `lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a commit,
-sha256 or content digest per source, and the toolchain (mkosi and its commit, the tools
-tree's distribution, release and snapshot, tundravm, the measurement tools). Commit it.
-The snapshot, for packages and tools tree alike, is the one this release of tundravm pins;
-`Debian(snapshot=)` overrides it.
+sha256 or content digest per source, and the toolchain (mkosi, the tools tree, tundravm,
+the measurement tools), and prints the snapshot, each pin and the toolchain. Commit it. Packages and tools tree share the
+snapshot this release pins; `Debian(snapshot=)` overrides it.
 
 - Pins already locked stay while their source is unchanged. `--update NAME` resolves the
   named inputs again; no name resolves all of them.
-- `--check` never writes and never touches the network. It prints the drift and exits 1;
+- `--check` never writes or fetches. It prints the drift and exits 1;
   a missing lockfile is drift too.
 - A profile's sections are `profiles.<name>.<key>`, and `check` reports their drift as
   that profile's finding: `error lock-changed [dev, production] files: files changed since
   the lock: ~/srv/www/index.html`.
-- A lockfile an older tundravm wrote is refused, never migrated: run `tundravm lock` again.
+- An older tundravm's lockfile is refused, never migrated: lock again.
 - A production build is a locked build: it refuses a missing (`lock-missing`) or stale
   lock, and builds every source at its pin, so a second builder gets the same bytes. A
   development build writes a missing lock and re-pins changed `Local` sources.
 - `build --offline` builds only what the lock pins.
 
-`check` reports a `source-unpinned` warning for each source the lock does not pin yet: one
-line per source naming the profiles that build it, and the hint once after them.
+`check` warns `source-unpinned` once per source the lock does not pin yet, naming the
+profiles that build it, then the hint once.
 
 ## The mkosi tree
 
@@ -801,7 +801,7 @@ build/demo/
 
 The directory is assembled beside its final place and published with one rename. Every
 file is read-only, and nothing writes into a published directory again. Building the same
-identity twice leaves the existing directory alone.
+identity twice leaves the existing directory alone. `tundravm.build()` does it from Python.
 
 `build` ends with a report, read back from that directory, so `show BUILD` prints it too.
 The fixture's production build in CI, digests cut short:
@@ -1033,11 +1033,12 @@ second `ExecStart=`). `check` passes once the image ships each program a unit ru
 $ tundravm convert ./old-tree --from mkosi
 ```
 
-prints an `Image` file for a tree mkosi itself resolves, with every setting it cannot carry
+prints an `Image` file for a tree mkosi itself resolves, each setting it cannot carry
 listed as `# unsupported:`. Save it beside the tree: its `Tree(...)` and script paths are
-relative to the file. A tree tundravm wrote (`mkosi.images/payload/`) converts its payload;
-the QEMU disk, the cloud wrappers and the payload's trees and scripts are what tundravm
-generates, so the notes name them and nothing is copied; the wrappers become `targets=`.
+relative to the file. Implied packages are dropped, with a note. A tree tundravm wrote
+(`mkosi.images/payload/`) converts its payload; the QEMU disk, the cloud wrappers and the
+payload's trees and scripts are what tundravm generates, so notes name them and nothing is
+copied; the wrappers become `targets=`.
 A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
 `--allow-scripts`, since parsing would run it.
 

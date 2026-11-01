@@ -22,7 +22,7 @@ reverses a decision already taken, weakens an opinion, or touches a section 6 co
 | 3 | `GoBinary(package=".")` as the default | S | **Done** later the same day (below) |
 | 4 | A volume mounts at a path derived from its name | S | **Do** |
 | 5 | `hardening="python"`: a preset by name | S | **Done** later the same day: the name resolves at construction, so the lowering still sees a `Hardening` |
-| 6 | `Service(quotes=True)` for `requires=[EVIDENCE]` plus `groups=["tdx"]` | S | **Do later**: `EVIDENCE` and the Raiko service that uses it live in `components/_base.py` and `components/_taiko.py`; both move with it |
+| 6 | `Service(quotes=True)` for `requires=[EVIDENCE]` plus `groups=["tdx"]` | S | **Done** on `leftovers-4`: lowering adds both; `Raiko` and example 06 use it |
 | 7 | The image collects the volumes and secrets its services bind | L | **Do**: S here, since lowering already reads `image.volumes` and `image.secrets` |
 | 8 | A secret reference binds itself | L | **Done** later the same day, in the smaller form (a `Secret` as an argv element or an `environment=` value); an edit that binds or unbinds one is refused |
 | 9 | A profile edit may change readiness, credentials and units, regenerating them | L | **Refusal side done** later the same day; editing `readiness=`, `credentials=` and `unit=` **still later**: each adds or drops units outside the one declaration an edit rewrites (a probe, delivery waits, a drop-in), so `_image/_lower.py` would rebuild the unit graph per profile |
@@ -78,8 +78,8 @@ ingress=[AttestedTLS(443, upstream=Endpoint("127.0.0.1", 8080, ready=app.ready))
 ingress=[AttestedTLS(443, upstream=app.endpoint(8080))]                            # after
 ```
 
-A component's `self.service("app")` is a `ServiceRef` (`_image/_component.py`); giving it
-the same method is the follow-up that shortens the templates' `http` property.
+A component's `self.service("app")` is a `ServiceRef` (`_image/_component.py`); it has the
+same method since `leftovers-4`, and the templates' `http` property is gone.
 
 ## Done later the same day
 

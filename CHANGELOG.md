@@ -16,8 +16,9 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - **Breaking:** the API speaks the public model (`Resolved.targets`, `.components`, `.production`, `class X(Component, name=)`, `ImageFile.component`); the internal-model test helpers and fixtures are gone.
 - **Breaking:** `Image(volumes=, secrets=)` are gone: the image collects each volume and secret from what binds it.
 - **Breaking:** a profile edit that binds or unbinds a credential, or gives a service whose state is on a volume another `user=`, is refused.
+- **Breaking:** `tundravm.bake` is `tundravm.build`, the command's verb, without an alias.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports (and 8745 where the SSH key delivery listens), one hardened user per service, and `tdxs`.
-- `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `hardening="python"` names the sandbox per runtime (`static`, `jit`, `node`, `python`, `dotnet`, `relaxed`), `Hardening.preset(NAME, ...)` a deviation.
+- `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)` or a component's `self.service(name).endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `hardening="python"` names the sandbox per runtime (`static`, `jit`, `node`, `python`, `dotnet`, `relaxed`), `Hardening.preset(NAME, ...)` a deviation; `quotes=True` joins the `tdx` group and requires the evidence service.
 - `Component` is a dataclass with `compose()`, typed exports and an optional `check()`; `Profile(extends=, add=, changes=, production=)` edits with `value.ref.edit(...)` and `.remove()`.
 - `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential, bound by naming it in argv or `environment=`; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
@@ -41,7 +42,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
 - `attest` verifies fresh evidence and delivers nothing; `secrets` attests again first.
 - `doctor` prints one row per capability with its fix; `build:go` blocks without `go`.
-- **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset; `convert --from mkosi` converts a tundravm tree's payload and its cloud wrappers into `targets=`; both write double-quoted Python.
+- **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset; `convert --from mkosi` converts a tundravm tree's payload and its cloud wrappers into `targets=`, dropping the packages every image implies; both write double-quoted Python.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".
 
 ### Build and lock
@@ -51,6 +52,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - **Breaking:** a production build needs `build/tundravm.lock` (`lock-missing`); a development build writes a missing one and re-pins `Local` sources.
 - **Breaking:** lockfile version 6 names profile sections `profiles.<name>`; an older lock is refused.
 - **Breaking:** the default Debian snapshot moves from `20251113T083151Z` to `20261018T082309Z`; `Debian(snapshot=)` keeps the old one.
+- `lock` prints the snapshot, each source's ref and pin and the toolchain; `build --tree-only` without a lock says its tree will drift.
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.
 - The ESP is a fixed 128 MiB; a UKI over 126 MiB fails, naming `RootFS.verity()`.
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
