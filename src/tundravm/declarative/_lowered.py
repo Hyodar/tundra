@@ -53,6 +53,7 @@ from tundravm.toolchain import ToolsTree
 
 if TYPE_CHECKING:
     from tundravm._modules.base import Module
+    from tundravm._modules.probe import Probe
     from tundravm.backends.base import BuildBackend
 
 LOCK_FILENAME = "tundravm.lock"
@@ -120,6 +121,9 @@ class Lowered:
     unreleased: frozenset[str] = frozenset()
     """Profiles of variants marked ``Variant(release=False)``: their payload carries
     ``"release": false`` (an eligible variant's carries nothing, so its digest is unchanged)."""
+    probes: Mapping[str, Probe] = field(default_factory=dict, repr=False)
+    """The boot probe each development profile carries (``tundravm._modules.probe``); a
+    production profile has none."""
 
     @property
     def base(self) -> str:

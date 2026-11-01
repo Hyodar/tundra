@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from .model import Ref
 
 __all__ = [
+    "CEILINGS",
     "PRESETS",
     "SERVICE_OWNED",
     "UNIT_REF_KINDS",
@@ -33,6 +34,7 @@ __all__ = [
     "Hardening",
     "PresetName",
     "UnitTarget",
+    "ceiling",
     "condition_entries",
     "extra_entries",
     "mount_unit",
@@ -94,7 +96,26 @@ later turns out to need belongs to that name alone, not to the other two.
 ``dotnet``: ``MemoryDenyWriteExecute=`` goes for the same reason, and ``@resources`` comes
 back out of the deny list: the .NET GC and thread pool size themselves with
 ``sched_setaffinity`` and ``setrlimit``, both of which that group covers.
+
+The probe a development profile carries (``tundravm._modules.probe``) holds each service to
+its preset's :data:`CEILINGS`: ``systemd-analyze security UNIT`` must report an exposure at
+or under it. ``static`` 2.5, ``jit``, ``node`` and ``python`` 2.6, ``dotnet`` 2.7 and
+:meth:`Hardening.relaxed` 7.8; systemd 255 scores them 1.9, 1.9, 2.0 and 7.3 (7.4 as root),
+so each ceiling leaves half a point for a newer systemd's weights. A sandbox with
+deviations (``Hardening.preset("jit", devices=[...])``) has no ceiling: the deviation is the
+reviewed statement, and :meth:`Hardening.none` has nothing to score.
 """
+
+CEILINGS: dict[str, float] = {
+    "static": 2.5,
+    "jit": 2.6,
+    "node": 2.6,
+    "python": 2.6,
+    "dotnet": 2.7,
+    "relaxed": 7.8,
+}
+"""The ``systemd-analyze security`` exposure each preset (and :meth:`Hardening.relaxed`)
+stays under; see :data:`PRESETS`."""
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -370,6 +391,17 @@ _NONE = Hardening.strict(
     sandbox=False,
     umask=None,
 )
+
+
+def ceiling(hardening: Hardening) -> tuple[str, float] | None:
+    """``(preset, exposure ceiling)`` when *hardening* is exactly a preset (or
+    :meth:`Hardening.relaxed`), else ``None``: see :data:`CEILINGS`."""
+    for name in PRESETS:
+        if hardening == Hardening.preset(name):  # type: ignore[arg-type]
+            return name, CEILINGS[name]
+    if hardening == _RELAXED:
+        return "relaxed", CEILINGS["relaxed"]
+    return None
 
 
 @dataclass(frozen=True, slots=True)

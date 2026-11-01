@@ -26,18 +26,21 @@ depends on the selection. Lowering is deterministic and never touches the networ
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from tundravm._location import display_location
+from tundravm._modules import probe as probe_module
+from tundravm._modules.probe import Probe
 from tundravm._options import MkosiOptions
 from tundravm._source import DebFile, HttpSource
-from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
+from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY, VERITY_MODULES
 from tundravm.errors import ValidationError
+from tundravm.kernel_modules import module_selection
 from tundravm.models import Kernel as FluentKernel
-from tundravm.models import KernelPatchSpec, OutputTarget, RecipeState, unit_name
+from tundravm.models import KernelPatchSpec, OutputTarget, ProfileState, RecipeState, unit_name
 
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
@@ -47,6 +50,7 @@ from .model import (
     Declaration,
     Disk,
     FileTree,
+    Firewall,
     Fragment,
     Http,
     Kernel,
@@ -254,6 +258,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             "(in the image itself); or make the profile an image of its own.",
             context={"profiles": ", ".join(name for name, _ in rejected)},
         )
+    probes = _probes(recipe, builder, selected, resolved, overlays, kernel)
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
     lowered = Lowered(
         state=builder.state,
@@ -273,10 +278,92 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         deb_files=_efi_stub_debs(recipe),
         secret_allowed={name: _secret_allowed(r.items) for name, r in resolved.items()},
         unreleased=frozenset(variant.name for variant in selected if not variant.release),
+        probes=probes,
         **extra,
     )
     _require_shared_distribution(lowered)
     return lowered
+
+
+def _probes(
+    recipe: Recipe,
+    builder: StateBuilder,
+    selected: Sequence[Variant],
+    resolved: Mapping[str, Resolved],
+    overlays: Sequence[str],
+    kernel: FluentKernel | None,
+) -> dict[str, Probe]:
+    """Give every development variant the boot probe its declarations imply
+    (``tundravm._modules.probe``), and keep it from a production variant that extends a
+    development default. A variant with no overlay of its own shares the default's."""
+    default = selected[0]
+    found: dict[str, Probe] = {}
+    spec = getattr(recipe.platform, "kernel_modules", ())
+    off = () if kernel is None else probe_module.off_options(_kernel_file(kernel), kernel.options)
+    for variant in selected:
+        name = variant.name
+        if variant.release:
+            if not default.release and name in overlays:
+                builder.no_probe(name)
+            continue
+        if name != default.name and name not in overlays:
+            if default.name in found:
+                found[name] = found[default.name]
+            continue
+        profile = builder.state.effective_profile(name)
+        modules = _curated(profile, spec, kernel, verity=recipe.mkosi.root == "verity")
+        items = resolved[name].items
+        firewall = _declared_firewall(recipe, variant)
+        if firewall is not None:
+            items = (*items, firewall)
+        probe = probe_module.derive(items, modules=modules, kernel_off=off)
+        builder.probe(name, probe)
+        found[name] = probe
+    return found
+
+
+def _declared_firewall(recipe: Recipe, variant: Variant) -> Firewall | None:
+    """The ``Firewall`` *variant* builds with, which resolution replaces with what it renders:
+    the last one its chain of variants (and the image's items) declares."""
+    chain: list[Variant] = []
+    current: Variant | None = variant
+    while current is not None and current not in chain:
+        chain.insert(0, current)
+        parent = current.inherits
+        current = None if parent is None or parent == BASE_VARIANT else recipe.variant(parent)
+    roots: list[object] = list(recipe.items) if chain[0].inherits == BASE_VARIANT else []
+    roots += [v.add for v in chain]
+    found: Firewall | None = None
+    pending = roots
+    while pending:
+        item = pending.pop(0)
+        if isinstance(item, Firewall):
+            found = item
+        elif isinstance(item, Fragment):
+            pending[:0] = list(item.items)
+    return found
+
+
+def _kernel_file(kernel: FluentKernel) -> Path | None:
+    """The config file a built kernel starts from (the whole one, or the base)."""
+    path = kernel.config_file or kernel.base_file
+    return None if path is None else Path(path)
+
+
+def _curated(
+    profile: ProfileState, spec: Any, kernel: FluentKernel | None, *, verity: bool
+) -> tuple[str, ...] | None:
+    """The modules *profile* may load: its curated set (with the verity root's), ``()`` for
+    a built kernel without loadable modules, ``None`` when every module is allowed or there
+    is no kernel to check."""
+    built = kernel is not None
+    loadable = kernel is not None and kernel.composed and kernel.modules
+    selection = module_selection(profile, spec, built_kernel=built, loadable=loadable)
+    if built:
+        return None if selection.modular else ()
+    if not selection.modular or not selection.modules:
+        return None
+    return (*selection.modules, *(VERITY_MODULES if verity else ()))
 
 
 def _require_shared_distribution(lowered: Lowered) -> None:

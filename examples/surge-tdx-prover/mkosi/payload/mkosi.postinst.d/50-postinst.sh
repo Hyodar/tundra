@@ -58,6 +58,9 @@ mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-back
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")
+if [[ " ${PROFILES:-} " == *" dev "* ]]; then
+    systemd_bin_whitelist+=("systemd-analyze")
+fi
 mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | while read -r bin_path; do
     bin_name=$(basename "$bin_path")
     if ! printf '%s\n' "${systemd_bin_whitelist[@]}" | grep -qx "$bin_name"; then

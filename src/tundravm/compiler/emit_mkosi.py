@@ -1556,6 +1556,11 @@ class DeterministicMkosiEmitter:
             debloat = ["# Debloat: remove unwanted systemd binaries"]
             bins_keep_list = " ".join(f'"{b}"' for b in bins_keep)
             debloat.append(f"systemd_bin_whitelist=({bins_keep_list})")
+            for profile_name, extra_bins in plan.profile_bins:
+                kept = " ".join(f'"{b}"' for b in extra_bins)
+                debloat.append(f'if [[ " ${{PROFILES:-}} " == *" {profile_name} "* ]]; then')
+                debloat.append(f"    systemd_bin_whitelist+=({kept})")
+                debloat.append("fi")
             debloat.append(
                 "mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | "
                 "while read -r bin_path; do"
@@ -1642,6 +1647,9 @@ class DebloatPlan:
     """The paths the finalize removes."""
     unmask: tuple[str, ...] = ()
     """The units the shared payload masked that this profile keeps."""
+    profile_bins: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """Per profile, the ``systemd`` binaries it keeps beyond *config*'s list
+    (``ProfileState.keep_bins``): the binary removal spares them when it builds that profile."""
 
     @property
     def masks(self) -> bool:
@@ -1673,15 +1681,30 @@ def _debloat_plans(
     if not shared.debloat.enabled:
         plans = {SHARED: DebloatPlan()}
         for name, state in effective.items():
+            own = tuple(sorted(state.keep_bins))
             plans[name] = (
-                DebloatPlan(state.debloat, tuple(sorted(keeps[name])), tuple(sorted(paths[name])))
+                DebloatPlan(
+                    state.debloat,
+                    tuple(sorted(keeps[name])),
+                    tuple(sorted(paths[name])),
+                    profile_bins=((name, own),) if own else (),
+                )
                 if state.debloat.enabled
                 else DebloatPlan()
             )
         return plans
     keep = set.intersection(*keeps.values())
     removed = set.intersection(*paths.values())
-    plans = {SHARED: DebloatPlan(shared.debloat, tuple(sorted(keep)), tuple(sorted(removed)))}
+    bins = tuple(
+        (name, tuple(sorted(state.keep_bins)))
+        for name, state in effective.items()
+        if state.keep_bins
+    )
+    plans = {
+        SHARED: DebloatPlan(
+            shared.debloat, tuple(sorted(keep)), tuple(sorted(removed)), profile_bins=bins
+        )
+    }
     for name in effective:
         unmask = tuple(sorted(keeps[name] - keep)) if shared.debloat.systemd_minimize else ()
         plans[name] = DebloatPlan(

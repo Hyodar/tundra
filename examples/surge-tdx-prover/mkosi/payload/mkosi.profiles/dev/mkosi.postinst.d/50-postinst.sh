@@ -29,8 +29,10 @@ mkosi-chroot dpkg-query -L systemd |
 done
 
 mkosi-chroot systemctl enable serial-getty@ttyS0.service
+mkosi-chroot systemctl enable tundravm-probe.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/serial-getty@ttyS0.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 # Set root password and unlock account
 SALT=$(printf 'tundravm-devtools:%s' "${IMAGE_ID:-devtools}" | sha256sum | cut -c1-16)
 ROOT_PASS=$(openssl passwd -6 -salt "$SALT" "tdx")

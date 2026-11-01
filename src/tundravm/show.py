@@ -374,6 +374,15 @@ def render_build(build: Build) -> str:
     signed = (build.path / mf.SIGNATURE).is_file()
     shown = "yes (manifest.sig; `tundravm verify` checks it)" if signed else "no"
     lines.append(f"  signed        {shown}")
+    probe = m.get("probe") or []
+    if probe:
+        lines.append(
+            f"  boot probe    {len(probe)} checks (`tundravm run probe INSTANCE` reads them)"
+        )
+        width = max(len(str(row["check"])) for row in probe)
+        lines.extend(f"    {row['check']:<{width}}  {row['what']}" for row in probe)
+    else:
+        lines.append("  boot probe    none: a production build carries none")
     unchecked = m.get("unchecked") or []
     if unchecked:
         lines.append("  unchecked")

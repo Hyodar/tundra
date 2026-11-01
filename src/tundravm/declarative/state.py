@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 
 from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
 from tundravm._modules import execution as gate
+from tundravm._modules import probe as probe_module
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.disk_encryption import (
     DISK_ENCRYPTION_BUILD_PACKAGES,
@@ -32,6 +33,7 @@ from tundravm._modules.init import wait_units
 from tundravm._modules.key_generation import (
     KEY_GENERATION_BUILD_PACKAGES,
 )
+from tundravm._modules.probe import Probe
 from tundravm._modules.secret_delivery import (
     BUILTIN_SECRET_PROVIDER,
     SECRET_DELIVERY_BUILD_PACKAGES,
@@ -347,6 +349,23 @@ class StateBuilder:
             profile.services.append(gate.service(gate.execution(default)))
         if release != default:
             _add_file(profile, gate.GATE_DROPIN, gate.dropin(gate.execution(release)))
+
+    def probe(self, name: str, probe: Probe) -> None:
+        """Give profile *name* the boot probe (``tundravm._modules.probe``): its script,
+        its unit and the binaries its checks run."""
+        profile = self.state.ensure_profile(name)
+        _add_file(profile, probe_module.SCRIPT_PATH, probe.script(), "0755")
+        profile.services.append(probe.service())
+        profile.keep_bins.update(probe.tools)
+
+    def no_probe(self, name: str) -> None:
+        """Keep a production profile *name* from running the probe its development default
+        ships: a drop-in whose condition never holds."""
+        text = (
+            "# tundravm: a production profile runs no boot probe\n"
+            f"[Unit]\nConditionPathExists=!{probe_module.SCRIPT_PATH}\n"
+        )
+        _add_file(self.state.ensure_profile(name), probe_module.DROPIN, text)
 
     # ── source builds and runtime tools ─────────────────────────────────
 

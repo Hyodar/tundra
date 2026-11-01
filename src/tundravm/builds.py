@@ -723,6 +723,7 @@ def _assemble(
         "summary": summary,
         "toolchain": toolchain,
         "unchecked": unchecked,
+        "probe": img.probes[profile].manifest() if profile in img.probes else [],
     }
     payload["id"] = mf.build_id(payload)
     mf.write_canonical(out / mf.MANIFEST, payload)

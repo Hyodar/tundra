@@ -487,6 +487,9 @@ class ProfileState:
     debloat: DebloatConfig = field(default_factory=DebloatConfig)
     debloat_explicit: bool = False
     source_builds: dict[str, SourceBuild] = field(default_factory=dict)
+    keep_bins: set[str] = field(default_factory=set)
+    """Binaries of the ``systemd`` package this profile keeps beyond its debloat's list
+    (``systemd-analyze`` for a probe that scores hardening)."""
 
 
 @dataclass(slots=True)
@@ -599,6 +602,7 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
         ),
         debloat=_fallback_debloat(base, own),
         debloat_explicit=own.debloat_explicit,
+        keep_bins=base.keep_bins | own.keep_bins,
     )
 
 
