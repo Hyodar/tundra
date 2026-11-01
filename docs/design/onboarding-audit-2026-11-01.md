@@ -162,6 +162,15 @@ and `show`. The generated workflow was parsed as YAML.
 - Components contribute their own egress (`Component.outbound()`): Nethermind's peers,
   the driver's L1 port, raiko's collateral and the Observability sinks, so the surge
   prover declares `Egress()` and no longer reports `egress-unfiltered`.
+- Fixed later on `egress-profiles`, through the end of this list: a component a `Profile`
+  (or `dev=`) adds contributed no egress, since the firewall was one ruleset for the whole
+  image; each profile's ruleset is the image's plus its own components' `outbound()`, in
+  its overlay when it differs, and its boot probe reads it.
+- `TaikoClient` and `Raiko` could only send to TCP 443 anywhere for their L1: `l1=["HOST:PORT"]`
+  names the endpoints their secrets hold, and the 443 fallback stays without it.
+- `Observability(proxy="IP:PORT")` reaches every sink through one fixed-address HTTP
+  CONNECT proxy, the only egress it then needs (plan 6.4), and the remote write's queue
+  and retries are bounded in its config.
 
 ### Not fixed, ranked
 
@@ -171,7 +180,11 @@ and `show`. The generated workflow was parsed as YAML.
    writes a tree that drifts once locked, without a word (S; `cli.py`).
 9. `convert --from mkosi` of a tundravm tree lists implied packages (`chrony`, `nftables`)
    as the image's own (S; `convert.py`).
-10. The guide is at 7875 of its 8000 words: the next paragraph needs a cut first; the
+10. The guide is at 7996 of its 8000 words: the next paragraph needs a cut first; the
     doctor sample and the Imports table (the API reference has both) are the candidates.
-12. The default snapshot (`LOCKED_SNAPSHOT`, 20251113T083151Z) is a year old; bumping it is
+11. The default snapshot (`LOCKED_SNAPSHOT`, 20251113T083151Z) is a year old; bumping it is
     its own deliberate change, not a date-dependent lint (S; needs a CI run).
+12. `Observability(proxy=)` is plain HTTP CONNECT: a proxy that speaks TLS itself needs
+    its name to resolve to its fixed address, an `/etc/hosts` entry the image does not
+    write (GCP's glue owns that file), since neither `systemd-journal-upload` nor
+    Prometheus takes the proxy's TLS name apart from its URL (S; `_observability.py`).

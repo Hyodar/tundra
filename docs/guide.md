@@ -20,7 +20,7 @@ gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 | Area | State |
 |---|---|
 | The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds give identical digests, both layouts' `azure.vhd` included |
-| Building an `Image` in CI | needs the `TUNDRA_TOOLS_TOKEN` secret (see [CI](#ci)): every image builds tundra-tools, a private repository the CI token cannot read |
+| Building an `Image` in CI | needs the `TUNDRA_TOOLS_TOKEN` secret: see [CI](#ci) |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
 | `run --mode simulated` | unit-tested against a fake QEMU; CI runs the fixture's dev build with it and fetches its page |
@@ -49,7 +49,7 @@ $ uv run pytest
 ```
 
 `new` prints this loop, then `build --dev` and `run --mode simulated --dev`. `lock` pins
-every source, tundra-tools included, so it needs read access to that repository (see
+every source, so it needs read access to tundra-tools (see
 [the shipped library](#the-shipped-library)). The generated tests and the CI's
 `check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends on
 the lock: write the tree after locking and commit both.
@@ -486,7 +486,8 @@ the new one in `add=`.
 How profiles lower: tundravm resolves every profile's whole image, writes what all of them
 build once in the shared `payload/`, and puts what each builds beyond that in
 `payload/mkosi.profiles/<name>/`. A declaration one profile removes moves into the
-overlays of the profiles that keep it, `production`'s included. So what a profile builds does
+overlays of the profiles that keep it, `production`'s included, and a component a profile
+adds opens its `outbound()` in that profile's firewall only. So what a profile builds does
 not depend on which profiles a compile selects. `build --profile staging` is
 `mkosi --profile=staging`, and `build --dev` is `mkosi --profile=dev`.
 
@@ -593,7 +594,9 @@ recorded in the manifest, never switched by a size threshold.
 traffic, accepting what the baseline (NTS time, resolvers, cloud metadata) and each
 component's `outbound()` send. A host may be `HOST:PORT`, and since nftables matches no
 names, `"logs.example:443"` opens 443 to any address. A production profile without it is
-an `egress-unfiltered` warning.
+an `egress-unfiltered` warning. `TaikoClient(l1=["HOST:PORT"])` and `Raiko(l1=)` name the
+L1 endpoints their secrets hold, and `Observability(proxy="IP:PORT")` reaches every sink
+through that one address.
 
 `observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
 exports the volatile journal and node metrics with secret credentials. An `http://` sink
@@ -603,8 +606,8 @@ is a lint warning: it carries the logs in the clear.
 
 An image with a volume or a secret runs tundra-tools' `secret-delivery` on the management
 port 8745: it takes one SSH public key once per boot, then the firewall drops the port.
-`attest`, `secrets deliver` and `secrets unlock` use that SSH session, which nothing binds to
-the quote yet ([trust](trust.md#the-channel-is-not-attested-yet)).
+`attest` and `secrets` use that SSH session, which nothing binds to the quote
+yet ([trust](trust.md#the-channel-is-not-attested-yet)).
 `/etc/tundravm/runtime.json` records every volume, secret and ingress.
 
 ## Sources and toolchains
@@ -1081,16 +1084,16 @@ A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
 | `check` | `show` into the job summary, `check --tree mkosi`, `lock --check` | every push to `main` and every pull request |
 | `build` | `build --reproduce`, `verify latest`, uploads `build/*/production/` | after `check`, when the repository variable `TUNDRAVM_BACKEND` names a backend |
 
-Commit `uv.lock`; both jobs install exactly what it locks. Findings show as annotations on
+Both jobs install what `uv.lock` locks. Findings show as annotations on
 the pull request. A project without a committed `build/tundravm.lock` fails `lock --check`:
 lock, commit it and push again. The `build` job builds production, so it reads tundra-tools
 with the repository secret `TUNDRA_TOOLS_TOKEN`: a fine-grained personal access token with
 read-only Contents on `Hyodar/tundra-tools`, added with
 `gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`.
 
-tundravm's own CI bakes the `Image` templates and reads tundra-tools the same way
-(`gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra`). Making tundra-tools public does
-the same without a secret. Without either, the template tests skip and name the repository.
+tundravm's own CI bakes the `Image` templates with the same secret. Making tundra-tools
+public does the same without a secret. Without either, the template tests skip and name the
+repository.
 
 ## When something fails
 

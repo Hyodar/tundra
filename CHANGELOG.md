@@ -26,7 +26,7 @@ Breaking changes are marked **Breaking**.
 - `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)`, which takes the value's own constructor keywords, and `value.ref.remove()`.
 - `Volume` with `OperatorKey`, `TpmSeal` or `BrokerKey`, `Secret` as a systemd credential, `AttestedTLS` and `TLS` ingress, `RootFS.verity()`, `Observability`.
 - `network=Network(egress=Egress(...))` drops every other outbound packet, and accepts the baseline's NTS time, resolvers and cloud metadata servers for you.
-- `Component.outbound()` says where a component sends, and a filtered image accepts it: the shipped ones cover their sinks, peers and collateral, `Egress(hosts=)` takes `HOST:PORT`, and each `nftables.conf` rule names who asked for it.
+- `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it: the shipped ones cover their sinks, peers and collateral, `TaikoClient(l1=)` and `Raiko(l1=)` name their L1 endpoints, `Observability(proxy=)` sends through one fixed-address proxy, `Egress(hosts=)` takes `HOST:PORT`, and each `nftables.conf` rule names who asked for it.
 - The SSH key delivery on 8745 is one-shot: one key, once per boot, then the firewall drops the port until the next boot.
 - `RootFS.initramfs(max_size="4G")` caps the root tmpfs (the kernel gives it half the memory) and the manifest records the cap.
 - On GCP, Google's own udev rules and `google_nvme_id` name NVMe disks, the hostname comes from the metadata server and load-balancer forwarded IPs are routed; each unit is inert off GCE.
