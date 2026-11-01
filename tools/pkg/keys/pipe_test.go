@@ -185,3 +185,60 @@ func TestPipeProvider_Store(t *testing.T) {
 		t.Fatalf("expected %q, got %q", "manual-key", key)
 	}
 }
+
+func TestPipeProvider_CreatesPipeDirectory(t *testing.T) {
+	run := t.TempDir()
+	pipePath := filepath.Join(run, "tundravm", "unlock", "data")
+	p := NewPipeProvider(KeyConfig{Strategy: "pipe", PipePath: pipePath}, &mockTPM{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	keyCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		key, err := p.Get(ctx)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		keyCh <- key
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		info, err := os.Lstat(pipePath)
+		if err == nil && info.Mode()&os.ModeNamedPipe != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no FIFO at %s: %v", pipePath, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for dir, want := range map[string]os.FileMode{
+		filepath.Dir(pipePath):               0o700,
+		filepath.Dir(filepath.Dir(pipePath)): 0o711,
+	} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("%s has mode %o, want %o", dir, got, want)
+		}
+	}
+
+	if err := os.WriteFile(pipePath, []byte("operator-passphrase\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("unexpected error: %v", err)
+	case key := <-keyCh:
+		if key != "operator-passphrase" {
+			t.Fatalf("got %q", key)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+}

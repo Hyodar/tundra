@@ -2,9 +2,12 @@ package keys
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -95,6 +98,10 @@ func (p *PipeProvider) readFromPipe(ctx context.Context) (string, error) {
 		}
 	}
 
+	if err := makePipeDir(p.pipePath); err != nil {
+		return "", fmt.Errorf("create directory for pipe %s: %w", p.pipePath, err)
+	}
+
 	slog.InfoContext(ctx, "creating named pipe", "path", p.pipePath)
 	if err := syscall.Mkfifo(p.pipePath, 0600); err != nil {
 		return "", fmt.Errorf("mkfifo %s: %w", p.pipePath, err)
@@ -129,4 +136,18 @@ func (p *PipeProvider) readFromPipe(ctx context.Context) (string, error) {
 		}
 		return r.data, nil
 	}
+}
+
+// makePipeDir creates the pipe's directory (mode 0700) and its missing parents (mode
+// 0711, so a sibling such as /run/tundravm/credentials stays reachable). An existing
+// directory is left as it is.
+func makePipeDir(pipePath string) error {
+	dir := filepath.Dir(pipePath)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o711); err != nil {
+		return err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return nil
 }
