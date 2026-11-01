@@ -498,7 +498,7 @@ def test_render_joins_profiles_and_states_a_shared_hint_once() -> None:
         "    hint (all 2 above): lock",
         "info variant-empty [prod]: m",
         "    hint: drop it",
-        "0 errors, 3 warnings, 1 info",
+        "0 errors, 3 warnings, 1 info (3 lines)",
     ]
     assert len(render_github(found, "image.py").splitlines()) == len(found) + 1
 

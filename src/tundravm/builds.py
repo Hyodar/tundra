@@ -965,7 +965,7 @@ def resolve(ref: str | None, *, root: Path, image: str | None, dev: bool = False
             return Build.open(linked[0].resolve())
         flag = " --dev" if dev else ""
         raise StateError(
-            f"No {kind} build under {root}" + (f" for {image}" if image else "") + ".",
+            f"No {kind} build under {root}/" + (f" for {image}" if image else "") + ".",
             hint=f"Run `tundravm build{flag}` first, or pass BUILD."
             if not linked
             else "Several images have builds here: pass BUILD.",

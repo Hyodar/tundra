@@ -171,10 +171,10 @@ def test_a_development_build_runs_simulated_without_the_fail_closed_line(
 def test_tdx_mode_is_refused_without_a_tdx_host(
     built: Build, project: Path, cli: Cli, qemu: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(instances, "tdx_refusal", lambda: "unavailable: no Intel TDX host")
+    monkeypatch.setattr(instances, "tdx_refusal", lambda: "no Intel TDX host: kvm_intel tdx is off")
     result = cli("run", "--mode", "tdx")
     assert result.code == EXIT_SDK_ERROR
-    assert "run --mode tdx needs an Intel TDX host (unavailable: no Intel TDX host)" in result.err
+    assert "run --mode tdx cannot run here: no Intel TDX host: kvm_intel tdx is off." in result.err
     assert not (project / ".tundravm" / "instances").exists()
 
 

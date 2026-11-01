@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import json
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -73,6 +75,18 @@ def _host(
     return host, ran
 
 
+def _refusing(runner: Callable[[Sequence[str]], Any], argv: tuple[str, ...]) -> Any:
+    """*runner*, except that *argv* exits 1 (``sudo -n true`` on a host that asks)."""
+
+    def run(given: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if tuple(given) == argv:
+            return subprocess.CompletedProcess(list(given), 1, "", "a password is required\n")
+        result: subprocess.CompletedProcess[str] = runner(given)
+        return result
+
+    return run
+
+
 def _rows(host: Host, **kwargs: object) -> dict[str, str]:
     return {row.name: row.render().split(None, 1)[1] for row in capabilities(host, **kwargs)}  # type: ignore[arg-type]
 
@@ -89,7 +103,7 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
         f"build:x86-64     ready (mkosi {MKOSI_PIN.version}, user namespaces)",
         f"build:go         ready (go1.24.4, which {GO_PURPOSE})",
         "run:simulated    ready (qemu 9.2.0, OVMF /usr/share/OVMF/OVMF_CODE_4M.fd, KVM)",
-        "run:tdx          unavailable: no Intel TDX host (kvm_intel tdx is not enabled)",
+        "run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled",
         "deploy:gcp       ready (gcloud as ops@example.com)",
         "deploy:azure     ready (az as ops@example.com)",
         rows[6],
@@ -123,7 +137,12 @@ def test_the_host_go_row_says_what_go_is_for(version: str | None, row: str) -> N
 def test_build_falls_back_to_sudo_and_names_the_userns_fix_without_it() -> None:
     sudo, _ = _host(files=LINUX_FILES, userns=False)
     assert _rows(sudo)["build:x86-64"] == (
-        f"ready (mkosi {MKOSI_PIN.version}, sudo (no unprivileged user namespaces here))"
+        f"ready (mkosi {MKOSI_PIN.version}, sudo, as this host has no unprivileged user namespaces)"
+    )
+    ask = replace(sudo, runner=_refusing(sudo.runner, ("sudo", "-n", "true")))
+    assert _rows(ask)["build:x86-64"] == (
+        f"ready (mkosi {MKOSI_PIN.version}, sudo, which may ask for a password, as this host "
+        "has no unprivileged user namespaces)"
     )
     root, _ = _host(files=LINUX_FILES, userns=False, uid=0)
     assert _rows(root)["build:x86-64"].endswith(", root)")
@@ -283,7 +302,7 @@ def test_doctor_json() -> None:
         {
             "name": "run:tdx",
             "verdict": "unavailable",
-            "detail": "no Intel TDX host (kvm_intel tdx is not enabled)",
+            "detail": "no Intel TDX host: kvm_intel tdx is not enabled",
         }
     ]
 

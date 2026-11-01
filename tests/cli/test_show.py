@@ -124,7 +124,7 @@ def test_profile_does_not_apply_to_a_build(built: Build, cli: Cli) -> None:
 def test_no_build_yet(project: Path, cli: Cli) -> None:
     result = cli("show", "latest")
     assert result.code == EXIT_SDK_ERROR
-    assert "No production build under build" in result.err
+    assert "No production build under build/." in result.err
     assert "tundravm build" in result.err
 
 

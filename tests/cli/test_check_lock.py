@@ -49,7 +49,7 @@ def test_errors_exit_1_in_text_and_json(
 
 
 def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
-    result = cli("check", "--explain", "source-unpinned", "tree-drift")
+    result = cli("check", "--explain", "source-unpinned", "--explain", "tree-drift", "demo.py")
     assert result.code == EXIT_OK, result.err
     assert result.out.startswith("source-unpinned (warning)\n    A source build")
     assert "\n    fix: Run `tundravm lock IMAGE`" in result.out
@@ -110,10 +110,10 @@ def test_lock_writes_then_check_reports_drift(project: Path, cli: Cli) -> None:
     assert report["schema"] == "tundravm.lock/1" and report["clean"] is False
 
 
-def test_lock_check_without_a_lock_is_a_lockfile_error(project: Path, cli: Cli) -> None:
+def test_lock_check_without_a_lock_is_drift(project: Path, cli: Cli) -> None:
     result = cli("lock", "--check")
-    assert result.code == EXIT_SDK_ERROR
-    assert result.err.startswith("error [E_LOCKFILE]: No lockfile at build/tundravm.lock")
+    assert result.code == EXIT_FAILURE
+    assert result.out == "no lockfile at build/tundravm.lock: run `tundravm lock` and commit it\n"
 
 
 def test_lock_update_resolves_again(

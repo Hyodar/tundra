@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from tests.cli.conftest import Cli
 from tundravm import __version__
-from tundravm.cli import COMMANDS, EXIT_OK, EXIT_SDK_ERROR, build_parser
+from tundravm.cli import COMMANDS, EXIT_BROKEN_PIPE, EXIT_OK, EXIT_SDK_ERROR, build_parser
 from tundravm.completion import verbs_of
 
 TWELVE = (
@@ -115,6 +117,16 @@ def test_an_unknown_deploy_target_is_a_usage_error(
         cli("deploy", "aws", "--build", "x")
     assert exit_.value.code == EXIT_SDK_ERROR
     assert "invalid choice: 'aws'" in capsys.readouterr().err
+
+
+def test_a_reader_that_closes_the_pipe_ends_the_command_quietly() -> None:
+    """``tundravm show --json | head``: no BrokenPipeError traceback, 128 + SIGPIPE."""
+    command = [sys.executable, "-m", "tundravm", "check", "--explain", "source-unpinned"]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert process.stdout is not None and process.stderr is not None
+    process.stdout.close()
+    err = process.stderr.read()
+    assert (process.wait(timeout=60), err) == (EXIT_BROKEN_PIPE, b"")
 
 
 def test_json_errors_are_one_error_line_on_stderr(project: Path, cli: Cli) -> None:

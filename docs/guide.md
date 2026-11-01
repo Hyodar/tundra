@@ -114,10 +114,10 @@ $ tundravm doctor --for build
 ```
 
 ```text
-build:x86-64     ready (mkosi 27.1, sudo (no unprivileged user namespaces here))
+build:x86-64     ready (mkosi 27.1, sudo, which may ask for a password, as this host has no unprivileged user namespaces)
 build:go         ready (go1.24.4, which fetches each Go source's modules and the toolchain its go.mod names for the offline build (every image's Tdxs is one))
 run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
-run:tdx          unavailable: no Intel TDX host (kvm_intel tdx is not enabled)
+run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled
 deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI
 deploy:azure     blocked: az not found: install the Azure CLI
 verify:qemu      ready (built-in TDX replay 1.0+attest-12f1e29.dstack-mr-gcp-b16e08b)
@@ -654,7 +654,8 @@ distribution, release and snapshot, tundravm, the measurement tools). Commit it.
 
 - Pins already locked stay while their source is unchanged. `--update NAME` resolves the
   named inputs again; no name resolves all of them.
-- `--check` never writes and never touches the network. It prints the drift and exits 1.
+- `--check` never writes and never touches the network. It prints the drift and exits 1;
+  a missing lockfile is drift too.
   A profile's sections are `profiles.<name>.<key>`, and `check` reports their drift as
   that profile's finding: `error lock-changed [dev, production] files: files changed since
   the lock: ~/srv/www/index.html`.
@@ -965,7 +966,9 @@ a starting point and port it by hand.
 | `build` | `build --reproduce`, `verify latest`, uploads `build/*/production/` | after `check`, when the repository variable `TUNDRAVM_BACKEND` names a backend |
 
 Commit `uv.lock`; both jobs install exactly what it locks. Findings show as annotations on
-the pull request. The `build` job needs read access to tundra-tools.
+the pull request. `lock --check` exits 1 on drift, and on a project that has no lockfile
+yet, naming `tundravm lock`: lock, commit `build/tundravm.lock` and push again. The `build`
+job builds production, so it needs that lock and read access to tundra-tools.
 
 tundravm's own CI bakes the `Image` templates, so it needs the same access. It reads
 tundra-tools with the repository secret `TUNDRA_TOOLS_TOKEN` when it exists: a fine-grained
@@ -983,7 +986,7 @@ A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did
 |---|---|---|
 | `E_VALIDATION` | a malformed declaration, an unknown profile | `tundravm check` lists everything |
 | `E_LINT` | `build` refused error-level findings | `tundravm check` |
-| `E_LOCKFILE` | the image drifted from the lock | `tundravm lock --check`, then `tundravm lock` |
+| `E_LOCKFILE` | `build` met a stale lock, or a production build none (`lock-missing`) | `tundravm lock --check`, then `tundravm lock` |
 | `E_SOURCE` | a source did not resolve, or a checkout changed | `tundravm build --clean-cache` |
 | `E_POLICY` | `build --offline` met a source the workspace never fetched, or a tree that builds with the network | build once online, then `--offline` |
 | `E_BACKEND_EXECUTION` | mkosi failed | the error names mkosi's log; `build -v` echoes it; `doctor --for build` |

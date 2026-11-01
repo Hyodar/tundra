@@ -11,8 +11,9 @@ can do.
 
 Exit codes: 0 success; 1 a failed check (``check`` errors, ``lock --check`` drift, a
 failing ``verify``, an ``attest`` that does not pass, a ``build --reproduce`` that differs,
-a blocked ``doctor`` row); 2 an SDK error (``error [E_CODE]: message`` on stderr, one
-``tundravm.error/1`` JSON line with ``--json``) or a usage error. Every ``--json`` report
+a blocked ``doctor`` row, a ``lock --check`` without a lockfile); 2 an SDK error
+(``error [E_CODE]: message`` on stderr, one ``tundravm.error/1`` JSON line with ``--json``)
+or a usage error; 141 a reader that closed the pipe (``| head``), silently. Every ``--json`` report
 carries ``"schema": "tundravm.<command>/1"``. Shell completion scripts are generated from
 this parser: ``python -m tundravm.completion bash|zsh|fish``.
 """
@@ -64,8 +65,8 @@ from .declarative.lifecycle import (
 from .declarative.resolve import resolve
 from .diagnostics import Diagnostic
 from .diff import diff_against
-from .errors import LockfileError, TdxError, ValidationError
-from .formats import in_github_actions
+from .errors import TdxError, ValidationError
+from .formats import in_github_actions, workflow_command
 from .project import RESOLUTION_HELP, Settings, settings
 from .recipe import RecipeFile, load_file
 from .templates import (
@@ -82,6 +83,8 @@ from .toolchain import running_toolchain, toolchain_drift
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_SDK_ERROR = 2
+EXIT_BROKEN_PIPE = 141
+"""A reader closed stdout (``show --json | head``): 128 + SIGPIPE, as a shell reports it."""
 
 COMMANDS = (
     "new",
@@ -134,7 +137,9 @@ def main(
     args.runner = runner
     handler: Callable[[argparse.Namespace, TextIO], int] = args.handler
     try:
-        return handler(args, out)
+        code = handler(args, out)
+        out.flush()
+        return code
     except TdxError as exc:
         if getattr(args, "traceback", False):
             raise
@@ -146,6 +151,17 @@ def main(
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
+    except BrokenPipeError:
+        _silence_stdout()
+        return EXIT_BROKEN_PIPE
+
+
+def _silence_stdout() -> None:
+    """Point stdout at /dev/null, so the flush at exit cannot fail on the closed pipe again."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError):
+        pass
 
 
 def schema(verb: str) -> str:
@@ -308,10 +324,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument(
         "--explain",
-        nargs="+",
+        action="append",
         default=None,
         metavar="CODE",
-        help="Print what each finding code checks and how to fix it; checks nothing.",
+        help="Print what this finding code checks and how to fix it (repeatable); checks nothing.",
     )
 
     lock = command(
@@ -916,11 +932,7 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     path = found.lockfile
     if args.check:
         if not path.is_file():
-            raise LockfileError(
-                f"No lockfile at {path}.",
-                hint="Run `tundravm lock` to write it, and commit it.",
-                context={"path": str(path)},
-            )
+            return _no_lockfile(args, path, out)
         drift = img.select(img.profile_names).lock_status(path)
         if args.json:
             print(
@@ -957,6 +969,19 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     if recorded is not None and recorded.mkosi is not None:
         print(f"  toolchain: {recorded.summary()}", file=out)
     return EXIT_OK
+
+
+def _no_lockfile(args: argparse.Namespace, path: Path, out: TextIO) -> int:
+    """``lock --check`` without a lockfile: drift like any other, exit 1."""
+    line = f"no lockfile at {path}: run `tundravm lock` and commit it"
+    if args.json:
+        print(json_report("lock", {"path": str(path), "clean": False, "drift": [line]}), file=out)
+    elif in_github_actions():
+        message = f"No lockfile at {path}. Run `tundravm lock` and commit the lockfile."
+        print(workflow_command("error", message, title="lock drift"), file=out)
+    else:
+        print(line, file=out)
+    return EXIT_FAILURE
 
 
 # ── build ────────────────────────────────────────────────────────────────

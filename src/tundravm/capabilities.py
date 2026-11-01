@@ -216,7 +216,12 @@ def _privilege(host: Host) -> str | None:
     if host.userns():
         return "user namespaces"
     if host.has("sudo"):
-        return "sudo (no unprivileged user namespaces here)"
+        ask = (
+            ""
+            if host.output("sudo", "-n", "true") is not None
+            else ", which may ask for a password"
+        )
+        return f"sudo{ask}, as this host has no unprivileged user namespaces"
     return None
 
 
@@ -265,7 +270,7 @@ def _run_tdx(host: Host) -> Capability:
     name = "run:tdx"
     enabled = host.read("/sys/module/kvm_intel/parameters/tdx")
     if host.system != "Linux" or enabled not in ("Y", "1"):
-        return Capability(name, "unavailable", "no Intel TDX host (kvm_intel tdx is not enabled)")
+        return Capability(name, "unavailable", "no Intel TDX host: kvm_intel tdx is not enabled")
     if _qemu(host) is None:
         return Capability(name, "blocked", "qemu-system-x86_64 not found: install qemu-system-x86")
     firmware = next((path for path in TDVF_PATHS if host.exists(path)), None)

@@ -278,7 +278,7 @@ def tdx_refusal() -> str | None:
     from .capabilities import Host, run_capabilities
 
     row = next(r for r in run_capabilities(Host()) if r.name == "run:tdx")
-    return None if row.verdict == "ready" else f"{row.verdict}: {row.detail}"
+    return None if row.verdict == "ready" else row.detail
 
 
 def launch(
@@ -296,7 +296,7 @@ def launch(
         refused = tdx_refusal()
         if refused is not None:
             raise DeploymentError(
-                f"run --mode tdx needs an Intel TDX host ({refused}).",
+                f"run --mode tdx cannot run here: {refused}.",
                 hint="Run `tundravm doctor --for tdx` for the missing prerequisite, or use "
                 "--mode simulated (no TDX, verdicts are `simulated`).",
             )

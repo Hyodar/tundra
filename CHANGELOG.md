@@ -151,7 +151,7 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - `[tool.tundravm]` keeps `image`, `build` and `backend`, under `TUNDRAVM_IMAGE`,
   `TUNDRAVM_BUILD` and `TUNDRAVM_BACKEND`.
 - Every code `check` reports is a registered rule with a severity, what it checks and how
-  to fix it. `check --explain CODE ...` prints them, and a text report ends with the
+  to fix it. `check --explain CODE` (repeatable) prints them, and a text report ends with the
   `--explain` command naming its codes.
 - `check`'s text report prints a finding several profiles share as one line naming them
   (`[dev, production]`), and a hint consecutive findings share once after them. `--json`
@@ -159,6 +159,15 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   finding about the whole image.
 - `check --tree DIR` reports a missing tree once, and says of each drifted file whether
   the tree misses it, has it extra or has it modified.
+- Output papercuts: a reader closing the pipe (`show --json | head`) ends a command
+  quietly with 141; `check --explain` takes one code per flag, so `check --explain
+  tree-drift demo.py` checks nothing and explains `tree-drift`; the text summary counts
+  findings and says when they took fewer lines (`2 errors, 0 warnings, 0 infos (1 line)`);
+  `E_SOURCE` for a modified checkout says its fix once; `run --mode tdx` and `doctor`
+  rows nest no parentheses; `No production build under build/.` names a directory;
+  `doctor`'s build row says sudo may ask for a password unless `sudo -n true` succeeds;
+  `lock --check` without a lockfile is drift (exit 1, naming `tundravm lock`), not
+  `E_LOCKFILE`.
 - Lockfile version 6 names a profile's sections `profiles.<name>.<key>`, the word the API
   uses; a lockfile an older tundravm wrote is refused, with `tundravm lock` as the fix.
   `check` reports a profile's lock drift as that profile's finding

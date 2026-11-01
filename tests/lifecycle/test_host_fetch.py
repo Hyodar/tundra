@@ -358,12 +358,10 @@ def test_a_modified_git_checkout_fails_until_a_clean_cache_fetches_it_again(
     (fetched.path / "main.go").write_text("package evil\n", encoding="utf-8")
     with pytest.raises(SourceError) as modified:
         fetch(recipe, lock=locked, build=tmp_path)
-    assert str(modified.value.args[0]) == (
-        "source tool checkout modified/incomplete: run tundravm build --clean-cache"
-    )
+    assert str(modified.value.args[0]) == "The checkout of source tool is modified or incomplete."
     assert modified.value.code == ErrorCode.SOURCE
     assert modified.value.reason == "1 file changed since the fetch: main.go"
-    with pytest.raises(SourceError, match="modified/incomplete"):
+    with pytest.raises(SourceError, match="modified or incomplete"):
         bake_image(
             lower(recipe), None, locked=locked, backend=_Recording(), build=tmp_path, fetch=False
         )
@@ -383,12 +381,12 @@ def test_untracked_files_and_a_moved_head_count_as_modified(
     locked = _locked(recipe, first)
     (fetched,) = fetch(recipe, lock=locked, build=tmp_path)
     (fetched.path / "injected.bin").write_bytes(b"\0")
-    with pytest.raises(SourceError, match="modified/incomplete") as untracked:
+    with pytest.raises(SourceError, match="modified or incomplete") as untracked:
         fetch(recipe, lock=locked, build=tmp_path)
     assert untracked.value.reason == "1 file changed since the fetch: injected.bin"
     (fetched.path / "injected.bin").unlink()
     _git("commit", "-q", "--allow-empty", "-m", "local", cwd=fetched.path)
-    with pytest.raises(SourceError, match="modified/incomplete") as moved:
+    with pytest.raises(SourceError, match="modified or incomplete") as moved:
         fetch(recipe, lock=locked, build=tmp_path)
     assert moved.value.reason.startswith("HEAD is ") and first[:12] in moved.value.reason
 
@@ -404,7 +402,7 @@ def test_a_modified_http_checkout_fails_against_its_manifest(
     marker = json.loads((fetched.path / ".tundravm-complete").read_text(encoding="utf-8"))
     assert set(marker["files"]) == {"bin/tool", "tool-1.0.tar.gz"}
     (fetched.path / "bin" / "tool").write_bytes(b"#!/bin/sh\necho evil\n")
-    with pytest.raises(SourceError, match="modified/incomplete") as modified:
+    with pytest.raises(SourceError, match="modified or incomplete") as modified:
         fetch(recipe, lock=locked, build=tmp_path)
     assert modified.value.reason == "1 file changed since the fetch: bin/tool"
     shutil.rmtree(tmp_path / ".sources")

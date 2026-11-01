@@ -79,7 +79,7 @@ Check the image: declarations, lint, lock drift, tree drift.
 
 ```text
 usage: tundravm check [-h] [--attr NAME] [--pythonpath DIR] [--json] [--traceback] [--profile P]
-                      [--tree DIR] [--explain CODE [CODE ...]]
+                      [--tree DIR] [--explain CODE]
                       [IMAGE]
 
 Everything short of a build: resolution and declaration errors, every lint rule,
@@ -90,21 +90,21 @@ In GitHub Actions the findings are workflow annotations. --explain CODE says wha
 a finding's code checks and how to fix it (docs/reference/lint.md lists them all).
 
 positional arguments:
-  IMAGE                 The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
+  IMAGE             The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
 
 options:
-  -h, --help            show this help message and exit
-  --json                Print a JSON report.
-  --traceback           Raise errors with the Python traceback.
-  --profile P           Check this profile (repeatable; default: every profile).
-  --tree DIR            A committed tree to compare.
-  --explain CODE [CODE ...]
-                        Print what each finding code checks and how to fix it; checks nothing.
+  -h, --help        show this help message and exit
+  --json            Print a JSON report.
+  --traceback       Raise errors with the Python traceback.
+  --profile P       Check this profile (repeatable; default: every profile).
+  --tree DIR        A committed tree to compare.
+  --explain CODE    Print what this finding code checks and how to fix it (repeatable); checks
+                    nothing.
 
 loading the image file:
-  --attr NAME           The name the image (or a zero-argument factory) is bound to in the file.
-  --pythonpath DIR      Extra import directory for the file (repeatable); the working directory is
-                        one.
+  --attr NAME       The name the image (or a zero-argument factory) is bound to in the file.
+  --pythonpath DIR  Extra import directory for the file (repeatable); the working directory is
+                    one.
 ```
 
 ## tundravm lock

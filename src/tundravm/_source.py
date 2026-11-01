@@ -1134,7 +1134,7 @@ def is_fetched(
         return True
     label = name or checkout.name
     raise SourceError(
-        f"source {label} checkout modified/incomplete: run tundravm build --clean-cache",
+        f"The checkout of source {label} is modified or incomplete.",
         source=source.describe(),
         reason=problem,
         hint=(

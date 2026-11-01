@@ -1652,7 +1652,8 @@ def render(diagnostics: Sequence[Diagnostic]) -> str:
     """Human-readable report, one line per finding plus a summary line.
 
     A finding several profiles share is one line naming them (``[dev, production]``), and
-    a hint consecutive findings share follows the last of them, once.
+    a hint consecutive findings share follows the last of them, once. The summary counts
+    findings, one per profile, and says how many lines they took when that differs.
     """
     if not diagnostics:
         return "no findings"
@@ -1670,7 +1671,7 @@ def render(diagnostics: Sequence[Diagnostic]) -> str:
                 run += 1
             shared = f" (all {run} above)" if run > 1 else ""
             lines.append(f"    hint{shared}: {d.hint}")
-    lines.append(render_summary(diagnostics))
+    lines.append(render_summary(diagnostics, lines=len(merged)))
     return "\n".join(lines)
 
 
@@ -1712,24 +1713,32 @@ def explain(codes: Sequence[str]) -> str:
 
 
 def explain_command(diagnostics: Sequence[Diagnostic]) -> str:
-    """``explain: tundravm check --explain CODE ...`` naming each registered code of
-    *diagnostics* once; ``""`` when none is registered."""
+    """``explain: tundravm check --explain CODE [--explain CODE ...]`` naming each registered
+    code of *diagnostics* once; ``""`` when none is registered."""
     codes = [code for code in dict.fromkeys(d.code for d in diagnostics) if code in RULES]
-    return f"explain: tundravm check --explain {' '.join(codes)}" if codes else ""
+    flags = " ".join(f"--explain {code}" for code in codes)
+    return f"explain: tundravm check {flags}" if codes else ""
 
 
-def render_summary(diagnostics: Sequence[Diagnostic]) -> str:
-    """``no findings`` or ``N errors, N warnings, N infos``."""
+def render_summary(diagnostics: Sequence[Diagnostic], *, lines: int | None = None) -> str:
+    """``no findings`` or ``N errors, N warnings, N infos``, one finding per profile.
+
+    *lines* is how many lines the report printed them on: ``(1 line)`` follows when it is
+    not one line per finding.
+    """
     if not diagnostics:
         return "no findings"
     counts = summarize(diagnostics)
-    return ", ".join(
+    text = ", ".join(
         (
             _plural(counts["errors"], "error"),
             _plural(counts["warnings"], "warning"),
             _plural(counts["infos"], "info"),
         )
     )
+    if lines is not None and lines != len(diagnostics):
+        text += f" ({_plural(lines, 'line')})"
+    return text
 
 
 def render_github(
