@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from tundravm.declarative._lowered import Lowered
     from tundravm.declarative.lifecycle import Artifact, Backend, Lock, Tree
 
-__all__ = ["IMAGE_OBJECT_NAMES", "bake", "compile", "load", "lower"]
+__all__ = ["IMAGE_OBJECT_NAMES", "build", "compile", "load", "lower"]
 
 IMAGE_OBJECT_NAMES: tuple[str, ...] = ("image", "IMAGE")
 """The module-level names an image file binds its :class:`Image` to."""
@@ -105,7 +105,7 @@ def compile(  # noqa: A001 - the verb the CLI and the docs use
     return lifecycle.compile(recipe_of(image), variants=profiles, lock=lock)
 
 
-def bake(
+def build(
     image: Image,
     *,
     lock: Lock,
@@ -115,7 +115,8 @@ def bake(
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
 ) -> tuple[Artifact, ...]:
-    """Build *image*'s artifacts into *build*, for *profiles* (default: all)."""
+    """Build *image*'s artifacts into the directory *build*, for *profiles* (default: all):
+    what ``tundravm build`` does, frozen against *lock*."""
     return lifecycle.bake(
         recipe_of(image),
         lock=lock,

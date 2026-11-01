@@ -26,7 +26,7 @@ from tundravm.declarative.model import (
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import CargoBinary, GoBinary
 
-from ._api import bake, compile, load, lower
+from ._api import build, compile, load, lower
 from ._component import (
     BootReady,
     Component,
@@ -111,7 +111,7 @@ __all__ = [
     "User",
     "Volume",
     "VolumeDirectory",
-    "bake",
+    "build",
     "compile",
     "load",
     "lower",

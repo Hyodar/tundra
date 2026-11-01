@@ -24,12 +24,12 @@ tundravm: confidential VM images declared as one `Image`.
 __version__ = '0.1.0'
 ```
 
-### `bake`
+### `build`
 
 *function*
 
 ```python
-bake(
+build(
     image: Image,
     *,
     lock: Lock,
@@ -41,7 +41,7 @@ bake(
 ) -> tuple[Artifact, ...]
 ```
 
-Build *image*'s artifacts into *build*, for *profiles* (default: all).
+Build *image*'s artifacts into the directory *build*, for *profiles* (default: all): what `tundravm build` does, frozen against *lock*.
 
 ### `compile`
 

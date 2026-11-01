@@ -10,7 +10,7 @@ what a service exposed, one hardened system user per service, and the evidence s
 attestation reads. ``Image``'s docstring lists each implied item with its one escape hatch.
 
 ``load`` reads an image file, ``lower`` hands it to the compiler, ``compile`` writes the
-mkosi tree, ``bake`` builds the artifacts and ``doctor`` checks the host. Every other public
+mkosi tree, ``build`` builds the artifacts and ``doctor`` checks the host. Every other public
 name has one home: :mod:`tundravm.ports`, :mod:`tundravm.systemd`,
 :mod:`tundravm.components`, :mod:`tundravm.storage`, :mod:`tundravm.secrets`,
 :mod:`tundravm.sources`, :mod:`tundravm.errors` and :mod:`tundravm.testing`.
@@ -32,7 +32,7 @@ from ._image import (
     Service,
     Tree,
     User,
-    bake,
+    build,
     compile,
     load,
     lower,
@@ -53,7 +53,7 @@ __all__ = [
     "Tree",
     "User",
     "__version__",
-    "bake",
+    "build",
     "compile",
     "doctor",
     "load",

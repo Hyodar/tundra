@@ -29,7 +29,7 @@ ROOT = [
     "Tree",
     "User",
     "__version__",
-    "bake",
+    "build",
     "compile",
     "doctor",
     "load",
@@ -299,7 +299,7 @@ def test_the_internal_model_is_not_exported() -> None:
 
 
 def test_the_public_surface_says_profile() -> None:
-    """No public signature or docstring, nor those of what compile and bake return, says variant."""
+    """No public signature or docstring, nor what compile and build return, says variant."""
     lifecycle = declarative.lifecycle
     values = [
         getattr(importlib.import_module(module), name)

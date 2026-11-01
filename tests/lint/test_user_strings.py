@@ -110,6 +110,9 @@ RENAMED = {
         rf"\btundravm\.(?:{'|'.join(NAMESPACED)})\b"
     ),
     "tundravm.image (the public namespaces)": re.compile(r"\btundravm\.image\b"),
+    "tundravm.bake (tundravm.build)": re.compile(
+        r"\btundravm\.bake\b|\bfrom tundravm import (?:\([^)]*|[^\n]*)\bbake\b"
+    ),
     "tundravm.components.<workload> (tundravm.components)": re.compile(
         r"\btundravm\.components\.(?:nethermind|taiko)\b"
     ),
@@ -360,6 +363,11 @@ def test_bare_string_statements_are_documentation() -> None:
         ("a tundravm.Secret holding the key", "tundravm.<namespaced name> (its namespace)"),
         ("from tundravm.image import Image", "tundravm.image (the public namespaces)"),
         (
+            "tundravm.bake(image, lock=lock, backend=backend, build=out)",
+            "tundravm.bake (tundravm.build)",
+        ),
+        ("from tundravm import Image, bake", "tundravm.bake (tundravm.build)"),
+        (
             "from tundravm.components.taiko import Raiko",
             "tundravm.components.<workload> (tundravm.components)",
         ),
@@ -376,6 +384,7 @@ def test_namespaced_spellings_are_caught(text: str, what: str) -> None:
         "from tundravm import secrets",
         "Bind a tundravm.Image to `image`.",
         "from tundravm.components import Component, DevAccess",
+        "from tundravm.declarative import Recipe, bake",
     ],
 )
 def test_namespaced_spellings_pass(text: str) -> None:

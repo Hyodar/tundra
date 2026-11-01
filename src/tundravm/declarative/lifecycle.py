@@ -181,7 +181,7 @@ class Tree:
 
 @dataclass(frozen=True, slots=True)
 class Backend:
-    """Where :func:`bake` builds: ``local`` (this Linux x86-64 host) or ``lima``."""
+    """Where :func:`tundravm.build` builds: ``local`` (this Linux x86-64 host) or ``lima``."""
 
     kind: BackendKind
     cpus: int = 2
@@ -204,6 +204,9 @@ class Backend:
 
 @dataclass(frozen=True, slots=True)
 class Artifact:
+    """A file :func:`tundravm.build` wrote for one profile and target, with the digests
+    that bind it to its image, lock and tree."""
+
     path: Path
     profile: str
     target: Target
@@ -212,16 +215,16 @@ class Artifact:
     lock_digest: str
     tree_digest: str
     lock_sha256: str | None = None
-    """The sha256 of the lockfile the bake read; ``None`` when it read none."""
+    """The sha256 of the lockfile the build read; ``None`` when it read none."""
     manifest_sha256: str | None = None
-    """The sha256 of mkosi's package manifest beside the artifact at bake time; ``None``
+    """The sha256 of mkosi's package manifest beside the artifact at build time; ``None``
     when there was none."""
     build: Path | None = None
-    """The build directory the bake ran in."""
+    """The build directory it was built in."""
     boot_payload: Path | None = None
-    """The UKI this disk artifact boots, as the bake recorded it; ``None`` when unknown."""
+    """The UKI this disk artifact boots, as the build recorded it; ``None`` when unknown."""
     boot_payload_sha256: str | None = None
-    """The sha256 of ``boot_payload`` at bake time."""
+    """The sha256 of ``boot_payload`` at build time."""
 
 
 @dataclass(frozen=True, slots=True)
