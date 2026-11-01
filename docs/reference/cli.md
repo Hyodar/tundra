@@ -317,17 +317,20 @@ usage: tundravm attest [-h] [--json] [--traceback] --policy FILE [--output REPOR
                        [--identity KEY] [--issuer ENDPOINT] [--validator ENDPOINT]
                        INSTANCE
 
-Ask the instance's tdxs issuer for a quote bound to a fresh nonce and check MRTD and
-RTMR0..2 against FILE: an operator-approved tundravm.policy/2 file, or a build's
-measurements.json (the record for the instance's platform). With --validator a tdxs
-validator judges the quote's signature and collateral; only then can it be
-`trusted`. Verdicts: trusted, partial, measurements-match, measurements-mismatch,
-simulated (accepted for a simulated instance), untrusted. Exit 0 when it passes.
+Ask the instance's attested endpoint (:8745) for evidence bound to a fresh nonce and
+check MRTD and RTMR0..2 against FILE: an operator-approved tundravm.policy/2 file, or
+a build's measurements.json (the record for the instance's platform). With
+--validator a tdxs validator judges the quote's signature and collateral; only then
+can it be `trusted`. Verdicts: trusted, partial, measurements-match,
+measurements-mismatch, simulated (accepted for a simulated instance), untrusted.
+Exit 0 when it passes.
 
-Channel: unverified first contact: the channel is the bootstrap SSH session, not bound
-to the quote (gate 3 adds the attested endpoint). The first contact POSTs the
-operator's SSH public key to :8745; the quote then comes over that SSH session.
---issuer names an endpoint the operator relays instead.
+Channel: attested endpoint: a TLS session whose key the quote binds. The quote binds
+the nonce, the session's TLS key, the SSH host keys and the instance public key;
+evidence with another nonce or key is refused. On success the host keys become
+known_hosts and the operator's SSH public key (--identity) goes over that session.
+--issuer checks a quote from a tdxs issuer the operator relays instead, bound to no
+session.
 
 positional arguments:
   INSTANCE
@@ -338,8 +341,9 @@ options:
   --traceback           Raise errors with the Python traceback.
   --policy FILE         The verifier policy.
   --output REPORT       Write the record (tundravm.attestation/2).
-  --identity KEY        The operator's SSH key (default: ~/.ssh/id_ed25519).
-  --issuer ENDPOINT     unix:PATH or tcp://HOST:PORT instead of the SSH relay.
+  --identity KEY        The SSH key to hand over on success (default: ~/.ssh/id_ed25519 if
+                        present).
+  --issuer ENDPOINT     unix:PATH or tcp://HOST:PORT instead of the attested endpoint.
   --validator ENDPOINT  A tdxs validator (unix:PATH or tcp://HOST:PORT).
 ```
 
@@ -351,15 +355,15 @@ Deliver credentials or unlock a volume after a fresh attestation.
 usage: tundravm secrets [-h] [--traceback] deliver|unlock ...
 
 tundravm secrets deliver INSTANCE --policy FILE NAME=@FILE...
-    attest again, then write each value to /run/tundravm/credentials/NAME (0600);
-    a production build needs `trusted`.
+    verify again, then write each value where the image declares it (a Secret:
+    /run/tundravm/credentials/NAME, 0600); a production build needs `trusted`.
 tundravm secrets unlock INSTANCE VOLUME
-    attest again with the policy of the last `attest`, then hand the passphrase
+    verify again with the policy of the last `attest`, then hand the passphrase
     (typed, or piped on stdin) to the OperatorKey() volume.
 
-Channel: unverified first contact: the channel is the bootstrap SSH session, not bound
-to the quote (gate 3 adds the attested endpoint). Values travel on the SSH command's
-stdin only: never on argv, in a log, a tree, a manifest or a receipt.
+Channel: attested endpoint: a TLS session whose key the quote binds, verified afresh
+by each command. Values travel in that session's request bodies only: never on argv,
+in a log, a tree, a manifest or a receipt.
 
 positional arguments:
   deliver|unlock
@@ -376,12 +380,11 @@ options:
 Deliver NAME=@FILE credentials.
 
 ```text
-usage: tundravm secrets deliver [-h] [--traceback] --policy FILE [--identity KEY]
-                                [--validator ENDPOINT]
+usage: tundravm secrets deliver [-h] [--traceback] --policy FILE [--validator ENDPOINT]
                                 INSTANCE NAME=@FILE [NAME=@FILE ...]
 
-Deliver NAME=@FILE credentials. Channel: unverified first contact: the channel is the bootstrap
-SSH session, not bound to the quote (gate 3 adds the attested endpoint).
+Deliver NAME=@FILE credentials. Channel: attested endpoint: a TLS session whose key the quote
+binds.
 
 positional arguments:
   INSTANCE
@@ -391,7 +394,6 @@ options:
   -h, --help            show this help message and exit
   --traceback           Raise errors with the Python traceback.
   --policy FILE         The verifier policy.
-  --identity KEY        The operator's SSH key.
   --validator ENDPOINT  A tdxs validator.
 ```
 
@@ -400,11 +402,10 @@ options:
 Unlock an OperatorKey() volume.
 
 ```text
-usage: tundravm secrets unlock [-h] [--traceback] [--identity KEY] [--validator ENDPOINT]
-                               INSTANCE VOLUME
+usage: tundravm secrets unlock [-h] [--traceback] [--validator ENDPOINT] INSTANCE VOLUME
 
-Unlock an OperatorKey() volume. Channel: unverified first contact: the channel is the bootstrap
-SSH session, not bound to the quote (gate 3 adds the attested endpoint).
+Unlock an OperatorKey() volume. Channel: attested endpoint: a TLS session whose key the quote
+binds.
 
 positional arguments:
   INSTANCE
@@ -413,7 +414,6 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --traceback           Raise errors with the Python traceback.
-  --identity KEY        The operator's SSH key.
   --validator ENDPOINT  A tdxs validator.
 ```
 

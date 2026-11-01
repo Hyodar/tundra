@@ -20,7 +20,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 | dm-verity root (`RootFS.verity()`) | changes to the root partition at rest: the root hash is on the measured command line | runtime writes, which land in a volatile overlay and vanish at reboot; volume data | proven: CI boots from dm-verity |
 | Firewall | inbound connections to anything not exposed | outbound traffic unless `Egress` is set; requests on exposed plaintext ports | implemented; the rendered rules are asserted |
 | Service sandbox | a compromised service reaching the rest of the guest | kernel exploits; the service's own data and credentials | implemented; each preset's directives are asserted |
-| LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlock over today's channel only |
+| LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlocked over the attested endpoint |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that binds the secret | implemented |
 | NTS time | the host setting the guest clock, which certificates and freshness depend on | the host delaying or blocking time traffic | implemented |
 | Fail-closed production profile | a production build starting its services where no TDX quote path exists | a host that offers TDX to a TD you did not approve: that is the verifier's call | proven: CI boots the production fixture without TDX and its services never start |
@@ -102,28 +102,24 @@ itself. A row such as `MRTD/RTMR0 3/27 accepted values` is a firmware table that
 policy pairs by firmware. A record with no prediction prints its state (`unknown: ...`)
 in place of a value.
 
-### The channel is not attested yet
+### What first contact proves
 
-This is the largest gap, and it is gate 3 work in `tools/`.
+An image with a volume or a secret runs the attested endpoint on port 8745, with a TLS key
+made in memory at start. Its evidence is a quote whose user data is
+`sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public key)`. `attest` sends a
+fresh nonce and refuses evidence for another nonce (a replay) or another TLS key than its
+session's (a relay), then judges the quote; on success it writes the bound host keys as
+`known_hosts`. `secrets deliver` and `unlock` verify again and write only on that session,
+with its nonce, once per value per boot.
 
-An image with a volume or a secret runs `secret-delivery` on port 8745. It accepts one SSH
-public key per boot, from whoever POSTs first, and root SSH then accepts only that key; the
-firewall then drops the port until the next boot.
-`attest`, `secrets deliver` and `secrets unlock` all run over that SSH session. The quote
-binds a nonce, but not the session, the SSH host key or the operator's key. So today:
+| Issuer | First contact proves | It does not prove |
+|---|---|---|
+| `tdx`, `gcp` | the session ends in a TD whose registers matched the policy; with `--validator`, a genuine quote (`trusted`) | without a validator, Intel's signature |
+| `azure` | nothing: `attest` refuses Azure policies | |
+| `simulator` | the binding and the quote's structure | where it runs: `simulated`, never production |
 
-- Whoever reaches port 8745 first after boot gets root on the instance. Keep the port
-  reachable only from the operator's address.
-- An attacker on the network path can stand between the operator and a genuine instance,
-  relay the genuine quote, pass `attest`, and receive what `secrets deliver` sends.
-- `AttestedTLS` serves a certificate generated per boot that no quote vouches for. A client
-  pins it on first contact.
-
-Each command prints `unverified first contact`. The design that closes them
-(plan 6.3): the guest generates a key pair at boot; the quote's `report_data` binds
-`sha512(purpose ‖ nonce ‖ public key ‖ SSH host keys)`; the client speaks TLS to a
-certificate carrying that key, so a relayed quote cannot authenticate another connection.
-Until it lands, treat delivery to a cloud instance as trusting the network path.
+`AttestedTLS` still serves a certificate no quote vouches for, and no TDX host has run the
+protocol yet (gate 2).
 
 Each image makes that key pair (`InstanceKey()`); until the quote binds it, a signature
 under it proves this boot, not what signed.
@@ -150,14 +146,13 @@ More limits that are not platform-specific:
 - **`TpmSeal`.** `key-gen` seals the key in the vTPM's NV storage without a PCR policy
   today; the image records `pcrs=` for gate 3 to enforce. `recovery="none"` is the only
   method: if the vTPM state is lost, the data is gone.
-- **`BrokerKey`.** The pull client is gate 3. Until then the image waits for the value as it
-  waits for an operator, and an operator can stand in for the broker.
+- **`BrokerKey`.** The pull client is not built. The image waits for the value as it waits
+  for an operator, and an operator can stand in for the broker over the attested endpoint.
 - **The kernel.** `Kernel.default()` is Debian's `linux-image-amd64` with a curated module
   set. A weekly CI workflow builds and boots one `Kernel.build` with every target's drivers
   built in; the tested kernel matrix of plan 6.7 is not published yet.
-- **The tools.** The evidence service and the key, secret and disk tools are built from
-  `tools/` in this repository at the SDK's own commit, and the lock pins that source like
-  any other (from a checkout of the repository, by the digest of its `tools/`).
+- **The tools.** The evidence service, the endpoint and the key and disk tools build from
+  `tools/` at the SDK's own commit, and the lock pins that source like any other.
 
 ## Recovery
 

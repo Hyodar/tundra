@@ -231,20 +231,79 @@ Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
 - `kernel:symbols`: no built kernel boots in CI, and the table of option to symbol
   (`SYMBOLS`, ten global functions) is unverified against a real `/proc/kallsyms`.
 
+## The attested endpoint (plan 6.3)
+
+The relay over SSH is gone. An image with a volume or a secret (an `Image`), or any
+`Secrets` block (a declarative recipe), runs `tools/cmd/attested-endpoint` as
+`tundravm-endpoint.service` on its port (8745 for an `Image`). It is a control-plane unit:
+not gated, ordered after the execution gate, the evidence socket, the SSH host keys and the
+instance key, and held up by no runtime-init step, so it answers while a volume still waits
+for its passphrase. It is its own binary rather than part of `tdxs`: `tdxs` stays an
+`AF_UNIX` quote service with one capability, while the endpoint listens on the network and
+writes root-owned files (credentials, `authorized_keys`, key-gen's FIFO), as root with
+`CAP_CHOWN` alone and `ProtectSystem=strict`.
+
+The protocol (`tools/pkg/endpoint`, `src/tundravm/bootstrap.py`):
+
+- At start the endpoint makes an ECDSA P-256 TLS key in memory and a self-signed
+  certificate; it serves TLS 1.3 only, and every TCP connection is a session.
+- `GET /evidence?nonce=HEX` (16 to 64 bytes) reads the SSH host public keys
+  (`/etc/ssh/ssh_host_*_key.pub`, sorted `type base64`) and the instance public key
+  (`/run/tundravm/instance-key.pub`), computes the binding
+  `sha512(lp(purpose) ‖ lp(nonce) ‖ lp(TLS SPKI) ‖ lp(host keys) ‖ lp(instance key))`
+  (`lp` is a big-endian uint32 length, the purpose `tundravm-endpoint/1`) and asks `tdxs`
+  to issue with that binding as user data and the nonce. The tdxs issuers put
+  `sha256(user data ‖ nonce)` in `report_data`, which the simulator's 32-byte quote can
+  carry too, so the binding is the user data rather than the raw `report_data`. The
+  answer carries the document, the simulator's metadata, every bound part, the gate's mode
+  and what the endpoint accepts (credential names, volumes, an SSH key). The session
+  remembers the nonce.
+- `POST /credentials`, `/unlock` and `/ssh-key` carry a nonce. The endpoint accepts it only
+  from the session that fetched evidence for it, once (403 otherwise). A credential name is
+  written once per boot (409 again), atomically, with its configured mode and owner. An
+  unlock writes the passphrase into key-gen's FIFO for that volume, non-blocking: 409 when
+  nothing reads it. The first SSH key wins for the boot.
+- The client opens one session, reads its peer's SPKI from the certificate, sends 32 fresh
+  bytes and refuses evidence for another nonce, for another TLS key, or whose parts do not
+  hash to the user data. Then `attestation.attest` judges the quote with that user data:
+  a TDX quote against the policy, a simulator quote by its HMAC tag under the simulator's
+  published key, its registers reported and never compared, verdict `simulated` at best.
+  Before each write it checks the session's key is still the bound one.
+
+`/unlock` is implemented: disk-setup takes its key from key-gen's pipe strategy, whose FIFO
+the endpoint writes.
+
+The negative tests, one table each:
+
+| Contract | Python (`tests/cli/test_secrets.py::test_delivery_is_refused`) | Go (`tools/pkg/endpoint/server_test.go::TestWritesAreBoundToTheSession`) |
+|---|---|---|
+| relay: evidence on one session, delivery on another | the session's key changed after the evidence: refused before anything is sent | 403 on the second session |
+| replay: an old nonce | evidence answering another nonce: refused | a nonce already used: 403 |
+| wrong key | the quote binds another TLS key than the session's: refused | `TestEvidenceBindsTheSessionKey` |
+| simulated in production | a production build on TDX answered with simulator evidence: nothing sent | |
+| debug attributes | a production build's TD with `DEBUG`: nothing sent | |
+
+The fixture's dev profile carries `Tdxs(issuer="simulator")` and a `Secrets` block on 8745
+with one optional secret, so the probe gains `endpoint:8745` (evidence answers the nonce it
+was given) and `fixture-boot` runs, after `run --probe`, `attest fixture-1 --policy
+measurements.json` (verdict `simulated`, `known_hosts` written) and `secrets deliver
+fixture-1 greeting-token=@...`, then finds the endpoint's `credential delivered` line on
+the console.
+
+The boot that runs it is the `fixture-boot` job of run (pending) on the scratch branch `ci/gate3-endpoint`.
+
 ## Not proven
 
-- The replayed-quote and wrong-recipient-key tests of plan 6.3 need the attested endpoint's
-  channel binding, tundra-tools' gate 3 Go protocol, which does not exist yet. A replayed
-  nonce already fails `attest` (`tests/cli/test_attest.py::test_a_replayed_quote_fails_the_nonce_check`),
-  but nothing binds a quote to a session.
+- ~~The replayed-quote and wrong-recipient-key tests of plan 6.3~~: done above, against
+  `FakeEndpoint` and the Go server; no TDX quote has run the protocol yet.
 - The instance key (`/run/tundravm/instance-key.pem`, made every boot) is not in the
   quote's `report_data`; `attest` prints its public key beside the quote as "not yet bound
   to the quote" until gate 3 binds it.
 - The gate's `tdx` branch has run only against stand-in paths. No TDX guest has booted a
   gated image (gate 2).
-- A dev profile on QEMU records `simulated`, but its `tdxs` still issues as `tdx` and has no
-  quote to give. So `attest` against a simulated instance of a real image fails at the
-  issuer, unless the image configures the `simulator` issuer itself.
+- A dev profile on QEMU records `simulated`, but an `Image`'s `tdxs` still issues as `tdx`
+  and has no quote to give, so `attest` of a simulated `Image` fails at the issuer unless
+  the image configures the `simulator` issuer itself, as the fixture does.
 - ~~`Image` builds are not booted in CI~~: since `tools-monorepo` the `templates` and
   `boot` jobs build and boot them from `tools/` (run `41311483505`); the first green `boot`
   is run `41313287454`.
