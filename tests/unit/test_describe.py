@@ -81,7 +81,7 @@ def test_describe_structure() -> None:
     assert info["base"] == "debian/trixie"
     assert info["arch"] == "x86_64"
     assert info["profile"] == "default"
-    assert info["inherits"] is None and info["fragments"] == []
+    assert info["extends"] is None and info["components"] == []
     assert info["reproducible"] is True
     assert info["mirror"] == "https://deb.example"
     assert info["kernel"] is None
@@ -176,7 +176,7 @@ def test_describe_per_variant() -> None:
     azure = describe(image, profile="azure")
 
     assert azure["profile"] == "azure"
-    assert azure["inherits"] == "default"
+    assert azure["extends"] == "default"
     assert azure["packages"] == [
         "curl",
         "dmidecode",
@@ -189,7 +189,7 @@ def test_describe_per_variant() -> None:
     ]
     assert "modules" not in azure
     lineage = describe(image, profile="azure", inherits="base", fragments=("common", "azure"))
-    assert (lineage["inherits"], lineage["fragments"]) == ("base", ["common", "azure"])
+    assert (lineage["extends"], lineage["components"]) == ("base", ["common", "azure"])
     assert azure["targets"] == ["azure"]
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]

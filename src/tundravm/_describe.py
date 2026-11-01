@@ -42,8 +42,8 @@ def describe(
     File and init-script contents are summarized as short sha256 digests.
     A profile built on another is described as built: merged over it. Hooks and
     sources show the pins of the lockfile *image* reads, as compile renders them.
-    *inherits* and *fragments* are the recipe's ``Variant.inherits`` and the
-    fragment names the profile resolved to.
+    *inherits* and *fragments* (the keys ``extends`` and ``components``) are the recipe's
+    ``Variant.inherits`` and the fragment names the profile resolved to.
     """
     selected = image.profile(profile)
     pins = image.build_pins()
@@ -60,9 +60,10 @@ def describe(
         "build_source_mounts": [
             {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
         ],
+        "components": list(fragments),
         "debloat": image.explain_debloat(profile=selected),
+        "extends": profile_state.extends if inherits is _IMAGE_PARENT else inherits,
         "files": _describe_files(profile_state.files),
-        "fragments": list(fragments),
         "groups": [
             {"gid": g.gid, "name": g.name, "system": g.system}
             for g in sorted(profile_state.groups, key=lambda item: item.name)
@@ -80,7 +81,6 @@ def describe(
         },
         "mirror": image.mirror,
         "packages": sorted(profile_state.packages),
-        "inherits": profile_state.extends if inherits is _IMAGE_PARENT else inherits,
         "partitions": [
             {"fs": p.fs, "mount_at": p.mount_at, "name": p.name, "size": p.size}
             for p in sorted(profile_state.partitions, key=lambda item: item.name)
@@ -177,9 +177,9 @@ def render(description: dict[str, object]) -> str:
         lines.append(
             "Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in build_options.items())
         )
-    if description.get("inherits") not in (None, "", BASE_VARIANT):
-        lines.append(f"Extends: {description['inherits']}")
-    _append_inline_list(lines, "Components", _as_list(description.get("fragments")))
+    if description.get("extends") not in (None, "", BASE_VARIANT):
+        lines.append(f"Extends: {description['extends']}")
+    _append_inline_list(lines, "Components", _as_list(description.get("components")))
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
     _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))
