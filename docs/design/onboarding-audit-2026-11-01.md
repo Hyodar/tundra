@@ -134,8 +134,6 @@ with and without `--build`, `deploy status`, `verify`, `convert --from mkosi` on
 tree, `convert --from systemd` on a unit with a timer, and surge through `check --tree`
 and `show`. The generated workflow was parsed as YAML.
 
-### Fixed on this branch (the commits carry the why)
-
 - `verify latest-development` without a build said `tundravm build`: it says `build --dev`.
 - `show --dev` in a project means the dev build: its refusal and `--help` name
   `show --profile dev` for the image's dev profile.
@@ -242,3 +240,70 @@ demo's and surge's trees; surge through `check --tree` and `show`.
     dm.Resolved)`, `FakeMkosi.invoke`/`verbs` and `FakeSources.*` without a line
     (S; `_reference.py`, `components/_base.py`, `testing/`).
 18. `tundravm.bake` keeps the old verb in the API beside `build` (S, breaking).
+
+## 7. First run
+
+Base: master at `d9376e7`, after `errors-speak-public`. Branch: `first-run`. Host: x86-64 Linux, sudo only with a
+password, no unprivileged user namespaces (AppArmor restricts them), no QEMU, no `go` on
+PATH; `rustup`, `uv` and OVMF present. The question: do the first ten minutes (install,
+`doctor`, `new`, `dev`) tell a stranger what to do at every stop?
+
+### What was run
+
+In a fresh directory under the scratchpad, with `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` there
+so the install is the only one on PATH: the documented line, then
+`uv tool install git+file:///home/franco/tundra@first-run` (the documented
+`git+https://github.com/Hyodar/tundra@v2.0.0` names a tag that does not exist yet), then
+each command below as the install put it on PATH, `uv sync` and `uv run tundravm dev` in
+the project, and `build --dev` to see the stop after QEMU.
+
+| Step | What printed | Verdict |
+|---|---|---|
+| `uv tool install …@v2.0.0` | `fatal: couldn't find remote ref refs/tags/v2.0.0` | wrong: no tag yet |
+| `uv tool install …@first-run` | mkosi 27.1 from its commit and tundravm, 2.5 s, no `go` and no `tools/` | clear |
+| `tundravm --version` | `tundravm 0.0.post1.dev556+g57f93a87e` | confusing until a tag: hatch-vcs counts from 0.0 |
+| `tundravm` | 41 lines: the argparse help of 13 commands, the resolution epilog, then `new`, `lock`, `build`, `dev` | confusing |
+| `tundravm doctor` | 10 rows, exit 1 | confusing |
+| `tundravm new demo` | five files, `check demo.py: no findings`, then the six next steps | clear |
+| `tundravm check` | the `lock-missing` note, `no findings` | clear |
+| `tundravm lock` | `locked build/tundravm.lock`, the snapshot, `tdxs git 57f93a87ec15`, the toolchain | clear |
+| `tundravm dev --no-follow` | `error [E_DEPLOYMENT]: qemu-system-x86_64 is not installed.` | confusing |
+| `tundravm build --dev` | `error [E_STATE]: Go source build 'tdxs' needs Go 1.21 or newer on the host …` | clear |
+| `tundravm show` | the image, production, then dev beyond it | clear |
+| `convert --from mkosi` (debian-cloud) | `image = Image(…)` on one 365-character line | wrong |
+
+The exact lines:
+
+- No arguments: the quickstart under the help runs bare `tundravm` where `new` says
+  `uv run tundravm`, puts a production `build` in the loop and leaves out `doctor`.
+- `doctor`: each fix is prose, not a command, and the Go row names no package:
+
+  ```
+  build:go         blocked: no go on PATH: install Go 1.21+, which fetches each Go source's modules and the toolchain its go.mod names for the offline build (every image's Tdxs is one)
+  run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
+  deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI
+  ```
+
+  `run:simulated` stops at the first missing piece, so a host without QEMU and OVMF learns
+  about OVMF only after installing QEMU. `build:x86-64` is ready through sudo "which may
+  ask for a password" and does not say the sysctl that builds without it.
+- `dev --no-follow` stops before it builds, which is right, but checks only QEMU:
+
+  ```
+  error [E_DEPLOYMENT]: qemu-system-x86_64 is not installed.
+  fix: Install qemu-system-x86 (`tundravm doctor --for run`).
+  ```
+
+  OVMF is looked for when the instance starts, after the build: a host with QEMU and no
+  OVMF builds for minutes and then fails with `No OVMF firmware found.`
+- `convert --from mkosi` formats its output with `python -m ruff`, which a
+  `uv tool install` does not carry: the `Image(...)` call came out on one line.
+
+### The install from a git URL
+
+It works without `tools/` on PATH and without `go`: the wheel records its commit, and
+`lock` pins the evidence service to `Git("https://github.com/Hyodar/tundra", <that
+commit>, subdir="tools")`. The build does not fetch Go itself: `require_host_go` refuses a
+Go source without a host `go` 1.21+, which fetches the toolchain each go.mod names, and
+every image builds `Tdxs` from Go. So the host needs `golang` (Debian 13, Ubuntu 24.04)
+or a Go from go.dev/dl, and neither `doctor` nor the README names the package.
