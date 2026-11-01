@@ -287,6 +287,18 @@ probe_instance_key() {
         ok "root:root 600, pub $pub"
     fi
 }
+probe_owner() {
+    if [ ! -e "$1" ]; then
+        fail "no $1 in the image"
+        return
+    fi
+    said=$(stat -c '%U:%G %a' "$1")
+    if [ "${said% *}" = "$2" ] && [ "${3:-${said#* }}" = "${said#* }" ]; then
+        ok "$said"
+    else
+        fail "$1 is $said, declared $2${3:+ $3}: its owner was not applied, so $2 cannot use it"
+    fi
+}
 check=mode
 mode=$(cat /run/tundravm/mode 2>/dev/null || true)
 case $mode in
@@ -337,4 +349,6 @@ check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 check=key:instance
 probe_instance_key /run/tundravm/instance-key.pem /run/tundravm/instance-key.pub
+check=owner:/srv/www/private.html
+probe_owner '/srv/www/private.html' web:web 600
 say "done $passed ok $failed fail"

@@ -43,7 +43,10 @@ The checks, each only when its declaration exists (:func:`derive`):
   key ``root:root 0600`` (plan 5.2 item 2: root-owned, read-only to everything else; the
   root is a tmpfs or erofs, which carry no ``chattr +i``);
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
-  ``root:root 0600`` and its public key file holds its public key.
+  ``root:root 0600`` and its public key file holds its public key;
+- ``owner:PATH``: each path a ``tmpfiles.d`` line of the image gives an owner (``z``/``Z``,
+  what ``File(owner=)`` and ``Tree(owner=)`` lower to) is owned by it, with the mode its
+  ``File`` declares.
 
 The probe runs inside the guest it checks: it proves what the guest says of itself, which a
 compromised guest could fake. It is a development aid, not evidence.
@@ -53,7 +56,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -64,7 +67,7 @@ from tundravm.models import ServiceSpec, unit_name
 from . import execution, instance_key
 
 if TYPE_CHECKING:
-    from tundravm.declarative.model import Declaration, EgressRule, Firewall
+    from tundravm.declarative.model import Declaration, EgressRule, File, Firewall
 
 UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
@@ -78,6 +81,8 @@ DENIED_ADDRESSES = ("192.0.2.1", "198.51.100.1", "203.0.113.1")
 """Documentation addresses (RFC 5737) the egress check sends to, the first no rule accepts."""
 DENIED_PORTS = (9, 7, 13, 19, 37)
 """Ports the egress check sends to (discard first), the first no rule accepts."""
+TMPFILES = ("/etc/tmpfiles.d/", "/usr/lib/tmpfiles.d/")
+"""Where a tmpfiles.d line the ``owner:`` checks read is shipped."""
 
 SYMBOLS: dict[str, str] = {
     "CONFIG_MAGIC_SYSRQ": "handle_sysrq",
@@ -111,6 +116,7 @@ Helper = Literal[
     "keys",
     "instance",
     "endpoint",
+    "owner",
 ]
 
 
@@ -188,7 +194,7 @@ def derive(
     image keeps every module); *kernel_off* the options a built kernel turns off (empty for
     a distribution kernel)."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
-    from tundravm.declarative.model import Disk, Firewall, Port, Secrets, Service, Task
+    from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task
     from tundravm.declarative.systemd import ceiling
     from tundravm.declarative.utils import SSH_HOST_KEY
 
@@ -322,7 +328,29 @@ def derive(
             (instance_key.UNIT,),
         )
     )
+    files = {item.path: item for item in items if isinstance(item, File)}
+    for path, owner in _owned(files.values()):
+        file = files.get(path)
+        mode = [] if file is None or file.mode is None else [f"{file.mode:o}"]
+        checks.append(
+            Check(
+                f"owner:{path}",
+                " ".join([f"{path} is {owner}", *mode]),
+                " ".join(["probe_owner", _quote(path), owner, *mode]),
+                "owner",
+            )
+        )
     return Probe(tuple(checks))
+
+
+def _owned(files: Iterable[File]) -> Iterator[tuple[str, str]]:
+    """``(path, user:group)`` of each ``z``/``Z`` line of the tmpfiles.d files in *files*."""
+    for file in files:
+        if file.path.startswith(TMPFILES) and isinstance(file.content, str):
+            for line in file.content.splitlines():
+                fields = line.split()
+                if len(fields) >= 5 and fields[0] in ("z", "Z"):
+                    yield fields[1], f"{fields[3]}:{fields[4]}"
 
 
 def _service(item: object) -> list[Check]:
@@ -851,6 +879,20 @@ probe_instance_key() {{
     fi
 }}
 """,  # noqa: E501
+    "owner": """\
+probe_owner() {
+    if [ ! -e "$1" ]; then
+        fail "no $1 in the image"
+        return
+    fi
+    said=$(stat -c '%U:%G %a' "$1")
+    if [ "${said% *}" = "$2" ] && [ "${3:-${said#* }}" = "${said#* }" ]; then
+        ok "$said"
+    else
+        fail "$1 is $said, declared $2${3:+ $3}: its owner was not applied, so $2 cannot use it"
+    fi
+}
+""",
 }
 
 _MODE = f"""\

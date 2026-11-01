@@ -18,7 +18,8 @@ no ``tundravm-probe.service``, and it reads what no declaration states (the root
 the built programs). The ``dev`` profile's derived probe checks the rest (``web`` and
 ``greeter`` active and sandboxed, :data:`WEB_PORT` bound, the curated modules, the SSH host
 key, a refused egress datagram, the ``tick`` timer, the exporters running on the
-configuration they took, nothing waiting on them and their sinks' egress loaded) and CI's
+configuration they took, nothing waiting on them and their sinks' egress loaded, ``web``
+owning its private page) and CI's
 ``fixture-boot`` job runs it with ``tundravm run --probe``.
 """
 
@@ -27,8 +28,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Literal
 
+import tundravm
 from tundravm import Image
 from tundravm._image import recipe_of
+from tundravm._image._lower import OWNED_FILES
 from tundravm.components import JournalExport, Observability, PrometheusRemoteWrite
 from tundravm.components._base import egress_rules
 from tundravm.declarative import (
@@ -189,14 +192,32 @@ class BootProbe(Composite):
         )
 
 
+PRIVATE = f"{WWW}/private.html"
+"""A page only its owner may read (``0600``), declared ``owner="web"``: httpd, running as
+``web``, serves it only when the image applied that owner, which the probe's ``owner:``
+check reads back."""
+
+
+def owned(file: tundravm.File) -> tuple[Declaration, ...]:
+    """*file* as an ``Image`` lowers it: the file, and the line that applies its owner."""
+    items = recipe_of(Image("fixture", files=[file])).items
+    return tuple(
+        item
+        for item in items
+        if isinstance(item, File) and (item.path == file.path or item.path == OWNED_FILES)
+    )
+
+
 @component
 class Web(Composite):
     """A page busybox httpd serves on :data:`WEB_PORT`, so a boot proves the network (the
-    recipe's ``Network``) and a sandboxed service: the host fetches it through a QEMU forward."""
+    recipe's ``Network``) and a sandboxed service: the host fetches it through a QEMU forward.
+    :data:`PRIVATE` beside it is ``web``'s own."""
 
     def compose(self) -> Iterator[Declaration]:
         yield Package("busybox")
         yield File(f"{WWW}/index.html", PAGE)
+        yield from owned(tundravm.File.text(PRIVATE, PAGE, mode=0o600, owner="web"))
         yield Service(
             "web",
             ("/usr/bin/busybox", "httpd", "-f", "-p", str(WEB_PORT), "-h", WWW),
