@@ -77,7 +77,7 @@ COMPONENTS = [
     "TeeBase",
 ]
 STORAGE = ["BrokerKey", "OperatorKey", "TpmSeal", "Volume", "VolumeDirectory"]
-SECRETS = ["Credential", "Generated", "Secret"]
+SECRETS = ["Credential", "Generated", "InstanceKey", "Secret"]
 SOURCES = ["Build", "CargoBinary", "Git", "GoBinary", "Http", "Install", "Local"]
 ERRORS = [
     "ArtifactError",

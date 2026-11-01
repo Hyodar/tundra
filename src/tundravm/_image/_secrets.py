@@ -15,6 +15,7 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Literal
 
 from tundravm._location import Located
+from tundravm._modules import instance_key
 from tundravm.errors import ValidationError
 
 from ._component import BootReady
@@ -27,6 +28,7 @@ __all__ = [
     "RUNTIME_DIRECTORY",
     "BrokerKey",
     "Generated",
+    "InstanceKey",
     "Secret",
     "credential_wait_unit",
 ]
@@ -215,3 +217,35 @@ class Generated(Credential):
     def ready(self) -> BootReady:
         """ "This boot's value exists": what a bound service requires."""
         return BootReady(self.unit)
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class InstanceKey(Credential):
+    """This boot's instance key, for a service that signs with it: ``InstanceKey()``.
+
+    Every image generates an ECDSA key on secp256k1 (Ethereum's curve) at boot, fresh each
+    boot and on tmpfs only (``/run/tundravm/instance-key.pem``, root:root 0600, SEC1 PEM);
+    a service reads it as a systemd credential. ``Service(credentials=[InstanceKey()])``
+    renders ``LoadCredential=instance-key:/run/tundravm/instance-key.pem`` with
+    ``Requires=`` and ``After=`` on the unit that generates it, and the program reads
+    ``$CREDENTIALS_DIRECTORY/instance-key``. In argv or ``environment=`` it is that path, as
+    a :class:`Secret` is, and binds itself; a ``timer=`` service may take it too. The public
+    key is ``/run/tundravm/instance-key.pub`` and the console line ``run status`` and
+    ``attest`` print. The quote does not bind it yet.
+    """
+
+    def __init__(self) -> None:
+        Credential.__init__(self, instance_key.CREDENTIAL, instance_key.KEY)
+
+    def __repr__(self) -> str:
+        return "InstanceKey()"
+
+    @property
+    def path(self) -> str:
+        """Where a bound service reads it: ``${CREDENTIALS_DIRECTORY}/instance-key``."""
+        return "${CREDENTIALS_DIRECTORY}/" + self.name
+
+    @property
+    def ready(self) -> BootReady:
+        """ "This boot's key exists": what a bound service requires."""
+        return BootReady(instance_key.UNIT)

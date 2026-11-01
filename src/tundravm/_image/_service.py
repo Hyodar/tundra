@@ -22,7 +22,7 @@ from tundravm.errors import ValidationError
 
 from ._change import Ref
 from ._component import BootReady, Component, ComponentReady, Endpoint, ServiceReady, ServiceRef
-from ._secrets import CREDENTIAL_REFERENCE, Secret
+from ._secrets import CREDENTIAL_REFERENCE, InstanceKey, Secret
 from ._storage import VolumeDirectory
 from ._values import (
     TCP,
@@ -142,11 +142,14 @@ class Service(Located):
     ``environment=`` (``{"JWT_FILE": jwt}``) is the path the service reads it at, and
     binds it: the service waits for a required one. ``credentials=[jwt]`` binds one the
     program finds otherwise (a word that embeds ``jwt.path``, a config file); an argv
-    word naming a credential the service does not bind is refused.
+    word naming a credential the service does not bind is refused. ``InstanceKey()`` is
+    this boot's secp256k1 key, bound the same ways; the service then requires the unit
+    that generates it.
 
     ``timer=Every("1h")`` (or ``Calendar(...)``) runs it as a scheduled oneshot with every
     other keyword kept; what only a long-lived service has (``socket=``, ``readiness=``,
-    ``expose=``, ``credentials=``, a volume ``state=``) is refused.
+    ``expose=``, ``credentials=`` beyond ``InstanceKey()``, a volume ``state=``) is
+    refused.
 
     :meth:`packaged` runs the unit a Debian package ships, under ``hardening=``.
     """
@@ -472,7 +475,7 @@ class Service(Located):
             ("expose", bool(self.expose), "no port stays open between scheduled runs"),
             (
                 "credentials",
-                bool(self.credentials),
+                any(not isinstance(c, InstanceKey) for c in self.credentials),
                 "secret delivery orders long-lived services only",
             ),
             (
@@ -488,7 +491,7 @@ class Service(Located):
                     f"{self.name!r} runs on a timer, so {name}= does not apply: {why}.",
                     hint=f"Drop {name}=, or drop timer= to run it as a long-lived service.",
                 )
-        referenced = self._references()
+        referenced = tuple(r for r in self._references() if not isinstance(r, InstanceKey))
         if referenced:
             raise _fail(
                 self,

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import ClassVar, Literal
 
 from tundravm._location import Located
+from tundravm._modules.instance_key import KEY as INSTANCE_KEY
 from tundravm.declarative import model as dm
 from tundravm.declarative.model import Git, Http
 from tundravm.declarative.utils import StaticAddress
@@ -921,3 +922,10 @@ class Credential:
         if not isinstance(self.name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", self.name):
             raise _fail(self, f"{self.name!r} is not a credential name.", hint="Use 'api-token'.")
         object.__setattr__(self, "source", _absolute(self, self.source, "source"))
+        if self.source == INSTANCE_KEY and type(self) is Credential:
+            raise _fail(
+                self,
+                f"{INSTANCE_KEY} is the instance key: a Credential naming it skips the "
+                "unit that generates it.",
+                hint="Pass InstanceKey() (from tundravm.secrets) instead.",
+            )

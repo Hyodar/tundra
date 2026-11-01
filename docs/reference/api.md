@@ -1242,6 +1242,21 @@ A secret the image makes at boot instead of having it delivered: `Generated("jwt
 | `Generated.ready` | "This boot's value exists": what a bound service requires. |
 | `Generated.unit` | The oneshot that writes it. |
 
+### `InstanceKey`
+
+*dataclass*
+
+```python
+InstanceKey()
+```
+
+This boot's instance key, for a service that signs with it: `InstanceKey()`.
+
+| Member | Does |
+|---|---|
+| `InstanceKey.path` | Where a bound service reads it: `${CREDENTIALS_DIRECTORY}/instance-key`. |
+| `InstanceKey.ready` | "This boot's key exists": what a bound service requires. |
+
 ### `Secret`
 
 *dataclass*

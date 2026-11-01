@@ -2726,11 +2726,11 @@ class Task(Declared):
     (``TimeoutStartSec=``, ``None``: systemd's unbounded oneshot default); *hardening*
     defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps and
     *conditions* gate it (``Condition.virtualization("google")``), as on :class:`Service`.
-    *env*, *groups*, *working_dir*, *logs*, *runtime*, *timeout_stop*, *kill_mode* and
-    *directives* render as :class:`Service`'s do (a public ``Service(timer=...)`` keeps
-    every keyword through them). A scheduled task requires the execution gate as a
-    ``Service`` does; a boot task does not (probes and boot plumbing stay readable on a
-    refused boot).
+    *env*, *credentials*, *groups*, *working_dir*, *logs*, *runtime*, *timeout_stop*,
+    *kill_mode* and *directives* render as :class:`Service`'s do (a public
+    ``Service(timer=...)`` keeps every keyword through them). A scheduled task requires the
+    execution gate as a ``Service`` does; a boot task does not (probes and boot plumbing
+    stay readable on a refused boot).
     """
 
     name: str
@@ -2750,6 +2750,7 @@ class Task(Declared):
     wanted_by: str | None = None
     conditions: tuple[Condition, ...] = ()
     env: Mapping[str, str] = field(default_factory=FrozenMap)
+    credentials: Mapping[str, str] = field(default_factory=FrozenMap)
     groups: tuple[str, ...] = ()
     working_dir: str | None = None
     logs: str | None = None
@@ -2761,6 +2762,10 @@ class Task(Declared):
     def __post_init__(self) -> None:
         _freeze(self, "command", "conditions", "groups")
         _require_env(self)
+        for name, target in _freeze_map(self, "credentials").items():
+            if not _ENTRY_NAME.fullmatch(name):
+                raise _fail(self, f"invalid credential name {name!r}.", hint="Use 'api-token'.")
+            _require_absolute(self, target, f"credential {name!r}")  # type: ignore[arg-type]
         for group in self.groups:
             if not isinstance(group, str) or not _GROUP_NAME.fullmatch(group):
                 raise _fail(self, f"invalid group name {group!r} in groups=.")

@@ -41,7 +41,7 @@ from ._component import (
 )
 from ._image import BASE_PROFILE, DEV_PROFILE, Image, Profile
 from ._runtime import RUNTIME_FRAGMENT, Runtime, RuntimeFragment, services_of
-from ._secrets import Secret
+from ._secrets import InstanceKey, Secret
 from ._service import Binding, Service
 from ._storage import VolumeDirectory
 from ._values import (
@@ -733,6 +733,7 @@ class _Lowering:
             state=item.state,
             working_dir=item.working_directory,
             env=item.variables(),
+            credentials=_credentials(item.bindings),
             logs=item.logs,
             runtime=item.runtime,
             after=requires,
@@ -763,7 +764,7 @@ class _Lowering:
     def required_units(self, item: Service) -> tuple[str, ...]:
         """The units ``requires=`` means: what proves each dependency ready."""
         units: list[str] = []
-        for requirement in (*_evidence(item), *item.requires):
+        for requirement in (*_evidence(item), *_instance_key(item), *item.requires):
             if isinstance(requirement, dm.UnitOutput):
                 continue
             for handle in _handles(requirement, self.world):
@@ -776,6 +777,12 @@ def _evidence(item: Service) -> tuple[ServiceReady, ...]:
     from tundravm.components import EVIDENCE
 
     return (EVIDENCE,) if item.quotes else ()
+
+
+def _instance_key(item: Service) -> tuple[BootReady, ...]:
+    """The instance key's generation, which a service that binds the key requires."""
+    bound = any(isinstance(binding, InstanceKey) for binding in item.bindings)
+    return (InstanceKey().ready,) if bound else ()
 
 
 def _groups(item: Service) -> list[str]:

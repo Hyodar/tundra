@@ -1474,6 +1474,7 @@ def _task(
             state=task.state,
             working_dir=task.working_dir or (f"/var/lib/{task.state}" if task.state else None),
             env=dict(task.env),
+            credentials=dict(task.credentials),
             groups=tuple(task.groups),
             logs=task.logs,
             runtime=task.runtime,

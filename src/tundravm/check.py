@@ -874,6 +874,38 @@ def _rule_secret_in_env(
             )
 
 
+def _rule_instance_key_exposed(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    from ._modules import instance_key
+    from ._modules import probe as probe_module
+
+    key = instance_key.KEY
+    owned = {instance_key.SCRIPT_PATH, probe_module.SCRIPT_PATH}
+    bound = f"LoadCredential={instance_key.CREDENTIAL}:{key}"
+    found: list[tuple[str, str]] = []
+    for path, content in _shipped_files(state):
+        if path not in owned and (key in path or key in _decoded(content)):
+            found.append((path, f"the file {path}"))
+    for svc in state.services:
+        name = unit_name(svc.name)
+        if not svc.command or name == instance_key.UNIT:
+            continue
+        lines = _systemd_unit_content(svc).splitlines()
+        if any(key in line for line in lines if line != bound):
+            found.append((name, f"service {name!r}"))
+    for subject, what in found:
+        yield Diagnostic(
+            severity="error",
+            code="instance-key-exposed",
+            message=f"{what} names {key}, the instance key, which only a bound service reads",
+            hint="Bind it instead: Service(credentials=[InstanceKey()]) (or InstanceKey() in "
+            "argv or environment=), and read $CREDENTIALS_DIRECTORY/instance-key.",
+            profile=profile_name,
+            subject=subject,
+        )
+
+
 # ── systemd unit text (every unit a variant ships) ──────────────────────
 #
 # ``tundravm._units.lint`` holds the rules; these wrappers feed them the variant's
@@ -1608,6 +1640,17 @@ _REGISTRY: tuple[Rule, ...] = (
         "Deliver it at boot: declare a Secret and pass it in the service's argv or "
         "environment=, where it is the path the service reads it at and binds itself.",
         (_rule_secret_in_env,),
+    ),
+    Rule(
+        "instance-key-exposed",
+        "error",
+        "A file, a unit drop-in or a service's unit names /run/tundravm/instance-key.pem, "
+        "the private key the image generates at boot, which only the services that bind it "
+        "may read, and only through their credentials.",
+        "Bind it: Service(credentials=[InstanceKey()]) (or InstanceKey() in argv or "
+        "environment=) renders LoadCredential= and the ordering; the program reads "
+        "$CREDENTIALS_DIRECTORY/instance-key.",
+        (_rule_instance_key_exposed,),
     ),
     Rule(
         "unit-written-at-runtime",
