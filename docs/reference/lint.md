@@ -83,7 +83,7 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `unit-directive-unknown` | warning | A unit sets a directive systemd 257 does not know, which systemd ignores. | Check the spelling against systemd.directives(7); X- keys are left alone. |
 | `unit-enable-noop` | warning | A unit is enabled but has no [Install] section, so systemctl enable does nothing. | Add [Install] WantedBy=, or stop enabling it. |
 | `unit-exec-relative` | warning | A unit command (ExecStart= and the other Exec directives) names its program by a relative name, and systemd's search path is not $PATH. | Spell the absolute path (/usr/bin/NAME or /usr/sbin/NAME). |
-| `unit-extra` | info | A unit sets directives through the extra= escape hatch, which nothing types or validates. | Use the typed field when one exists (docs/reference/api.md lists them); keep extra= for directives no field covers. |
+| `unit-extra` | info | A service's unit=DropIn(...), or raw unit directives, set what a Service keyword covers, which nothing then types or validates. | Use the keyword the finding names (resources=, shutdown=, environment=, ...); keep unit=DropIn(...) for what no keyword covers. |
 | `unit-raw` | info | A service is hand-written unit text instead of a typed Service. | Declare Service(NAME, command, ...): the compiler renders the unit, its ordering after needs= and its enablement. |
 | `unit-section-invalid` | error | A unit has a section its type does not allow, which systemd ignores. | Move its directives to [Unit], [Install] or the unit type's own section. |
 | `unit-value-invalid` | error | A unit gives a directive a value it does not accept, so systemd keeps the default. | Use a value the directive accepts; the message names what is wrong with it. |

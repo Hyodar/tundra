@@ -1092,7 +1092,10 @@ class Service(Declared):
     runtime-init steps the unit waits for (the default, :data:`RUNTIME_INIT`, is the whole
     chain when the variant has one; ``needs=()`` starts it without waiting). ``enabled=False``
     renders no ``[Install]`` and enables nothing. ``extra`` is the escape hatch for
-    directives no field covers (linted ``unit-extra``). ``Unit`` ships verbatim text.
+    directives no field covers (linted ``unit-extra`` when a public ``Service`` keyword
+    covers one); ``directives`` holds the ones the public keywords lower to
+    (``resources=``, ``shutdown=``), rendered the same way and never linted. ``Unit``
+    ships verbatim text.
     ``allow_secret`` silences ``secret-in-env`` for the rendered unit, every field.
     ``conditions`` renders ``Condition*=`` lines (``Condition.virtualization("microsoft")``):
     systemd skips the unit, without failing, where one does not hold. Every unit lowered
@@ -1140,6 +1143,7 @@ class Service(Declared):
     conflicts: tuple[UnitTarget, ...] = ()
     enabled: bool = True
     extra: Extra = field(default_factory=FrozenMap)
+    directives: Extra = field(default_factory=FrozenMap)
     socket: Listen | None = None
     remain_after_exit: bool = False
     conditions: tuple[Condition, ...] = ()
@@ -1203,6 +1207,10 @@ class Service(Declared):
                 hint="Drop wanted_by=, or keep enabled=True.",
             )
         require_extra(self, ("Unit", "Service", "Install"), SERVICE_OWNED)
+        require_extra(self, ("Service",), SERVICE_OWNED, name="directives")
+        for section, keys in self.directives.items():
+            if twice := sorted(set(keys) & set(self.extra.get(section, {}))):
+                raise _fail(self, f"extra= sets {section}.{twice[0]}, which a keyword renders.")
         _require_socket(self)
 
     @property

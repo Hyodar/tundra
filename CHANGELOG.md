@@ -139,6 +139,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `Artifact.profile` from `tundravm.bake()`, `profiles` and `profile` in `show --json`, the
   `profile` key of error contexts, and the lint code `profile-empty` (was `variant-empty`).
   `examples/02_variants.py` is `examples/02_profiles.py`.
+- `Service(resources=, shutdown=)` lower without a finding. `unit-extra` fires only when a
+  service's `unit=DropIn(...)` or raw unit directives set what a `Service` keyword covers
+  (`MemoryMax=`, `env=`, ...), and names that keyword; a drop-in for what no keyword covers is
+  quiet.
 - Evidence: `docs/design/evidence/gate4-sdk.md`.
 
 ### Profiles and the ESP

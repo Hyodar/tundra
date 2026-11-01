@@ -3,12 +3,15 @@ that do not resolve, and ``tundravm.testing`` queries over the grown ``Service``
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
-from tests.lint.test_check_rules import recipe, report
+import tundravm
 from tundravm.declarative import BootStep, DropIn, Dynamic, Hardening, Service, Unit
 from tundravm.errors import ValidationError
-from tundravm.testing import fragment_plan
+from tundravm.systemd import Resources, Shutdown
+from tundravm.testing import PlannedImage, fragment_plan, plan
 
 DROPIN = "/usr/lib/systemd/system/nginx.service.d/20-tundravm.conf"
 
@@ -62,22 +65,49 @@ def test_dropin_validation(make: object, message: str) -> None:
         make()  # type: ignore[operator]
 
 
-def test_unit_extra_is_reported_as_info() -> None:
-    found = [
-        d
-        for d in report(
-            recipe(
-                Service("probe", "/bin/true", extra={"Service": {"OOMScoreAdjust": "-500"}}),
-                Unit("ssh.service", dropin=DropIn(extra={"Unit": {"StartLimitBurst": "3"}})),
-            )
-        )
-        if d.code == "unit-extra"
-    ]
-    assert [(d.severity, d.subject) for d in found] == [
-        ("info", "probe.service"),
-        ("info", "ssh.service"),
-    ]
-    assert "Service.OOMScoreAdjust" in found[0].message
+def _app(**fields: object) -> PlannedImage:
+    service = tundravm.Service("app", ["/usr/bin/app"], **fields)  # type: ignore[arg-type]
+    return plan(tundravm.Image("app", services=[service]), "production")
+
+
+@pytest.mark.parametrize(
+    ("planned", "finding"),
+    [
+        (
+            lambda: _app(resources=Resources(memory_max="1G"), shutdown=Shutdown(signal="SIGINT")),
+            None,
+        ),
+        (lambda: _app(unit=DropIn(extra={"Service": {"OOMScoreAdjust": "-500"}})), None),
+        (
+            lambda: _app(unit=DropIn(extra={"Service": {"MemoryMax": "1G"}})),
+            ("MemoryMax= through unit=DropIn(...)", "Use resources=Resources(memory_max=...) on"),
+        ),
+        (
+            lambda: _app(unit=DropIn(env={"A": "b"})),
+            ("env= through unit=DropIn(...)", "Use environment= on Service('app', ...)"),
+        ),
+        (
+            lambda: fragment_plan(Service("app", "/bin/app", extra={"Service": {"TasksMax": "8"}})),
+            ("TasksMax= as raw unit directives", "Use resources=Resources(tasks_max=...) on"),
+        ),
+        (
+            lambda: fragment_plan(
+                Unit("ssh.service", dropin=DropIn(extra={"Service": {"MemoryMax": "1G"}}))
+            ),
+            None,
+        ),
+    ],
+    ids=["keywords", "uncovered", "dropin-extra", "dropin-field", "raw", "packaged"],
+)
+def test_unit_extra_names_the_keyword_a_unit_duplicates(
+    planned: Callable[[], PlannedImage], finding: tuple[str, str] | None
+) -> None:
+    found = [(d.message, d.hint or "") for d in planned().lint() if d.code == "unit-extra"]
+    if finding is None:
+        assert found == []
+    else:
+        ((message, hint),) = found
+        assert finding[0] in message and hint.startswith(finding[1]) and "extra=" not in message
 
 
 def test_an_undeclared_unit_ref_is_refused_at_lowering() -> None:

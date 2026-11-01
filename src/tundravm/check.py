@@ -857,16 +857,27 @@ def unit_declaration_check(
     selected = set(variants) if variants is not None else {v.name for v in recipe.variants}
     groups = [("", (*recipe.platform.contribution(), *recipe.items))]
     groups += [(v.name, (v.add,)) for v in recipe.variants if v.name in selected]
+    generated = {
+        unit_name(item.name)
+        for _, items in groups
+        for item in _own_declarations(items)
+        if isinstance(item, Service)
+    }
     found: list[Diagnostic] = []
     for variant, items in groups:
         for item in _own_declarations(items):
             if isinstance(item, (Service, Task)):
                 found += [_located(d, item) for d in _typed_unit_findings(item, variant)]
-            if isinstance(item, Service) and item.extra:
-                found.append(_located(_unit_extra(unit_name(item.name), item.extra, variant), item))
-            elif isinstance(item, Unit) and item.dropin is not None and item.dropin.extra:
-                extra = _unit_extra(unit_name(item.name), item.dropin.extra, variant)
-                found.append(_located(extra, item))
+            if isinstance(item, Service):
+                covered = _keyword_covered(item.extra, {})
+                if covered:
+                    found.append(_located(_unit_extra(item.name, covered, variant, False), item))
+            elif isinstance(item, Unit) and item.dropin is not None:
+                if unit_name(item.name) in generated:
+                    dropin = item.dropin
+                    covered = _keyword_covered(dropin.extra, _dropin_keywords(dropin))
+                    if covered:
+                        found.append(_located(_unit_extra(item.name, covered, variant, True), item))
             if isinstance(item, Unit) and item.content is not None:
                 if unit_name(item.name).endswith(".service"):
                     found.append(_located(_unit_raw(item.name, variant), item))
@@ -926,17 +937,78 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
         )
 
 
-def _unit_extra(name: str, extra: Mapping[str, Mapping[str, object]], variant: str) -> Diagnostic:
-    keys = ", ".join(f"{section}.{key}" for section, values in extra.items() for key in values)
+_KEYWORDS: Mapping[str, str] = {
+    **{
+        f"Service.{key}": f"resources=Resources({field}=...)"
+        for key, field in (
+            ("MemoryMax", "memory_max"),
+            ("MemoryHigh", "memory_high"),
+            ("CPUQuota", "cpu_quota"),
+            ("CPUWeight", "cpu_weight"),
+            ("TasksMax", "tasks_max"),
+            ("IOWeight", "io_weight"),
+        )
+    },
+    "Service.KillSignal": "shutdown=Shutdown(signal=...)",
+    "Service.SendSIGKILL": "shutdown=Shutdown(final_kill=False)",
+}
+"""Directives raw unit text may set that a public ``Service`` keyword renders."""
+
+_DROPIN_KEYWORDS: Mapping[str, str] = {
+    "exec_start": "the argv",
+    "user": "user=",
+    "groups": "groups=",
+    "working_dir": "working_directory=",
+    "env": "environment=",
+    "credentials": "credentials=",
+    "state": "state=",
+    "logs": "logs=",
+    "runtime": "runtime=",
+    "timeout_stop": "shutdown=Shutdown(timeout=...)",
+    "hardening": "hardening=",
+}
+"""``DropIn`` fields a public ``Service`` keyword renders on the unit it generates."""
+
+
+def _dropin_keywords(dropin: object) -> dict[str, str]:
+    """The ``DropIn`` fields *dropin* sets that a ``Service`` keyword covers, as ``field=``."""
+    defaults = type(dropin).__dataclass_fields__  # type: ignore[attr-defined]
+    found: dict[str, str] = {}
+    for name, keyword in _DROPIN_KEYWORDS.items():
+        value = getattr(dropin, name)
+        if value not in (None, (), defaults[name].default) and value != {}:
+            found[f"{name}="] = keyword
+    return found
+
+
+def _keyword_covered(
+    extra: Mapping[str, Mapping[str, object]], typed: Mapping[str, str]
+) -> dict[str, str]:
+    """What *extra* and the *typed* fields set that a ``Service`` keyword covers."""
+    found = dict(typed)
+    for section, values in extra.items():
+        for key in values:
+            keyword = _KEYWORDS.get(f"{section}.{key}")
+            if keyword is not None:
+                found[f"{key}="] = keyword
+    return found
+
+
+def _unit_extra(name: str, covered: Mapping[str, str], variant: str, dropin: bool) -> Diagnostic:
+    unit = unit_name(name)
+    where = "through unit=DropIn(...)" if dropin else "as raw unit directives"
+    keywords = tuple(dict.fromkeys(covered.values()))
+    which = "a Service keyword covers" if len(keywords) == 1 else "Service keywords cover"
+    stem = unit.removesuffix(".service")
     return Diagnostic(
         code="unit-extra",
         severity="info",
-        message=f"unit {name!r} sets {keys} through the extra= escape hatch",
-        subject=name,
+        message=f"unit {unit!r} sets {', '.join(covered)} {where}, which {which}",
+        subject=unit,
         profile=variant,
         hint=(
-            "extra= is for directives no typed field covers; prefer a field when one exists "
-            "(docs/reference/api.md lists them), so the setting stays typed and validated."
+            f"Use {', '.join(keywords)} on Service({stem!r}, ...) instead, so the setting stays "
+            "typed and validated; unit=DropIn(...) is for what no keyword covers."
         ),
     )
 
@@ -1505,9 +1577,10 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "unit-extra",
         "info",
-        "A unit sets directives through the extra= escape hatch, which nothing types or validates.",
-        "Use the typed field when one exists (docs/reference/api.md lists them); keep "
-        "extra= for directives no field covers.",
+        "A service's unit=DropIn(...), or raw unit directives, set what a Service keyword "
+        "covers, which nothing then types or validates.",
+        "Use the keyword the finding names (resources=, shutdown=, environment=, ...); keep "
+        "unit=DropIn(...) for what no keyword covers.",
     ),
     Rule(
         "unit-raw",

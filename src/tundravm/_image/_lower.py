@@ -448,14 +448,14 @@ class _Lowering:
 
     def unit(self, item: Service) -> dm.Service:
         """The generated ``.service``."""
-        extra: dict[str, str | tuple[str, ...]] = {}
+        directives: dict[str, str | tuple[str, ...]] = {}
         if item.resources is not None:
-            extra.update(dict(item.resources.entries()))
+            directives.update(dict(item.resources.entries()))
         if item.shutdown is not None:
-            extra.update(dict(item.shutdown.entries()))
+            directives.update(dict(item.shutdown.entries()))
         optional = self.runtime.optional(item)
         if optional:
-            extra["SetCredential"] = optional
+            directives["SetCredential"] = optional
         requires = (*self.required_units(item), *self.runtime.waits(item))
         shutdown = item.shutdown
         state = item.state
@@ -490,7 +490,7 @@ class _Lowering:
             socket=item.socket,
             timeout_stop=None if shutdown is None else shutdown.timeout,
             kill_mode=None if shutdown is None else shutdown.kill_mode,
-            extra={"Service": extra} if extra else {},
+            directives={"Service": directives} if directives else {},
         )
 
     def timer_task(self, item: Service) -> dm.Task:

@@ -1000,10 +1000,19 @@ def _unit_fields(
             if isinstance(decl, DropIn)
             else decl.hardening.entries()
         ),
-        "extra_unit": {section: dict(keys) for section, keys in decl.extra.items()},
+        "extra_unit": _extra_unit(decl),
         "kill_mode": getattr(decl, "kill_mode", None),
         "needs": tuple(ref.step for ref in getattr(decl, "needs", ())),
     }
+
+
+def _extra_unit(decl: Service | DropIn) -> dict[str, dict[str, str | tuple[str, ...]]]:
+    """The directives no typed field renders: the keywords' own, then ``extra=``."""
+    found: dict[str, dict[str, str | tuple[str, ...]]] = {}
+    for part in (getattr(decl, "directives", {}), decl.extra):
+        for section, keys in part.items():
+            found.setdefault(section, {}).update(keys)
+    return found
 
 
 def _dropin(unit: Unit, dropin: DropIn, units: Collection[str] | None) -> str:
