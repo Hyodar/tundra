@@ -114,6 +114,9 @@ RENAMED = {
     ),
     "BOOT package tuple (Debian(boot=...))": re.compile(r"\bBOOT\s*=\s*\(|\*BOOT\b"),
     "Init (BootStep)": re.compile(r"(?<![\w.])Init\("),
+    "Tdxs simulator issuer (a development profile picks it at boot)": re.compile(
+        r"\bissuer=[\"']simulator[\"']"
+    ),
     "after_init (needs=)": re.compile(r"\bafter_init\b"),
     "BUILTIN_INITS priorities (BUILTIN_STEPS, readiness handles)": re.compile(
         r"\bBUILTIN_INITS\b|\binit-priority-collision\b"

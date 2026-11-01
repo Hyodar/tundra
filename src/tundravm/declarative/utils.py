@@ -261,12 +261,15 @@ class Tdxs(Composite):
     ``Service(socket=Listen(...))``, hardened for its job (``_modules/tdxs.py``
     ``Tdxs.service`` gives the reasoning: ``CAP_DAC_OVERRIDE`` for configfs-tsm, unverified
     on TDX hardware).
+    *issuer* is the real issuer (``None``: validate only). A development profile also ships
+    the simulator issuer and takes it at boot where the execution gate finds no TDX quote
+    path; a production profile never ships it, so no recipe names ``simulator`` here.
     Component name: ``tdxs``. ``policy_file`` is the file :meth:`from_policy` read
     (``None`` otherwise); it is not configuration, so equality and ``repr`` skip it.
     """
 
     source: Git | Local = field(default_factory=tools_source)
-    issuer: TdxsType | None = "tdx"
+    issuer: Literal["tdx", "azure", "gcp"] | None = "tdx"
     validator: TdxsType | None = None
     expected_measurements: Mapping[str, str] = field(default_factory=FrozenMap)
     check_revocations: bool = False
@@ -341,6 +344,13 @@ class Tdxs(Composite):
         return cls.from_policy(measurements.to_policy(), validator=validator, mrtd=mrtd, **kwargs)
 
     def compose(self) -> Fragment:
+        if self.issuer == _tdxs.SIMULATOR:
+            raise ValidationError(
+                "Tdxs: issuer= names the real issuer; the simulator there would ship in "
+                "production too.",
+                hint="Drop issuer=: a development profile takes the simulator issuer at boot "
+                "where it finds no TDX, and a production profile never ships it.",
+            )
         if not isinstance(self.expected_measurements, Mapping):
             raise ValidationError(
                 f"Tdxs: expected_measurements= must be a mapping, "

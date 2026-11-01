@@ -211,6 +211,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         default.name, release=default.release, default=default.release, ships=True
     )
     builder.instance_key(default.name)
+    builder.issuer(default.name, release=default.release)
     payload = builder.state.ensure_profile(default.name)
     declared = set(payload.packages)
     builder.targets(default.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
@@ -244,6 +245,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
                 variant.name, release=variant.release, default=default.release, ships=True
             )
             builder.instance_key(variant.name)
+            builder.issuer(variant.name, release=variant.release)
             builder.targets(variant.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
             overlays.append(variant.name)
             continue
@@ -255,6 +257,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             builder.execution_gate(
                 variant.name, release=variant.release, default=default.release, ships=False
             )
+            builder.issuer(variant.name, release=variant.release)
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)

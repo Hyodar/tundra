@@ -258,7 +258,7 @@ DEV = Fragment(
             user=Root(),
             hardening=Hardening.none(),
         ),
-        Tdxs(issuer="simulator"),
+        Tdxs(),
         Secrets(entries=(DEV_SECRET,), port=MANAGEMENT_PORT),
     ),
 )

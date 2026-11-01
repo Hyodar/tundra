@@ -3,4 +3,4 @@ transport:
   config:
     systemd: true
 issuer:
-  type: simulator
+  type: tdx

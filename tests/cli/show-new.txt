@@ -49,8 +49,10 @@ Built into production:
 Built into dev, beyond production:
   Packages: +apt +bash-completion +curl +dnsutils +iputils-ping +net-tools +netcat-openbsd +openssh-server +socat +strace +tcpdump +tcpflow +vim
   Files
+    + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
     + /usr/lib/tundravm/probe  0755  4147B  sha256:364f5322bcd3
+    + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps
     + sets the dev root password

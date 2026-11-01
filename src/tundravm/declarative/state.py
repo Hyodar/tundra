@@ -32,6 +32,7 @@ from tundravm._modules import (
 )
 from tundravm._modules import execution as gate
 from tundravm._modules import probe as probe_module
+from tundravm._modules import tdxs as _tdxs
 from tundravm._modules.base import Module, tools_source
 from tundravm._modules.disk_encryption import (
     DISK_ENCRYPTION_BUILD_PACKAGES,
@@ -391,6 +392,36 @@ class StateBuilder:
         )
         _add_file(self.state.ensure_profile(name), probe_module.DROPIN, text)
 
+    def issuer(self, name: str, *, release: bool) -> None:
+        """Make profile *name*'s tdxs issuer follow its build (``tundravm._modules.tdxs``).
+
+        A development profile whose tdxs has an issuer, and does not inherit the pick, gets
+        the simulator's config and the script that picks at boot, which its ``tdxs.service``
+        starts through. A production profile extending a development default gets
+        ``tdxs.service`` back on the real config; the inherited simulator config stays,
+        unread, and the gate never starts tdxs there without TDX anyway."""
+        effective = self.state.effective_profile(name)
+        unit = _tdxs.Tdxs().service_name
+        service = next((s for s in effective.services if s.name == unit), None)
+        if service is None:
+            return
+        own = self.state.ensure_profile(name)
+        picks = service.command[:1] == (_tdxs.ISSUER_SCRIPT,)
+        if release:
+            if picks:
+                _put_service(own, replace(service, command=_tdxs.real(service.command)))
+            return
+        config = next(
+            (e.content for e in effective.files if e.path == _tdxs.TDXS_DEFAULT_CONFIG_PATH),
+            None,
+        )
+        issuer = _tdxs.issuer_of(config) if isinstance(config, str) else None
+        if picks or config is None or issuer is None:
+            return
+        _add_file(own, _tdxs.SIMULATOR_CONFIG_PATH, _tdxs.simulator_config(str(config), issuer))
+        _add_file(own, _tdxs.ISSUER_SCRIPT, _tdxs.issuer_script(issuer), "0755")
+        _put_service(own, replace(service, command=_tdxs.picking(service.command)))
+
     # ── source builds and runtime tools ─────────────────────────────────
 
     def _build_from(self, profile: ProfileState, spec: SourceBuild) -> None:
@@ -563,6 +594,15 @@ def _runtime_init(
 
 def _add_file(profile: ProfileState, path: str, content: str | bytes, mode: str = "0644") -> None:
     profile.files.append(FileEntry(path=path, content=content, mode=mode))
+
+
+def _put_service(profile: ProfileState, spec: ServiceSpec) -> None:
+    """*spec* in *profile*, in place of the service of its name the profile holds."""
+    for at, held in enumerate(profile.services):
+        if held.name == spec.name:
+            profile.services[at] = spec
+            return
+    profile.services.append(spec)
 
 
 def _set_targets(profile: ProfileState, targets: Sequence[OutputTarget]) -> None:

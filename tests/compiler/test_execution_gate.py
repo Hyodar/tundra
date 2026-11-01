@@ -15,6 +15,7 @@ import pytest
 from tundravm import Image, Profile
 from tundravm import Service as ImageService
 from tundravm._modules import execution as gate
+from tundravm._modules import tdxs as issuers
 from tundravm.components import DevAccess
 from tundravm.declarative import (
     BootStep,
@@ -30,6 +31,7 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.declarative.systemd import Hardening
+from tundravm.declarative.utils import Tdxs
 from tundravm.testing import plan
 from tundravm.testing._model import compile_tree
 
@@ -156,6 +158,74 @@ def test_an_image_gates_tdxs_and_its_services_and_its_dev_profile_runs_simulated
     for name in ("dev", "staging"):
         dropin = plan(image, name).file(gate.GATE_DROPIN).text
         assert "TUNDRAVM_EXECUTION=development" in dropin, name
+
+
+REAL = ("/usr/bin/tdxs", "--config", issuers.TDXS_DEFAULT_CONFIG_PATH, "--log-level", "info")
+PICK = (issuers.ISSUER_SCRIPT, "--log-level", "info")
+OWN = (issuers.SIMULATOR_CONFIG_PATH, issuers.ISSUER_SCRIPT)
+
+
+@pytest.mark.parametrize(
+    ("default", "other", "starts", "own"),
+    [
+        (True, False, {"default": REAL, "other": PICK}, {"default": (), "other": OWN}),
+        (False, True, {"default": PICK, "other": REAL}, {"default": OWN, "other": ()}),
+        (False, False, {"default": PICK, "other": PICK}, {"default": OWN, "other": ()}),
+    ],
+    ids=["production-default-dev-overlay", "dev-default-production-overlay", "dev-both"],
+)
+def test_the_issuer_follows_the_build(
+    default: bool,
+    other: bool,
+    starts: dict[str, tuple[str, ...]],
+    own: dict[str, tuple[str, ...]],
+) -> None:
+    """A development profile's tdxs starts through the pick with the simulator's config
+    beside the real one; a production profile's starts on the real config, also over a
+    development default."""
+    recipe = _recipe(
+        Tdxs(),
+        Service("app", "/usr/bin/app", needs=()),
+        variants=(
+            Variant("default", outputs=("qemu",), release=default),
+            Variant(
+                "other", add=Fragment("other", items=(Unit("x.service", UNIT),)), release=other
+            ),
+        ),
+    )
+    state = lower(recipe).state
+    for name in ("default", "other"):
+        tdxs = next(s for s in state.effective_profile(name).services if s.name == "tdxs.service")
+        assert tdxs.command == starts[name], name
+        files = {e.path for e in state.ensure_profile(name).files}
+        assert tuple(p for p in OWN if p in files) == own[name], name
+
+
+@pytest.mark.parametrize(
+    ("mode", "line", "config"),
+    [
+        ("simulated", issuers.ISSUER_LINE, issuers.SIMULATOR_CONFIG_PATH),
+        ("tdx", "tdxs-issuer: TDX quote path; issuing with the tdx issuer", REAL[2]),
+    ],
+)
+def test_the_issuer_script_picks_by_the_gate_mode(
+    tmp_path: Path, mode: str, line: str, config: str
+) -> None:
+    recorded = tmp_path / "mode"
+    recorded.write_text(f"{mode}\n")
+    script = (
+        issuers.issuer_script("tdx")
+        .replace(gate.MODE_FILE, str(recorded))
+        .replace("exec /usr/bin/tdxs", "exec echo tdxs")
+    )
+    done = subprocess.run(
+        ["/bin/sh", "-c", script, "tdxs-issuer", "--log-level", "info"],
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout.splitlines() == [line, f"tdxs --config {config} --log-level info"]
 
 
 # ── the script itself ────────────────────────────────────────────────────

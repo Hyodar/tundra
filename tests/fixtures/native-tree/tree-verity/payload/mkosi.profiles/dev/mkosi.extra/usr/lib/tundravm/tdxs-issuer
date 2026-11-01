@@ -1,0 +1,11 @@
+#!/bin/sh
+# tundravm: a development profile's tdxs takes the simulator issuer unless the
+# execution gate found a TDX quote path.
+set -eu
+read -r mode < /run/tundravm/mode
+if [ "$mode" = tdx ]; then
+    echo "tdxs-issuer: TDX quote path; issuing with the tdx issuer"
+    exec /usr/bin/tdxs --config /etc/tdxs/config.yaml "$@"
+fi
+echo "tdxs-issuer: no TDX quote path; issuing simulated quotes"
+exec /usr/bin/tdxs --config /etc/tdxs/simulator.yaml "$@"

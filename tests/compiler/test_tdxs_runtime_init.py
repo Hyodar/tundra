@@ -115,8 +115,9 @@ def test_tdxs_platform_validator_verification_flags(
             lambda: Tdxs(issuer=None, validator=None),
             "at least one of issuer_type or validator_type",
         ),
+        (lambda: Tdxs(issuer="simulator"), "would ship in production too"),  # type: ignore[arg-type]
     ],
-    ids=["invalid-issuer-type", "no-roles"],
+    ids=["invalid-issuer-type", "no-roles", "simulator-issuer"],
 )
 def test_tdxs_refuses_bad_roles(declare: Callable[[], Tdxs], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
@@ -147,9 +148,8 @@ def test_tdxs_reaches_the_network_only_when_its_config_does(
     assert f"RestrictAddressFamilies={families}\n" in _compile(tmp_path, tdxs).unit("tdxs.service")
 
 
-@pytest.mark.parametrize("tdxs", [Tdxs(issuer=None, validator="tdx"), Tdxs(issuer="simulator")])
-def test_tdxs_without_a_quoting_issuer_gets_no_quote_access(tmp_path: Path, tdxs: Tdxs) -> None:
-    svc = _compile(tmp_path, tdxs).unit("tdxs.service")
+def test_tdxs_without_a_quoting_issuer_gets_no_quote_access(tmp_path: Path) -> None:
+    svc = _compile(tmp_path, Tdxs(issuer=None, validator="tdx")).unit("tdxs.service")
     assert "PrivateDevices=yes\n" in svc
     assert "CapabilityBoundingSet=\n" in svc
     assert "DeviceAllow" not in svc

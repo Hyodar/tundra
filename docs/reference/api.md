@@ -982,7 +982,6 @@ A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")
 Tdxs(
     *,
     source: dm.Git | dm.Local = tools_source(),
-    issuer: du.TdxsType | None = 'tdx',
     validator: du.TdxsType | None = None,
     expected_measurements: Mapping[str, str] = FrozenMap({}),
     check_revocations: bool = False,

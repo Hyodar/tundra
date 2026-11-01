@@ -496,13 +496,17 @@ class Tdxs(Component):
     and delivery tools (``key-gen``, ``disk-setup``, ``attested-endpoint``) when the image has
     volumes or secrets, so one input names all of them.
 
+    The issuer follows the build, not the image: a production profile issues TDX quotes
+    only; a development profile also ships the simulator issuer and takes it at boot where
+    the execution gate finds no TDX quote path, so ``attest`` of a dev build under QEMU
+    answers ``simulated`` (``tundravm._modules.tdxs``).
+
     Services that ask for quotes join the ``tdx`` group and require :data:`EVIDENCE`
     (``tdxs.ready``). It depends on nothing on a volume or a secret: the evidence is
     what unlocks them. Component name: ``tdxs``.
     """
 
     source: dm.Git | dm.Local = field(default_factory=du.tools_source)
-    issuer: du.TdxsType | None = "tdx"
     validator: du.TdxsType | None = None
     expected_measurements: Mapping[str, str] = FrozenMap()
     check_revocations: bool = False
@@ -526,7 +530,7 @@ class Tdxs(Component):
         *allow_placeholder*.
         Other keyword arguments are fields of this class.
         """
-        fields = {k: kwargs.pop(k) for k in ("source", "issuer") if k in kwargs}
+        fields = {k: kwargs.pop(k) for k in ("source",) if k in kwargs}
         reader = du.Tdxs.from_policy(
             policy, validator=validator, allow_placeholder=allow_placeholder, **fields, **kwargs
         )
@@ -568,7 +572,6 @@ class Tdxs(Component):
             )
         service = du.Tdxs(
             source=self.source,
-            issuer=self.issuer,
             validator=self.validator,
             expected_measurements=dict(self.expected_measurements),
             check_revocations=self.check_revocations,

@@ -1,4 +1,14 @@
-"""Renders the tdxs config and unit files for the ``declarative.utils.Tdxs`` fragment."""
+"""Renders the tdxs config and unit files for the ``declarative.utils.Tdxs`` fragment, and
+the issuer a development profile picks at boot.
+
+A production profile ships the real issuer only: its ``tdxs.service`` reads
+:data:`TDXS_DEFAULT_CONFIG_PATH`. A development profile ships the ``simulator`` issuer beside
+it (:data:`SIMULATOR_CONFIG_PATH`), and its ``tdxs.service`` starts through
+:data:`ISSUER_SCRIPT` (:func:`picking`), which reads the execution gate's mode
+(``tundravm._modules.execution``): ``tdx`` keeps the real issuer, ``simulated`` takes the
+simulator. tdxs is gated, so the mode is recorded before it starts; a production profile
+never starts it without ``tdx``.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from tundravm._modules.execution import MODE_FILE
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -26,6 +37,60 @@ TDX_GUEST_UDEV_RULE = "/usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules"
 """Gives the ``tdx`` group the guest device (the kernel creates it ``root:root 0600``)."""
 QUOTE_ISSUERS = frozenset({"tdx", "azure", "gcp"})
 """Issuers that ask go-tdx-guest for a quote (``simulator`` fakes one)."""
+SIMULATOR = "simulator"
+SIMULATOR_CONFIG_PATH = "/etc/tdxs/simulator.yaml"
+"""A development profile's second config: the real one with the ``simulator`` issuer."""
+ISSUER_SCRIPT = "/usr/lib/tundravm/tdxs-issuer"
+ISSUER_LINE = "tdxs-issuer: no TDX quote path; issuing simulated quotes"
+"""The console line of a development boot whose tdxs took the simulator."""
+
+
+def issuer_of(config: str) -> str | None:
+    """The issuer type a config :meth:`Tdxs.render_config` wrote names; ``None`` without one."""
+    lines = config.splitlines()
+    for at, line in enumerate(lines[:-1]):
+        if line == "issuer:" and lines[at + 1].startswith("  type: "):
+            return lines[at + 1].removeprefix("  type: ")
+    return None
+
+
+def simulator_config(config: str, issuer: str) -> str:
+    """*config* (one :meth:`Tdxs.render_config` wrote, naming *issuer*) with the ``simulator``
+    issuer in its place."""
+    return config.replace(f"issuer:\n  type: {issuer}\n", f"issuer:\n  type: {SIMULATOR}\n", 1)
+
+
+def issuer_script(issuer: str, config_path: str = TDXS_DEFAULT_CONFIG_PATH) -> str:
+    """:data:`ISSUER_SCRIPT`: tdxs on *config_path* (the real *issuer*) where the gate
+    recorded ``tdx``, on :data:`SIMULATOR_CONFIG_PATH` otherwise; ``/bin/sh`` builtins only."""
+    return (
+        "#!/bin/sh\n"
+        "# tundravm: a development profile's tdxs takes the simulator issuer unless the\n"
+        "# execution gate found a TDX quote path.\n"
+        "set -eu\n"
+        f"read -r mode < {MODE_FILE}\n"
+        'if [ "$mode" = tdx ]; then\n'
+        f'    echo "tdxs-issuer: TDX quote path; issuing with the {issuer} issuer"\n'
+        f'    exec /usr/bin/tdxs --config {config_path} "$@"\n'
+        "fi\n"
+        f'echo "{ISSUER_LINE}"\n'
+        f'exec /usr/bin/tdxs --config {SIMULATOR_CONFIG_PATH} "$@"\n'
+    )
+
+
+def picking(command: Sequence[str]) -> tuple[str, ...]:
+    """The tdxs ``ExecStart=`` *command* through :data:`ISSUER_SCRIPT`, which supplies
+    ``--config``."""
+    args = list(command[1:])
+    if "--config" in args:
+        at = args.index("--config")
+        del args[at : at + 2]
+    return (ISSUER_SCRIPT, *args)
+
+
+def real(command: Sequence[str], config_path: str = TDXS_DEFAULT_CONFIG_PATH) -> tuple[str, ...]:
+    """A :func:`picking` *command* back on the real issuer's config."""
+    return ("/usr/bin/tdxs", "--config", config_path, *command[1:])
 
 
 @dataclass(slots=True)
