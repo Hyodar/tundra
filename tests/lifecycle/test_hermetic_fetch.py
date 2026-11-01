@@ -540,6 +540,44 @@ def test_a_prefetch_that_cannot_run_records_why(
     assert list((tmp_path / ".sources" / "deps").glob("*.json")) == []
 
 
+@pytest.mark.parametrize(
+    ("subdir", "refused"),
+    [("tools", None), ("missing", "no directory missing"), ("out", "no directory out")],
+    ids=["a-module", "absent", "a-link-out"],
+)
+def test_a_subdirectory_builds_inside_the_checkout_with_its_go_mod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subdir: str, refused: str | None
+) -> None:
+    """The prefetch runs in the subdirectory with the toolchain its go.mod names (the root's
+    is older), and a subdirectory the commit lacks or that leaves the checkout is refused."""
+    path = tmp_path / "mono"
+    (path / "tools").mkdir(parents=True)
+    _git("init", "-q", "-b", "main", cwd=path)
+    (path / "go.mod").write_text("module example.com/root\n\ngo 1.21\n", encoding="utf-8")
+    (path / "tools" / "go.mod").write_text("module example.com/t\n\ngo 1.22\n", encoding="utf-8")
+    (path / "out").symlink_to(tmp_path)
+    _git("add", ".", cwd=path)
+    _git("commit", "-qm", "one", cwd=path)
+    tools = _Toolchain(monkeypatch, ["go"])
+    build = Build(
+        "tool",
+        Git(path.as_uri(), "main", subdir=subdir),
+        using=RECIPES["go"],
+        install=(Install("tool", "/t"),),
+    )
+    recipe = _recipe(build)
+    locked = _locked(recipe, _git("rev-parse", "HEAD", cwd=path))
+    if refused is not None:
+        with pytest.raises(SourceError, match=refused):
+            fetch(recipe, lock=locked, build=tmp_path / "out-dir")
+        return
+    (fetched,) = fetch(recipe, lock=locked, build=tmp_path / "out-dir")
+    assert fetched.deps == "go: prefetched"
+    *_, (argv, cwd, env) = tools.calls
+    assert argv == ("go", "mod", "download") and cwd.name == "tools"
+    assert env["GOTOOLCHAIN"] == TOOLCHAIN
+
+
 MODULE = "example.com/Dep"
 MODULE_DIR = "example.com/!dep@v1.2.0"
 """The module ``go.sum`` names, and its directory in the module cache (case-encoded)."""

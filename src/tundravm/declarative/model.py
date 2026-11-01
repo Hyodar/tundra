@@ -1883,6 +1883,15 @@ class RuntimeTools(Declared):
 
 @dataclass(frozen=True, slots=True)
 class Git:
+    """A git repository at *ref* (a tag, a branch, or a 40-hex commit ``tundravm lock`` pins).
+
+    *subdir* builds one directory of the checkout: relative, no ``..``, and a directory of
+    the repository at the pinned commit (``tundravm build`` refuses the checkout otherwise).
+    The whole repository is checked out; the dependency prefetch and the build run in
+    *subdir*, and a Go build's toolchain is the one ``<subdir>/go.mod`` names.
+    *submodules* checks them out too.
+    """
+
     url: str
     ref: str
     subdir: str | None = None

@@ -1513,6 +1513,23 @@ def fetch_source(source: Source, pin: str, dest: Path) -> None:
             "--recursive",
             "--depth=1",
         )
+    if source.subdir:
+        _require_subdir(source, pin, dest)
+
+
+def _require_subdir(source: GitSource, pin: str, checkout: Path) -> None:
+    """Refuse a checkout of *pin* without *source*'s ``subdir`` as a directory inside it."""
+    subdir = source.subdir or ""
+    workdir = (checkout / subdir).resolve()
+    if workdir.is_dir() and workdir.is_relative_to(checkout.resolve()):
+        return
+    reason = f"{pin[:12]} has no directory {subdir} inside the checkout"
+    raise SourceError(
+        f"Cannot build {source.describe()}: {reason}.",
+        source=source.describe(),
+        reason=reason,
+        hint=f"Pass subdir= a directory of the repository at that commit, not {subdir!r}.",
+    )
 
 
 def run_tool(

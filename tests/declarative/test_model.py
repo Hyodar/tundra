@@ -122,6 +122,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
     ("secrets port", lambda: Secrets(port=0)),
     ("runtime tools http", lambda: RuntimeTools(Http("https://x"))),  # type: ignore[arg-type]
     ("git subdir escape", lambda: Git("https://x", "main", subdir="../up")),
+    ("git subdir absolute", lambda: Git("https://x", "main", subdir="/tools")),
     ("http sha", lambda: Http("https://x", sha256="abc")),
     ("install absolute source", lambda: Install("/abs", "/usr/bin/a")),
     ("install relative destination", lambda: Install("a", "usr/bin/a")),

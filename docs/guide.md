@@ -594,7 +594,8 @@ and reproducible `rustflags`, so the SBOM can read the crate graph from the bina
 
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
-by sha256. Your own program is a `Local` source:
+by sha256. `Git(url, ref, subdir="tools")` builds one directory of the repository, with the
+toolchain its `go.mod` names. Your own program is a `Local` source:
 
 <!-- fragment -->
 ```python

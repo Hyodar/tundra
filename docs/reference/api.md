@@ -1236,6 +1236,8 @@ A Rust program built from *source* and installed at `executable`.
 Git(url: str, ref: str, subdir: str | None = None, submodules: bool = False)
 ```
 
+A git repository at *ref* (a tag, a branch, or a 40-hex commit `tundravm lock` pins).
+
 ### `GoBinary`
 
 *dataclass*
