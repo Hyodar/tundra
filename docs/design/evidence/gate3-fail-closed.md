@@ -243,4 +243,5 @@ Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
   quote to give. So `attest` against a simulated instance of a real image fails at the
   issuer, unless the image configures the `simulator` issuer itself.
 - ~~`Image` builds are not booted in CI~~: since `tools-monorepo` the `templates` and
-  `boot` jobs build and boot them from `tools/` (run `41311483505`).
+  `boot` jobs build and boot them from `tools/` (run `41311483505`); the first green `boot`
+  is run `41313287454`.

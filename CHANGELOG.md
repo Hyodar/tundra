@@ -67,6 +67,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
 - `examples/nethermind_base.py`'s kernel config builds in every driver a target needs; a weekly workflow builds it and Debian's newest 6.12 (6.12.113, from the security pool).
 - `DebianConfig` reads the snapshot's main pool, then its security pool, which alone carries a kernel shipped as a security update.
+- A dev profile's root password (`DevAccess(password=)`, `DevTools`) is set inside the image with `mkosi-chroot chpasswd -e`, so the build no longer fails locking `/etc/passwd`; it logs in on the console only, unless `DevTools(network_login=True)` opens SSH to it.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
 - `GoBinary` builds the module root unless `package=` names a sub-command.
 - **Breaking:** `Tdxs` and the volume and delivery tools build from `tools/` of this repository (`Git(url, sdk_commit, subdir="tools")`, or the checkout's `tools/` as a `Local`), not `Hyodar/tundra-tools` master; `Git(subdir=)` must name a directory of the commit.
