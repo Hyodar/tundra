@@ -1,0 +1,32 @@
+plan: deploy prover {build} (production) to gcp; nothing runs
+  XXXXXXXX, EPOCH and <the id call N prints> stand for what the deploy draws or reads
+1. upload    {root}/build/prover/production/{build}/gcp.tar.gz, {size} bytes, sha256 {sha256}
+      to gs://b/tdx-images/tdx-prover-XXXXXXXX.tar.gz
+2. image     tdx-prover-XXXXXXXX in project p, guest OS features UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE
+3. instance  tdx-prover-XXXXXX, c3-standard-4 in z: --confidential-compute-type=TDX --maintenance-policy=TERMINATE
+4. volumes   data: new 100GiB as device tundravm-data
+5. firewall  allow tcp:22,443,8745 to the VM (not managed by tundravm)
+6. policy    none written; attest --policy takes {root}/build/prover/production/{build}/measurements.json (gcp/disk) or an approved copy:
+      MRTD   a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694  gcp-ovmf-ff11d313b462
+      MRTD   8370d8f6d02f2d13e211e91c93fde923049522b241425a29a7bf0071ef49b250af4ef49d852fa3e10065d1b51dfce8fb  gcp-ovmf-afa88de3952c
+      MRTD   feb7486608382c1ff0e15b4648ddc0acea6ca974eb53e3529f4c4bd5ffbaa20bf335cb75965cea65fe473aed9647c162  gcp-ovmf-f53fdf89544e
+      RTMR0  c6975b4a5d66fd88bce4d449ed161e0800ce0f5bcd6a3246f2c83407e230474ff56e6e8d5bc9e9d95cf692d458257954  gcp-ovmf-ff11d313b462 c3-standard-4 acpi-2026-03
+      RTMR0  8256ae5bb15489ebb0181f9935fe00625751e879d4e3b0a111aaba48da31e5cdd82f379cf4b97411618b02ce1deba1fd  gcp-ovmf-ff11d313b462 c3-standard-4 acpi-2026-04
+      RTMR0  c07820997dc2a5e1cc67b05e89852c1a72289e0ec82034bee5b3605cd759328853a758a346522651956afe9222914235  gcp-ovmf-ff11d313b462 c3-standard-4 acpi-pre-2026-03
+      RTMR0  8ae3d7af48afa0f30fd700a58ca84cd5e0054fbe011d9ed228e30a17db456987e63c6dfd71437aac33ffb9d796088d70  gcp-ovmf-afa88de3952c c3-standard-4 acpi-2026-03
+      RTMR0  3fdfcb2bbf25c9e535f7e4724b1cee79666824cab1565f985d2e1e0218818d538cf6f3bfa5c623c13d6226ae51ea8cd6  gcp-ovmf-afa88de3952c c3-standard-4 acpi-2026-04
+      RTMR0  123ad184172b44083b191b12557f3c923416d8e654ffb390736db331ff2a5bce6c89d14d62cf70e113b98d8f13e78519  gcp-ovmf-afa88de3952c c3-standard-4 acpi-pre-2026-03
+      RTMR0  8292abcf17f665c5f63e158a5fd7f2e160ac5b5ae4811532d93c3b5f38a53adebebddaf531aca4ef91d9fb68fb4312a8  gcp-ovmf-f53fdf89544e c3-standard-4 acpi-2026-03
+      RTMR0  e1d0235496f93f9475bf0b26d33da5c15831cfc94104d6bea7ab82db027c5f1e917d47dda6953eefae7dcb20ab6f75c4  gcp-ovmf-f53fdf89544e c3-standard-4 acpi-2026-04
+      RTMR0  90d7dbdb795d66669ff44aff1f8ea0de13f5362f1dec68f17fca60364fcc019de18b246c9e173c09102360442dba3261  gcp-ovmf-f53fdf89544e c3-standard-4 acpi-pre-2026-03
+      RTMR0  and 18 values for other machine types
+      RTMR1  {RTMR1}
+      RTMR2  {RTMR2}
+7. receipt   {root}/.tundravm/instances/prover-N/instance.json
+8. status    `gcloud compute instances describe tdx-prover-XXXXXX --project=p --zone=z --format=json`,
+      then tcp 8745 (control plane) and 443 (application)
+calls:
+1. gcloud storage cp {root}/build/prover/production/{build}/gcp.tar.gz gs://b/tdx-images/tdx-prover-XXXXXXXX.tar.gz
+2. gcloud compute images create tdx-prover-XXXXXXXX --project=p --source-uri=gs://b/tdx-images/tdx-prover-XXXXXXXX.tar.gz --guest-os-features=UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE
+3. gcloud compute instances create tdx-prover-XXXXXX --project=p --zone=z --machine-type=c3-standard-4 --image=tdx-prover-XXXXXXXX --confidential-compute-type=TDX --maintenance-policy=TERMINATE --create-disk=name=prover-data-XXXXXX,size=100GiB,device-name=tundravm-data,auto-delete=no --format=json
+4. gcloud compute instances describe tdx-prover-XXXXXX --project=p --zone=z --format=json

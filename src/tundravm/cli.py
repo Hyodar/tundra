@@ -583,13 +583,14 @@ def build_parser() -> argparse.ArgumentParser:
         "deploy",
         _cmd_deploy,
         "Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.",
-        "tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID]\n"
+        "tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID] [--plan]\n"
         "    publish the build's disk and start a TDX VM from it, with a receipt; every\n"
         "    volume the image declares needs --volume (GCP attaches it as tundravm-NAME;\n"
         "    Azure is refused: its disks have no name the image can find). Settings come\n"
         "    from [tool.tundravm.gcp] (project, bucket, zone, machine_type) and\n"
         "    [tool.tundravm.azure] (storage_account, resource_group, location, vm_size,\n"
         "    gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.\n"
+        "    --plan prints each step and every cloud call in order and runs none of them.\n"
         "tundravm deploy status|logs|mode INSTANCE\n"
         "tundravm deploy upgrade INSTANCE --build BUILD --policy FILE [NAME=@FILE...]\n"
         "    the replacement workflow (GCP): launch the candidate, attest it and deliver its\n"
@@ -628,6 +629,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--identity", type=Path, default=None, metavar="KEY", help="The operator's SSH key."
     )
     deploy.add_argument("--validator", default=None, metavar="ENDPOINT", help="A tdxs validator.")
+    deploy.add_argument(
+        "--plan", action="store_true", help="Print what the deploy would do; run nothing."
+    )
 
     attest = command(
         "attest",
@@ -1565,9 +1569,15 @@ def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
                 "--build build/<image>/production/<id>.",
             )
         build = builds.resolve(args.build, root=found.build, image=None)
-        instance = deployments.deploy(
-            found.instances, action, build, deployments.parse_volumes(args.volume), out=out
-        )
+        volumes = deployments.parse_volumes(args.volume)
+        if args.plan:
+            plan = deployments.plan(found.instances, action, build, volumes)
+            if args.json:
+                print(json_report("deploy", plan), file=out)
+            else:
+                print(deployments.render_plan(plan), file=out)
+            return EXIT_OK
+        instance = deployments.deploy(found.instances, action, build, volumes, out=out)
         if args.json:
             print(json_report("deploy", instance.data), file=out)
         else:
@@ -1576,6 +1586,11 @@ def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
             print(f"  firewall  {instance.data['firewall']}", file=out)
             print(f"  receipt   {instance.path / instances.INSTANCE}", file=out)
         return EXIT_OK
+    if args.plan:
+        raise ValidationError(
+            f"deploy {action} has no --plan.",
+            hint="tundravm deploy azure|gcp --build BUILD --plan",
+        )
     instance = _instance(found, args.rest[0] if args.rest else None, "deploy", action)
     rest = args.rest[1:]
     if action in ("status", "logs", "mode") and rest:

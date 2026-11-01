@@ -308,16 +308,17 @@ Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.
 ```text
 usage: tundravm deploy [-h] [--json] [--traceback] [--build BUILD]
                        [--volume NAME=create:SIZE|existing:ID] [--policy FILE] [--identity KEY]
-                       [--validator ENDPOINT]
+                       [--validator ENDPOINT] [--plan]
                        azure|gcp|ACTION [ARG ...]
 
-tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID]
+tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID] [--plan]
     publish the build's disk and start a TDX VM from it, with a receipt; every
     volume the image declares needs --volume (GCP attaches it as tundravm-NAME;
     Azure is refused: its disks have no name the image can find). Settings come
     from [tool.tundravm.gcp] (project, bucket, zone, machine_type) and
     [tool.tundravm.azure] (storage_account, resource_group, location, vm_size,
     gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.
+    --plan prints each step and every cloud call in order and runs none of them.
 tundravm deploy status|logs|mode INSTANCE
 tundravm deploy upgrade INSTANCE --build BUILD --policy FILE [NAME=@FILE...]
     the replacement workflow (GCP): launch the candidate, attest it and deliver its
@@ -339,6 +340,7 @@ options:
   --policy FILE         The verifier policy (upgrade, rollback).
   --identity KEY        The operator's SSH key.
   --validator ENDPOINT  A tdxs validator.
+  --plan                Print what the deploy would do; run nothing.
 ```
 
 ## tundravm attest

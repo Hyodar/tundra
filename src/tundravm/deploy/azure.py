@@ -4,6 +4,10 @@ Uploads a VHD artifact to Azure, publishes it as a confidential-VM-capable
 Compute Gallery image version and creates a confidential VM from it.
 Requires the `az` CLI to be installed and authenticated.
 
+The VM gets no network security group rule (``--nsg-rule NONE``): the image's firewall
+decides what is open, and Azure's default SSH rule would contradict it. The receipt records
+the public address ``az vm create`` prints.
+
 Secure Boot is off by default: tundravm does not sign the UKI, and Azure's
 firmware boots only signed ones with Secure Boot on. ``secure_boot=true``
 requires ``signed=true``, the statement that the UKI was signed with keys the
@@ -14,19 +18,24 @@ from __future__ import annotations
 
 import json
 import shutil
-import time
-import uuid
 from dataclasses import dataclass
 
 from tundravm.errors import DeploymentError
 from tundravm.models import DeployRequest, DeployResult
 
-from ._run import CommandRunner, run_captured, stderr_of
+from ._run import RANDOM, CommandRunner, Fresh, run_captured, stderr_of
 
 CONTAINER = "tdx-images"
 # TDX confidential VMs: the DCesv5/DCedsv5 (and ECesv5/ECedsv5) families.
 DEFAULT_VM_SIZE = "Standard_DC2es_v5"
 DEFAULT_GALLERY = "tdx_images"
+CONFIDENTIAL_FLAGS = (
+    "--security-type",
+    "--os-disk-security-encryption-type",
+    "--enable-vtpm",
+    "--enable-secure-boot",
+)
+"""The ``vm create`` flags that make the VM a confidential one."""
 
 
 @dataclass(slots=True)
@@ -34,9 +43,10 @@ class AzureDeployAdapter:
     name: str = "azure"
     # None: require `az` on PATH and run it via subprocess.
     runner: CommandRunner | None = None
+    fresh: Fresh = RANDOM
 
     def deploy(self, request: DeployRequest) -> DeployResult:
-        deployment_id = f"azure-{request.profile}-{uuid.uuid4().hex[:8]}"
+        deployment_id = f"azure-{request.profile}-{self.fresh.hex(8)}"
         params = dict(request.parameters)
 
         resource_group = params.pop("resource_group", "tdx-vms")
@@ -78,7 +88,7 @@ class AzureDeployAdapter:
                 context={"adapter": self.name},
             )
 
-        blob_name = f"{request.artifact_path.stem}-{uuid.uuid4().hex[:8]}.vhd"
+        blob_name = f"{request.artifact_path.stem}-{self.fresh.hex(8)}.vhd"
         blob_url = f"https://{storage_account}.blob.core.windows.net/{CONTAINER}/{blob_name}"
         self._az(
             [
@@ -124,7 +134,7 @@ class AzureDeployAdapter:
 
         # A confidential VM boots only a gallery image whose definition supports it.
         definition = f"tdx-{request.profile}"
-        version = f"1.0.{int(time.time())}"
+        version = f"1.0.{self.fresh.epoch()}"
         self._az(
             [
                 "sig",
@@ -202,8 +212,8 @@ class AzureDeployAdapter:
         )
 
         # Create VM from the gallery image version
-        vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
-        self._az(
+        vm_name = f"tdx-{request.profile}-{self.fresh.hex(6)}"
+        created = self._az(
             [
                 "vm",
                 "create",
@@ -228,6 +238,8 @@ class AzureDeployAdapter:
                 str(secure_boot).lower(),
                 "--public-ip-sku",
                 "Standard",
+                "--nsg-rule",
+                "NONE",
                 "--output",
                 "json",
             ],
@@ -244,6 +256,7 @@ class AzureDeployAdapter:
             "vm_name": vm_name,
             "blob": f"{CONTAINER}/{blob_name}",
             "image": image_id,
+            "public_ip": _public_ip(created),
             **params,
         }
 
@@ -285,3 +298,12 @@ class AzureDeployAdapter:
                 context={"command": " ".join(cmd), "stdout": text[:2000]},
             )
         return value
+
+
+def _public_ip(text: str) -> str:
+    """The ``publicIpAddress`` ``az vm create`` prints, empty when it printed none."""
+    try:
+        value = json.loads(text).get("publicIpAddress")
+    except (ValueError, AttributeError):
+        return ""
+    return value if isinstance(value, str) else ""

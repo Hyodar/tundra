@@ -13,18 +13,19 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from tundravm.errors import DeploymentError
 from tundravm.models import DeployRequest, DeployResult
 
-from ._run import CommandRunner, run_captured, stderr_of
+from ._run import RANDOM, CommandRunner, Fresh, run_captured, stderr_of
 
 # Intel TDX Confidential VMs run on the C3 machine series.
 DEFAULT_MACHINE_TYPE = "c3-standard-4"
 GUEST_OS_FEATURES = "UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE"
+CONFIDENTIAL_FLAGS = ("--confidential-compute-type", "--maintenance-policy")
+"""The ``instances create`` flags that make the VM a TDX Confidential VM."""
 
 
 @dataclass(slots=True)
@@ -32,16 +33,17 @@ class GcpDeployAdapter:
     name: str = "gcp"
     # None: require `gcloud` on PATH and run it via subprocess.
     runner: CommandRunner | None = None
+    fresh: Fresh = RANDOM
 
     def deploy(self, request: DeployRequest) -> DeployResult:
-        deployment_id = f"gcp-{request.profile}-{uuid.uuid4().hex[:8]}"
+        deployment_id = f"gcp-{request.profile}-{self.fresh.hex(8)}"
         params = dict(request.parameters)
 
         project = params.pop("project", "")
         zone = params.pop("zone", "us-central1-a")
         machine_type = params.pop("machine_type", DEFAULT_MACHINE_TYPE)
         bucket = params.pop("bucket", "")
-        volumes = volume_flags(params.pop("volumes", ""), prefix=request.profile)
+        volumes = volume_flags(params.pop("volumes", ""), prefix=request.profile, fresh=self.fresh)
 
         # Check if gcloud is available
         if self.runner is None and shutil.which("gcloud") is None:
@@ -71,12 +73,12 @@ class GcpDeployAdapter:
             )
 
         # Upload image to GCS
-        image_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:8]}"
+        image_name = f"tdx-{request.profile}-{self.fresh.hex(8)}"
         gcs_uri = self._upload_image(request.artifact_path, bucket=bucket, image_name=image_name)
         self._create_image(image_name, gcs_uri=gcs_uri, project=project)
 
         # Create VM instance
-        vm_name = f"tdx-{request.profile}-{uuid.uuid4().hex[:6]}"
+        vm_name = f"tdx-{request.profile}-{self.fresh.hex(6)}"
         cmd = [
             "gcloud",
             "compute",
@@ -168,7 +170,7 @@ class GcpDeployAdapter:
             )
 
 
-def volume_flags(text: str, *, prefix: str) -> list[str]:
+def volume_flags(text: str, *, prefix: str, fresh: Fresh = RANDOM) -> list[str]:
     """``NAME=create:SIZE;NAME=existing:ID`` as ``gcloud compute instances create`` flags.
 
     Each disk's device name is ``tundravm-NAME``, which the guest sees as
@@ -182,7 +184,7 @@ def volume_flags(text: str, *, prefix: str) -> list[str]:
         device = f"tundravm-{name}"
         if how == "create":
             flags.append(
-                f"--create-disk=name={prefix}-{name}-{uuid.uuid4().hex[:6]},size={value},"
+                f"--create-disk=name={prefix}-{name}-{fresh.hex(6)},size={value},"
                 f"device-name={device},auto-delete=no"
             )
         elif how == "existing":

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -15,6 +17,7 @@ from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_OK
 from tundravm.deploy.azure import AzureDeployAdapter
 from tundravm.deploy.gcp import GcpDeployAdapter
+from tundravm.testing import UPDATE_GOLDEN_ENV
 
 DESCRIBE = {
     "status": "RUNNING",
@@ -199,3 +202,64 @@ def test_rollback_needs_a_replaced_instance(
     policy.write_text("{}")
     result = cli("deploy", "rollback", "prover-1", "--policy", policy)
     assert result.code == EXIT_ERROR and "replaced nothing" in result.err
+
+
+PLAN_SETTINGS = {
+    "gcp": '\n[tool.tundravm.gcp]\nproject = "p"\nbucket = "b"\nzone = "z"\n',
+    "azure": '\n[tool.tundravm.azure]\nstorage_account = "acct"\n',
+}
+
+
+@pytest.mark.parametrize("target", ["gcp", "azure"])
+def test_plan_prints_every_step_and_call_and_runs_none(
+    target: str, request: pytest.FixtureRequest, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan of the prover on GCP (its volume a new disk) and of the starter on Azure,
+    compared with ``deploy-plan-TARGET.golden`` beside this file once the build's own values
+    are named (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it); ``--json`` holds the same calls."""
+
+    def refuse(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"--plan ran {list(argv)}")
+
+    for module in ("deployments", "deploy.gcp", "deploy.azure"):
+        monkeypatch.setattr(f"tundravm.{module}.run_captured", refuse)
+    if target == "gcp":
+        root: Path = request.getfixturevalue("prover")
+        volumes: tuple[str, ...] = ("--volume", "data=create:100GiB")
+    else:
+        root = request.getfixturevalue("project")
+        (root / "demo.py").write_text(
+            STARTER.replace("    dev=DevAccess", '    targets=("azure",),\n    dev=DevAccess')
+        )
+        volumes = ()
+    with (root / "pyproject.toml").open("a") as handle:
+        handle.write(PLAN_SETTINGS[target])
+    assert cli("lock").code == EXIT_OK
+    assert cli("build").code == EXIT_OK
+    build = Build.open(next((root / "build").glob("*/latest-production")).resolve())
+    shown = cli("deploy", target, "--build", "latest", *volumes, "--plan")
+    assert shown.code == EXIT_OK, shown.err
+    data = json.loads(cli("deploy", target, "--build", "latest", *volumes, "--plan", "--json").out)
+    assert data["schema"] == "tundravm.deploy/1"
+    calls = shown.out.split("\ncalls:\n", 1)[1].splitlines()
+    assert calls == [f"{n}. {shlex.join(call)}" for n, call in enumerate(data["calls"], 1)]
+    assert not (root / ".tundravm" / "instances").exists()
+    artifact = build.manifest["artifacts"][build.artifact(target).name]
+    policy = next(s for s in data["steps"] if s["step"] == "policy")
+    named = {
+        str(root): "{root}",
+        build.id: "{build}",
+        artifact["sha256"]: "{sha256}",
+        f"{artifact['size']} bytes": "{size} bytes",
+        **{
+            str(v[0]): f"{{{k}}}" for k, v in policy["registers"].items() if k in ("RTMR1", "RTMR2")
+        },
+        **{v: f"{{{k}}}" for k, v in policy["vtpm_pcrs"].items()},
+    }
+    text = shown.out
+    for value, name in named.items():
+        text = text.replace(value, name)
+    golden = Path(__file__).with_name(f"deploy-plan-{target}.golden")
+    if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
+        golden.write_text(text)
+    assert text == golden.read_text()
