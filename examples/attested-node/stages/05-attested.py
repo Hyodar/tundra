@@ -1,8 +1,9 @@
 """attested-node: the attested ingress, stage 5 of the guide.
 
 Adds attested TLS on 8546 in front of the signer: the one port the firewall opens, and
-the only way requests reach it. Egress stays filtered: the baseline, Nethermind's and
-Lighthouse's peers and the checkpoint host, nothing else.
+the only way requests reach it. The signer asks the evidence service for a quote over its
+key, checks it at start and serves it on GET /quote. Egress stays filtered: the baseline,
+Nethermind's and Lighthouse's peers and the checkpoint host, nothing else.
 """
 
 from components.lighthouse import Lighthouse
@@ -28,8 +29,9 @@ lighthouse = Lighthouse(
 program = GoBinary("signer", Local("../signer"))
 signer = Service(
     "signer",
-    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
+    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc, "-quotes"],
     credentials=[InstanceKey()],
+    quotes=True,
     requires=[nethermind.rpc],
     readiness=TcpProbe(8547),
     resources=Resources(memory_max="256M"),

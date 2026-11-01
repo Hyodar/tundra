@@ -48,7 +48,7 @@ def test_new_writes_the_first_stage_and_image_py_is_the_last() -> None:
     last = EXAMPLE_RECIPES[-1].read_text(encoding="utf-8")
     image = (ATTESTED_NODE / "image.py").read_text(encoding="utf-8")
     assert image == last.replace('Local("../signer")', 'Local("signer")')
-    assert len(image.splitlines()) <= 60
+    assert len(image.splitlines()) <= 70
 
 
 def test_the_image_resolves_every_profile_and_wrapper() -> None:

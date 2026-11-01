@@ -10,6 +10,7 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-export
 mkosi-chroot useradd --system --shell /usr/sbin/nologin signer
 mkosi-chroot useradd --system --shell /usr/sbin/nologin signer-ready
+mkosi-chroot useradd --system --shell /usr/sbin/nologin sync-status
 mkosi-chroot useradd --system --shell /usr/sbin/nologin attested-tls-8546
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-metadata-dns.service
@@ -27,6 +28,7 @@ mkosi-chroot systemctl enable lighthouse-ready.service
 mkosi-chroot systemctl enable journal-export.service
 mkosi-chroot systemctl enable signer.service
 mkosi-chroot systemctl enable signer-ready.service
+mkosi-chroot systemctl enable sync-status.timer
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
@@ -54,6 +56,7 @@ ln -sf "/etc/systemd/system/lighthouse-ready.service" "$BUILDROOT/etc/systemd/sy
 ln -sf "/etc/systemd/system/journal-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/sync-status.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

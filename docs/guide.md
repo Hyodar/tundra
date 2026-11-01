@@ -48,10 +48,9 @@ $ uv run tundravm build --tree-only mkosi
 $ uv run pytest
 ```
 
-`new` prints this loop, then `dev`. `lock` pins
-every source. The generated tests and the CI's
-`check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends on
-the lock: write the tree after locking and commit both.
+`new` prints this loop, then `dev`. The generated tests and the CI's `check --tree mkosi`
+compare the image with the committed `mkosi/` tree, which depends on the lock: write the
+tree after locking and commit both.
 
 `new NAME` writes:
 
@@ -117,15 +116,12 @@ $ tundravm doctor --for build
 The example, `examples/attested-node/`, is an Ethereum node on Hoodi that signs its block
 responses inside the TD. Six stages under `stages/` build it up. Each stage is a
 complete image file that adds to the one before. The last is `image.py`, whose `mkosi/`
-tree is committed. Run any stage the same way:
+tree is committed. `dev` builds any stage's dev profile, boots it without TDX and prints
+the boot probe's table:
 
 ```console
-$ tundravm check examples/attested-node/stages/01-boot.py
-$ tundravm build examples/attested-node/stages/01-boot.py --dev
-$ tundravm run --mode simulated --dev --probe
+$ tundravm dev examples/attested-node/stages/01-boot.py
 ```
-
-`run --probe` boots the dev build without TDX and prints the boot probe's table.
 
 ### 1. The boot
 
@@ -352,12 +348,21 @@ Stage 5 puts attested TLS on 8546 in front of it:
 +from tundravm.ports import AttestedTLS
  from tundravm.secrets import Generated, InstanceKey
 @@
+     "signer",
+-    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
++    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc, "-quotes"],
+     credentials=[InstanceKey()],
++    quotes=True,
+     requires=[nethermind.rpc],
+@@
      services=[signer],
 +    ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
      network=Network(egress=Egress()),
 ```
 
-The firewall opens 8546 and nothing else. The probe's `port:` row shows it bound.
+The firewall opens 8546 and nothing else. `quotes=True` lets the signer ask the evidence
+service for a quote over its key. It starts only once one is issued, and
+`GET /quote?nonce=HEX` answers one, so a client can check the key it verifies with.
 
 ### 6. Operating it
 
@@ -377,15 +382,30 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
 -from tundravm.secrets import Generated, InstanceKey
 +from tundravm.secrets import Generated, InstanceKey, Secret
  from tundravm.sources import GoBinary, Local
+ from tundravm.storage import OperatorKey, Volume
+-from tundravm.systemd import Resources, TcpProbe
++from tundravm.systemd import Every, Resources, TcpProbe
+ 
 @@
  )
 +motd = File.text("/etc/motd", "attested-node: Nethermind and Lighthouse on Hoodi\n")
++sync = Service(
++    "sync-status",
++    ["/usr/bin/curl", "-fsS", f"http://{lighthouse.http.address}/eth/v1/node/syncing"],
++    requires=[lighthouse.http],
++    timer=Every("1h"),
++)
 +logs = JournalExport("https://logs.example:19532", credential=Secret("logs-client"))
  
 @@
-     packages=["ca-certificates"],
+     base=Debian("trixie", snapshot="20261018T082309Z"),
+-    packages=["ca-certificates"],
++    packages=["ca-certificates", "curl"],
 +    files=[motd],
      components=[nethermind, lighthouse],
+-    services=[signer],
++    services=[signer, sync],
+     ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
 @@
      rootfs=RootFS.verity(),
 +    observability=Observability(logs=logs),
@@ -397,7 +417,8 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
      dev=DevAccess(password="tdx"),
 ```
 
-The journal ships to a sink, authenticated by a delivered certificate. `staging` edits one
+The journal ships to a sink, authenticated by a delivered certificate. `sync-status`
+runs hourly (`timer=Every("1h")`) and puts Lighthouse's sync status in it. `staging` edits one
 file, and `bench` adds `fio` and is never shipped. `targets=` adds the cloud disks of the
 same payload.
 
@@ -467,16 +488,14 @@ uses, as the stages' do. The [API reference](reference/api.md) lists each namesp
 
 ## Services
 
-A `Service` is an argv, never a command line, as the [signer](#4-the-signer) is.
-What a bare `Service(name, argv)` gets: `Type=exec`, `Restart=on-failure` with
+A `Service` is an argv, never a command line. What a bare `Service(name, argv)` gets: `Type=exec`, `Restart=on-failure` with
 `RestartSec=5s`, a system user named after the service, `hardening="static"`, and
 `WantedBy=minimal.target`. Each argv element is quoted the way systemd parses it. The one
 visible exception for a shell is `["/bin/sh", "-eu", "-c", script]`. A built binary is a
 valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
 
 Every image generates an instance key at boot: a fresh secp256k1 key on tmpfs, root-only.
-A service takes it with `credentials=[InstanceKey()]`, as the [signer](#4-the-signer) does,
-and nothing else may name it. `run status`, `attest` and `show` print its public key.
+A service takes it with `credentials=[InstanceKey()]`, and nothing else may name it. `run status`, `attest` and `show` print its public key.
 
 ### Reaching a service
 
@@ -532,8 +551,9 @@ cannot fix.
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
-A timer runs the service as a scheduled oneshot and refuses what only a long-lived service
-has: `socket=`, `readiness=`, `expose=`, `credentials=`, a volume `state=`. Writing a unit
+A timer, as [stage 6](#6-operating-it)'s `sync-status`, runs a scheduled oneshot and
+refuses what only a long-lived service has: `socket=`, `readiness=`, `expose=`,
+`credentials=`, a volume `state=`. Writing a unit
 under `/etc/systemd/system` at boot is the `unit-written-at-runtime` error: declare it
 instead.
 
@@ -599,13 +619,11 @@ Refused: another built binary, a credential bound through argv or `environment=`
 in `credentials=`), another `user=` for a directory on a volume, dropping a required
 readiness.
 
-How profiles lower: tundravm resolves every profile's whole image, writes what all of them
-build once in the shared `payload/`, and puts what each builds beyond that in
-`payload/mkosi.profiles/<name>/`. A declaration one profile removes moves into the
-overlays of the profiles that keep it, `production`'s included, and a component a profile
-adds opens its `outbound()` in that profile's firewall only. So what a profile builds does
-not depend on which profiles a compile selects. `build --profile staging` is
-`mkosi --profile=staging`, and `build --dev` is `mkosi --profile=dev`.
+How profiles lower: what every profile builds goes once in the shared `payload/`, and what
+each builds beyond that, or keeps of what another removes, in `payload/mkosi.profiles/<name>/`.
+So what a profile builds does not depend on which profiles a compile selects. A component a
+profile adds opens its `outbound()` in that profile's firewall only. `build --profile staging`
+is `mkosi --profile=staging`.
 
 ## Volumes, secrets and ingress
 
@@ -638,13 +656,7 @@ service waits for it. `directory(name, group=)` shares it through a group.
 ### Secrets
 
 `Secret(name)` is a value the image needs and never contains. An operator delivers it
-after attestation:
-
-```console
-$ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json api-token=@token.txt
-```
-
-It lands in `/run/tundravm/credentials/<name>`, root-owned tmpfs, mode 0600. A service
+after attestation ([Delivering secrets](#delivering-secrets)). It lands in `/run/tundravm/credentials/<name>`, root-owned tmpfs, mode 0600. A service
 binds it by naming it as an argv element or an `environment=` value, where it renders as
 the path the service reads it at, or with `credentials=[secret]` for a program that finds
 it otherwise; either renders `LoadCredential=<name>:/run/tundravm/credentials/<name>`.
@@ -696,9 +708,9 @@ names, `"logs.example:443"` opens 443 to any address. A production profile witho
 an `egress-unfiltered` warning. `Observability(proxy="IP:PORT")` reaches every sink
 through that one address.
 
-`observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
-exports the volatile journal and node metrics with secret credentials. An `http://` sink
-is a lint warning: it carries the logs in the clear.
+`Observability(logs=, metrics=PrometheusRemoteWrite(url, credential=))` adds node metrics
+to [stage 6](#6-operating-it)'s journal. An `http://` sink is a lint warning: it carries
+the logs in the clear.
 
 ### The control plane
 
@@ -1022,7 +1034,6 @@ check; a `fail` says what to do:
 | `kernel:` | no disabled symbol in `/proc/kallsyms` (`Kernel.build`), else no uncurated module |
 | `host-keys` | with SSH, the host key is root-owned, read-only to others |
 | `endpoint:` | the attested endpoint answers evidence for the nonce it was sent |
-| `rtmr` | skipped: only `attest` reads registers, from a quote |
 
 `--probe` waits for it (up to `--timeout`), prints the table, writes `probe.json`,
 exits 1 on a failure; `run probe INSTANCE` reads a running instance's.

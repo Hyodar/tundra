@@ -294,6 +294,8 @@ check=service:lighthouse.service
 probe_service lighthouse.service
 check=service:signer.service
 probe_service signer.service
+check=timer:sync-status.timer
+probe_active sync-status.timer 'the timer must be enabled; systemctl status names why it is not'
 check=service:attested-tls-8546.service
 probe_service attested-tls-8546.service
 check=port:8546/tcp

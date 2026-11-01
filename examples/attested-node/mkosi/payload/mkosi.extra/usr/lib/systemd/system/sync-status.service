@@ -1,0 +1,34 @@
+[Unit]
+Description=sync-status.service
+After=lighthouse-ready.service tdx-evidence.service
+Requires=lighthouse-ready.service tdx-evidence.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl -fsS http://127.0.0.1:5052/eth/v1/node/syncing
+User=sync-status
+TimeoutStartSec=5min
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077

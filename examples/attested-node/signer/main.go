@@ -5,7 +5,9 @@
 // object keys sorted) with this boot's instance key: a recoverable 65-byte signature
 // r || s || v (v is 27 or 28, as ecrecover takes it), sent hex-encoded in
 // X-Tundra-Signature with the signer's compressed public key in X-Tundra-Signer. Every
-// other request passes through unsigned. GET /signer answers the public key.
+// other request passes through unsigned. GET /signer answers the public key. With -quotes
+// it starts only once the evidence service quotes its key, and GET /quote?nonce=HEX
+// answers a quote whose report data binds the key and the nonce (quote.go).
 package main
 
 import (
@@ -55,12 +57,21 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8547", "the loopback address to answer on")
 	upstream := flag.String("upstream", "http://127.0.0.1:8545/", "Nethermind's JSON-RPC URL")
 	keyFile := flag.String("key", "", "the instance key (default $CREDENTIALS_DIRECTORY/instance-key)")
+	quotes := flag.Bool("quotes", false, "quote the key through the evidence service, and serve GET /quote")
+	socket := flag.String("evidence", "/var/tdxs.sock", "the evidence service's socket, with -quotes")
 	flag.Parse()
 	key, err := loadKey(*keyFile)
 	if err != nil {
 		log.Fatal(err)
 	}
 	p := newProxy(*upstream, key)
+	if *quotes {
+		p.evidence = &evidence{socket: *socket, signer: key.PubKey().SerializeCompressed()}
+		if err := p.evidence.check(); err != nil {
+			log.Fatalf("not starting: %v", err)
+		}
+		log.Printf("the evidence service at %s quotes the key", *socket)
+	}
 	log.Printf("signing as %s, forwarding to %s", p.signer, *upstream)
 	log.Fatal(http.ListenAndServe(*listen, p))
 }
@@ -104,6 +115,7 @@ type proxy struct {
 	key      *secp256k1.PrivateKey
 	signer   string
 	client   *http.Client
+	evidence *evidence
 }
 
 func newProxy(upstream string, key *secp256k1.PrivateKey) *proxy {
@@ -120,11 +132,29 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/signer":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, p.signer)
+	case r.Method == http.MethodGet && r.URL.Path == "/quote" && p.evidence != nil:
+		p.quote(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/":
 		p.forward(w, r)
 	default:
 		http.Error(w, "POST JSON-RPC to /, or GET /signer", http.StatusNotFound)
 	}
+}
+
+// quote answers the evidence service's document over the key and the caller's nonce.
+func (p *proxy) quote(w http.ResponseWriter, r *http.Request) {
+	nonce, err := hex.DecodeString(r.URL.Query().Get("nonce"))
+	if err != nil || len(nonce) < 16 || len(nonce) > 64 {
+		http.Error(w, "pass nonce= 16 to 64 random bytes in hex", http.StatusBadRequest)
+		return
+	}
+	document, err := p.evidence.issue(nonce)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"signer": p.signer, "document": document})
 }
 
 func (p *proxy) forward(w http.ResponseWriter, r *http.Request) {

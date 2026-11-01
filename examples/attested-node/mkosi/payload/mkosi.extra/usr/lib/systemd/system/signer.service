@@ -1,12 +1,13 @@
 [Unit]
 Description=signer.service
-After=tundravm-instance-key.service nethermind-ready.service tdx-evidence.service
-Requires=tundravm-instance-key.service nethermind-ready.service tdx-evidence.service
+After=tdxs.service tundravm-instance-key.service nethermind-ready.service tdx-evidence.service
+Requires=tdxs.service tundravm-instance-key.service nethermind-ready.service tdx-evidence.service
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/signer -listen 127.0.0.1:8547 -upstream http://127.0.0.1:8545/
+ExecStart=/usr/bin/signer -listen 127.0.0.1:8547 -upstream http://127.0.0.1:8545/ -quotes
 User=signer
+SupplementaryGroups=tdx
 LoadCredential=instance-key:/run/tundravm/instance-key.pem
 Restart=on-failure
 RestartSec=5s

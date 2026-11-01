@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,6 +111,77 @@ func TestProxy(t *testing.T) {
 			s.SetByteSlice(raw[32:64])
 			if !ecdsa.NewSignature(&r, &s).Verify(hash, signerKey) {
 				t.Fatal("the signature does not verify with the signer's public key")
+			}
+		})
+	}
+}
+
+func TestQuote(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "tdxs.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	asked := make(chan issueRequest, 4)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var request issueRequest
+			json.NewDecoder(conn).Decode(&request)
+			asked <- request
+			document := hex.EncodeToString([]byte(`{"quote":"q"}`))
+			io.WriteString(conn, `{"data":{"document":"`+document+`"},"error":null}`+"\n")
+			conn.Close()
+		}
+	}()
+	key, _ := secp256k1.GeneratePrivateKey()
+	p := newProxy("http://127.0.0.1:1/", key)
+	p.evidence = &evidence{socket: socket, signer: key.PubKey().SerializeCompressed()}
+	if err := p.evidence.check(); err != nil {
+		t.Fatal(err)
+	}
+	if got := (<-asked).Data.UserData; got != p.signer {
+		t.Fatalf("the start check quoted %s, not the key %s", got, p.signer)
+	}
+	signer := httptest.NewServer(p)
+	defer signer.Close()
+
+	cases := []struct {
+		name, nonce string
+		status      int
+	}{
+		{"a nonce is quoted with the key", strings.Repeat("ab", 32), http.StatusOK},
+		{"a short nonce is refused", "abcd", http.StatusBadRequest},
+		{"a nonce that is not hex is refused", strings.Repeat("zz", 32), http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			response, err := http.Get(signer.URL + "/quote?nonce=" + c.nonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body struct {
+				Signer   string          `json:"signer"`
+				Document json.RawMessage `json:"document"`
+			}
+			json.NewDecoder(response.Body).Decode(&body)
+			response.Body.Close()
+			if response.StatusCode != c.status {
+				t.Fatalf("status %d, want %d", response.StatusCode, c.status)
+			}
+			if c.status != http.StatusOK {
+				return
+			}
+			request := <-asked
+			if request.Data.Nonce != c.nonce || request.Data.UserData != p.signer {
+				t.Fatalf("asked for %+v", request.Data)
+			}
+			if body.Signer != p.signer || string(body.Document) != `{"quote":"q"}` {
+				t.Fatalf("answered %s %s", body.Signer, body.Document)
 			}
 		})
 	}
