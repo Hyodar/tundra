@@ -159,6 +159,13 @@ def test_the_kernel_boots_the_ukis_cmdline(
     assert probe_lines(result.console, "cmdline") == [expected]
 
 
+def test_the_root_tmpfs_is_capped_at_its_max_size(kernel_boot: BootResult) -> None:
+    """``Mkosi(root_size="4G")``: systemd-remount-fs remounts the initramfs root with
+    ``/etc/fstab``'s size, which the kernel reports in KiB."""
+    mounts = [line.split() for line in probe_lines(kernel_boot.console, "mount /")]
+    assert any("size=4194304k" in mount[2].split(",") for mount in mounts), mounts
+
+
 def test_the_production_build_carries_no_boot_probe(disk_boot: BootResult) -> None:
     """The derived probe ships only in a development profile: a production boot prints
     none of its lines (``tundravm.testing.read_probe``)."""

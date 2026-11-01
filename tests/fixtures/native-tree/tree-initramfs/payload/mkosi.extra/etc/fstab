@@ -1,0 +1,2 @@
+# tundravm: RootFS.initramfs(max_size=...); systemd-remount-fs applies it at boot.
+rootfs / tmpfs size=4G 0 0

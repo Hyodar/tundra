@@ -26,6 +26,7 @@ Breaking changes are marked **Breaking**.
 - `Volume` with `OperatorKey`, `TpmSeal` or `BrokerKey`, `Secret` as a systemd credential, `AttestedTLS` and `TLS` ingress, `RootFS.verity()`, `Observability`.
 - `network=Network(egress=Egress(...))` drops every other outbound packet, and accepts the baseline's NTS time, resolvers and cloud metadata servers for you.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it: the shipped ones cover their sinks, peers and collateral, `Egress(hosts=)` takes `HOST:PORT`, and each `nftables.conf` rule names who asked for it.
+- `RootFS.initramfs(max_size="4G")` caps the root tmpfs (the kernel gives it half the memory) and the manifest records the cap.
 - On GCP, Google's own udev rules and `google_nvme_id` name NVMe disks, the hostname comes from the metadata server and load-balancer forwarded IPs are routed; each unit is inert off GCE.
 - On Azure, the image installs the `curl` its provisioning report needs, so a production build without a probe still reports ready.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.

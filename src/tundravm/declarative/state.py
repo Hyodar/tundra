@@ -179,6 +179,12 @@ class StateBuilder:
             ]
             profile.hooks = [h for h in profile.hooks if not _is_strip_hook(h)]
 
+    def root_size(self, size: str) -> None:
+        """Cap the default profile's initramfs root tmpfs at *size*: ``systemd-remount-fs``
+        remounts ``/`` with the options ``/etc/fstab`` gives it."""
+        profile = self.state.ensure_profile(self.state.default_profile)
+        _add_file(profile, "/etc/fstab", ROOT_FSTAB.format(size=size))
+
     def extending(self, name: str) -> None:
         """Declare profile *name*, extending the default profile."""
         self.state.set_extends(name, self.state.default_profile)
@@ -486,6 +492,11 @@ class StateBuilder:
             _unit_state(profile, "mask", unit)
         _set_targets(profile, ("gcp",))
 
+
+ROOT_FSTAB = (
+    "# tundravm: RootFS.initramfs(max_size=...); systemd-remount-fs applies it at boot.\n"
+    "rootfs / tmpfs size={size} 0 0\n"
+)
 
 # ── ProfileState writes ──────────────────────────────────────────────────
 

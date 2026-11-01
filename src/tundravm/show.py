@@ -368,7 +368,8 @@ def render_build(build: Build) -> str:
         f"  path          {build.path}",
         *render_report(report(build)),
         f"  targets       {', '.join(m['targets'])}",
-        f"  rootfs        {m.get('rootfs')}",
+        f"  rootfs        {m.get('rootfs')}"
+        + (f", at most {m['rootfs_max_size']}" if m.get("rootfs_max_size") else ""),
     ]
     if m.get("root_hash"):
         lines.append(f"  root hash     {m['root_hash']}")

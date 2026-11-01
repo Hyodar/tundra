@@ -380,6 +380,29 @@ def test_the_root_layout_is_chosen_explicitly() -> None:
         RootFS.verity(filesystem="ext4")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    ("layout", "size", "refused"),
+    [
+        ("initramfs", "4G", None),
+        ("initramfs", "50%", None),
+        ("initramfs", "4GB", "not a tmpfs size"),
+        ("verity", "4G", "volatile overlay"),
+    ],
+)
+def test_the_initramfs_root_tmpfs_cap(layout: str, size: str, refused: str | None) -> None:
+    """Lowered to /etc/fstab, which systemd-remount-fs applies; in the digest and the
+    manifest's options; refused where the root is not a tmpfs."""
+    filesystem = "erofs" if layout == "verity" else None
+    if refused is not None:
+        with pytest.raises(ValidationError, match=refused):
+            RootFS(layout, filesystem, size)  # type: ignore[arg-type]
+        return
+    image = prover(rootfs=RootFS.initramfs(max_size=size))
+    assert f"rootfs / tmpfs size={size} 0 0\n" in plan(image, "production").file("/etc/fstab").text
+    assert lower(image).mkosi.root_size == size
+    assert lower(image).digest() != lower(prover()).digest()
+
+
 # ── The kernel command line ─────────────────────────────────────────────
 
 

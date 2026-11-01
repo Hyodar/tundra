@@ -300,6 +300,9 @@ class Mkosi:
     """
 
     root: Literal["initramfs", "verity"] = "initramfs"
+    root_size: str | None = None
+    """The initramfs root's tmpfs cap (``"4G"``, ``"50%"``), applied at boot through
+    ``/etc/fstab`` and ``systemd-remount-fs``. ``None``: the kernel's, half the memory."""
     version_script: bool = False
     strip_os_release: bool | None = None
     seed: str | None = None
@@ -321,6 +324,10 @@ class Mkosi:
 
     def __post_init__(self) -> None:
         _require_choice(self, self.root, ("initramfs", "verity"), "root")
+        if self.root_size is not None:
+            from tundravm._image._rootfs import RootFS
+
+            RootFS(self.root, "erofs" if self.root == "verity" else None, self.root_size)
         for what in ("seed", "output_dir", "package_cache"):
             if (value := getattr(self, what)) is not None:
                 _require_name(self, value, what)

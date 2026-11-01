@@ -168,7 +168,8 @@ def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
     return Recipe(
         name="fixture",
         platform=Debian("trixie", snapshot=SNAPSHOT),
-        mkosi=Mkosi(seed=SEED, root=root),
+        # the initramfs root tmpfs capped, which the boot test reads back from the probe
+        mkosi=Mkosi(seed=SEED, root=root, root_size="4G" if root == "initramfs" else None),
         items=(
             Greeter(),
             Service("greeter", ("/usr/bin/cat", "/etc/greeter/greeting")),

@@ -249,6 +249,7 @@ A named variation on the image: what it adds, and what it changes.
 RootFS(
     layout: Literal['initramfs', 'verity'] = 'initramfs',
     filesystem: Literal['erofs'] | None = None,
+    max_size: str | None = None,
 )
 ```
 
@@ -256,7 +257,7 @@ Where the OS lives: `RootFS.initramfs()` (the default) or `RootFS.verity()`.
 
 | Member | Does |
 |---|---|
-| `RootFS.initramfs() -> RootFS` | The OS in the UKI's initrd. |
+| `RootFS.initramfs(*, max_size: str \| None = None) -> RootFS` | The OS in the UKI's initrd, its tmpfs capped at *max_size* (`"4G"`, `"50%"`). |
 | `RootFS.verity(*, filesystem: Literal['erofs'] = 'erofs') -> RootFS` | A read-only *filesystem* root verified by dm-verity. |
 
 ### `Service`

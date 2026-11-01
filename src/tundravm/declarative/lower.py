@@ -202,6 +202,8 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         builder.strip_image_version(enabled=strip)
 
     builder.declare(default.name, base.items, full=base.items)
+    if recipe.mkosi.root_size is not None:
+        builder.root_size(recipe.mkosi.root_size)
     builder.execution_gate(
         default.name, release=default.release, default=default.release, ships=True
     )
@@ -767,6 +769,7 @@ def _typed_options(recipe: Recipe) -> dict[str, Any]:
         "manifest_format": config.manifest,
         "with_network": config.build_network,
         "root": config.root,
+        "root_size": config.root_size,
         "clean_package_metadata": getattr(recipe.platform, "clean_package_metadata", True),
         "kernel_modules": getattr(recipe.platform, "kernel_modules", ()),
         "kernel_cmdline": getattr(recipe.platform, "kernel_cmdline", ()),

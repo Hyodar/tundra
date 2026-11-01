@@ -72,7 +72,11 @@ def recipe_of(image: Image) -> dm.Recipe:
         items=items,
         variants=state.variants(),
         platform=state.platform(),
-        mkosi=dm.Mkosi(root=image.rootfs.layout, build_network=state.build_network()),
+        mkosi=dm.Mkosi(
+            root=image.rootfs.layout,
+            root_size=image.rootfs.max_size,
+            build_network=state.build_network(),
+        ),
     )
 
 

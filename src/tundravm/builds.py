@@ -694,6 +694,7 @@ def _assemble(
         "targets": list(targets),
         "ports": sorted(set(ports)),
         "rootfs": img.mkosi.root,
+        "rootfs_max_size": img.mkosi.root_size,
         "recipe_digest": locked.recipe_digest,
         "artifacts": mf.artifact_index(out),
         "uki": {

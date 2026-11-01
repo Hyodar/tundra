@@ -54,6 +54,8 @@ class MkosiOptions:
     bootable: bool = True
     """``False`` writes ``Bootable=no`` and a plain disk payload instead of a UKI."""
     root: RootLayout = "initramfs"
+    root_size: str | None = None
+    """``Mkosi(root_size=)``: the initramfs root's tmpfs cap, written to ``/etc/fstab``."""
     """The payload's root filesystem layout (``Mkosi(root=...)``)."""
 
     def __post_init__(self) -> None:

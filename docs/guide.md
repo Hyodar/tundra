@@ -578,13 +578,12 @@ as a secret. Nothing about it is attested.
 
 | Layout | Use |
 |---|---|
-| `RootFS.initramfs()` | the OS in the UKI's initrd: small services, one file to measure (default) |
-| `RootFS.verity()` | a read-only erofs root with a dm-verity hash partition beside the ESP, the root hash on the UKI command line, a volatile overlay on top |
+| `RootFS.initramfs()` | the OS in the UKI's initrd: small services, one file to measure (default); `max_size="4G"` caps its tmpfs, else half the memory |
+| `RootFS.verity()` | a read-only erofs root, its dm-verity hash partition beside the ESP and root hash on the command line, under a volatile overlay |
 
 Choose verity when the payload is large. Every disk boots the UKI from a fixed 128 MiB
-FAT32 ESP, which holds a UKI of up to 126 MiB; a larger one fails the build with both
-sizes and this fix. The layout is recorded in the manifest and never switched by a size
-threshold.
+FAT32 ESP: a UKI over 126 MiB fails the build with both sizes. The layout and the cap are
+recorded in the manifest, never switched by a size threshold.
 
 ### Network and observability
 
