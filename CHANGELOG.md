@@ -75,6 +75,7 @@ Breaking changes are marked **Breaking**.
 - **Breaking:** `service-program-missing` (error) replaces the `service-command-not-shipped` warning: a service's program must be a file, tree or build the image ships, or a program a listed package provides.
 - `egress-unfiltered` (warning, a `Firewall` rule): a production profile without `Egress`, or with one allowing `0.0.0.0/0` or `::/0`, sends anywhere; `Resolved.production` tells any component's check which profiles are exempt.
 - `volume-tpm-on-cloud` (info): a volume sealed to Azure's or GCP's vTPM names that platform's trust boundary and points at `OperatorKey()` and `BrokerKey()`.
+- `unit-written-at-runtime` (error): a service, boot task or boot step that writes a unit under `/etc/systemd/system`, `/run/systemd/system` or `/usr/lib/systemd/system` at boot, by argv, shell redirection or a tmpfiles.d line.
 - A finding several profiles share prints once (`[dev, production]`), `[image]` marks an image-wide one, and a shared hint prints once.
 - **Breaking:** `source-unpinned` is image-wide with the subject `sources.NAME`, as lock drift reports a source.
 - A hint names the lock command that runs where you are: `tundravm lock`, or `tundravm lock FILE` for an image the project does not configure; `local-changed` says `build --dev` re-pins.

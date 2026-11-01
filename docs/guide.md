@@ -289,9 +289,9 @@ strict sandbox minus what that runtime cannot live without:
 
 The `static` sandbox is `ProtectSystem=strict`, private `/tmp` and devices, no new
 privileges, an empty capability bounding set, the kernel and namespace protections, the
-`@system-service` syscall filter and `UMask=0077`. A deviation is explicit:
+`@system-service` syscall filter and `UMask=0077`.
 `Hardening.preset("static", devices=["/dev/tdx_guest"])` replaces `PrivateDevices=yes`
-with an allow list. `Hardening.relaxed()` and `Hardening.none()` exist for programs you
+with an allow list. `Hardening.relaxed()` and `Hardening.none()` are for programs you
 cannot fix.
 
 ### Timers, sockets and the rest
@@ -305,9 +305,10 @@ cannot fix.
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
-These values come from `tundravm.systemd`. A timer runs the service as a scheduled oneshot
-and keeps every other keyword; `socket=`, `readiness=`, `expose=`, `credentials=` and a
-volume `state=` belong to a long-lived service, so a timer refuses them.
+A timer runs the service as a scheduled oneshot and refuses what only a long-lived service
+has: `socket=`, `readiness=`, `expose=`, `credentials=`, a volume `state=`. Writing a unit
+under `/etc/systemd/system` at boot is the `unit-written-at-runtime` error: declare it
+instead.
 
 ## Components
 

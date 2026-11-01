@@ -18,6 +18,7 @@ import difflib
 import fnmatch
 import posixpath
 import re
+import shlex
 import textwrap
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -44,6 +45,7 @@ from .models import MODULES_PATH, ProfileState, ServiceSpec, debloat_units_keep,
 from .project import lock_command
 
 if TYPE_CHECKING:
+    from ._units.lint import ShippedUnit
     from .declarative._lowered import Lowered
     from .declarative.model import Recipe, Service, Task
 
@@ -920,21 +922,32 @@ def _rule_secret_in_env(
 # units (shipped files and generated services) and the facts they check against.
 
 
-def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> Iterator[Diagnostic]:
-    from ._units.lint import Facts, ShippedUnit, unit_findings
+def _profile_units(state: ProfileState) -> list[ShippedUnit]:
+    """Every unit *state* ships: its unit files and drop-ins, then the services it generates."""
+    from ._units.lint import ShippedUnit
 
     units: list[ShippedUnit] = []
     for path, content in _shipped_files(state):
         if is_unit_path(path) and not path.endswith("/"):
-            text = content.decode("utf-8", "replace") if isinstance(content, bytes) else content
             subject = path if posixpath.dirname(path).endswith(".d") else posixpath.basename(path)
-            units.append(ShippedUnit(subject, path, text))
+            units.append(ShippedUnit(subject, path, _decoded(content)))
     shipped = {unit.name for unit in units}
     for svc in state.services:
         name = unit_name(svc.name)
         if svc.command and name not in shipped:
             path = f"/usr/lib/systemd/system/{name}"
             units.append(ShippedUnit(svc.name, path, _systemd_unit_content(svc), generated=True))
+    return units
+
+
+def _decoded(content: str | bytes) -> str:
+    return content.decode("utf-8", "replace") if isinstance(content, bytes) else content
+
+
+def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> Iterator[Diagnostic]:
+    from ._units.lint import Facts, unit_findings
+
+    units = _profile_units(state)
     commands = _command_text(state)
     users = {u.name for u in state.users} | _BASE_USERS
     groups = {g.name for g in state.groups} | {u.name for u in state.users if u.gid is None}
@@ -959,6 +972,116 @@ def _rule_unit_text(image: Lowered, profile_name: str, state: ProfileState) -> I
         outputs=frozenset(state.output_targets),
     )
     yield from unit_findings(units, facts)
+
+
+_UNIT_DIRS = (
+    "/etc/systemd/system",
+    "/run/systemd/system",
+    "/usr/lib/systemd/system",
+    "/lib/systemd/system",
+)
+"""Where systemd loads units from: what runs in the image is what is there at build time."""
+
+_WRITERS = frozenset({"cp", "dd", "install", "ln", "mv", "rsync", "tee", "touch", "truncate"})
+"""Programs that write the paths they are given."""
+
+_SHELLS = frozenset({"bash", "dash", "sh"})
+_EXEC_LINE = re.compile(r"^\s*Exec\w+\s*=\s*(?P<command>.*)$", re.MULTILINE)
+_SHELL_SPLIT = re.compile(r"&&|\|\||[;&|\n]")
+_TMPFILES_WRITES = frozenset("fFwLC")
+"""tmpfiles.d line types that create or write the path they name."""
+
+
+def _unit_dir_path(word: str) -> str | None:
+    """The path under a unit directory *word* names (``of=PATH`` and ``--opt=PATH`` too)."""
+    for candidate in (word, word.partition("=")[2]):
+        path = posixpath.normpath(candidate) if candidate.startswith("/") else ""
+        if any(path == d or path.startswith(d + "/") for d in _UNIT_DIRS):
+            return path
+    return None
+
+
+def _argv_writes(argv: Sequence[str]) -> str | None:
+    """The unit path *argv* writes, when its program is a writer or a ``sh -c`` script."""
+    words = list(argv)
+    while words and ("=" in words[0] and not words[0].startswith("/") or words[0] == "env"):
+        words.pop(0)
+    if not words:
+        return None
+    program = posixpath.basename(words[0].lstrip("-@:+!"))
+    if program in _SHELLS and "-c" in words[1:-1]:
+        return _script_writes(words[words.index("-c") + 1])
+    writes = program in _WRITERS or (program == "sed" and any(w.startswith("-i") for w in words))
+    if program == "systemctl":
+        writes = any(w in ("edit", "link") for w in words[1:])
+    if not writes:
+        return None
+    return next((path for w in words[1:] if (path := _unit_dir_path(w)) is not None), None)
+
+
+def _script_writes(script: str) -> str | None:
+    """The unit path a shell *script* writes: a redirection or a writer's argument."""
+    for command in _SHELL_SPLIT.split(script):
+        try:
+            words = shlex.split(command, comments=True)
+        except ValueError:
+            words = command.split()
+        for index, word in enumerate(words):
+            if word.lstrip("0123456789&").startswith(">") and ">&" not in word:
+                target = word.lstrip("0123456789&>") or (words[index + 1 :] or [""])[0]
+                path = _unit_dir_path(target)
+                if path is not None:
+                    return path
+        found = _argv_writes(words)
+        if found is not None:
+            return found
+    return None
+
+
+def _rule_unit_written_at_runtime(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    found: list[tuple[str, str, str]] = []
+    for unit in _profile_units(state):
+        for match in _EXEC_LINE.finditer(unit.text.replace("\\\n", " ")):
+            try:
+                argv = shlex.split(match["command"])
+            except ValueError:
+                argv = match["command"].split()
+            path = _argv_writes(argv)
+            if path is not None:
+                found.append((unit.subject, f"unit {unit.subject!r}", path))
+                break
+    for entry in state.init_scripts:
+        path = _script_writes(entry.script)
+        if path is not None:
+            found.append((entry.name, f"boot step {entry.name!r}", path))
+    for path, content in _shipped_files(state):
+        if not path.startswith(("/etc/tmpfiles.d/", "/usr/lib/tmpfiles.d/")):
+            continue
+        for line in _decoded(content).splitlines():
+            fields = line.split()
+            if len(fields) < 2 or fields[0].startswith("#"):
+                continue
+            target = _unit_dir_path(fields[1])
+            if fields[0][0] in _TMPFILES_WRITES and target is not None:
+                found.append((path, f"the tmpfiles.d line {fields[0]} {fields[1]}", target))
+    for subject, what, path in found:
+        yield Diagnostic(
+            severity="error",
+            code="unit-written-at-runtime",
+            message=(
+                f"{what} writes {path} at boot, so the attested image does not pin what "
+                "that unit runs"
+            ),
+            hint=(
+                "Declare the unit in the image (Service(...), or Unit(name, dropin=...) for "
+                "a packaged one), so the measurement covers it; a value it needs at boot "
+                "comes from a Secret through credentials=, never from writing the unit."
+            ),
+            profile=profile_name,
+            subject=subject,
+        )
 
 
 def unit_declaration_check(
@@ -1531,6 +1654,16 @@ _REGISTRY: tuple[Rule, ...] = (
         "ExternalDelivery. If it is not a secret, pass allow_secret=True to the "
         "declaration.",
         (_rule_secret_in_env,),
+    ),
+    Rule(
+        "unit-written-at-runtime",
+        "error",
+        "A service, boot task or boot step writes a unit under /etc/systemd/system, "
+        "/run/systemd/system or /usr/lib/systemd/system at boot (cp, tee, install, ln, a "
+        "shell redirection, a tmpfiles.d line), so the attested image does not pin what runs.",
+        "Declare the unit in the image (Service(...), or Unit(name, dropin=...) for a "
+        "packaged one); a value it needs at boot comes from a Secret through credentials=.",
+        (_rule_unit_written_at_runtime,),
     ),
     # ── systemd unit text: every unit a profile ships, raw or generated ──
     Rule(

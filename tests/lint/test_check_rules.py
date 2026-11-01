@@ -15,6 +15,7 @@ import pytest
 from tundravm.check import Diagnostic, check, render, render_github
 from tundravm.cli import main
 from tundravm.declarative import (
+    BootStep,
     Debian,
     Debloat,
     Declaration,
@@ -183,6 +184,24 @@ def test_service_program_missing(items: tuple[Declaration, ...], missing: str | 
     assert all(d.severity == "error" for d in found)
     if missing == "/usr/bin/python3":
         assert "packages=['python3']" in (found[0].hint or "")
+
+
+@pytest.mark.parametrize(
+    ("item", "written"),
+    [
+        (Service("render", "/usr/bin/cp /run/app.service /etc/systemd/system/"), True),
+        (Service("render", "/bin/sh -c 'envsubst < /run/t > /run/systemd/system/a.service'"), True),
+        (BootStep("render", "cat /run/x >/etc/systemd/system/a.service.d/v.conf\n"), True),
+        (File("/etc/tmpfiles.d/a.conf", "L+ /etc/systemd/system/a.service - - - - /run/a\n"), True),
+        (Service("render", "/usr/bin/cat /etc/systemd/system/a.service"), False),
+        (BootStep("render", "echo ok > /run/app.env\n"), False),
+    ],
+    ids=["cp", "sh-redirect", "boot-step", "tmpfiles", "read", "elsewhere"],
+)
+def test_unit_written_at_runtime(item: Declaration, written: bool) -> None:
+    found = [d for d in report(recipe(item)) if d.code == "unit-written-at-runtime"]
+    assert bool(found) is written
+    assert all(d.severity == "error" for d in found)
 
 
 # e. cloud targets
