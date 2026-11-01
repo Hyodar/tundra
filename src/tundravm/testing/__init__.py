@@ -72,126 +72,126 @@ UPDATE_GOLDEN_ENV = "TUNDRAVM_UPDATE_GOLDEN"
 _UNIFIED_LINES = 200
 _UNIT_DIR = "mkosi.extra/usr/lib/systemd/system"
 
-Variants = str | Sequence[str] | None
+Profiles = str | Sequence[str] | None
 """A profile selection: one name, several names, or ``None`` for every declared profile."""
 
 
 class CompiledTree:
     """A compiled mkosi tree on disk, with readers for the files tests inspect.
 
-    ``variants`` are the compiled profiles. Every ``variant`` argument names one of
+    ``profiles`` are the compiled profiles. Every ``profile`` argument names one of
     them and defaults to the first. A profile reads the payload (``payload/``) with
     its overlay (``payload/mkosi.profiles/<profile>/``) over it, as mkosi merges them:
     a path in the overlay wins, scripts and configuration accumulate.
     """
 
-    __slots__ = ("default_variant", "root", "variants")
+    __slots__ = ("default_profile", "root", "profiles")
 
-    def __init__(self, root: Path, variants: Sequence[str], default_variant: str = "default"):
+    def __init__(self, root: Path, profiles: Sequence[str], default_profile: str = "default"):
         self.root = Path(root)
-        self.variants = tuple(variants)
-        if default_variant not in self.variants and self.variants:
-            default_variant = self.variants[0]
-        self.default_variant = default_variant
+        self.profiles = tuple(profiles)
+        if default_profile not in self.profiles and self.profiles:
+            default_profile = self.profiles[0]
+        self.default_profile = default_profile
 
     def __fspath__(self) -> str:
         return os.fspath(self.root)
 
     def __repr__(self) -> str:
-        return f"CompiledTree({str(self.root)!r}, variants={self.variants!r})"
+        return f"CompiledTree({str(self.root)!r}, profiles={self.profiles!r})"
 
     def layers(self, name: str | None = None) -> tuple[Path, ...]:
         """The configuration directories profile *name* builds from: the payload, then its
         overlay when it has one."""
-        name = name or self.default_variant
-        if name not in self.variants:
-            raise KeyError(f"profile {name!r} was not compiled; compiled: {list(self.variants)}")
+        name = name or self.default_profile
+        if name not in self.profiles:
+            raise KeyError(f"profile {name!r} was not compiled; compiled: {list(self.profiles)}")
         payload = self.root / PAYLOAD
         overlay = payload / "mkosi.profiles" / name
         return (payload, overlay) if overlay.is_dir() else (payload,)
 
-    def variant(self, name: str | None = None) -> Path:
+    def profile(self, name: str | None = None) -> Path:
         """The directory holding what profile *name* adds: its overlay, else the
         payload."""
         return self.layers(name)[-1]
 
-    def path(self, relpath: str, variant: str | None = None) -> Path:
+    def path(self, relpath: str, profile: str | None = None) -> Path:
         """*relpath* in the profile's overlay when it is there, else in the payload."""
-        for layer in reversed(self.layers(variant)):
+        for layer in reversed(self.layers(profile)):
             found = layer / relpath.lstrip("/")
             if found.exists() or found.is_symlink():
                 return found
-        return self.layers(variant)[0] / relpath.lstrip("/")
+        return self.layers(profile)[0] / relpath.lstrip("/")
 
-    def read(self, relpath: str, variant: str | None = None) -> str:
-        return self.path(relpath, variant).read_text(encoding="utf-8")
+    def read(self, relpath: str, profile: str | None = None) -> str:
+        return self.path(relpath, profile).read_text(encoding="utf-8")
 
-    def exists(self, relpath: str, variant: str | None = None) -> bool:
-        return self.path(relpath, variant).exists()
+    def exists(self, relpath: str, profile: str | None = None) -> bool:
+        return self.path(relpath, profile).exists()
 
-    def files(self, variant: str | None = None) -> list[str]:
+    def files(self, profile: str | None = None) -> list[str]:
         """Sorted POSIX paths of every file the profile reads, relative to its layer (the
         payload's own profile overlays left out)."""
         found: set[str] = set()
-        for layer in self.layers(variant):
+        for layer in self.layers(profile):
             for path in layer.rglob("*"):
                 rel = path.relative_to(layer).as_posix()
                 if not path.is_dir() and not rel.startswith("mkosi.profiles/"):
                     found.add(rel)
         return sorted(found)
 
-    def unit(self, name: str, variant: str | None = None) -> str:
+    def unit(self, name: str, profile: str | None = None) -> str:
         """Systemd unit text; a bare name such as ``"app"`` means ``app.service``."""
         unit = name if "." in name else f"{name}.service"
-        path = self.path(f"{_UNIT_DIR}/{unit}", variant)
+        path = self.path(f"{_UNIT_DIR}/{unit}", profile)
         if not path.is_file():
             found = sorted(p.name for p in path.parent.glob("*")) if path.parent.is_dir() else []
             raise FileNotFoundError(f"no unit {unit!r} in {path.parent}; found: {found}")
         return path.read_text(encoding="utf-8")
 
-    def scripts(self, phase: str, variant: str | None = None) -> list[Path]:
+    def scripts(self, phase: str, profile: str | None = None) -> list[Path]:
         """The profile's ``mkosi.<phase>.d/`` scripts in the order mkosi runs them."""
         return [
             script
-            for layer in self.layers(variant)
+            for layer in self.layers(profile)
             for script in sorted((layer / f"mkosi.{phase}.d").glob("*"))
         ]
 
-    def script(self, phase: str, variant: str | None = None) -> str:
+    def script(self, phase: str, profile: str | None = None) -> str:
         """The text of the profile's *phase* scripts, in the order mkosi runs them."""
-        found = self.scripts(phase, variant)
+        found = self.scripts(phase, profile)
         if not found:
             phases = sorted(
                 {
                     path.name.removeprefix("mkosi.").removesuffix(".d")
-                    for layer in self.layers(variant)
+                    for layer in self.layers(profile)
                     for path in layer.glob("mkosi.*.d")
                     if any(path.iterdir())
                 }
             )
             raise FileNotFoundError(
-                f"no {phase!r} script for profile {variant!r}; scripts: {', '.join(phases)}"
+                f"no {phase!r} script for profile {profile!r}; scripts: {', '.join(phases)}"
             )
         return "\n".join(path.read_text(encoding="utf-8") for path in found)
 
-    def runtime_init(self, variant: str | None = None, *, step: str | None = None) -> str:
+    def runtime_init(self, profile: str | None = None, *, step: str | None = None) -> str:
         """The runtime-init script text: one *step*'s script, or every step in the order
         ``runtime-init.service`` lists them (``/usr/lib/runtime-init/<step>``)."""
         if step is not None:
-            return self.read(f"mkosi.extra/usr/lib/runtime-init/{step}", variant)
-        aggregate = self.unit("runtime-init.service", variant)
+            return self.read(f"mkosi.extra/usr/lib/runtime-init/{step}", profile)
+        aggregate = self.unit("runtime-init.service", profile)
         after = next(line for line in aggregate.splitlines() if line.startswith("After="))
         steps = [
             unit.removeprefix("runtime-init-").removesuffix(".service")
             for unit in after[6:].split()
         ]
-        return "".join(self.runtime_init(variant, step=name) for name in steps)
+        return "".join(self.runtime_init(profile, step=name) for name in steps)
 
-    def conf(self, variant: str | None = None) -> str:
+    def conf(self, profile: str | None = None) -> str:
         """The profile's payload configuration as mkosi reads it, one text: the payload's
         ``mkosi.conf``, its ``mkosi.conf.d/*.conf`` and the overlay's ``mkosi.conf``."""
         texts: list[str] = []
-        for layer in self.layers(variant):
+        for layer in self.layers(profile):
             texts.append((layer / "mkosi.conf").read_text(encoding="utf-8"))
             texts += [p.read_text(encoding="utf-8") for p in sorted(layer.glob("mkosi.conf.d/*"))]
         return "\n".join(texts)
@@ -201,25 +201,25 @@ class CompiledTree:
         return (self.root / "mkosi.conf").read_text(encoding="utf-8")
 
 
-def _names(variants: Variants) -> list[str] | None:
-    if variants is None:
+def _names(profiles: Profiles) -> list[str] | None:
+    if profiles is None:
         return None
-    return [variants] if isinstance(variants, str) else list(variants)
+    return [profiles] if isinstance(profiles, str) else list(profiles)
 
 
 def compile_tree(
-    recipe: Recipe, *, variants: Variants = None, path: str | Path | None = None
+    recipe: Recipe, *, profiles: Profiles = None, path: str | Path | None = None
 ) -> CompiledTree:
-    """Compile the profiles *variants* (default: all) of *recipe* into *path* or a temp dir.
+    """Compile *profiles* (default: every profile) of *recipe* into *path* or a temp dir.
 
     *recipe* is the internal model an image lowers to; for an :class:`~tundravm.Image`,
     ``tundravm.compile(image).write(path)`` does the same. Unknown profile names raise
     ``ValidationError``. No lockfile is consulted, so source builds use their refs.
     """
     root = Path(path) if path is not None else Path(tempfile.mkdtemp(prefix="tundravm-tree-"))
-    tree = lifecycle.compile(recipe, variants=_names(variants))
+    tree = lifecycle.compile(recipe, variants=_names(profiles))
     tree.write(root)
-    return CompiledTree(root, tree.variants, default_variant=tree.variants[0])
+    return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
 
 
 Lintable = Recipe | PlannedImage | Sequence[Diagnostic]
@@ -227,11 +227,11 @@ Lintable = Recipe | PlannedImage | Sequence[Diagnostic]
 model an image lowers to."""
 
 
-def _findings(subject: Lintable, variants: Variants) -> Sequence[Diagnostic]:
+def _findings(subject: Lintable, profiles: Profiles) -> Sequence[Diagnostic]:
     if isinstance(subject, Recipe):
-        return check_report(subject, None, variants=_names(variants))
-    if variants is not None:
-        raise TypeError("variants= selects the profiles to lint; this input already chose one")
+        return check_report(subject, None, variants=_names(profiles))
+    if profiles is not None:
+        raise TypeError("profiles= selects the profiles to lint; this input already chose one")
     return subject.lint() if isinstance(subject, PlannedImage) else subject
 
 
@@ -245,17 +245,17 @@ def assert_clean(
     *,
     warnings: Literal["fail", "allow"] = "fail",
     allow: Sequence[str] = (),
-    variants: Variants = None,
+    profiles: Profiles = None,
 ) -> Sequence[Diagnostic]:
     """Fail on every error and warning finding whose code is not in *allow*.
 
     *subject* is a :class:`PlannedImage` (``plan(image, profile)``, linted for its
     profile), the diagnostics :meth:`PlannedImage.lint` returned, or the internal model
-    (linted for the profiles *variants*, default: all). ``warnings="allow"`` fails on
+    (linted for *profiles*, default: all). ``warnings="allow"`` fails on
     errors only. Returns every diagnostic, allowed or not: *subject* itself for
     diagnostics.
     """
-    diagnostics = _findings(subject, variants)
+    diagnostics = _findings(subject, profiles)
     severities = {"error", "warning"} if warnings == "fail" else {"error"}
     failing = [d for d in diagnostics if d.code not in allow and d.severity in severities]
     if failing:
@@ -268,9 +268,9 @@ def assert_diagnostic(
     code: str,
     /,
     *,
-    variants: Variants = None,
+    profiles: Profiles = None,
     severity: Severity | None = None,
-    variant: str | None = None,
+    profile: str | None = None,
     subject: str | None = None,
     location: str | None = None,
 ) -> Diagnostic:
@@ -278,18 +278,18 @@ def assert_diagnostic(
 
     *diagnostics* is a :class:`PlannedImage` to lint, a sequence of diagnostics (what
     :meth:`PlannedImage.lint` returned), or the internal model to lint for the profiles
-    *variants* (default: *variant* alone when given, else all). *variant* is the profile,
-    ``""`` for the image as a whole; *location* the source position (``file:line``).
+    *profiles* (default: *profile* alone when given, else all). *profile* names the
+    profile, ``""`` the image as a whole; *location* the source position (``file:line``).
     """
     wanted_subject = subject
-    if variants is None and variant and isinstance(diagnostics, Recipe):
-        variants = [variant]
-    found = _findings(diagnostics, variants)
+    if profiles is None and profile and isinstance(diagnostics, Recipe):
+        profiles = [profile]
+    found = _findings(diagnostics, profiles)
     for d in found:
         if (
             d.code == code
             and (severity is None or d.severity == severity)
-            and (variant is None or d.variant == variant)
+            and (profile is None or d.variant == profile)
             and (wanted_subject is None or d.subject == wanted_subject)
             and (location is None or d.location == location)
         ):
@@ -299,7 +299,7 @@ def assert_diagnostic(
         for key, value in (
             ("code", code),
             ("severity", severity),
-            ("variant", variant),
+            ("profile", profile),
             ("subject", wanted_subject),
             ("location", location),
         )
@@ -348,7 +348,7 @@ def assert_tree_matches(
     recipe: Recipe,
     golden_dir: str | Path,
     *,
-    variants: Variants = None,
+    profiles: Profiles = None,
     update: bool | None = None,
 ) -> TreeDiff:
     """Compare the compiled tree of *recipe* (the internal model) with *golden_dir*.
@@ -362,8 +362,8 @@ def assert_tree_matches(
     if update is None:
         update = os.environ.get(UPDATE_GOLDEN_ENV) == "1"
     with tempfile.TemporaryDirectory(prefix="tundravm-golden-") as tmp:
-        tree = compile_tree(recipe, variants=variants, path=Path(tmp))
-        ignore = _foreign_profile_globs(golden, tree.variants)
+        tree = compile_tree(recipe, profiles=profiles, path=Path(tmp))
+        ignore = _foreign_profile_globs(golden, tree.profiles)
         diff = diff_trees(golden, tree.root, ignore=ignore)
         if update:
             if not diff.is_clean:
@@ -466,7 +466,7 @@ __all__ = [
     "InitStep",
     "Lintable",
     "UnitView",
-    "Variants",
+    "Profiles",
     "assert_clean",
     "assert_diagnostic",
     "assert_tree",

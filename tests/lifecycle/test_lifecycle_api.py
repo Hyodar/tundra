@@ -144,7 +144,7 @@ def test_lint_merges_declarative_and_compiler_diagnostics() -> None:
     assert "backend-missing" not in codes  # the backend is a bake() argument
     assert len(found) == len(set(found))
     assert_diagnostic(found, "jq-missing", subject="jq")
-    assert_diagnostic(found, "debloat-removes-declared-file", variant="default")
+    assert_diagnostic(found, "debloat-removes-declared-file", profile="default")
     with pytest.raises(AssertionError, match="unexpected finding"):
         assert_clean(found)
 

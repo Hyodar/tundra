@@ -50,8 +50,8 @@ def test_devtools_variant_includes_expected_packages() -> None:
 def test_devtools_enables_the_serial_getty_at_build_time(tree: CompiledTree) -> None:
     (unit,) = [item for item in DevTools().items if isinstance(item, Unit)]
     assert (unit.name, unit.content, unit.enabled) == (GETTY, None, True)
-    assert f"mkosi.extra/usr/lib/systemd/system/{SERIAL_UNIT}" not in tree.files(variant="devtools")
-    postinst = tree.script("postinst", variant="devtools").splitlines()
+    assert f"mkosi.extra/usr/lib/systemd/system/{SERIAL_UNIT}" not in tree.files(profile="devtools")
+    postinst = tree.script("postinst", profile="devtools").splitlines()
     assert f"mkosi-chroot systemctl enable {GETTY}" in postinst
     assert any("minimal.target.wants" in line and GETTY in line for line in postinst)
     # The shared payload's debloat masks the getty's template, which only devtools keeps:
@@ -67,8 +67,8 @@ def test_devtools_enables_the_serial_getty_at_build_time(tree: CompiledTree) -> 
 def test_unreproducible_devtools_keep_the_boot_time_serial_console(tmp_path: Path) -> None:
     recipe = Recipe("debug", variants=(Variant("devtools", add=DevTools(reproducible=False)),))
     tree = compile_tree(recipe, path=tmp_path / "tree")
-    service = tree.unit(SERIAL_UNIT, variant="devtools")
+    service = tree.unit(SERIAL_UNIT, profile="devtools")
     assert service == v1.SERIAL_CONSOLE
-    postinst = tree.script("postinst", variant="devtools")
+    postinst = tree.script("postinst", profile="devtools")
     enable = postinst.index(f"mkosi-chroot systemctl enable {SERIAL_UNIT}")
     assert enable < postinst.index("openssl passwd")  # the hook keeps its historical place

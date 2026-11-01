@@ -27,9 +27,9 @@ def tree(tmp_path: Path) -> CompiledTree:
 
 def test_gcp_variant_applies_metadata_dns_at_boot_on_gcp_only(tree: CompiledTree) -> None:
     """No static /etc/resolv.conf: it would break DNS where the same UKI boots off GCP."""
-    assert RESOLV_CONF not in tree.files(variant="gcp")
-    assert tree.read(SHIPPED_RESOLV_CONF, variant="gcp") == GCP_RESOLV_CONF
-    unit = tree.read(DNS_UNIT, variant="gcp")
+    assert RESOLV_CONF not in tree.files(profile="gcp")
+    assert tree.read(SHIPPED_RESOLV_CONF, profile="gcp") == GCP_RESOLV_CONF
+    unit = tree.read(DNS_UNIT, profile="gcp")
     assert "ConditionVirtualization=google" in unit
     assert f"ExecStart=/usr/bin/cp {GCP_RESOLV_CONF_PATH} /etc/resolv.conf" in unit
     assert "Before=network-pre.target network-setup.service" in unit

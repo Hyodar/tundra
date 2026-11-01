@@ -112,7 +112,7 @@ def test_float_fields_take_ints() -> None:
 
 
 def test_check_method_is_the_fragments_lint_rule() -> None:
-    assert_diagnostic(fragment_plan(WebApp(version="1", port=80)), "webapp-port", variant="default")
+    assert_diagnostic(fragment_plan(WebApp(version="1", port=80)), "webapp-port", profile="default")
     assert_clean(fragment_plan(WebApp(version="1")))
 
 

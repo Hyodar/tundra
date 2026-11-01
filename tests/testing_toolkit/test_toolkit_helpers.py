@@ -95,12 +95,12 @@ def test_compile_tree_reads_compiled_files(tmp_path: Path) -> None:
     tree = compile_tree(_recipe(), path=tmp_path / "out")
 
     assert isinstance(tree, CompiledTree)
-    assert tree.variants == ("default", "azure")
-    assert tree.default_variant == "default"
+    assert tree.profiles == ("default", "azure")
+    assert tree.default_profile == "default"
     assert os.fspath(tree) == str(tmp_path / "out")
     assert "curl" in tree.conf()
     assert tree.read("mkosi.extra/etc/motd") == "hello\n"
-    assert tree.read("/mkosi.extra/etc/motd", variant="default") == "hello\n"
+    assert tree.read("/mkosi.extra/etc/motd", profile="default") == "hello\n"
     assert tree.exists("mkosi.extra/etc/motd")
     assert not tree.exists("mkosi.extra/etc/nope")
     assert "User=app" in tree.unit("app")
@@ -112,13 +112,13 @@ def test_compile_tree_reads_compiled_files(tmp_path: Path) -> None:
     assert {"mkosi.conf", "mkosi.extra/etc/motd"} <= set(files)
 
 
-def test_compile_tree_rejects_unknown_and_uncompiled_variants(tmp_path: Path) -> None:
+def test_compile_tree_rejects_unknown_and_uncompiled_profiles(tmp_path: Path) -> None:
     recipe = _recipe()
     with pytest.raises(ValidationError, match="Unknown profile"):
-        compile_tree(recipe, variants=["gpc"], path=tmp_path / "x")
-    tree = compile_tree(recipe, variants="default", path=tmp_path / "y")
+        compile_tree(recipe, profiles=["gpc"], path=tmp_path / "x")
+    tree = compile_tree(recipe, profiles="default", path=tmp_path / "y")
     with pytest.raises(KeyError, match="was not compiled"):
-        tree.variant("azure")
+        tree.profile("azure")
 
 
 def test_compile_tree_missing_unit_or_script_lists_what_exists(tmp_path: Path) -> None:
@@ -159,36 +159,36 @@ def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
     assert_clean(recipe, allow=["service-user-missing", "service-command-not-shipped"])
 
 
-def test_assert_clean_checks_selected_variants() -> None:
+def test_assert_clean_checks_selected_profiles() -> None:
     recipe = _ghost(where="azure")
-    assert_clean(recipe, variants="default")
+    assert_clean(recipe, profiles="default")
     with pytest.raises(AssertionError, match=r"\[azure\]"):
         assert_clean(recipe)
     with pytest.raises(AssertionError, match=r"\[azure\]"):
-        assert_clean(recipe, variants=["azure"])
+        assert_clean(recipe, profiles=["azure"])
 
 
 def test_assert_clean_returns_lint_diagnostics_as_given() -> None:
     found = lint(_warning_only())
     assert assert_clean(found, warnings="allow") is found
     assert assert_clean(lint(_recipe())) == ()
-    with pytest.raises(TypeError, match="variants="):
-        assert_clean(found, variants="default")
-    with pytest.raises(TypeError, match="variants="):
-        assert_clean(plan(_recipe()), variants="default")
+    with pytest.raises(TypeError, match="profiles="):
+        assert_clean(found, profiles="default")
+    with pytest.raises(TypeError, match="profiles="):
+        assert_clean(plan(_recipe()), profiles="default")
 
 
-def test_assert_diagnostic_filters_by_variant() -> None:
+def test_assert_diagnostic_filters_by_profile() -> None:
     recipe = _ghost(where="azure")
-    found = assert_diagnostic(recipe, "service-user-missing", variant="azure")
+    found = assert_diagnostic(recipe, "service-user-missing", profile="azure")
     assert found.variant == "azure"
-    assert assert_diagnostic(recipe, "service-user-missing", variant="azure") == found
+    assert assert_diagnostic(recipe, "service-user-missing", profile="azure") == found
     with pytest.raises(AssertionError, match="no findings"):
-        assert_diagnostic(recipe, "service-user-missing", variants="default")
+        assert_diagnostic(recipe, "service-user-missing", profiles="default")
 
 
 def test_assert_diagnostic_takes_lint_diagnostics() -> None:
-    found = assert_diagnostic(lint(_ghost()), "service-user-missing", variant="default")
+    found = assert_diagnostic(lint(_ghost()), "service-user-missing", profile="default")
     assert isinstance(found, Diagnostic)
     assert (found.severity, found.subject) == ("error", "app")
 
@@ -259,19 +259,19 @@ def test_golden_update_from_env_rewrites_and_prunes(
     assert_tree_matches(_recipe(), golden, update=False)
 
 
-def test_golden_ignores_and_keeps_variants_not_compiled(tmp_path: Path) -> None:
+def test_golden_ignores_and_keeps_profiles_not_compiled(tmp_path: Path) -> None:
     golden = tmp_path / "golden"
-    assert_tree_matches(_recipe(), golden, variants=["default", "azure"], update=True)
+    assert_tree_matches(_recipe(), golden, profiles=["default", "azure"], update=True)
     overlay = golden / "payload" / "mkosi.profiles" / "azure" / "mkosi.conf"
     wrapper = golden / "mkosi.images" / "azure" / "mkosi.conf"
     kept = (overlay.read_text(encoding="utf-8"), wrapper.read_text(encoding="utf-8"))
 
     changed = _recipe(Package("htop"))
-    assert_tree_matches(changed, golden, variants="default", update=True)
+    assert_tree_matches(changed, golden, profiles="default", update=True)
     assert (overlay.read_text(encoding="utf-8"), wrapper.read_text(encoding="utf-8")) == kept
-    assert_tree_matches(changed, golden, variants="default")
+    assert_tree_matches(changed, golden, profiles="default")
     with pytest.raises(AssertionError, match="payload/mkosi.conf"):
-        assert_tree_matches(_recipe(), golden, variants=["azure"])
+        assert_tree_matches(_recipe(), golden, profiles=["azure"])
 
 
 def test_golden_truncates_long_diffs(tmp_path: Path) -> None:

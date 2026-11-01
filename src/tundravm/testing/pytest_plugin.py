@@ -21,7 +21,7 @@ from tundravm.testing import (
     BootUnavailable,
     CompiledTree,
     FakeMkosi,
-    Variants,
+    Profiles,
     compile_tree,
 )
 from tundravm.testing import boot as _boot
@@ -30,7 +30,7 @@ from tundravm.testing._boot import Bootable
 
 
 class CompileFactory(Protocol):
-    def __call__(self, recipe: Recipe, variants: Variants = None) -> CompiledTree: ...
+    def __call__(self, recipe: Recipe, profiles: Profiles = None) -> CompiledTree: ...
 
 
 CliRunner = Callable[..., tuple[int, str, str]]
@@ -53,12 +53,12 @@ def recipe() -> Recipe:
 
 @pytest.fixture
 def compiled(tmp_path: Path) -> CompileFactory:
-    """Factory: ``compiled(recipe, variants=None)`` compiles the internal model's profiles
+    """Factory: ``compiled(recipe, profiles=None)`` compiles the internal model's profiles
     (:func:`~tundravm.testing.compile_tree`) into a new dir under ``tmp_path``."""
     counter = itertools.count()
 
-    def factory(recipe: Recipe, variants: Variants = None) -> CompiledTree:
-        return compile_tree(recipe, variants=variants, path=tmp_path / f"compiled-{next(counter)}")
+    def factory(recipe: Recipe, profiles: Profiles = None) -> CompiledTree:
+        return compile_tree(recipe, profiles=profiles, path=tmp_path / f"compiled-{next(counter)}")
 
     return factory
 

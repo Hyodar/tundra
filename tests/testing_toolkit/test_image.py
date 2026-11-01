@@ -57,7 +57,7 @@ APP = Fragment(
 def test_fragment_plan_boots_on_the_test_platform() -> None:
     image = fragment_plan(APP)
     assert isinstance(image, PlannedImage)
-    assert (image.recipe.name, image.variant) == ("fragment-plan", "default")
+    assert (image.recipe.name, image.profile) == ("fragment-plan", "default")
     assert image.packages["linux-image-amd64"] == "runtime"
     assert image.packages["curl"] == "runtime"
     assert image.packages["gcc"] == "build"
@@ -184,8 +184,8 @@ def test_base_takes_a_fragment_or_a_recipe() -> None:
         items=(Package("linux-image-amd64"),),
         variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
     )
-    on_azure = fragment_plan(File("/etc/x", "x"), base=host, variant="azure")
-    assert on_azure.variant == "azure"
+    on_azure = fragment_plan(File("/etc/x", "x"), base=host, profile="azure")
+    assert on_azure.profile == "azure"
     assert on_azure.file("/etc/x").text == "x"
 
 
@@ -195,7 +195,7 @@ def test_include_satisfies_requires() -> None:
     assert_clean(fragment_plan(needy, include=(Fragment("tools", (Package("jq"),)),)))
 
 
-def test_plan_takes_a_variant_and_matches_compile() -> None:
+def test_plan_takes_a_profile_and_matches_compile() -> None:
     recipe = Recipe(
         name="demo",
         items=(Package("linux-image-amd64"),),
@@ -204,7 +204,7 @@ def test_plan_takes_a_variant_and_matches_compile() -> None:
             Variant("azure", outputs=("azure",), add=Fragment("azure", (Package("jq"),))),
         ),
     )
-    assert plan(recipe).variant == "default"
+    assert plan(recipe).profile == "default"
     azure = plan(recipe, "azure")
     assert "jq" in azure.packages and "jq" not in plan(recipe).packages
     assert azure.tree.digest == compile(recipe, variants=["azure"]).digest

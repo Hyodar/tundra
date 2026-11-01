@@ -112,6 +112,11 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - An image file names no backend: `TUNDRAVM_BACKEND`, else `local` on Linux x86-64 and
   `lima` elsewhere.
 - `tundravm.testing.plan(image)` takes an `Image`; the planned value is `PlannedImage`.
+- `tundravm.testing` says profile where it said variant: `PlannedImage.profile`,
+  `CompiledTree.profiles`, `.default_profile` and `.profile(name)`, the `profile=` argument of
+  every `CompiledTree` reader, `fragment_plan(profile=)`, `assert_diagnostic(profile=,
+  profiles=)`, `profiles=` on `compile_tree`, `assert_clean`, `assert_tree_matches` and the
+  `compiled` fixture, and the `Profiles` alias (was `Variants`).
 - Evidence: `docs/design/evidence/gate4-sdk.md`.
 
 ### Profiles and the ESP

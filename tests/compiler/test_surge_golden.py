@@ -49,5 +49,5 @@ def test_surge_image_matches_the_committed_tree(surge: Recipe) -> None:
 
 
 def test_the_dev_profile_compiles_alone_to_its_golden_tree(surge: Recipe) -> None:
-    diff = assert_tree_matches(surge, GOLDEN, variants=["dev"], update=False)
+    diff = assert_tree_matches(surge, GOLDEN, profiles=["dev"], update=False)
     assert diff.is_clean

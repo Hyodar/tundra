@@ -154,32 +154,32 @@ class PlannedImage:
     packages, mkosi settings) from the compiled tree.
     """
 
-    def __init__(self, recipe: Recipe, variant: str, *, lock: Lock | None = None) -> None:
-        (self.variant,) = lifecycle.variant_names(recipe, [variant])
+    def __init__(self, recipe: Recipe, profile: str, *, lock: Lock | None = None) -> None:
+        (self.profile,) = lifecycle.variant_names(recipe, [profile])
         self.recipe = recipe
         self.lock = lock
 
     def __repr__(self) -> str:
-        return f"<PlannedImage of {self.recipe.name!r}, profile {self.variant!r}>"
+        return f"<PlannedImage of {self.recipe.name!r}, profile {self.profile!r}>"
 
     @cached_property
     def tree(self) -> Tree:
         """The compiled tree of this profile alone, as :func:`tundravm.compile` returns it."""
-        return lifecycle.compile(self.recipe, variants=[self.variant], lock=self.lock)
+        return lifecycle.compile(self.recipe, variants=[self.profile], lock=self.lock)
 
     @cached_property
     def resolved(self) -> Resolved:
         """The resolved profile: every declaration after components, the profiles it extends
         and their changes."""
-        return resolve(self.recipe, variant=self.variant)
+        return resolve(self.recipe, variant=self.profile)
 
     def lint(self) -> tuple[Diagnostic, ...]:
         """Every finding for this profile, as ``tundravm check`` reports it."""
-        return lifecycle.lint(self.recipe, variants=[self.variant], lock=self.lock)
+        return lifecycle.lint(self.recipe, variants=[self.profile], lock=self.lock)
 
     @cached_property
     def _layers(self) -> tuple[dict[str, Entry], ...]:
-        return lifecycle.variant_layers(self.tree, self.variant)
+        return lifecycle.variant_layers(self.tree, self.profile)
 
     @cached_property
     def _entries(self) -> dict[str, Entry]:
@@ -193,7 +193,7 @@ class PlannedImage:
     @cached_property
     def files(self) -> Mapping[str, ImageFile]:
         """Every file and symlink the image tree ships, by absolute path (extra over skeleton)."""
-        trace = provenance(self.recipe, variant=self.variant)
+        trace = provenance(self.recipe, variant=self.profile)
         found: dict[str, ImageFile] = {}
         for stage in ("skeleton", "extra"):
             top = f"mkosi.{stage}"
@@ -218,7 +218,7 @@ class PlannedImage:
             return self.files[path]
         here = posixpath.dirname(path)
         nearby = [p for p in self.files if posixpath.dirname(p) == here]
-        raise KeyError(f"profile {self.variant!r} ships no {path}; in {here}: {nearby}")
+        raise KeyError(f"profile {self.profile!r} ships no {path}; in {here}: {nearby}")
 
     @cached_property
     def _unit_states(self) -> dict[str, str]:
@@ -240,7 +240,7 @@ class PlannedImage:
         shipped = sorted(
             posixpath.basename(p) for p in self.files if posixpath.dirname(p) in UNIT_DIRS
         )
-        raise KeyError(f"profile {self.variant!r} ships no unit {name!r}; units: {shipped}")
+        raise KeyError(f"profile {self.profile!r} ships no unit {name!r}; units: {shipped}")
 
     def service(self, name: str) -> UnitView:
         """The ``<name>.service`` unit; same as :meth:`unit` for a service name."""
@@ -319,9 +319,9 @@ class PlannedImage:
 
 
 def plan(
-    subject: Recipe | PublicImage, variant: str | None = None, *, lock: Lock | None = None
+    subject: Recipe | PublicImage, profile: str | None = None, *, lock: Lock | None = None
 ) -> PlannedImage:
-    """The profile *variant* of *subject* (default: ``production``) as a :class:`PlannedImage`.
+    """*profile* of *subject* (default: ``production``) as a :class:`PlannedImage`.
 
     *subject* is an :class:`~tundravm.Image` (or the internal model one lowers to).
     The tree compiles in memory on the first query that reads it; *lock*'s source pins
@@ -330,14 +330,14 @@ def plan(
     from tundravm._image import recipe_of
 
     recipe = recipe_of(subject) if isinstance(subject, PublicImage) else subject
-    return PlannedImage(recipe, variant or recipe.variants[0].name, lock=lock)
+    return PlannedImage(recipe, profile or recipe.variants[0].name, lock=lock)
 
 
 def fragment_plan(
     *items: Declaration | Fragment,
     include: Sequence[Declaration | Fragment] = (),
     base: Fragment | Recipe | None = None,
-    variant: str = "default",
+    profile: str = "default",
     lock: Lock | None = None,
 ) -> PlannedImage:
     """Internal declarations (or one group of them) planned on a minimal bootable platform.
@@ -345,7 +345,7 @@ def fragment_plan(
     For testing tundravm itself; an image is planned with :func:`plan`. *include* adds what
     the items need but are not under test (a group their ``requires`` names). *base* is the
     platform: a group (default :data:`TEST_PLATFORM`, the kernel package) under one
-    ``qemu`` profile called *variant*, or a whole internal model whose items gain them.
+    ``qemu`` profile called *profile*, or a whole internal model whose items gain them.
     """
     if len(items) == 1 and isinstance(items[0], Fragment):
         under_test = items[0]
@@ -353,11 +353,11 @@ def fragment_plan(
         under_test = Fragment("under-test", tuple(items))
     if isinstance(base, Recipe):
         items = (*base.items, *include, under_test)
-        return PlannedImage(replace(base, items=items), variant, lock=lock)
+        return PlannedImage(replace(base, items=items), profile, lock=lock)
     platform = TEST_PLATFORM if base is None else base
     recipe = Recipe(
         name="fragment-plan",
         items=(platform, *include, under_test),
-        variants=(Variant(variant, outputs=("qemu",)),),
+        variants=(Variant(profile, outputs=("qemu",)),),
     )
-    return PlannedImage(recipe, variant, lock=lock)
+    return PlannedImage(recipe, profile, lock=lock)

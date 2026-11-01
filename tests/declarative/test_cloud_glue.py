@@ -60,7 +60,7 @@ def test_service_and_task_render_conditions_after_the_relations(tmp_path: Path) 
 
 def test_one_variant_builds_one_uki_for_three_outputs(tmp_path: Path) -> None:
     tree = compile_tree(CLOUDS, path=tmp_path / "tree")
-    conf = tree.conf(variant="default").splitlines()
+    conf = tree.conf(profile="default").splitlines()
     assert "Format=uki" in conf and "Output=payload" in conf
     images = tree.root / "mkosi.images"
     assert sorted(p.name for p in images.iterdir()) == ["azure", "gcp", "payload"]

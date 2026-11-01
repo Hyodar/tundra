@@ -126,6 +126,12 @@ RENAMED_KEYWORDS = {
     "Build": {"recipe": "using=", "cache_key": "cache_namespace="},
     "BootStep": {"priority": "after=/before= readiness handles"},
     "fake_fragment": {"priority": "after="},
+    **{
+        helper: {"variants": "profiles="}
+        for helper in ("assert_clean", "compile_tree", "assert_tree_matches", "compiled")
+    },
+    "assert_diagnostic": {"variants": "profiles=", "variant": "profile="},
+    "fragment_plan": {"variant": "profile="},
     "Recipe": {
         "common": "items=",
         **{

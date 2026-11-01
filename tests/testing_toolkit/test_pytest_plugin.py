@@ -59,12 +59,12 @@ def test_compiled_factory_uses_fresh_dirs(
     both = compiled(extended)
     assert first.root != both.root
     assert first.root.is_relative_to(tmp_path)
-    assert first.variants == ("default",)
-    assert both.variants == ("default", "azure")
+    assert first.profiles == ("default",)
+    assert both.profiles == ("default", "azure")
     assert "curl" in first.conf()
     assert "echo demo" in first.runtime_init()
-    assert "jq" in both.conf(variant="azure")
-    assert compiled(extended, variants=["azure"]).variants == ("azure",)
+    assert "jq" in both.conf(profile="azure")
+    assert compiled(extended, profiles=["azure"]).profiles == ("azure",)
 
 
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:

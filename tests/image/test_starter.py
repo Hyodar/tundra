@@ -114,7 +114,7 @@ def test_plan_accepts_an_image_and_the_recipe_it_lowers_to() -> None:
     assert (
         from_image.file("/srv/www/index.html").text == from_recipe.file("/srv/www/index.html").text
     )
-    assert plan(image).variant == "production"
+    assert plan(image).profile == "production"
 
 
 def test_the_default_target_is_the_qemu_disk() -> None:

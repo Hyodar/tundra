@@ -1413,7 +1413,7 @@ assert_clean(
     *,
     warnings: Literal['fail', 'allow'] = 'fail',
     allow: Sequence[str] = (),
-    variants: Variants = None,
+    profiles: Profiles = None,
 ) -> Sequence[Diagnostic]
 ```
 
@@ -1429,9 +1429,9 @@ assert_diagnostic(
     code: str,
     /,
     *,
-    variants: Variants = None,
+    profiles: Profiles = None,
     severity: Severity | None = None,
-    variant: str | None = None,
+    profile: str | None = None,
     subject: str | None = None,
     location: str | None = None,
 ) -> Diagnostic
@@ -1458,7 +1458,7 @@ assert_tree_matches(
     recipe: Recipe,
     golden_dir: str | Path,
     *,
-    variants: Variants = None,
+    profiles: Profiles = None,
     update: bool | None = None,
 ) -> TreeDiff
 ```
@@ -1567,37 +1567,37 @@ Why this host cannot run a real build with the Linux backend without a password 
 compile_tree(
     recipe: Recipe,
     *,
-    variants: Variants = None,
+    profiles: Profiles = None,
     path: str | Path | None = None,
 ) -> CompiledTree
 ```
 
-Compile the profiles *variants* (default: all) of *recipe* into *path* or a temp dir.
+Compile *profiles* (default: every profile) of *recipe* into *path* or a temp dir.
 
 ### `CompiledTree`
 
 *class*
 
 ```python
-CompiledTree(root: Path, variants: Sequence[str], default_variant: str = 'default')
+CompiledTree(root: Path, profiles: Sequence[str], default_profile: str = 'default')
 ```
 
 A compiled mkosi tree on disk, with readers for the files tests inspect.
 
 | Member | Does |
 |---|---|
-| `CompiledTree.conf(variant: str \| None = None) -> str` | The profile's payload configuration as mkosi reads it, one text: the payload's `mkosi.conf`, its `mkosi.conf.d/*.conf` and the overlay's `mkosi.conf`. |
-| `CompiledTree.exists(relpath: str, variant: str \| None = None) -> bool` |  |
-| `CompiledTree.files(variant: str \| None = None) -> list[str]` | Sorted POSIX paths of every file the profile reads, relative to its layer (the payload's own profile overlays left out). |
+| `CompiledTree.conf(profile: str \| None = None) -> str` | The profile's payload configuration as mkosi reads it, one text: the payload's `mkosi.conf`, its `mkosi.conf.d/*.conf` and the overlay's `mkosi.conf`. |
+| `CompiledTree.exists(relpath: str, profile: str \| None = None) -> bool` |  |
+| `CompiledTree.files(profile: str \| None = None) -> list[str]` | Sorted POSIX paths of every file the profile reads, relative to its layer (the payload's own profile overlays left out). |
 | `CompiledTree.layers(name: str \| None = None) -> tuple[Path, ...]` | The configuration directories profile *name* builds from: the payload, then its overlay when it has one. |
 | `CompiledTree.main_conf() -> str` | The root `mkosi.conf`: the settings every image shares and the QEMU disk. |
-| `CompiledTree.path(relpath: str, variant: str \| None = None) -> Path` | *relpath* in the profile's overlay when it is there, else in the payload. |
-| `CompiledTree.read(relpath: str, variant: str \| None = None) -> str` |  |
-| `CompiledTree.runtime_init(variant: str \| None = None, *, step: str \| None = None) -> str` | The runtime-init script text: one *step*'s script, or every step in the order `runtime-init.service` lists them (`/usr/lib/runtime-init/<step>`). |
-| `CompiledTree.script(phase: str, variant: str \| None = None) -> str` | The text of the profile's *phase* scripts, in the order mkosi runs them. |
-| `CompiledTree.scripts(phase: str, variant: str \| None = None) -> list[Path]` | The profile's `mkosi.<phase>.d/` scripts in the order mkosi runs them. |
-| `CompiledTree.unit(name: str, variant: str \| None = None) -> str` | Systemd unit text; a bare name such as `"app"` means `app.service`. |
-| `CompiledTree.variant(name: str \| None = None) -> Path` | The directory holding what profile *name* adds: its overlay, else the payload. |
+| `CompiledTree.path(relpath: str, profile: str \| None = None) -> Path` | *relpath* in the profile's overlay when it is there, else in the payload. |
+| `CompiledTree.profile(name: str \| None = None) -> Path` | The directory holding what profile *name* adds: its overlay, else the payload. |
+| `CompiledTree.read(relpath: str, profile: str \| None = None) -> str` |  |
+| `CompiledTree.runtime_init(profile: str \| None = None, *, step: str \| None = None) -> str` | The runtime-init script text: one *step*'s script, or every step in the order `runtime-init.service` lists them (`/usr/lib/runtime-init/<step>`). |
+| `CompiledTree.script(phase: str, profile: str \| None = None) -> str` | The text of the profile's *phase* scripts, in the order mkosi runs them. |
+| `CompiledTree.scripts(phase: str, profile: str \| None = None) -> list[Path]` | The profile's `mkosi.<phase>.d/` scripts in the order mkosi runs them. |
+| `CompiledTree.unit(name: str, profile: str \| None = None) -> str` | Systemd unit text; a bare name such as `"app"` means `app.service`. |
 
 ### `ConsoleScan`
 
@@ -1710,7 +1710,7 @@ fragment_plan(
     *items: Declaration | Fragment,
     include: Sequence[Declaration | Fragment] = (),
     base: Fragment | Recipe | None = None,
-    variant: str = 'default',
+    profile: str = 'default',
     lock: Lock | None = None,
 ) -> PlannedImage
 ```
@@ -1784,20 +1784,20 @@ Lintable = tundravm.declarative.model.Recipe | tundravm.testing._image.PlannedIm
 ```python
 plan(
     subject: Recipe | PublicImage,
-    variant: str | None = None,
+    profile: str | None = None,
     *,
     lock: Lock | None = None,
 ) -> PlannedImage
 ```
 
-The profile *variant* of *subject* (default: `production`) as a `PlannedImage`.
+*profile* of *subject* (default: `production`) as a `PlannedImage`.
 
 ### `PlannedImage`
 
 *class*
 
 ```python
-PlannedImage(recipe: Recipe, variant: str, *, lock: Lock | None = None)
+PlannedImage(recipe: Recipe, profile: str, *, lock: Lock | None = None)
 ```
 
 One profile of an image, planned in memory: what its compiled tree holds, as values.
@@ -1815,6 +1815,14 @@ One profile of an image, planned in memory: what its compiled tree holds, as val
 | `PlannedImage.settings(section: str) -> Mapping[str, tuple[str, ...]]` | The compiled payload's `mkosi.conf` section, `{key: values}` (empty when absent), merged as mkosi reads it: the root `mkosi.conf`, the payload's `mkosi.conf` and `mkosi.conf.d/*.conf`, then the profile's overlay. List settings (`Packages`, scripts, trees) accumulate, the others override. |
 | `PlannedImage.unit(name: str) -> UnitView` | The shipped unit *name* (a bare name means `.service`), parsed. |
 | `PlannedImage.users` | The declared users, by name. |
+
+### `Profiles`
+
+*value*
+
+```python
+Profiles = str | collections.abc.Sequence[str] | None
+```
 
 ### `read_lock`
 
@@ -1900,12 +1908,4 @@ One compiled systemd unit: its text, parsed sections and whether the image enabl
 
 ```python
 UPDATE_GOLDEN_ENV = 'TUNDRAVM_UPDATE_GOLDEN'
-```
-
-### `Variants`
-
-*value*
-
-```python
-Variants = str | collections.abc.Sequence[str] | None
 ```
