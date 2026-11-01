@@ -581,16 +581,19 @@ def build_parser() -> argparse.ArgumentParser:
         "attest",
         _cmd_attest,
         "Verify an instance's evidence against a policy; delivers nothing.",
-        "Ask the instance's tdxs issuer for a quote bound to a fresh nonce and check MRTD and\n"
-        "RTMR0..2 against FILE: an operator-approved tundravm.policy/2 file, or a build's\n"
-        "measurements.json (the record for the instance's platform). With --validator a tdxs\n"
-        "validator judges the quote's signature and collateral; only then can it be\n"
-        "`trusted`. Verdicts: trusted, partial, measurements-match, measurements-mismatch,\n"
-        "simulated (accepted for a simulated instance), untrusted. Exit 0 when it passes.\n\n"
+        "Ask the instance's attested endpoint (:8745) for evidence bound to a fresh nonce and\n"
+        "check MRTD and RTMR0..2 against FILE: an operator-approved tundravm.policy/2 file, or\n"
+        "a build's measurements.json (the record for the instance's platform). With\n"
+        "--validator a tdxs validator judges the quote's signature and collateral; only then\n"
+        "can it be `trusted`. Verdicts: trusted, partial, measurements-match,\n"
+        "measurements-mismatch, simulated (accepted for a simulated instance), untrusted.\n"
+        "Exit 0 when it passes.\n\n"
         + _wrapped(
-            f"Channel: {bootstrap.UNVERIFIED}. The first contact POSTs the operator's SSH "
-            "public key to :8745; the quote then comes over that SSH session. --issuer names "
-            "an endpoint the operator relays instead."
+            f"Channel: {bootstrap.CHANNEL}. The quote binds the nonce, the session's TLS key, "
+            "the SSH host keys and the instance public key; evidence with another nonce or key "
+            "is refused. On success the host keys become known_hosts and the operator's SSH "
+            "public key (--identity) goes over that session. --issuer checks a quote from a "
+            "tdxs issuer the operator relays instead, bound to no session."
         ),
         as_json,
     )
@@ -610,13 +613,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="KEY",
-        help="The operator's SSH key (default: ~/.ssh/id_ed25519).",
+        help="The SSH key to hand over on success (default: ~/.ssh/id_ed25519 if present).",
     )
     attest.add_argument(
         "--issuer",
         default=None,
         metavar="ENDPOINT",
-        help="unix:PATH or tcp://HOST:PORT instead of the SSH relay.",
+        help="unix:PATH or tcp://HOST:PORT instead of the attested endpoint.",
     )
     attest.add_argument(
         "--validator",
@@ -630,14 +633,15 @@ def build_parser() -> argparse.ArgumentParser:
         _cmd_secrets_help,
         "Deliver credentials or unlock a volume after a fresh attestation.",
         "tundravm secrets deliver INSTANCE --policy FILE NAME=@FILE...\n"
-        "    attest again, then write each value to /run/tundravm/credentials/NAME (0600);\n"
-        "    a production build needs `trusted`.\n"
+        "    verify again, then write each value where the image declares it (a Secret:\n"
+        "    /run/tundravm/credentials/NAME, 0600); a production build needs `trusted`.\n"
         "tundravm secrets unlock INSTANCE VOLUME\n"
-        "    attest again with the policy of the last `attest`, then hand the passphrase\n"
+        "    verify again with the policy of the last `attest`, then hand the passphrase\n"
         "    (typed, or piped on stdin) to the OperatorKey() volume.\n\n"
         + _wrapped(
-            f"Channel: {bootstrap.UNVERIFIED}. Values travel on the SSH command's stdin only: "
-            "never on argv, in a log, a tree, a manifest or a receipt."
+            f"Channel: {bootstrap.CHANNEL}, verified afresh by each command. Values travel in "
+            "that session's request bodies only: never on argv, in a log, a tree, a manifest "
+            "or a receipt."
         ),
     )
     verbs = secrets.add_subparsers(dest="secrets_command", required=True, metavar="deliver|unlock")
@@ -648,7 +652,7 @@ def build_parser() -> argparse.ArgumentParser:
         action = verbs.add_parser(
             name,
             help=help_text,
-            description=_wrapped(f"{help_text} Channel: {bootstrap.UNVERIFIED}."),
+            description=_wrapped(f"{help_text} Channel: {bootstrap.CHANNEL}."),
             parents=[common],
         )
         action.add_argument("instance", metavar="INSTANCE")
@@ -663,9 +667,6 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             action.set_defaults(handler=_cmd_unlock)
             action.add_argument("volume", metavar="VOLUME")
-        action.add_argument(
-            "--identity", type=Path, default=None, metavar="KEY", help="The operator's SSH key."
-        )
         action.add_argument(
             "--validator", default=None, metavar="ENDPOINT", help="A tdxs validator."
         )
@@ -1365,12 +1366,13 @@ def _run_action(
     if action == "probe":
         return _probe(instance, args, out)
     instances.ssh_permitted(instance)
-    session = bootstrap.Session(instance, bootstrap.identity_path(args.identity))
-    argv = session.argv("")[:-1]
-    print(
-        f"note: host key not verified through the attested endpoint ({bootstrap.UNVERIFIED})",
-        file=sys.stderr,
-    )
+    argv = bootstrap.ssh_argv(instance, bootstrap.identity_path(args.identity))
+    if not instances.known_hosts(instance).is_file():
+        print(
+            f"note: host key unverified: `tundravm attest {instance.id}` writes the host keys "
+            "its quote binds",
+            file=sys.stderr,
+        )
     os.execvp(argv[0], argv)
 
 
@@ -1521,7 +1523,7 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
                 "attest",
                 {
                     **json.loads(render_attestation(result, "json")),
-                    "channel": bootstrap.UNVERIFIED if args.issuer is None else args.issuer,
+                    "channel": bootstrap.CHANNEL if args.issuer is None else args.issuer,
                 },
             ),
             file=out,
@@ -1529,7 +1531,7 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
     else:
         print(render_attestation(result, "text"), file=out)
         if args.issuer is None:
-            print(f"channel: {bootstrap.UNVERIFIED}", file=out)
+            print(f"channel: {bootstrap.CHANNEL}", file=out)
     if args.output is not None:
         result.save(args.output)
         _err(f"wrote {args.output}")
@@ -1545,11 +1547,9 @@ def _cmd_secrets_help(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_deliver(args: argparse.Namespace, out: TextIO) -> int:
     found = settings(None)
     instance = instances.open_instance(found.instances, args.instance)
-    result, names = bootstrap.deliver(
-        instance, args.policy, args.values, identity=args.identity, validator=args.validator
-    )
+    result, names = bootstrap.deliver(instance, args.policy, args.values, validator=args.validator)
     print(f"delivered {', '.join(names)} to {instance.id} (verdict {result.verdict})", file=out)
-    print(f"channel: {bootstrap.UNVERIFIED}", file=out)
+    print(f"channel: {bootstrap.CHANNEL}", file=out)
     return EXIT_OK
 
 
@@ -1560,11 +1560,10 @@ def _cmd_unlock(args: argparse.Namespace, out: TextIO) -> int:
         instance,
         args.volume,
         lambda: bootstrap.read_passphrase(args.volume),
-        identity=args.identity,
         validator=args.validator,
     )
     print(f"unlocked {args.volume} on {instance.id} (verdict {result.verdict})", file=out)
-    print(f"channel: {bootstrap.UNVERIFIED}", file=out)
+    print(f"channel: {bootstrap.CHANNEL}", file=out)
     return EXIT_OK
 
 

@@ -7,8 +7,9 @@ hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint findings,
 :func:`assert_tree` compares ``tundravm.compile(image)`` against a golden directory, and
 :func:`read_lock` reads the lockfile those take. :class:`FakeMkosi` and
 :class:`FakeSources` stand in for mkosi and the source fetches, so a real backend runs a
-whole build with nothing forked or fetched; :func:`boot` boots a built image under QEMU
-and reads its serial console, and :func:`assert_probe` (:func:`read_probe`) reads the boot
+whole build with nothing forked or fetched, and :class:`FakeEndpoint` for an instance's
+attested endpoint, misbehaving on request; :func:`boot` boots a built image under QEMU and
+reads its serial console, and :func:`assert_probe` (:func:`read_probe`) reads the boot
 probe a development profile prints there; :func:`run_cli` runs the CLI in-process, on an
 image :func:`image_file` writes.
 
@@ -44,6 +45,7 @@ from tundravm.testing._boot import (
     read_probe,
     scan_console,
 )
+from tundravm.testing._endpoint import FakeEndpoint
 from tundravm.testing._fake_mkosi import FakeCall, FakeMkosi, build_unavailable
 from tundravm.testing._fake_sources import FakeFetch, FakeSources
 from tundravm.testing._image import ImageFile, InitStep, PlannedImage, plan
@@ -217,6 +219,7 @@ __all__ = [
     "BootUnavailable",
     "ConsoleScan",
     "FakeCall",
+    "FakeEndpoint",
     "FakeFetch",
     "FakeMkosi",
     "FakeSources",

@@ -10,15 +10,15 @@ secp256k1 curve (the curve Ethereum signs with, so an address derives from it) w
 - :data:`PUBLIC`, world-readable, the compressed public key (33 bytes) as one hex line;
 - one console line, :data:`CONSOLE` and the hex, which ``run status`` reads.
 
-tundra-tools' ``key-gen`` makes random bytes and pipe keys only, so ``openssl`` (the
+``tools/``' ``key-gen`` makes random bytes and pipe keys only, so ``openssl`` (the
 ``openssl`` package, which every image then carries) makes this one. It starts no network
 and writes nothing a production boot would not, so production profiles carry it too.
 
 A service reads the key as a systemd credential: ``Service(credentials=[InstanceKey()])``
 renders ``LoadCredential=instance-key:/run/tundravm/instance-key.pem`` with ``Requires=``
 and ``After=`` on :data:`UNIT` (:mod:`tundravm.secrets`). Nothing else may name
-:data:`KEY` (the ``instance-key-exposed`` rule). The quote does not bind the public key yet;
-that is tundra-tools work (plan 6.3).
+:data:`KEY` (the ``instance-key-exposed`` rule). The attested endpoint's quote binds
+:data:`PUBLIC` (plan 6.3), so ``attest`` prints it as bound to the quote.
 """
 
 from __future__ import annotations

@@ -102,6 +102,7 @@ TESTING = [
     "BootUnavailable",
     "ConsoleScan",
     "FakeCall",
+    "FakeEndpoint",
     "FakeFetch",
     "FakeMkosi",
     "FakeSources",

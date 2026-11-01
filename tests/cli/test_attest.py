@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import socketserver
 import struct
@@ -18,6 +19,7 @@ import pytest
 from tundravm.attestation import (
     ATTESTATION_SCHEMA,
     CHECKS_NOTE,
+    SIMULATOR_KEY,
     TRUST_NOTE,
     VERDICTS,
     Attestation,
@@ -125,7 +127,7 @@ class FakeIssuer:
         nonce = self.replay if self.replay is not None else bytes.fromhex(str(data["nonce"]))
         bound = self.report_data or report_data_for(user_data, nonce)
         raw = (
-            bound[:32] + hashlib.sha256(bound[:32]).digest()
+            bound[:32] + hmac.new(SIMULATOR_KEY, bound[:32], hashlib.sha256).digest()
             if self.platform == "simulator"
             else tdx_quote(bound, **self.quote)  # type: ignore[arg-type]
         )
@@ -311,11 +313,29 @@ def test_a_simulator_is_never_trusted() -> None:
     assert result.source == "metadata" and result.quote_version is None
     assert result.platform == "simulator" and result.nonce_matches
     assert result.verdict == "simulated" and not result.trusted and not result.passed
-    assert result.reasons == ("simulated", "platform-unverified")
-    allowed = attest("tcp://h:1", peer, transport=FakeIssuer("simulator"), allow_simulated=True)
+    # a simulator's registers are its constants: reported, never compared
+    assert result.reasons == ("simulated", "platform-unverified", "image-unverified")
+    assert {check.verdict for check in result.registers} == {"unchecked"}
+    allowed = attest("tcp://h:1", PEER, transport=FakeIssuer("simulator"), allow_simulated=True)
     assert allowed.verdict == "simulated" and allowed.passed and not allowed.trusted
-    mismatched = attest("tcp://h:1", PEER, transport=FakeIssuer("simulator"))
-    assert mismatched.verdict == "measurements-mismatch"
+    with pytest.raises(MeasurementError, match="its tag does not verify"):
+        attest("tcp://h:1", PEER, transport=_untagged(FakeIssuer("simulator")))
+
+
+def _untagged(issuer: FakeIssuer) -> Callable[[Mapping[str, object]], Mapping[str, object]]:
+    """*issuer*'s replies with the simulator quote's tag zeroed."""
+
+    def send(request: Mapping[str, object]) -> Mapping[str, object]:
+        reply = dict(issuer(request))
+        if request["method"] != "issue":
+            return reply
+        data = dict(reply["data"])  # type: ignore[call-overload]
+        document = json.loads(bytes.fromhex(str(data["document"])))
+        raw = base64.b64decode(document["raw_quote"])
+        document["raw_quote"] = base64.b64encode(raw[:32] + bytes(32)).decode()
+        return {"data": {"document": json.dumps(document).encode().hex()}, "error": None}
+
+    return send
 
 
 def test_issuer_and_validator_failures_are_attestation_errors() -> None:
