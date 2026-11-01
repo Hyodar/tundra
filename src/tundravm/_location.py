@@ -55,13 +55,11 @@ def caller_location() -> str:
     frame: FrameType | None = sys._getframe(1)
     while frame is not None:
         filename = frame.f_code.co_filename
-        if not filename.startswith(("<", *_SKIPPED)):
-            if not os.path.isabs(filename):
-                filename = os.path.abspath(filename)
-                if filename.startswith(_SKIPPED):
-                    frame = frame.f_back
-                    continue
-            return f"{filename}:{frame.f_lineno}"
+        if not filename.startswith("<"):
+            # abspath also normalizes: `../.venv/bin/tundravm` runs as `/x/../.venv/bin/...`.
+            filename = os.path.abspath(filename)
+            if not filename.startswith(_SKIPPED):
+                return f"{filename}:{frame.f_lineno}"
         frame = frame.f_back
     return ""
 

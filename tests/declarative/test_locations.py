@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import write_recipe_file
+from tundravm import _location
 from tundravm.check import render, render_github
 from tundravm.declarative import Diagnostic, Recipe, lint, lower
 from tundravm.declarative.resolve import provenance, resolve
@@ -103,3 +104,12 @@ def test_a_step_cycle_points_at_a_step_in_it(tmp_path: Path) -> None:
     )
     cycle = _finding(load_recipe(_write(tmp_path / "cycle.py", source)), "step-cycle")
     assert cycle.location == f"{tmp_path}/cycle.py:9"  # outside the working directory
+
+
+def test_a_skipped_frame_reached_through_dotdot_stays_skipped() -> None:
+    # A console script started as `../.venv/bin/tundravm` runs under an unnormalized path.
+    package = Path(_location.__file__).parent
+    code = compile("found = caller_location()", f"{package}/../tundravm/cli.py", "exec")
+    namespace: dict[str, object] = {"caller_location": _location.caller_location}
+    exec(code, namespace)
+    assert str(namespace["found"]).startswith(f"{__file__}:")
