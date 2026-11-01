@@ -411,9 +411,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="P",
-        help="Profiles of an image (default: all).",
+        help="Profiles of an image (repeatable; default: all).",
     )
-    show_cmd.add_argument("--dev", action="store_true", help="The latest development build.")
+    show_cmd.add_argument(
+        "--dev",
+        action="store_true",
+        help="The latest development build (the image's dev profile is --profile dev).",
+    )
     show_cmd.add_argument(
         "--attr", default=None, metavar="NAME", help="The image's name in its file."
     )
