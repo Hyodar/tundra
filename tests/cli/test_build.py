@@ -166,6 +166,54 @@ def test_the_dev_profile_is_a_development_build(dev_built: Build, project: Path)
     assert argv == {"argv": ["--profile=dev"]}
 
 
+INCREMENTAL_STEPS = [
+    (("build",), None, None, None),
+    (
+        ("build", "--dev"),
+        None,
+        "saved",
+        "caching: packages (Debian 20261018T082309Z) for the next build",
+    ),
+    (("build", "--dev"), "<h1>again</h1>", "hit", "cached: packages (Debian 20261018T082309Z)"),
+    (("build",), "<h1>once more</h1>", None, None),
+]
+"""In order: the command, the page the image's file is changed to first (the lock written
+again), what the build did with the payload's cached base tree (``None``: it had no cache)
+and the line it prints about it."""
+
+
+def test_a_development_build_is_incremental_and_a_production_build_never_is(
+    project: Path, cli: Cli
+) -> None:
+    """The first dev build stores the base tree and says so, the next, of a changed file,
+    reuses it (`show` says the same); a production build before and after builds from
+    scratch, prints no cache line, records none, and leaves the dev cache as it was."""
+    assert cli("lock").code == EXIT_OK
+    incremental = project / "build" / "demo" / builds.WORK / ".mkosi" / "incremental"
+    stamps: dict[str, float] = {}
+    for argv, page, state, line in INCREMENTAL_STEPS:
+        if page is not None:
+            (project / "demo.py").write_text(STARTER.replace("<h1>demo</h1>", page))
+            assert cli("lock").code == EXIT_OK
+        result = cli(*argv)
+        assert result.code == EXIT_OK, result.err
+        said = [row for row in result.out.splitlines() if row.startswith(("cached:", "caching:"))]
+        assert said == ([line] if line else []), result.out
+        kind = "development" if state else "production"
+        build = Build.open((project / "build" / "demo" / f"latest-{kind}").resolve())
+        assert build.manifest["incremental"] is (state is not None)
+        observed = json.loads((build.path / "observations.json").read_text())["cache"]
+        if state is None or line is None:
+            assert observed is None
+            found = {p.name: p.stat().st_mtime for p in incremental.iterdir()} if stamps else {}
+            assert found == stamps
+            continue
+        assert (observed["packages"], observed["directory"]) == (state, str(incremental))
+        assert f"  incremental   {line.replace(':', '', 1)}" in cli("show", build.path).out
+        stamps = {p.name: p.stat().st_mtime for p in incremental.iterdir()}
+    assert (project / "build" / "demo" / builds.WORK / ".mkosi" / "cache").is_dir()
+
+
 def test_profile_and_dev_are_exclusive(project: Path, cli: Cli) -> None:
     with pytest.raises(SystemExit):
         cli("build", "--profile", "production", "--dev")

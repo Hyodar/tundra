@@ -1206,6 +1206,9 @@ def _build(
         print(f"lock: {name} re-pinned, local source changed", file=out)
     if outcome.lock_written:
         print(f"lock written: {found.lockfile} (commit it)", file=out)
+    reused = None if outcome.cache is None else builds.cache_summary(outcome.cache)
+    if reused is not None:
+        print(f"{reused[0]}: {reused[1]}", file=out)
     state = "built" if outcome.created else "already built (identical; left untouched)"
     print(f"{state} {result.path}", file=out)
     for line in show.render_report(show.report(result)):
