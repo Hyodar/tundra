@@ -116,8 +116,7 @@ $ tundravm doctor --for build
 The example, `examples/attested-node/`, is an Ethereum node on Hoodi that signs its block
 responses inside the TD. Six stages under `stages/` build it up. Each stage is a
 complete image file that adds to the one before. The last is `image.py`, whose `mkosi/`
-tree is committed. `dev` builds any stage's dev profile, boots it without TDX and prints
-the boot probe's table:
+tree is committed. [`dev`](#run) boots any stage's dev profile and prints its probe:
 
 ```console
 $ tundravm dev examples/attested-node/stages/01-boot.py
@@ -429,8 +428,8 @@ same payload.
 
 An image file binds an `Image` to the name `image`, as each stage does.
 `Image` is a frozen dataclass. Every slot is optional and takes small typed values.
-`tundravm show` prints the image as written, then what each profile builds. Every public name
-has one home, without aliases: the [API reference](reference/api.md) lists each namespace.
+Every public name has one home, without aliases: the [API reference](reference/api.md)
+lists each namespace.
 
 ### What is implied
 
@@ -473,7 +472,7 @@ Passing a baseline component in `components=` replaces the implied one.
 by `key=` (a host keyring `Path`, or one under `/usr/share/keyrings/`) and pinned: a
 `https://snapshot.debian.org/archive/NAME` URL by the image's snapshot (or `snapshot=`),
 any other by `sha256=` of its `dists/SUITE/InRelease`, which `lock` records with its
-date and the build checks first.
+date and the build checks first. The example needs no archive beyond Debian's.
 
 `File.copy` and `Tree` read host files when the image lowers: build their paths from
 `Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise; the
@@ -483,7 +482,9 @@ runtime-init step `owners` applies it at boot.
 measured command line, after the image's own: `Kernel.default(cmdline=["nospectre_v2"])`.
 The ones tundravm sets are refused, each naming what sets it: `rootfs=` (`root=`,
 `roothash=`, `usrhash=`, `systemd.verity*`, `systemd.volatile=`), `minimal.target`
-(`init=`, `rdinit=`, `systemd.unit=`) and `run` (`console=`).
+(`init=`, `rdinit=`, `systemd.unit=`) and `run` (`console=`). The example keeps Debian's
+kernel, whose curated modules cover its three targets: `Kernel.build` is for a driver
+built in or a symbol turned off.
 
 ## Services
 
@@ -562,7 +563,9 @@ unless said, which replaces the package's own; beside it only `requires=`, a pro
 `readiness=`, `expose=` and `unit=DropIn(...)` apply. A time daemon's one capability is a deviation,
 `Service.packaged("systemd-timesyncd.service", hardening=Hardening.preset("static",
 capabilities=["CAP_SYS_TIME"]))`, which also lifts `ProtectClock=`; one it lacks shows at
-boot, as the probe's `service:` failure naming a denied capability.
+boot, as the probe's `service:` failure naming a denied capability. The example runs no
+packaged unit: the one it would, the node exporter, comes with `Observability(metrics=)`,
+and declaring it beside that is an `identity-collision`.
 
 ## Components
 
@@ -594,6 +597,8 @@ them.
 `Tdxs` and the volume and delivery tools build from `tools/` of tundravm's repository at
 the installed commit (from a checkout of it, its `tools/` directory, pinned by digest).
 `Tdxs(source=Git(mirror, commit, subdir="tools"))` points every one of them at a mirror.
+`Tdxs.from_policy(policy)` also validates quotes against the registers of an image you
+trust; the example's node checks no peer, so it uses none.
 
 ## Profiles
 
@@ -646,7 +651,8 @@ carries no initialisation token: an unlock failure never permits formatting.
 
 `TpmSeal` is refused for `targets=` that boot with another vTPM: one payload boots on every
 target, and a key sealed on one platform does not open on another. On a cloud it is a
-`volume-tpm-on-cloud` info: that platform's vTPM decides who opens it.
+`volume-tpm-on-cloud` info: that platform's vTPM decides who opens it. That is why the
+example, built for three targets, unlocks with `OperatorKey()`.
 
 `data.directory("nethermind")` is a directory on the volume. A service binds it with
 `state=`, and the image creates it, owned by that service, once the volume is open. The
@@ -736,11 +742,10 @@ by sha256. `Git(url, ref, subdir="tools")` builds one directory of the repositor
 toolchain its `go.mod` names. Your own program is a `Local` source, as the
 [signer](#4-the-signer) is.
 
-The path stays inside the project (the nearest `pyproject.toml`). The digest covers each
-file's path, sha256 and exec bit, and symlink targets, of what `git ls-files --cached
---others --exclude-per-directory=.gitignore` lists (every file outside a work tree).
-`build` copies those files like a checkout. An edit is `local-changed`
-([the lock](#the-lock) says who re-pins it).
+The path stays inside the project (the nearest `pyproject.toml`). The digest covers the
+path, sha256, exec bit and symlink target of what `git ls-files --cached --others
+--exclude-per-directory=.gitignore` lists, and `build` copies those files. An edit is
+`local-changed` ([the lock](#the-lock) says who re-pins it).
 
 The build sandbox never fetches a source. `build` checks each one out on the host, as you,
 into `build/<image>/.work/`, verifies a reused checkout against its pin, and mounts the
@@ -818,8 +823,6 @@ payload/mkosi.profiles/dev/    the dev overlay (public keys only)
 
 How to read it as an mkosi user:
 
-- The OS is the `payload` subimage, built first and copied into the ESP.
-- The main image is the QEMU raw disk `mkosi vm` boots.
 - `targets=` adds `mkosi.images/azure/` and `mkosi.images/gcp/`. Each depends on the
   payload, carries the same ESP and converts the disk in `mkosi.postoutput.d/`. tundravm
   selects them with `--dependency=`.
@@ -983,13 +986,9 @@ $ tundravm show latest --measurements
 $ tundravm show --diff OLD NEW
 ```
 
-Without a build, `show` prints the image as written, then what each profile builds beyond
-the one it extends.
-`--profile P` picks profiles, `--dev` the dev profile; `--json` adds each declaration's origin.
-With a build (a directory, an id prefix, `latest`, `latest-development`), it prints its
-report, provenance, unchecked guarantees and probe checks, or `--units`, `--tree`,
-`--measurements`.
-`--diff` prints the lines two image files, or two builds, differ in.
+Without a build, `show` prints the image as written, then what each profile adds; with
+one (a directory, an id prefix, `latest`), its report, provenance and probe checks. `--diff`
+compares two image files or two builds.
 
 ## Run
 
