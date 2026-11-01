@@ -199,6 +199,28 @@ host-keys                  ok       /etc/ssh root:root 755, ssh_host_ed25519_key
 production boots of the fixture and the verity fixture printed no probe line
 (`test_the_production_build_carries_no_boot_probe`).
 
+The dev variant then gained `Observability(proxy=)` exporting to `sink`
+(`tests/fixtures/sink`, the proxy and both receivers inside the guest). Run `41311712008`
+on `ci/observability-proof`: `run --probe` exited 0 with 17 ok, 0 fail, 1 skip, these rows
+among them:
+
+```
+observability:journal-export.service  ok  active, uploaded to http://127.0.0.2:19580 (its cursor is in /var/lib/journal-export/state)
+observability:metrics-export.service  ok  active, promtool check config --agent accepts /etc/tundravm/metrics-export.yml
+observability:no-wait                 ok  3 services start without waiting on them
+observability:egress                  ok  1 rules loaded
+```
+
+Prometheus 2.53.3 loaded the rendered queue (`retry_on_http_429` included), and `sink`
+printed `proxy carries 127.0.0.2:19580` and `proxy carries 127.0.0.2:19581`, then journal
+batches (`journal batch 1 32768 bytes`, `journal batch 2 381651 bytes`) and remote-write
+batches, both through the proxy. An earlier run (`41308131113`) had the uploader active
+and sending nothing: the image drops systemd's tmpfiles.d and masks
+`systemd-tmpfiles-setup.service`, so the journal stayed `root:root`, unreadable to the
+`systemd-journal` group `journal-export` runs in; `journal-export` now runs
+`/usr/lib/tundravm/journal-access` as root first. The same masking means a `File(owner=)`,
+which `/etc/tmpfiles.d/50-tundravm-owned.conf` applies, is likely never applied either.
+
 Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
 
 - `volume:`: `run` attaches a disk only for an `Image`'s runtime manifest. Since

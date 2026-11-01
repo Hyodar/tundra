@@ -892,8 +892,8 @@ $ tundravm run logs demo-1
 $ tundravm run stop demo-1
 ```
 
-`run` boots `qemu.raw` through OVMF from its ESP on a snapshot (the build is never
-written) and forwards from `127.0.0.1` every TCP port the image accepts and the management
+`run` boots `qemu.raw` through OVMF from its ESP on a snapshot and
+forwards from `127.0.0.1` every TCP port the image accepts and the management
 port 8745, on the same port when free and unprivileged. `--mode` is required:
 
 | Mode | Boots | Evidence |
@@ -906,14 +906,14 @@ says so. Run the dev build (`--dev`) to use the services without TDX.
 
 The instance is `.tundravm/instances/<image>-<n>/`: `instance.json` (build, mode, QEMU
 argv, ports), `events.jsonl` (one record per action, never a value), `console.log`, and a
-sparse 16 GiB `volume-<name>.img` per volume. `run ssh` opens a shell on a dev build that
-runs SSH; `run mode` explains the mode.
+sparse 16 GiB `volume-<name>.img` per volume. `run ssh` opens a shell on a dev build with
+SSH; `run mode` explains the mode.
 
 ### The boot probe
 
-Every development profile carries `tundravm-probe.service`, a checklist compiled from its
-declarations (a production profile carries none), printing one `tundravm-probe: <check>
-ok|fail|skip <detail>` line per check; a `fail` says what to do:
+A development profile, never a production one, carries `tundravm-probe.service`, its
+declarations' checklist, printing `tundravm-probe: <check> ok|fail|skip <detail>` per
+check; a `fail` says what to do:
 
 | Check | Holds when |
 |---|---|
@@ -922,12 +922,13 @@ ok|fail|skip <detail>` line per check; a `fail` says what to do:
 | `port:` | each `expose=` port has a listener |
 | `volume:` | each `Volume` is mounted, ext4, on dm-crypt |
 | `egress:` | with `Egress`, a datagram no rule accepts is refused |
+| `observability:` | exporters run or retry, took their configuration, block nothing, egress loaded |
 | `hardening:` | a preset's `systemd-analyze security` score is under its ceiling |
 | `kernel:` | no disabled symbol in `/proc/kallsyms` (`Kernel.build`), else no uncurated module |
 | `host-keys` | with SSH, the host key is root-owned, read-only to others |
-| `rtmr` | skipped: registers come only from a quote, which `attest` checks |
+| `rtmr` | skipped: only `attest` reads registers, from a quote |
 
-`--probe` waits for it (up to `--timeout`), prints the table, writes `probe.json` and
+`--probe` waits for it (up to `--timeout`), prints the table, writes `probe.json`,
 exits 1 on a failure; `run probe INSTANCE` reads a running instance's.
 
 ## Deploy
