@@ -1,7 +1,7 @@
 [Unit]
 Description=Attested TLS on :8546 to http://127.0.0.1:8547/
-After=attested-tls-8546-key.service tdx-evidence.service
-Requires=attested-tls-8546-key.service tdx-evidence.service
+After=attested-tls-8546-key.service signer-ready.service tdx-evidence.service
+Requires=attested-tls-8546-key.service signer-ready.service tdx-evidence.service
 
 [Service]
 Type=exec

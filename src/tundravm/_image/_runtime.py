@@ -354,12 +354,14 @@ class Runtime:
             )
 
     def relay(self, way: AttestedTLS | TLS) -> Iterator[dm.Declaration]:
-        """The TLS listener relaying *way*'s port to its upstream; an attested one with
-        the root oneshot that makes its key pair each boot (:mod:`._modules.attested_tls`),
-        whose script :meth:`declarations` ships once."""
+        """The TLS listener relaying *way*'s port to its upstream, started once the
+        upstream's readiness holds; an attested one with the root oneshot that makes its
+        key pair each boot (:mod:`._modules.attested_tls`), whose script
+        :meth:`declarations` ships once."""
         yield dm.Package("socat")
         name = way.unit.removesuffix(".service")
         upstream = f"TCP:{way.upstream.address}"
+        ready = _upstream_ready(way)
         hardening = Hardening.preset(
             "static",
             capabilities=("CAP_NET_BIND_SERVICE",) if way.port < 1024 else (),
@@ -389,8 +391,8 @@ class Runtime:
                     "cert": attested_tls.certificate(way.port),
                     "key": attested_tls.key(way.port),
                 },
-                requires=(key_unit,),
-                after=(key_unit,),
+                requires=(key_unit, *ready),
+                after=(key_unit, *ready),
                 ports=(dm.Port(way.port),),
                 needs=(),
                 hardening=hardening,
@@ -402,8 +404,8 @@ class Runtime:
             ("/usr/bin/socat", listen, upstream),
             description=f"TLS on :{way.port} to {way.upstream.url}",
             credentials={way.certificate.name: way.certificate.location},
-            requires=(way.certificate.ready.unit,),
-            after=(way.certificate.ready.unit,),
+            requires=(way.certificate.ready.unit, *ready),
+            after=(way.certificate.ready.unit, *ready),
             ports=(dm.Port(way.port),),
             needs=(),
             hardening=hardening,
@@ -449,6 +451,17 @@ class Runtime:
             "ingress": [way.manifest() for way in self.ingress],
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def _upstream_ready(way: AttestedTLS | TLS) -> tuple[str, ...]:
+    """The unit that proves *way*'s upstream ready, which the relay requires and follows:
+    the service's probe, or the service itself under ``Notify``; none when the upstream
+    declares no readiness."""
+    ready = way.upstream.ready
+    service = None if ready is None else ready.service
+    if service is None or service.readiness is None:
+        return ()
+    return (service.probe_unit or service.unit_name,)
 
 
 def _generate(secret: Generated) -> dm.Task:

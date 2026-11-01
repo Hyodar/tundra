@@ -382,6 +382,9 @@ def test_attested_tls_is_the_only_way_in(planned: PlannedImage) -> None:
     assert key.get("Service", "User") is None and key.get("Service", "Type") == "oneshot"
     assert "attested-tls-443-key.service" in _after(planned, "attested-tls-443.service")
     assert "attested-tls-443-key.service" in _after(planned, "tundravm-endpoint.service")
+    # The relay starts once the upstream's readiness holds, never before it serves.
+    assert "app-ready.service" in _after(planned, "attested-tls-443.service")
+    assert "app-ready.service" in " ".join(relay.values("Unit", "Requires")).split()
     config = planned.file("/etc/tdx/secrets.yaml").text
     assert "attested_tls:\n  - port: 443\n" in config
     assert 'certificate: "/run/tundravm/attested-tls/443/cert.pem"' in config
