@@ -652,16 +652,27 @@ def build_parser() -> argparse.ArgumentParser:
         "Exit 0 when it passes.\n\n"
         + _wrapped(
             f"Channel: {bootstrap.CHANNEL}. The quote binds the nonce, the session's TLS key, "
-            "the SSH host keys and the instance public key; evidence with another nonce or key "
-            "is refused. On success the host keys become known_hosts and the operator's SSH "
-            "public key (--identity) goes over that session. --issuer checks a quote from a "
-            "tdxs issuer the operator relays instead, bound to no session."
+            "the SSH host keys, the instance public key and each AttestedTLS port's "
+            "certificate key; evidence with another nonce or key is refused. On success the "
+            "host keys become known_hosts and the operator's SSH public key (--identity) goes "
+            "over that session. --tls PORT also connects to the AttestedTLS listener on guest "
+            "PORT and refuses unless the certificate it presents carries the key this same "
+            "evidence binds for it; the verdict then shows the certificate's fingerprint. "
+            "--issuer checks a quote from a tdxs issuer the operator relays instead, bound to "
+            "no session."
         ),
         as_json,
     )
     attest.add_argument("instance", metavar="INSTANCE")
     attest.add_argument(
         "--policy", type=Path, required=True, metavar="FILE", help="The verifier policy."
+    )
+    attest.add_argument(
+        "--tls",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="An AttestedTLS port: check the certificate it presents against the binding.",
     )
     attest.add_argument(
         "--output",
@@ -1668,7 +1679,12 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
     found = settings(None)
     instance = instances.open_instance(found.instances, args.instance)
     result = bootstrap.attest(
-        instance, args.policy, identity=args.identity, issuer=args.issuer, validator=args.validator
+        instance,
+        args.policy,
+        identity=args.identity,
+        issuer=args.issuer,
+        validator=args.validator,
+        tls=args.tls,
     )
     if args.json:
         print(

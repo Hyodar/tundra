@@ -379,6 +379,7 @@ def test_placeholder_policies_and_bad_nonces_are_refused() -> None:
 def test_to_dict_is_the_stable_json_shape() -> None:
     payload = attest("tcp://h:1", PEER, nonce=NONCE, transport=FakeIssuer()).to_dict()
     assert sorted(payload) == [
+        "certificate",
         "checks",
         "debug",
         "guest_mode",

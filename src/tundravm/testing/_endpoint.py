@@ -1,7 +1,8 @@
 """A fake attested endpoint: ``tools/pkg/endpoint``'s protocol in memory, for the operator
 side's tests. It speaks through :class:`FakeSession` objects (one per TLS session), signs
-simulator quotes the way tdxs's simulator issuer does and builds synthetic TDX quotes, and
-misbehaves on request: ``relay``, ``replay``, ``wrong-key``."""
+simulator quotes the way tdxs's simulator issuer does and builds synthetic TDX quotes,
+presents the certificate of each attested TLS listener it binds, and misbehaves on
+request: ``relay``, ``replay``, ``wrong-key``, ``wrong-certificate``."""
 
 from __future__ import annotations
 
@@ -19,13 +20,38 @@ from urllib.parse import parse_qs, urlsplit
 from tundravm.attestation import SIMULATOR_KEY, report_data_for
 from tundravm.bootstrap import PURPOSE, binding
 
-Misbehaviour = Literal["relay", "replay", "wrong-key"]
+Misbehaviour = Literal["relay", "replay", "wrong-key", "wrong-certificate"]
 """``relay``: the session's TLS key changes after the evidence (the delivery would land on
 another session); ``replay``: the evidence answers the first nonce it ever saw; ``wrong-key``:
-the evidence binds a TLS key that is not the session's."""
+the evidence binds a TLS key that is not the session's; ``wrong-certificate``: an attested
+TLS listener presents a certificate whose key the evidence does not bind."""
 
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeEndpointHostKeyFakeEndpointHostKey00"
 INSTANCE_KEY = "02" + "ab" * 32
+
+
+def _der(tag: int, content: bytes) -> bytes:
+    length = len(content)
+    if length < 128:
+        head = bytes([length])
+    else:
+        size = (length.bit_length() + 7) // 8
+        head = bytes([0x80 | size]) + length.to_bytes(size, "big")
+    return bytes([tag]) + head + content
+
+
+def listener_key() -> bytes:
+    """A stand-in for an attested TLS listener's key: one DER element, as a
+    SubjectPublicKeyInfo is, of random content."""
+    return _der(0x30, os.urandom(89))
+
+
+def der_certificate(spki: bytes) -> bytes:
+    """A DER X.509 structure around *spki*, enough for
+    :func:`tundravm.bootstrap.certificate_key`: a serial, an algorithm, an issuer, a
+    validity and a subject before the key, then an algorithm and a signature nobody checks."""
+    body = _der(0x02, b"\x01") + _der(0x30, b"") * 4 + spki
+    return _der(0x30, _der(0x30, body) + _der(0x30, b"") + _der(0x03, b"\x00"))
 
 
 def tdx_quote(
@@ -80,6 +106,14 @@ class FakeEndpoint:
         session = FakeSession(self, os.urandom(91))
         self.sessions.append(session)
         return session
+
+    def presented(self, host: str, port: int) -> bytes:
+        """The DER certificate the attested TLS listener on *port* presents (the
+        ``presented=`` that ``attest`` takes): around its bound key, or around a key the
+        evidence does not bind when misbehaving or when *port* is no listener."""
+        del host
+        key = None if self.misbehave == "wrong-certificate" else self.listeners.get(port)
+        return der_certificate(listener_key() if key is None else key)
 
     def evidence(self, session: FakeSession, nonce: bytes) -> dict[str, object]:
         if self.first_nonce is None:

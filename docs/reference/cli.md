@@ -352,7 +352,7 @@ options:
 Verify an instance's evidence against a policy; delivers nothing.
 
 ```text
-usage: tundravm attest [-h] [--json] [--traceback] --policy FILE [--output REPORT]
+usage: tundravm attest [-h] [--json] [--traceback] --policy FILE [--tls PORT] [--output REPORT]
                        [--identity KEY] [--issuer ENDPOINT] [--validator ENDPOINT]
                        INSTANCE
 
@@ -365,9 +365,12 @@ measurements-mismatch, simulated (accepted for a simulated instance), untrusted.
 Exit 0 when it passes.
 
 Channel: attested endpoint: a TLS session whose key the quote binds. The quote binds
-the nonce, the session's TLS key, the SSH host keys and the instance public key;
-evidence with another nonce or key is refused. On success the host keys become
-known_hosts and the operator's SSH public key (--identity) goes over that session.
+the nonce, the session's TLS key, the SSH host keys, the instance public key and each
+AttestedTLS port's certificate key; evidence with another nonce or key is refused. On
+success the host keys become known_hosts and the operator's SSH public key
+(--identity) goes over that session. --tls PORT also connects to the AttestedTLS
+listener on guest PORT and refuses unless the certificate it presents carries the key
+this same evidence binds for it; the verdict then shows the certificate's fingerprint.
 --issuer checks a quote from a tdxs issuer the operator relays instead, bound to no
 session.
 
@@ -379,6 +382,8 @@ options:
   --json                Print a JSON report.
   --traceback           Raise errors with the Python traceback.
   --policy FILE         The verifier policy.
+  --tls PORT            An AttestedTLS port: check the certificate it presents against the
+                        binding.
   --output REPORT       Write the record (tundravm.attestation/2).
   --identity KEY        The SSH key to hand over on success (default: ~/.ssh/id_ed25519 if
                         present).

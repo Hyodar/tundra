@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -17,12 +18,14 @@ from tundravm import bootstrap, instances
 from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.testing import FakeEndpoint
-from tundravm.testing._endpoint import HOST_KEY, INSTANCE_KEY
+from tundravm.testing._endpoint import HOST_KEY, INSTANCE_KEY, der_certificate, listener_key
 
 SIMULATED = policy(RTMR0=bytes(48), RTMR1=bytes(48), RTMR2=bytes(48))
 TOKEN = b"s3cret-token-value"
 PASSPHRASE = b"correct horse battery staple"
 REGISTERS = {"MRTD": MRTD, "RTMR0": R0, "RTMR1": R1, "RTMR2": R2, "RTMR3": R3}
+LISTENER = listener_key()
+"""The key of the prover's AttestedTLS(443) listener, which the fake's evidence binds."""
 
 
 @pytest.fixture
@@ -161,6 +164,86 @@ def test_delivery_is_refused(
     assert refusal in " ".join(result.err.split())
     assert fake.received == {}
     assert not any(method == "POST" for s in fake.sessions for method, _ in s.requests)
+
+
+def test_attest_tls_checks_the_certificate_against_the_same_evidence(
+    instance: instances.Instance,
+    cli: Cli,
+    endpoint: FakeEndpoint,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--tls PORT`` prints the listener's fingerprint, checked on the one session's evidence."""
+    endpoint.listeners = {443: LISTENER}
+    monkeypatch.setattr(bootstrap, "_presented", endpoint.presented)
+    simulated = _file(tmp_path, "policy.json", json.dumps(SIMULATED))
+    result = cli("attest", instance.id, "--policy", simulated, "--tls", "443")
+    assert result.code == EXIT_OK, result.out + result.err
+    fingerprint = "sha256:" + hashlib.sha256(der_certificate(LISTENER)).hexdigest()
+    assert f"certificate   :443  {fingerprint}  (key bound to the quote)" in result.out
+    assert "verdict: simulated" in result.out and len(endpoint.sessions) == 1
+    assert _events(instance)[-1]["certificate"] == [443, fingerprint]
+    report = cli("attest", instance.id, "--policy", simulated, "--tls", "443", "--json")
+    assert f'"fingerprint": "{fingerprint}"' in report.out and '"port": 443' in report.out
+
+
+@pytest.mark.parametrize(
+    ("contract", "misbehave", "build", "endpoint_kwargs", "code", "said"),
+    [
+        (
+            "wrong certificate",
+            "wrong-certificate",
+            ("simulated", "development"),
+            {},
+            EXIT_ERROR,
+            "but the quote binds key sha256:",
+        ),
+        (
+            "certificate bound, evidence for another nonce",
+            "replay",
+            ("simulated", "development"),
+            {},
+            EXIT_ERROR,
+            "replayed evidence",
+        ),
+        (
+            "simulated evidence against a production policy",
+            None,
+            ("tdx", "production"),
+            {"mode": "tdx"},
+            EXIT_FAILURE,
+            "verdict: simulated",
+        ),
+    ],
+)
+def test_attest_tls_is_refused(
+    prover: Path,
+    cli: Cli,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contract: str,
+    misbehave: str | None,
+    build: tuple[Literal["simulated", "tdx"], str],
+    endpoint_kwargs: dict[str, object],
+    code: int,
+    said: str,
+) -> None:
+    """A certificate the binding does not vouch for, or evidence that is not this session's,
+    is a refusal; simulated evidence never passes a production build: nothing is written."""
+    del contract
+    found = _instance(prover, cli, mode=build[0], kind=build[1])
+    fake = FakeEndpoint(misbehave=misbehave, listeners={443: LISTENER}, **endpoint_kwargs)  # type: ignore[arg-type]
+    monkeypatch.setattr(bootstrap, "_tls", fake.connect)
+    monkeypatch.setattr(bootstrap, "_presented", fake.presented)
+    if misbehave == "replay":
+        fake.connect("h", 1).request("GET", "/evidence?nonce=" + "11" * 32)
+    peer = PEER if build[1] == "production" else SIMULATED
+    path = _file(tmp_path, "policy.json", json.dumps(peer))
+    result = cli("attest", found.id, "--policy", path, "--tls", "443")
+    assert result.code == code, result.out + result.err
+    assert said in " ".join((result.out + result.err).split())
+    assert "attested" not in json.loads((found.path / "instance.json").read_text())
+    assert not instances.known_hosts(found).exists()
 
 
 def test_attest_fails_on_a_mismatch_and_writes_nothing(

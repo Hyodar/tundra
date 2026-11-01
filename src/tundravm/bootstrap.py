@@ -35,6 +35,7 @@ import json
 import os
 import re
 import secrets as random
+import socket
 import ssl
 import struct
 import sys
@@ -93,6 +94,9 @@ class Channel(Protocol):
 
 Connector = Callable[[str, int], Channel]
 """Opens a session to ``host:port`` (tests replace it with a fake endpoint's)."""
+
+Presented = Callable[[str, int], bytes]
+"""Returns the DER certificate the TLS listener at ``host:port`` presents (tests replace it)."""
 
 
 def _tlv(data: bytes, offset: int) -> tuple[int, int, int]:
@@ -170,6 +174,74 @@ class TlsChannel:
 
 def _tls(host: str, port: int) -> Channel:
     return TlsChannel(host, port)
+
+
+def _presented(host: str, port: int) -> bytes:
+    """The DER certificate the attested TLS listener at *host*:*port* presents; the handshake
+    checks nothing, since the quote is what vouches for the key."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, port), timeout=TIMEOUT_S) as raw:
+            with context.wrap_socket(raw) as sock:
+                der = sock.getpeercert(binary_form=True)
+    except OSError as exc:
+        raise AttestationError(
+            f"Cannot reach the attested TLS listener at {host}:{port}: {exc}.",
+            hint="The relay starts with the image's services: check `tundravm run status`, and "
+            "pass --tls with an AttestedTLS port of the image (`tundravm show BUILD` lists them).",
+        ) from exc
+    if der is None:
+        raise AttestationError(
+            f"{host}:{port} presented no certificate.",
+            hint="Pass --tls with an AttestedTLS port of the image (`tundravm show BUILD`).",
+        )
+    return der
+
+
+@dataclass(frozen=True, slots=True)
+class Certificate:
+    """The certificate an attested TLS listener presented, its key found in the binding."""
+
+    port: int
+    """The guest port the listener serves."""
+    fingerprint: str
+    """``sha256:`` and the hex SHA-256 of the certificate's DER, as ``openssl x509
+    -fingerprint -sha256`` prints it without the colons."""
+    key: bytes
+    """The DER SubjectPublicKeyInfo of its key: the part the quote's user data holds."""
+
+
+def key_name(spki: bytes) -> str:
+    """How a refusal names a key: ``sha256:`` and the hex SHA-256 of its DER
+    SubjectPublicKeyInfo."""
+    return "sha256:" + hashlib.sha256(spki).hexdigest()
+
+
+def check_certificate(evidence: Evidence, port: int, der: bytes) -> Certificate:
+    """The certificate *der* the attested TLS listener on guest *port* presented, refused
+    unless its key is the one *evidence* binds for that port; the refusal says which key the
+    quote bound. It is checked against the evidence the policy was judged on, never
+    another session's, so a relay cannot pair a good quote with a certificate of its own."""
+    key = certificate_key(der)
+    fingerprint = "sha256:" + hashlib.sha256(der).hexdigest()
+    bound = dict(evidence.attested_tls)
+    if port not in bound:
+        ports = ", ".join(f":{p}" for p in bound) or "no port"
+        raise AttestationError(
+            f"Refused: the quote binds no certificate key for :{port}; it binds one for {ports}.",
+            hint="Pass --tls with an AttestedTLS port of this image: `tundravm show BUILD` "
+            "lists its ingress.",
+        )
+    if bound[port] != key:
+        raise AttestationError(
+            f"Refused: the certificate on :{port} ({fingerprint}) carries key {key_name(key)}, "
+            f"but the quote binds key {key_name(bound[port])} for that port.",
+            hint="Something between this host and the instance terminates TLS on that port: "
+            "check the forward (`tundravm run status`) and attest again.",
+        )
+    return Certificate(port, fingerprint, key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +512,8 @@ def attest(
     issuer: str | None = None,
     validator: str | None = None,
     connect: Connector | None = None,
+    tls: int | None = None,
+    presented: Presented | None = None,
 ) -> Attestation:
     """Fresh evidence from *instance*'s attested endpoint, bound to the TLS session, checked
     against *policy*; delivers no secret.
@@ -449,10 +523,19 @@ def attest(
     instance's ``known_hosts`` and, when the image takes one, hands the operator's SSH
     public key (*identity*, the default key pair when there is one) over the same session.
     *issuer* checks a quote from a tdxs issuer the operator relays instead: nothing binds it
-    to a session, so nothing is written or sent."""
+    to a session, so nothing is written or sent. *tls* also connects to the attested TLS
+    listener on that guest port and refuses, before anything is written, unless the
+    certificate it presents carries the key this same evidence binds for it
+    (:func:`check_certificate`); the result then carries the port and the fingerprint."""
     data, digest = read_policy(policy, instance)
     evidence: Evidence | None = None
     sent_key: str | None = None
+    if issuer is not None and tls is not None:
+        raise ValidationError(
+            "--tls checks a certificate against the attested endpoint's evidence, which "
+            "--issuer does not fetch.",
+            hint="Drop --issuer: `tundravm attest INSTANCE --policy FILE --tls PORT`.",
+        )
     if issuer is not None:
         result = check_quote(
             issuer,
@@ -465,6 +548,11 @@ def attest(
     else:
         channel, where = _session(instance, connect)
         result, evidence = verify(instance, data, channel, where, validator=validator)
+        if tls is not None:
+            der = (presented or _presented)(instance.host, instance.port(tls) or tls)
+            result = replace(
+                result, certificate=(tls, check_certificate(evidence, tls, der).fingerprint)
+            )
         if evidence.instance_key:
             result = replace(result, instance_key=evidence.instance_key)
             instance.data["instance_key"] = evidence.instance_key
@@ -481,6 +569,7 @@ def attest(
         nonce=result.nonce,
         channel=CHANNEL if issuer is None else f"issuer {issuer} (not bound to a session)",
         instance_key=result.instance_key,
+        certificate=result.certificate,
         ssh_key=sent_key,
     )
     if result.passed:
@@ -702,17 +791,21 @@ __all__ = [
     "CHANNEL",
     "CREDENTIALS",
     "PURPOSE",
+    "Certificate",
     "Channel",
     "Connector",
     "Evidence",
+    "Presented",
     "TlsChannel",
     "attest",
     "binding",
     "certificate_key",
+    "check_certificate",
     "deliver",
     "fail_closed",
     "fetch_evidence",
     "identity_path",
+    "key_name",
     "post",
     "read_passphrase",
     "read_policy",

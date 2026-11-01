@@ -302,6 +302,9 @@ class Attestation:
     instance_key: str | None = None
     """The guest's instance public key (``/run/tundravm/instance-key.pub``) the attested
     endpoint's quote binds; ``None`` without one (an issuer the operator relays)."""
+    certificate: tuple[int, str] | None = None
+    """The attested TLS port ``attest --tls`` connected to and the ``sha256:`` fingerprint of
+    the certificate it presented, whose key this quote binds; ``None`` when none was checked."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -384,6 +387,13 @@ class Attestation:
     def to_dict(self) -> dict[str, object]:
         """The JSON form ``attest --json`` prints (sorted keys)."""
         return {
+            "certificate": None
+            if self.certificate is None
+            else {
+                "port": self.certificate[0],
+                "fingerprint": self.certificate[1],
+                "bound_to_quote": True,
+            },
             "checks": CHECKS_NOTE,
             "debug": self.debug,
             "guest_mode": self.guest_mode,
@@ -1161,6 +1171,8 @@ def _signature_line(result: Attestation) -> str:
 
 INSTANCE_KEY_NOTE = "bound to the quote"
 """What ``attest`` says beside the instance public key: the endpoint's binding holds it."""
+CERTIFICATE_NOTE = "key bound to the quote"
+"""What ``attest --tls`` says beside the certificate's fingerprint: the binding holds its key."""
 
 
 def render_attestation(result: Attestation, fmt: str) -> str:
@@ -1192,6 +1204,9 @@ def render_attestation(result: Attestation, fmt: str) -> str:
             lines.append(f"{'':<6} {'policy':<9}  {shown}")
     if result.instance_key is not None:
         lines.append(f"instance key  {result.instance_key}  ({INSTANCE_KEY_NOTE})")
+    if result.certificate is not None:
+        port, fingerprint = result.certificate
+        lines.append(f"certificate   :{port}  {fingerprint}  ({CERTIFICATE_NOTE})")
     if result.validator is None:
         lines.append(f"note: {CHECKS_NOTE}")
     if result.verdict == "partial":
