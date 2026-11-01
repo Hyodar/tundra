@@ -23,12 +23,12 @@ mkosi-chroot systemctl enable nethermind-ready.service
 mkosi-chroot systemctl enable taiko-client.service
 mkosi-chroot systemctl enable raiko.service
 mkosi-chroot systemctl enable raiko-ready.service
+mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
 mkosi-chroot systemctl enable credential-jwt.service
 mkosi-chroot systemctl enable credential-taiko-chain.service
 mkosi-chroot systemctl enable credential-raiko-config.service
-mkosi-chroot systemctl enable tundravm-credentials.service
 mkosi-chroot systemctl enable attested-tls-443.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable tdx-evidence.service
@@ -49,12 +49,12 @@ ln -sf "/etc/systemd/system/nethermind-ready.service" "$BUILDROOT/etc/systemd/sy
 ln -sf "/etc/systemd/system/taiko-client.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/raiko.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/raiko-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/credential-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/credential-taiko-chain.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/credential-raiko-config.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/tundravm-credentials.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

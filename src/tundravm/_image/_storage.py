@@ -63,9 +63,8 @@ class OperatorKey:
     the instance has proved what it runs; nothing about it is in the image. The volume
     stays closed, and every service bound to it waits, until it arrives. Today the image
     waits on a FIFO (``/run/tundravm/unlock/<volume>``, ``key-gen``'s pipe strategy) that
-    the operator writes over the control plane; gate 3's tools/ work adds the
-    attested endpoint that writes it, and keeps the SSH public key in a LUKS2 token so
-    the control plane works before the disk opens.
+    the attested endpoint writes (``POST /unlock``) on a session a fresh quote bound. The
+    endpoint keeps nothing on the volume, so the control plane works before it opens.
     """
 
     def manifest(self) -> dict[str, object]:

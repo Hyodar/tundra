@@ -90,7 +90,7 @@ def test_an_operator_key_volume_is_a_pipe_key_and_a_luks_disk(planned: PlannedIm
     assert 'encryption_key_path: "/run/tundravm/keys/data"' in disks
     assert planned.packages["cryptsetup"] == "runtime"
     builds = lower(prover()).source_builds()
-    assert {"key-generation", "disk-encryption", "secret-delivery", "tdxs"} <= set(builds)
+    assert {"key-generation", "disk-encryption", "attested-endpoint", "tdxs"} <= set(builds)
 
 
 def test_the_volume_directory_is_made_for_its_service_once_the_volume_opens(
@@ -351,12 +351,12 @@ def test_the_control_plane_bootstrap_listens_on_the_management_port(
     planned: PlannedImage,
 ) -> None:
     config = planned.file("/etc/tdx/secrets.yaml").text
-    assert f'server_url: "0.0.0.0:{MANAGEMENT_PORT}"' in config
+    assert f'listen: "0.0.0.0:{MANAGEMENT_PORT}"' in config
     assert "store_at" not in config  # the bootstrap never waits for the volume
     sshd = planned.file("/etc/ssh/sshd_config.d/50-tundravm.conf").text
     assert "PasswordAuthentication no" in sshd
     needs = planned.file("/usr/lib/systemd/system/ssh.service.d/10-tundravm-needs.conf").text
-    assert "runtime-init-secrets.service" in needs  # sshd waits for the delivered key
+    assert "runtime-init-secrets.service" not in needs  # the key lands whenever
     # The evidence service waits for nothing an operator delivers.
     assert not [unit for unit in _after(planned, "tdxs.service") if "runtime-init" in unit]
 

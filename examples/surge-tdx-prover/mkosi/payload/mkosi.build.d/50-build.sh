@@ -19,6 +19,6 @@ echo 'tundravm: source build key-generation is not pinned: run tundravm lock, th
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"disk-setup","package":"./cmd/disk-setup","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/disk-setup","kind":"artifact","mode":"0755"}],"name":"disk-encryption","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
 echo 'tundravm: source build disk-encryption is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
-# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"secret-delivery","package":"./cmd/secret-delivery","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/secret-delivery","kind":"artifact","mode":"0755"}],"name":"secret-delivery","source":{"kind":"local","path":"tundravm:tools"}}
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"attested-endpoint","package":"./cmd/attested-endpoint","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/attested-endpoint","kind":"artifact","mode":"0755"}],"name":"attested-endpoint","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
-echo 'tundravm: source build secret-delivery is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+echo 'tundravm: source build attested-endpoint is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

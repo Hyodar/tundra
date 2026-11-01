@@ -138,8 +138,8 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "91af2029693ac7c70e4bae6d8a819e719c33007dd012ee0bc2a35dbb7ad6d77c"
-EQUIVALENCE_RECIPE = "b6bb4191108c7d03b2fa37aee22227b9a470a0d875dd404b76135c3c47c3e270"
+EQUIVALENCE_TREE = "5c228cd777a98e60808de55fa0d106949c940c30158006e770e77078e9ae81a2"
+EQUIVALENCE_RECIPE = "379f025960d43c4fea29cbde82edd5154fe426116f612431f10a1053e186aeea"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
 overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned
@@ -154,9 +154,9 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
     assert [(d.severity, d.code, d.profile, d.subject) for d in check(lowered)] == [
         ("warning", "source-unpinned", "", "sources.app"),
+        ("warning", "source-unpinned", "", "sources.attested-endpoint"),
         ("warning", "source-unpinned", "", "sources.disk-encryption"),
         ("warning", "source-unpinned", "", "sources.key-generation"),
-        ("warning", "source-unpinned", "", "sources.secret-delivery"),
         ("error", "disk-device-guessed", "default", "disk_persistent"),
         ("error", "kernel-missing", "default", ""),
     ]

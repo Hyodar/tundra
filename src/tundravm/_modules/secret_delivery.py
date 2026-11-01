@@ -1,8 +1,14 @@
-"""Secret delivery module."""
+"""Secret delivery: the attested endpoint (``tools/cmd/attested-endpoint``) of a ``Secrets``.
+
+The endpoint serves ``GET /evidence`` (a quote binding the nonce, its TLS key, the SSH host
+keys and the instance public key) and takes ``POST /credentials``, ``/unlock`` and
+``/ssh-key`` only on the TLS session that fetched that evidence (plan section 6.3).
+"""
 
 from __future__ import annotations
 
 import json
+import posixpath
 import shlex
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -15,7 +21,7 @@ from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBui
 from tundravm._units.render import render
 from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
-from tundravm.models import SecretSpec, ships_unit
+from tundravm.models import SecretSpec, ServiceSpec, ships_unit
 
 if TYPE_CHECKING:
     from tundravm.declarative._lowered import Lowered
@@ -33,31 +39,57 @@ SECRET_ENV_DIRECTORY = "/run/secrets"
 _UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 BUILTIN_SECRET_PROVIDER = "tundravm"
-"""The provider of a ``Secrets`` without ``delivery=``: ``secret-delivery`` from ``tools/``."""
+"""The provider of a ``Secrets`` without ``delivery=``: the attested endpoint from ``tools/``."""
 
 BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
-    {"ssh-key": True, "file": False, "env": False}
+    {"ssh-key": True, "file": True, "env": False}
 )
-"""What the built-in provider writes at boot, by target kind.
+"""What the built-in provider (``attested-endpoint``) writes, by target kind, each only on
+the TLS session whose key a fresh quote bound.
 
-``ssh-key``: one ed25519 public key POSTed to ``host:port``, written to
-``<ssh_dir>/authorized_keys`` and ``key_path`` (``tools/pkg/secrets``
-``Manager.Setup``). The binary never reads the manifest, so ``file``
-(``SecretFile``) and ``env`` (``SecretEnv``) targets are not written.
+``ssh-key``: the operator's OpenSSH public key (``POST /ssh-key``), written to
+``<ssh_dir>/authorized_keys`` and ``key_path``. ``file``: a ``SecretFile`` target, written
+atomically with its mode and owner (``POST /credentials``), once per name per boot. ``env``
+(``SecretEnv``) targets are not written.
 """
+
+ENDPOINT_UNIT = "tundravm-endpoint.service"
+"""The attested endpoint's unit: the control plane, which no runtime-init step holds up."""
+QUOTE_SOCKET = "/var/tdxs.sock"
+"""The evidence service's socket the endpoint asks for quotes."""
+SSH_HOST_KEYS = "/etc/ssh/ssh_host_*_key.pub"
+"""The SSH host public keys every quote binds (none in an image without SSH)."""
+INSTANCE_PUBLIC_KEY = "/run/tundravm/instance-key.pub"
+"""The instance public key every quote binds, in an image that generates one."""
+RUNTIME = "/run/tundravm"
+MODE_FILE = "/run/tundravm/mode"
+"""What the execution gate recorded, which the evidence carries."""
 
 _TARGET_NOUNS = {"file": "file", "env": "environment variable"}
-_LOOPBACK = ("127.0.0.1", "::1", "localhost")
 
-CLOSE_DELIVERY_PORT = """\
-# One key, once: the delivery port stays closed until the next boot.
-if /usr/sbin/nft list chain inet filter input >/dev/null 2>&1; then
-    /usr/sbin/nft insert rule inet filter input tcp dport {port} drop \\
-        'comment "tundravm: the SSH key was taken"'
-fi
-"""
-"""What the ``secrets`` step runs after ``secret-delivery setup``: a drop rule ahead of the
-firewall's accept for the port (an image without the firewall has no rule to override)."""
+_HARDENING: tuple[tuple[str, str], ...] = (
+    ("ProtectSystem", "strict"),
+    ("ProtectHome", "no"),
+    ("PrivateTmp", "yes"),
+    ("PrivateDevices", "yes"),
+    ("NoNewPrivileges", "yes"),
+    ("ProtectKernelModules", "yes"),
+    ("ProtectKernelTunables", "yes"),
+    ("ProtectControlGroups", "yes"),
+    ("ProtectKernelLogs", "yes"),
+    ("ProtectClock", "yes"),
+    ("ProtectHostname", "yes"),
+    ("RestrictSUIDSGID", "yes"),
+    ("RestrictRealtime", "yes"),
+    ("RestrictNamespaces", "yes"),
+    ("LockPersonality", "yes"),
+    ("MemoryDenyWriteExecute", "yes"),
+    ("RestrictAddressFamilies", "AF_UNIX AF_INET AF_INET6"),
+    ("SystemCallArchitectures", "native"),
+    ("CapabilityBoundingSet", "CAP_CHOWN"),
+)
+"""Root (it writes root-owned credentials, FIFOs and ``authorized_keys``) with ``CAP_CHOWN``
+alone, for a ``SecretFile`` with an owner."""
 
 
 @dataclass(slots=True)
@@ -79,6 +111,9 @@ class SecretDelivery(Module):
     or an external one writing the kinds in *provider_supports*; ``check()``
     rejects a target it does not write (``secret-target-unsupported``). The SSH
     key flow always runs through the built-in one.
+
+    *volumes* are ``(name, pipe)`` pairs: the volumes whose passphrase ``POST /unlock``
+    hands to ``key-gen``'s FIFO.
     """
 
     secrets: tuple[SecretSpec, ...] = ()
@@ -94,6 +129,7 @@ class SecretDelivery(Module):
     env_suffix: str | None = None
     provider: str = BUILTIN_SECRET_PROVIDER
     provider_supports: tuple[str, ...] = ()
+    volumes: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         self.secrets = tuple(self.secrets)
@@ -152,7 +188,7 @@ class SecretDelivery(Module):
 
     @property
     def external(self) -> bool:
-        """Whether something other than ``secret-delivery`` writes the targets."""
+        """Whether something other than the attested endpoint writes the targets."""
         return self.provider != BUILTIN_SECRET_PROVIDER
 
     def delivers(self, kind: str) -> bool:
@@ -216,7 +252,7 @@ class SecretDelivery(Module):
                 if self.delivers(target.kind):
                     continue
                 noun = _TARGET_NOUNS[target.kind]
-                only = "" if self.external else " (it provisions only the SSH key)"
+                only = "" if self.external else " (it writes files, never the environment)"
                 yield Diagnostic(
                     severity="error",
                     code="secret-target-unsupported",
@@ -247,29 +283,84 @@ class SecretDelivery(Module):
                 subject=service,
             )
 
-    def init_script(self) -> str:
-        """The ``secrets`` runtime-init step: ``secret-delivery setup`` on the config.
+    def files(self) -> list[tuple[str, str, str, str | None]]:
+        """``(name, location, mode, owner)`` of each ``file`` target the endpoint writes."""
+        if self.external:
+            return []
+        return [
+            (spec.name, target.location, target.mode, target.owner)
+            for spec in sorted(self.secrets, key=lambda s: s.name)
+            for target in spec.targets
+            if target.kind == "file"
+        ]
 
-        It receives the SSH key and writes the configuration; an external
-        provider's targets are waited for by its own ``delivery-<name>`` step. The key
-        delivery is one-shot: ``secret-delivery`` takes the first valid key and stops
-        listening (or never listens, when ``store_at``'s LUKS token already holds one),
-        and the step then drops the port in the firewall until the next boot
-        (:data:`CLOSE_DELIVERY_PORT`), so nothing reopens it. The attested endpoint of
-        plan section 6.3, which replaces it, is not one-shot.
+    def init_script(self) -> str:
+        """The ``secrets`` runtime-init step: wait until every required ``file`` target the
+        endpoint writes has arrived, so ``secrets.ready`` means the image has its secrets.
+
+        The endpoint itself is :meth:`service`, not a step: it serves from boot whatever the
+        other steps wait for.
         """
-        setup = f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
-        if self.host in _LOOPBACK:
-            return setup
-        return setup + CLOSE_DELIVERY_PORT.format(port=self.port)
+        required = [
+            target.location
+            for spec in self.secrets
+            if spec.required and not self.external
+            for target in spec.targets
+            if target.kind == "file"
+        ]
+        if not required:
+            return "# secrets: nothing required arrives through the attested endpoint\n"
+        test = " && ".join(f"[ -e {shlex.quote(path)} ]" for path in sorted(set(required)))
+        wait = f"until {test}; do sleep 1; done\n"
+        return f"# secrets: wait for the attested endpoint's deliveries\n{wait}"
+
+    @property
+    def unit(self) -> str:
+        """The endpoint's unit (``tundravm-endpoint-<suffix>.service`` beside another)."""
+        if self.env_suffix is None:
+            return ENDPOINT_UNIT
+        return f"tundravm-endpoint-{self.env_suffix}.service"
+
+    def service(self) -> ServiceSpec:
+        """The endpoint: started at boot, after the evidence socket and the keys it binds,
+        waiting for no runtime-init step (the control plane must answer before them)."""
+        return ServiceSpec(
+            name=self.unit,
+            command=("/usr/bin/attested-endpoint", "--config", self.config_path),
+            description="tundravm attested endpoint",
+            after=(
+                "network-online.target",
+                "tdx-evidence.service",
+                "tdxs.socket",
+                "ssh-host-keys.service",
+                "tundravm-instance-key.service",
+            ),
+            wants=("network-online.target", "tdxs.socket"),
+            type="notify",
+            restart="on-failure",
+            hardening=(*_HARDENING, ("ReadWritePaths", " ".join(self.write_paths()))),
+            needs=(),
+        )
+
+    def write_paths(self) -> tuple[str, ...]:
+        """The directories the endpoint writes (``-``: perhaps not there). ``/run/tundravm``
+        exists once the execution gate, which the endpoint starts after, recorded its mode;
+        the SSH directory's parent is writable so the endpoint can make it."""
+        found = {RUNTIME, posixpath.dirname(self.ssh_dir.rstrip("/")) or "/"}
+        if self.key_path:
+            found.add(posixpath.dirname(self.key_path))
+        found.update(posixpath.dirname(location) for _, location, _, _ in self.files())
+        found.update(posixpath.dirname(pipe) for _, pipe in self.volumes)
+        outermost = [p for p in found if not any(p.startswith(f"{o}/") for o in found)]
+        return tuple(f"-{path}" for path in sorted(outermost))
 
     def source_spec(self) -> SourceBuild:
-        """The ``secret-delivery`` source build from ``source``."""
+        """The ``attested-endpoint`` source build from ``source``."""
         return SourceBuild(
-            name="secret-delivery",
+            name="attested-endpoint",
             source=self.source,
-            build=GoBuild(package="./cmd/secret-delivery", output="secret-delivery"),
-            install=(Install.artifact("/usr/bin/secret-delivery"),),
+            build=GoBuild(package="./cmd/attested-endpoint", output="attested-endpoint"),
+            install=(Install.artifact("/usr/bin/attested-endpoint"),),
         )
 
     def render_manifest(self) -> str:
@@ -279,24 +370,33 @@ class SecretDelivery(Module):
         )
 
     def render_config(self) -> str:
-        """The ``secret-delivery`` YAML config: where to listen, where to store."""
+        """The endpoint's YAML config: where it listens, what it binds and where it writes."""
         if self.method != "http_post":
             raise ValidationError(
                 "Only http_post secret delivery is supported.",
-                hint="Secrets() delivers over HTTP POST only.",
+                hint="Secrets() delivers over the attested endpoint only.",
             )
 
         lines = [
+            f'listen: "{self.host}:{self.port}"',
+            f'quote_socket: "{QUOTE_SOCKET}"',
+            f'ssh_host_keys: "{SSH_HOST_KEYS}"',
+            f'instance_key: "{INSTANCE_PUBLIC_KEY}"',
+            f'mode_file: "{MODE_FILE}"',
             "ssh:",
-            '  strategy: "webserver"',
-            "  strategy_config:",
-            f'    server_url: "{self.host}:{self.port}"',
             f'  dir: "{self.ssh_dir}"',
         ]
         if self.key_path:
             lines.append(f'  key_path: "{self.key_path}"')
-        if self.store_disk:
-            lines.append(f'  store_at: "{self.store_disk}"')
+        files = self.files()
+        lines.append("credentials:" if files else "credentials: []")
+        for name, location, mode, owner in files:
+            lines.extend((f'  - name: "{name}"', f'    path: "{location}"', f'    mode: "{mode}"'))
+            if owner is not None:
+                lines.append(f'    owner: "{owner}"')
+        lines.append("volumes:" if self.volumes else "volumes: []")
+        for name, pipe in self.volumes:
+            lines.extend((f'  - name: "{name}"', f'    pipe: "{pipe}"'))
         return "\n".join(lines) + "\n"
 
 

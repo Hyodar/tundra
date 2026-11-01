@@ -861,12 +861,13 @@ class SshAccess(Composite):
     generates this instance's at boot (``ssh-keygen -A``, skipped when they exist) and sshd
     starts after it. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
     only and root by key only (``PermitRootLogin prohibit-password``): root is the account
-    secret-delivery delivers a key for, and the image has no other login account, so refusing
+    the attested endpoint takes a key for, and the image has no other login account, so refusing
     root would refuse everyone, while a password is never accepted.
     *authorized_keys* are public keys baked into the image
     (``/etc/ssh/authorized_keys.d/root``); *from_secrets* accepts the key the image's
-    ``Secrets`` delivers at boot (``/root/.ssh/authorized_keys``) and makes sshd wait for
-    that step (``secrets.ready``). One of them is required. Component name: ``ssh-access``.
+    ``Secrets`` endpoint takes once the operator verified a quote binding these host keys
+    (``/root/.ssh/authorized_keys``, read at each login, so sshd waits only for its host
+    keys). One of them is required. Component name: ``ssh-access``.
     """
 
     port: int = 22
@@ -911,10 +912,7 @@ class SshAccess(Composite):
             conditions=(Condition.path_exists(SSH_HOST_KEY, negate=True),),
         )
         yield host_keys
-        needs: tuple[Ready, ...] = (host_keys.ready,)
-        if self.from_secrets:
-            needs += (Ready("secrets"),)
-        yield Unit("ssh.service", enabled=True, needs=needs, ports=(self.port,))
+        yield Unit("ssh.service", enabled=True, needs=(host_keys.ready,), ports=(self.port,))
 
     def config(self) -> str:
         """The ``sshd_config.d`` drop-in: keys only, root by key only."""

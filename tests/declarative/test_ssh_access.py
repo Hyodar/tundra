@@ -33,12 +33,12 @@ def _files(*items: object) -> dict[str, str]:
     }
 
 
-def test_from_secrets_waits_for_the_delivered_key() -> None:
+def test_from_secrets_waits_only_for_its_host_keys() -> None:
     key = Key("k", output="/run/k")
     disk = Disk("d", mount="/data", key=key, device="/dev/disk/by-id/virtio-tundra-data")
     files = _files(TOOLS, key, disk, Secrets(store=disk), SshAccess(port=2200, from_secrets=True))
     needs = files["/usr/lib/systemd/system/ssh.service.d/10-tundravm-needs.conf"]
-    assert "runtime-init-secrets.service" in needs
+    assert "runtime-init-secrets.service" not in needs and "ssh-host-keys.service" in needs
     assert "Port 2200\n" in files["/etc/ssh/sshd_config.d/50-tundravm.conf"]
     assert "/etc/ssh/authorized_keys.d/root" not in files
 

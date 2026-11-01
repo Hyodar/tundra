@@ -8,13 +8,14 @@ values become the declarations the tools and systemd already understand:
   by its ``/dev/disk/by-id/`` name, formatted only while uninitialised), plus a boot step
   that creates the directories services bind, owned by them;
 - the secrets are entries of one ``Secrets`` block whose targets are files under
-  ``/run/tundravm/credentials``, written by the operator (an ``ExternalDelivery``), plus
-  one boot unit per secret that finishes once it has arrived;
+  ``/run/tundravm/credentials``, written by the attested endpoint on a session whose TLS
+  key a fresh quote bound, plus one boot unit per secret that finishes once it has arrived;
 - a :class:`~tundravm.secrets.Generated` secret is a root boot oneshot that writes random
   hex under ``/run/tundravm/secrets``, which every service binding it requires;
-- a volume an operator unlocks, or any secret, brings today's control-plane bootstrap:
-  that ``Secrets`` block listens on the management port for the operator's SSH public
-  key, and ``SshAccess(from_delivery=True)`` lets only that key in;
+- a volume an operator unlocks, or any secret, brings the control plane: that
+  ``Secrets`` block is the attested endpoint on the management port (evidence,
+  credentials, unlock, the operator's SSH key), and ``SshAccess(from_delivery=True)`` lets
+  only that key in;
 - an ingress is a ``socat`` TLS relay unit with its firewall port;
 - ``/etc/tundravm/runtime.json`` records all of it for the tools that deliver.
 
@@ -66,10 +67,7 @@ RUNTIME_TMPFILES = "/usr/lib/tmpfiles.d/50-tundravm-runtime.conf"
 """The tmpfs directories the delivery writes into, made at boot."""
 
 CONTROL_PLANE = "tundravm"
-"""The ``Secrets`` block that is today's control-plane bootstrap."""
-
-DELIVERY_UNIT = "tundravm-credentials.service"
-"""Finishes once every required secret has been delivered."""
+"""The ``Secrets`` block that is the control plane: the attested endpoint."""
 
 _TMPFILES = f"""\
 # tundravm: where secrets, keys and unlock passphrases are delivered (root-owned tmpfs).
@@ -322,7 +320,7 @@ class Runtime:
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:
-        """Today's control plane: the SSH-key bootstrap, root SSH, and the credential waits."""
+        """The control plane: the attested endpoint, root SSH, and the credential waits."""
         from tundravm.components import SshAccess
 
         entries = tuple(
@@ -333,32 +331,13 @@ class Runtime:
             )
             for secret in self.secrets
         )
-        delivery = (
-            dm.ExternalDelivery("operator", supports=("file",), unit=DELIVERY_UNIT)
-            if entries
-            else None
-        )
-        yield dm.Secrets(
-            CONTROL_PLANE,
-            entries=entries,
-            port=MANAGEMENT_PORT,
-            delivery=delivery,
-        )
-        yield dm.Package("socat")
+        yield dm.Secrets(CONTROL_PLANE, entries=entries, port=MANAGEMENT_PORT, ssh_key_path=None)
         yield SshAccess(from_delivery=True)
         for secret in self.secrets:
             yield _wait(
                 secret.ready.unit,
                 f"Wait for secret {secret.name}",
                 f"until [ -e {shlex.quote(secret.location)} ]; do sleep 1; done",
-            )
-        if entries:
-            required = [s.location for s in self.secrets if s.required]
-            test = " && ".join(f"[ -e {shlex.quote(path)} ]" for path in required) or "true"
-            yield _wait(
-                DELIVERY_UNIT,
-                "Wait for every required secret",
-                f"until {test}; do sleep 1; done",
             )
 
     def relay(self, way: AttestedTLS | TLS) -> Iterator[dm.Declaration]:
@@ -437,10 +416,7 @@ class Runtime:
             "schema": 1,
             "management_port": MANAGEMENT_PORT,
             "control_plane": (
-                "secret-delivery ssh-key bootstrap, unverified first contact (gate 3: "
-                "attested endpoint)"
-                if self.control_plane
-                else None
+                "attested endpoint: TLS bound to the quote" if self.control_plane else None
             ),
             "rootfs": self.rootfs,
             "volumes": volumes,

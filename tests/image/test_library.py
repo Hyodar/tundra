@@ -242,7 +242,7 @@ def test_component_configuration_is_checked(make: object, message: str) -> None:
 def test_an_explicit_tdxs_builds_the_evidence_and_the_volume_tools_from_its_source() -> None:
     image = stack(components=[execution, driver, prover, Tdxs(source=MIRROR)])
     builds = lower(image).source_builds()
-    for name in ("tdxs", "key-generation", "disk-encryption", "secret-delivery"):
+    for name in ("tdxs", "key-generation", "disk-encryption", "attested-endpoint"):
         assert builds[name].source.url == MIRROR.url, name
     assert len([c for c in image.components if isinstance(c, Tdxs)]) == 1
     with pytest.raises(ValidationError, match="2 Tdxs components"):
