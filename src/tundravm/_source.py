@@ -76,6 +76,22 @@ GO_MOD_TOOLCHAIN = "<go.mod>"
 _GO_VERSION = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+)|(beta|rc)(\d+))?$")
 _GO_FIRST_TOOLCHAIN = (1, 21, 0, 0)
 """Go 1.21's language version: the first release published as a toolchain module."""
+RUST_TOOLCHAIN_DEBIAN = "debian"
+"""The toolchain of a Cargo source that pins none: Debian's ``cargo`` and ``rustc``."""
+RUST_TOOLCHAIN_FILE = "<rust-toolchain.toml>"
+"""The ``RUSTUP_TOOLCHAIN`` a prefetch marker records: the one the checkout's file pins."""
+RUST_HOST = "x86_64-unknown-linux-gnu"
+"""The host triple of every Rust toolchain ``tundravm build`` installs: the build sandbox's."""
+RUSTUP_DIRNAME = "rustup"
+"""``<out>/.sources/deps/rustup``: the ``RUSTUP_HOME`` the host's ``rustup`` installs into."""
+_RUST_TOOLCHAIN_FILES = ("rust-toolchain", "rust-toolchain.toml")
+"""The files ``rustup`` reads a directory's toolchain from, the legacy name first, as it does."""
+_RUST_CHANNEL = re.compile(r"^(?:\d+\.\d+\.\d+|(?:stable|beta|nightly)-\d{4}-\d{2}-\d{2})$")
+"""A pinned channel: a release (``1.91.0``) or a dated channel (``nightly-2026-09-01``)."""
+_RUST_PROFILES = ("minimal", "default", "complete")
+_RUST_DEBIAN_REASON = (
+    "the source has no rust-toolchain.toml or rust-toolchain, so Debian's cargo builds it"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,7 +358,11 @@ class CargoBuild:
     build`` writes reads. ``reproducible`` adds :data:`CARGO_RUSTFLAGS` and the path remap to the
     project's ``build.rustflags`` (``--config``; prepended to an ``env`` ``RUSTFLAGS``,
     which would replace them), one codegen unit, no incremental build and
-    ``SOURCE_DATE_EPOCH`` (the build's, else ``0``). ``None`` (the default) is on.
+    ``SOURCE_DATE_EPOCH`` (the build's, else ``0``). ``None`` (the default) is on. The
+    build runs the toolchain the source's ``rust-toolchain.toml`` pins
+    (:func:`rust_toolchain`), which ``tundravm build`` installs on the host with ``rustup``;
+    a source that pins none builds with Debian's ``cargo``. ``env`` cannot set
+    ``RUSTUP_TOOLCHAIN``.
     """
 
     output: str
@@ -365,10 +385,27 @@ class CargoBuild:
         _freeze_recipe(self, ("env",), ("features", "packages"))
         if self.auditable is True and "cargo-auditable" not in self.packages:
             object.__setattr__(self, "packages", (*self.packages, "cargo-auditable"))
+        if "RUSTUP_TOOLCHAIN" in self.env:
+            raise ValidationError(
+                "Cargo(env=...) sets RUSTUP_TOOLCHAIN: the toolchain is the one the source's "
+                "rust-toolchain.toml pins.",
+                hint="Drop RUSTUP_TOOLCHAIN; to build with another Rust, build a revision whose "
+                'rust-toolchain.toml pins it (channel = "1.91.0").',
+            )
 
-    def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
-        """``cargo fetch --locked`` into the cargo home *cache*, and its environment."""
-        return ("cargo", "fetch", "--locked"), {**self.env, "CARGO_HOME": cache}
+    def prefetch(
+        self, cache: str, toolchain: str = RUST_TOOLCHAIN_FILE
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
+        """``cargo fetch --locked`` into the cargo home *cache* with the Rust *toolchain*.
+
+        ``RUSTUP_TOOLCHAIN`` names the installed toolchain, whose own ``cargo``
+        :func:`prefetch_deps` puts first on ``PATH``; with :data:`RUST_TOOLCHAIN_DEBIAN`
+        it is unset and the host's ``cargo`` fetches.
+        """
+        env = {**self.env, "CARGO_HOME": cache}
+        if toolchain != RUST_TOOLCHAIN_DEBIAN:
+            env["RUSTUP_TOOLCHAIN"] = toolchain
+        return ("cargo", "fetch", "--locked"), env
 
     @staticmethod
     def deps_env(cache: str) -> str:
@@ -376,6 +413,21 @@ class CargoBuild:
         return (
             f"export CARGO_HOME={cache} && "
             '{ [ "$WITH_NETWORK" != 0 ] || export CARGO_NET_OFFLINE=true; }'
+        )
+
+    @staticmethod
+    def toolchain_env(record: str, rustup: str) -> str:
+        """The exports selecting the toolchain the prefetch wrote to *record*.
+
+        Its own ``cargo`` and ``rustc`` come first on ``PATH``: Debian's ``cargo`` is not
+        rustup's proxy, so ``RUSTUP_TOOLCHAIN`` alone would not select it. Without a
+        record, or with ``debian``, Debian's ``cargo`` builds.
+        """
+        name = f'"$(cat {record})"'
+        return (
+            f"if [ -f {record} ] && [ {name} != {RUST_TOOLCHAIN_DEBIAN} ]; then "
+            f"export RUSTUP_HOME={rustup} RUSTUP_TOOLCHAIN={name} && "
+            'export PATH="$RUSTUP_HOME/toolchains/$RUSTUP_TOOLCHAIN/bin:$PATH"; fi'
         )
 
     @property
@@ -932,10 +984,11 @@ class SourceBuild(NamedSource):
 
         *copy* (``&&``-joined after the checkout copy) copies
         ``$SRCDIR/tundravm-sources/deps/<cache>`` to ``$BUILDROOT/build/.tundravm-deps``
-        once, when ``tundravm build`` filled it, and a Go build's toolchain record
-        (:meth:`go_toolchain_file`) beside it; *exports* (inside mkosi-chroot) point the
-        toolchain at that copy, offline when mkosi runs the build without network, and
-        select a Go build's toolchain. Both are empty for a script build.
+        once, when ``tundravm build`` filled it, and a Go or Cargo build's toolchain record
+        (:meth:`toolchain_file`) beside it, with the Rust toolchain it names from
+        ``deps/rustup``; *exports* (inside mkosi-chroot) point the toolchain at that copy,
+        offline when mkosi runs the build without network, and select the build's
+        toolchain. Both are empty for a script build.
         """
         if not isinstance(self.build, LanguageBuild):
             return "", ""
@@ -950,24 +1003,37 @@ class SourceBuild(NamedSource):
         )
         chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{cache}")
         exports = f"if [ -d {chroot} ]; then {self.build.deps_env(str(chroot))}; fi && "
-        record = self.go_toolchain_file(pin)
-        if record is not None:
-            mounted_record = f'"{mounted_deps}/{record}"'
-            copy += (
-                f" && {{ [ ! -f {mounted_record} ] || "
-                f"{{ mkdir -p {parent} && cp {mounted_record} {parent}/; }}; }}"
-            )
-            in_chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{record}")
-            exports += f"{GoBuild.toolchain_env(str(in_chroot))} && "
-        return copy, exports
+        record = self.toolchain_file(pin)
+        if record is None:
+            return copy, exports
+        mounted_record = f'"{mounted_deps}/{record}"'
+        copy += (
+            f" && {{ [ ! -f {mounted_record} ] || "
+            f"{{ mkdir -p {parent} && cp {mounted_record} {parent}/; }}; }}"
+        )
+        in_chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{record}")
+        if isinstance(self.build, GoBuild):
+            return copy, exports + f"{GoBuild.toolchain_env(str(in_chroot))} && "
+        name = f'"$(cat {mounted_record})"'
+        toolchains = f"{RUSTUP_DIRNAME}/toolchains"
+        copied = f'"{Build.build_path(f"{DEPS_BUILD_DIR}/{toolchains}")}"'
+        copy += (
+            f" && {{ [ ! -f {mounted_record} ] || [ {name} = {RUST_TOOLCHAIN_DEBIAN} ] || "
+            f"[ -d {copied}/{name} ] || {{ mkdir -p {copied} && "
+            f'cp -a --no-preserve=ownership "{mounted_deps}/{toolchains}"/{name} {copied}/; }}; }}'
+        )
+        rustup = Build.chroot_path(f"{DEPS_BUILD_DIR}/{RUSTUP_DIRNAME}")
+        return copy, exports + f"{CargoBuild.toolchain_env(str(in_chroot), str(rustup))} && "
 
-    def go_toolchain_file(self, pin: str) -> str | None:
-        """``<pin_dir>.go.toolchain``: the ``GOTOOLCHAIN`` a Go build's prefetch selected.
+    def toolchain_file(self, pin: str) -> str | None:
+        """``<pin_dir>.<cache>.toolchain``: the toolchain a Go or Cargo prefetch selected.
 
         ``tundravm build`` writes it in ``.sources/deps`` once the host fetched that
-        toolchain (:func:`go_toolchain`); ``None`` for a build that is not Go.
+        toolchain: a Go build's ``GOTOOLCHAIN`` (:func:`go_toolchain`), a Cargo build's
+        installed Rust toolchain or ``debian`` (:func:`rust_toolchain`). ``None`` for a
+        build that is neither.
         """
-        if not isinstance(self.build, GoBuild):
+        if not isinstance(self.build, (GoBuild, CargoBuild)):
             return None
         return f"{self.pin_dir(pin)}.{self.build.deps}.toolchain"
 
@@ -998,7 +1064,7 @@ class SourceBuild(NamedSource):
         Canonical JSON of the source pin (with git's ``subdir`` and
         ``submodules``), the build recipe (defaults decided, see
         :func:`resolve_recipe`) and install steps, the toolchain (recipe kind and packages, and
-        for Go that the go.mod picks the release) and the
+        that Go's go.mod or Rust's rust-toolchain.toml picks the release) and the
         *distribution* it comes from: base, architecture, mirror, snapshot,
         repositories, build packages and build settings
         (``Lowered.build_distribution``).
@@ -1017,7 +1083,7 @@ class SourceBuild(NamedSource):
             "toolchain": {
                 "kind": self.build.kind,
                 "packages": list(self.build_packages()),
-                **({"version": GO_MOD_TOOLCHAIN} if isinstance(self.build, GoBuild) else {}),
+                **_TOOLCHAIN_VERSIONS.get(self.build.kind, {}),
             },
         }
         return fingerprint(spec)
@@ -1033,6 +1099,13 @@ class SourceBuild(NamedSource):
             else:
                 artifacts.append(Cache.file(src=src, dest=target, name=name, mode=mode))
         return Cache.declare(key, tuple(artifacts))
+
+
+_TOOLCHAIN_VERSIONS: dict[str, dict[str, str]] = {
+    "go": {"version": GO_MOD_TOOLCHAIN},
+    "cargo": {"version": RUST_TOOLCHAIN_FILE},
+}
+"""What :meth:`SourceBuild.cache_fingerprint` records picks a recipe kind's toolchain."""
 
 
 def fingerprint(spec: Mapping[str, object]) -> str:
@@ -1268,8 +1341,9 @@ def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
     prefetch command and every entry of its content manifest is still there:
     each Go module directory and ``.mod`` file ``go.sum`` names, each ``.crate``
     of ``Cargo.lock`` (size and sha256), each NuGet package directory of the
-    restore's ``project.assets.json``. ``None`` for a script build, which has none;
-    :data:`NOT_PREFETCHED` without a marker.
+    restore's ``project.assets.json``, and the toolchain record naming the recorded
+    toolchain, a Rust one with its files in ``deps/rustup``. ``None`` for a script
+    build, which has none; :data:`NOT_PREFETCHED` without a marker.
     """
     marker = build.deps_marker(pin)
     if marker is None or not isinstance(build.build, LanguageBuild):
@@ -1292,29 +1366,40 @@ def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
     for rel, expected in sorted(contents.items()):
         if _cache_entry(cache / rel) != expected:
             return f"{label}/{rel} is missing or changed"
-    record = build.go_toolchain_file(pin)
-    if record is not None:
-        toolchain = recorded.get("toolchain")
-        named = toolchain.get("name") if isinstance(toolchain, dict) else None
-        try:
-            written = (root / DEPS_DIRNAME / record).read_text(encoding="utf-8").strip()
-        except OSError:
-            written = None
-        if named is None or written != named:
-            return f"{DEPS_DIRNAME}/{record} does not name the recorded Go toolchain"
+    record = build.toolchain_file(pin)
+    if record is None:
+        return None
+    toolchain = recorded.get("toolchain")
+    named = toolchain.get("name") if isinstance(toolchain, dict) else None
+    try:
+        written = (root / DEPS_DIRNAME / record).read_text(encoding="utf-8").strip()
+    except OSError:
+        written = None
+    language = "Go" if isinstance(build.build, GoBuild) else "Rust"
+    if named is None or written != named:
+        return f"{DEPS_DIRNAME}/{record} does not name the recorded {language} toolchain"
+    files = recorded.get("toolchain_contents")
+    if isinstance(build.build, CargoBuild) and named != RUST_TOOLCHAIN_DEBIAN:
+        home = root / DEPS_DIRNAME / RUSTUP_DIRNAME
+        for rel, expected in sorted(files.items() if isinstance(files, dict) else ()):
+            if _cache_entry(home / rel) != expected:
+                return f"{DEPS_DIRNAME}/{RUSTUP_DIRNAME}/{rel} is missing or changed"
+        if not files:
+            return "the marker has no content manifest of the Rust toolchain"
     return None
 
 
-def go_toolchain_record(build: SourceBuild, pin: str, root: Path) -> dict[str, object] | None:
-    """The Go toolchain the prefetch of *build* at *pin* recorded in ``<root>/deps``.
+def toolchain_record(build: SourceBuild, pin: str, root: Path) -> dict[str, object] | None:
+    """The Go or Rust toolchain the prefetch of *build* at *pin* recorded in ``<root>/deps``.
 
-    ``{"name", "module", "sum"}``: the ``GOTOOLCHAIN`` release, its module and the
-    ``h1:`` checksum the checksum database vouched for; ``{"name": "local", "reason"}``
-    for a go.mod older than toolchain modules. ``None`` for a build that is not Go or
-    that no prefetch recorded.
+    Go: ``{"name", "module", "sum"}``, the ``GOTOOLCHAIN`` release, its module and the
+    ``h1:`` checksum the checksum database vouched for, or ``{"name": "local", "reason"}``
+    for a go.mod older than toolchain modules. Rust: :meth:`RustToolchain.record` with
+    what ``rustc -vV`` says, or ``{"name": "debian", "reason"}`` for a source that pins
+    none. ``None`` for another build or one that no prefetch recorded.
     """
     marker = build.deps_marker(pin)
-    if marker is None or build.go_toolchain_file(pin) is None:
+    if marker is None or build.toolchain_file(pin) is None:
         return None
     try:
         recorded = json.loads((root / DEPS_DIRNAME / marker).read_text(encoding="utf-8"))
@@ -1384,12 +1469,16 @@ def _go_mod_file(workdir: Path, tree: Path) -> Path | None:
 
     Each is looked for in *workdir* and its parents up to *tree*, as ``go`` looks.
     """
-    directories = [workdir, *(d for d in workdir.parents if d == tree or tree in d.parents)]
     for name in ("go.work", "go.mod"):
-        for directory in directories:
+        for directory in _up_to(workdir, tree):
             if (directory / name).is_file():
                 return directory / name
     return None
+
+
+def _up_to(workdir: Path, tree: Path) -> list[Path]:
+    """*workdir* and its parents up to the source tree *tree*, nearest first."""
+    return [workdir, *(d for d in workdir.parents if d == tree or tree in d.parents)]
 
 
 def host_go_version() -> str | None:
@@ -1509,6 +1598,231 @@ def _fetch_go_toolchain(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class RustToolchain:
+    """The Rust toolchain a source pins: its *channel* and what ``rustup`` installs with it.
+
+    *file* is the source's ``rust-toolchain.toml`` (or ``rust-toolchain``) it comes from;
+    *profile* is ``minimal`` unless the file names another.
+    """
+
+    channel: str
+    components: tuple[str, ...] = ()
+    targets: tuple[str, ...] = ()
+    profile: str = "minimal"
+    file: str = "rust-toolchain.toml"
+
+    @property
+    def name(self) -> str:
+        """``<channel>-x86_64-unknown-linux-gnu``: its directory in ``RUSTUP_HOME/toolchains``."""
+        return f"{self.channel}-{RUST_HOST}"
+
+    def install(self) -> tuple[str, ...]:
+        """The ``rustup toolchain install`` of this toolchain, never updating rustup."""
+        argv = ["rustup", "toolchain", "install", self.name, "--profile", self.profile]
+        argv.append("--no-self-update")
+        if self.components:
+            argv += ["--component", ",".join(self.components)]
+        if self.targets:
+            argv += ["--target", ",".join(self.targets)]
+        return tuple(argv)
+
+
+def rust_toolchain(workdir: Path, tree: Path) -> RustToolchain | None:
+    """The Rust toolchain the source tree *tree* pins for a build in *workdir*.
+
+    As ``rustup`` looks: the first directory from *workdir* up to *tree* holding a
+    ``rust-toolchain`` (a channel line, or TOML) or a ``rust-toolchain.toml``, the legacy
+    name first. ``None`` without one: Debian's ``cargo`` builds it. A channel that is not
+    pinned (``stable``, ``1.91``, an undated ``nightly``), a ``path`` toolchain or a file
+    that is not a toolchain file raises ``SourceError`` naming the fix.
+    """
+    for directory in _up_to(workdir, tree):
+        for name in _RUST_TOOLCHAIN_FILES:
+            path = directory / name
+            if path.is_file():
+                text = path.read_text(encoding="utf-8")
+                return _rust_toolchain_file(text, path.relative_to(tree).as_posix())
+    return None
+
+
+def checkout_rust_toolchain(build: SourceBuild, checkout: Path) -> RustToolchain | None:
+    """:func:`rust_toolchain` of a Cargo *build*'s *checkout*; ``None`` for another build."""
+    if not isinstance(build.build, CargoBuild):
+        return None
+    workdir = checkout
+    if isinstance(build.source, GitSource) and build.source.subdir:
+        workdir = checkout / build.source.subdir.strip("/")
+    return rust_toolchain(workdir, checkout)
+
+
+def _rust_toolchain_file(text: str, file: str) -> RustToolchain:
+    try:
+        table: object = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if posixpath.basename(file) != "rust-toolchain" or len(lines) != 1:
+            raise _not_a_toolchain(file, "it is not TOML with a [toolchain] table") from None
+        return _pinned(RustToolchain(lines[0], file=file))
+    toolchain = table.get("toolchain") if isinstance(table, dict) else None
+    if not isinstance(toolchain, dict):
+        raise _not_a_toolchain(file, "it has no [toolchain] table")
+    if "path" in toolchain:
+        raise _not_a_toolchain(file, "it names a custom toolchain (path =), not a channel")
+    channel = toolchain.get("channel")
+    profile = toolchain.get("profile", "minimal")
+    if not isinstance(channel, str):
+        raise _not_a_toolchain(file, "its [toolchain] names no channel")
+    if profile not in _RUST_PROFILES:
+        raise _not_a_toolchain(file, f"profile {profile!r} is not minimal, default or complete")
+    lists = {key: toolchain.get(key, []) for key in ("components", "targets")}
+    for key, value in lists.items():
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise _not_a_toolchain(file, f"its {key} is not a list of names")
+    return _pinned(
+        RustToolchain(
+            channel,
+            components=tuple(lists["components"]),
+            targets=tuple(lists["targets"]),
+            profile=str(profile),
+            file=file,
+        )
+    )
+
+
+def _pinned(toolchain: RustToolchain) -> RustToolchain:
+    if _RUST_CHANNEL.fullmatch(toolchain.channel):
+        return toolchain
+    reason = f"channel {toolchain.channel!r} is not pinned"
+    raise SourceError(
+        f"{toolchain.file} asks for Rust channel {toolchain.channel!r}, which is not pinned: "
+        "it moves with each Rust release, so two builds would not build the same bytes.",
+        source=toolchain.file,
+        reason=reason,
+        hint=(
+            f'Pin a release in the source\'s {toolchain.file} (channel = "1.91.0", or a dated '
+            '"nightly-2026-09-01") and build that revision.'
+        ),
+        context={"channel": toolchain.channel},
+    )
+
+
+def _not_a_toolchain(file: str, why: str) -> SourceError:
+    return SourceError(
+        f"{file} is not a Rust toolchain file tundravm can install: {why}.",
+        source=file,
+        reason=why,
+        hint='Pin a release in it: [toolchain] channel = "1.91.0", then build that revision.',
+    )
+
+
+def host_rustup_version() -> str | None:
+    """The version of the host's ``rustup`` (``1.28.2``), or ``None`` without one."""
+    path = shutil.which("rustup")
+    if path is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=_NETWORK_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    words = completed.stdout.split()
+    return words[1] if completed.returncode == 0 and len(words) > 1 else None
+
+
+def require_host_rustup(toolchains: Mapping[str, RustToolchain]) -> None:
+    """Refuse the Cargo builds *toolchains* maps to the toolchain they pin without ``rustup``.
+
+    Raised once the checkouts are on the host and before any toolchain runs, since the
+    offline sandbox cannot build a Cargo source whose toolchain the host did not install.
+    """
+    if not toolchains or host_rustup_version() is not None:
+        return
+    names = ", ".join(repr(name) for name in toolchains)
+    channels = ", ".join(sorted({t.channel for t in toolchains.values()}))
+    one = len(toolchains) == 1
+    noun = f"Cargo source build {names} needs" if one else f"Cargo source builds {names} need"
+    pins = "the Rust toolchain its rust-toolchain.toml pins" if one else "the Rust toolchains"
+    raise StateError(
+        f"{noun} rustup on the host to install {pins} ({channels}): there is no rustup on PATH.",
+        hint=(
+            "Install rustup (https://rustup.rs, or the Debian package rustup), then check the "
+            "host with `tundravm doctor --for build`."
+        ),
+        context={"sources": ", ".join(toolchains), "toolchains": channels},
+    )
+
+
+def _rust_toolchain_files(name: str) -> tuple[str, ...]:
+    """What the content manifest of toolchain *name* covers, relative to ``RUSTUP_HOME``."""
+    root = f"toolchains/{name}"
+    return (
+        f"{root}/bin/cargo",
+        f"{root}/bin/rustc",
+        f"{root}/lib/rustlib/multirust-channel-manifest.toml",
+        f"{root}/lib/rustlib/multirust-config.toml",
+    )
+
+
+def _install_rust_toolchain(
+    build: SourceBuild, toolchain: RustToolchain, deps: Path
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Install *toolchain* into ``<deps>/rustup`` with the host ``rustup``.
+
+    Returns ``(record, contents)``: :func:`toolchain_record`'s record, with what its
+    ``rustc -vV`` says, and the content manifest of its files (:func:`_rust_toolchain_files`).
+    A failure raises ``SourceError`` naming the channel and the fix.
+    """
+    home = (deps / RUSTUP_DIRNAME).resolve()
+    env = {**os.environ, "RUSTUP_HOME": str(home)}
+    rustc = home / "toolchains" / toolchain.name / "bin" / "rustc"
+    files = _rust_toolchain_files(toolchain.name)
+    try:
+        completed = run_tool(toolchain.install(), cwd=deps, env=env)
+        if completed.returncode == 0:
+            completed = run_tool((str(rustc), "-vV"), cwd=deps, env=env)
+    except OSError as exc:
+        reason = f"cannot run {exc.filename or 'rustup'}: {exc.strerror or exc}"
+    else:
+        lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
+        reason = lines[-1] if lines else f"exit status {completed.returncode}"
+        contents = {rel: entry for rel in files if (entry := _cache_entry(home / rel))}
+        version, *rest = completed.stdout.splitlines() or [""]
+        if completed.returncode == 0 and version and len(contents) == len(files):
+            facts = dict(line.split(": ", 1) for line in rest if ": " in line)
+            record: dict[str, object] = {
+                "name": toolchain.name,
+                "channel": toolchain.channel,
+                "host": facts.get("host", RUST_HOST),
+                "rustc": version.strip(),
+                "commit": facts.get("commit-hash", ""),
+                "profile": toolchain.profile,
+                "components": list(toolchain.components),
+                "targets": list(toolchain.targets),
+            }
+            return record, contents
+        if completed.returncode == 0:
+            reason = f"{toolchain.name} is not in {RUSTUP_DIRNAME}/toolchains after the install"
+    raise SourceError(
+        f"Cannot install Rust {toolchain.channel}, the toolchain source build {build.key!r}'s "
+        f"{toolchain.file} pins: {reason}.",
+        source=build.source.describe(),
+        reason=reason,
+        hint=(
+            f"tundravm installs it on the host with `rustup toolchain install {toolchain.name}` "
+            "from the Rust distribution server (RUSTUP_DIST_SERVER, static.rust-lang.org by "
+            "default), then builds offline with it. Give the host access to it, or build a "
+            "revision whose rust-toolchain.toml pins a released channel."
+        ),
+        context={"toolchain": toolchain.name, "file": toolchain.file},
+    )
+
+
 def _cache_entry(path: Path) -> str | None:
     """A content-manifest value: ``dir`` (non-empty directory) or ``<size> <sha256>``."""
     if path.is_dir():
@@ -1613,7 +1927,9 @@ def prefetch_deps(
 
     The host's toolchain (``go mod download``, ``cargo fetch --locked``, ``dotnet
     restore --packages``) runs as the invoking user in a scratch copy of
-    *checkout* (subdirectory included), so the checkout stays clean, and a marker
+    *checkout* (subdirectory included), so the checkout stays clean, after the host's
+    ``rustup`` installed the toolchain a Cargo source pins into ``<root>/deps/rustup``
+    (:func:`rust_toolchain`; its own ``cargo`` fetches), and a marker
     (:meth:`SourceBuild.deps_marker`) records the success with a content manifest
     (:func:`deps_problem`). Returns ``None`` for a script build, ``"<cache>: kept"``
     when the marker and its manifest still match, ``"<cache>: prefetched"`` (with
@@ -1632,14 +1948,17 @@ def prefetch_deps(
     if problem is None:
         return f"{recipe.deps}: kept"
     incomplete = problem not in (None, NOT_PREFETCHED)
-    if offline or shutil.which(recipe.tool) is None:
+    rust = None if offline else checkout_rust_toolchain(build, checkout)
+    tool = recipe.tool if rust is None else "rustup"
+    if offline or shutil.which(tool) is None:
         if incomplete:
             return f"{recipe.deps}: incomplete ({problem})"
-        return "skipped (offline)" if offline else f"skipped (no host {recipe.tool})"
+        return "skipped (offline)" if offline else f"skipped (no host {tool})"
     cache = deps / recipe.deps
     cache.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix=f".{build.pin_dir(pin)}.", dir=deps))
     toolchain: dict[str, object] | None = None
+    files: dict[str, str] = {}
     try:
         tree = scratch / "tree"
         shutil.copytree(
@@ -1657,7 +1976,21 @@ def prefetch_deps(
                 toolchain, _ = _go_toolchain_entries(name, cache)
             else:
                 toolchain, fetched = _fetch_go_toolchain(build, name, workdir, cache, env)
-            (deps / str(build.go_toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
+            (deps / str(build.toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
+        elif isinstance(recipe, CargoBuild):
+            if rust is None:
+                name = RUST_TOOLCHAIN_DEBIAN
+                toolchain = {"name": name, "reason": _RUST_DEBIAN_REASON}
+            else:
+                name = rust.name
+                toolchain, files = _install_rust_toolchain(build, rust, deps)
+            argv, env = recipe.prefetch(str(cache.resolve()), name)
+            if rust is not None:
+                home = (deps / RUSTUP_DIRNAME).resolve()
+                bin_dir = home / "toolchains" / name / "bin"
+                env["RUSTUP_HOME"] = str(home)
+                env["PATH"] = os.pathsep.join((str(bin_dir), os.environ.get("PATH", "")))
+            (deps / str(build.toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
         else:
             argv, env = recipe.prefetch(str(cache.resolve()))
         try:
@@ -1679,6 +2012,8 @@ def prefetch_deps(
     }
     if toolchain is not None:
         record["toolchain"] = toolchain
+    if files:
+        record["toolchain_contents"] = files
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     (deps / marker).write_text(text, encoding="utf-8")
     if incomplete:
@@ -2028,22 +2363,27 @@ __all__ = [
     "NOT_PREFETCHED",
     "NamedSource",
     "Resolver",
+    "RustToolchain",
     "ScriptBuild",
     "Source",
     "SourceBuild",
     "checkout_identity",
+    "checkout_rust_toolchain",
     "default_resolver",
     "deps_problem",
     "fetch_source",
     "fingerprint",
     "go_toolchain",
-    "go_toolchain_record",
     "host_go_version",
+    "host_rustup_version",
     "is_fetched",
     "prefetch_deps",
     "require_host_go",
+    "require_host_rustup",
     "resolve_pins",
+    "rust_toolchain",
     "source_drift",
     "source_section",
+    "toolchain_record",
     "write_marker",
 ]

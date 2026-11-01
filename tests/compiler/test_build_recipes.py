@@ -74,7 +74,7 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     hooks = _hooks(tree)
     distribution = lowered.build_distribution("default")
     assert hooks == spec.render(SHA_A, distribution=distribution)
-    record = spec.go_toolchain_file(SHA_A)
+    record = spec.toolchain_file(SHA_A)
     assert record == f"{spec.pin_dir(SHA_A)}.go.toolchain"
     assert (
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/go ]; then export "
@@ -131,10 +131,24 @@ def test_cargo_recipe_renders_cargo_build_and_installs_its_artifact() -> None:
     )
     tree = _pinned(_recipe(build))
     hooks = _hooks(tree)
+    record = lower(_recipe(build)).source_builds()["tool"].toolchain_file(SHA_A)
+    name = f'"$(cat "$SRCDIR/tundravm-sources/deps/{record}")"'
+    toolchains = "rustup/toolchains"
+    assert (
+        f' && {{ [ ! -f "$SRCDIR/tundravm-sources/deps/{record}" ] || [ {name} = debian ] || '
+        f'[ -d "$BUILDROOT/build/.tundravm-deps/{toolchains}"/{name} ] || '
+        f'{{ mkdir -p "$BUILDROOT/build/.tundravm-deps/{toolchains}" && '
+        f'cp -a --no-preserve=ownership "$SRCDIR/tundravm-sources/deps/{toolchains}"/{name} '
+        f'"$BUILDROOT/build/.tundravm-deps/{toolchains}"/; }}; }}'
+    ) in hooks
+    chosen = f'"$(cat /build/.tundravm-deps/{record})"'
     assert (
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/cargo ]; then export "
         "CARGO_HOME=/build/.tundravm-deps/cargo && "
         '{ [ "$WITH_NETWORK" != 0 ] || export CARGO_NET_OFFLINE=true; }; fi && '
+        f"if [ -f /build/.tundravm-deps/{record} ] && [ {chosen} != debian ]; then "
+        f"export RUSTUP_HOME=/build/.tundravm-deps/rustup RUSTUP_TOOLCHAIN={chosen} && "
+        'export PATH="$RUSTUP_HOME/toolchains/$RUSTUP_TOOLCHAIN/bin:$PATH"; fi && '
         'export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" '
         "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_INCREMENTAL=false "
         'CARGO_TERM_COLOR=never RUSTFLAGS="-C target-cpu=generic '

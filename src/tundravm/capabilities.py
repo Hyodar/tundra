@@ -209,6 +209,26 @@ def go_capability(host: Host) -> Capability:
     return Capability(name, "ready", f"{found}, which {GO_PURPOSE}")
 
 
+RUSTUP_PURPOSE = (
+    "installs the toolchain each Cargo source's rust-toolchain.toml pins for the offline build"
+)
+"""What the host ``rustup`` is for, in every ``build:rustup`` row."""
+
+
+def rustup_capability(host: Host) -> Capability:
+    """``build:rustup``: the host ``rustup`` that installs a Cargo source's pinned toolchain."""
+    name = "build:rustup"
+    words = (host.output("rustup", "--version") or "").split()
+    if len(words) < 2 or words[0] != "rustup":
+        return Capability(
+            name,
+            "blocked",
+            f"no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
+            "(https://rustup.rs, or the Debian package rustup)",
+        )
+    return Capability(name, "ready", f"rustup {words[1]}, which {RUSTUP_PURPOSE}")
+
+
 def _privilege(host: Host) -> str | None:
     """How mkosi gets privileges here, or ``None`` when it cannot."""
     if host.uid == 0:
@@ -339,6 +359,7 @@ def capabilities(
         if area == "build":
             rows.append(build_capability(host, backend or default_backend(host)))
             rows.append(go_capability(host))
+            rows.append(rustup_capability(host))
         elif area == "run":
             rows.extend(run_capabilities(host))
         elif area == "deploy":

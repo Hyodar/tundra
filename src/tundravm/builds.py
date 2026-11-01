@@ -49,7 +49,7 @@ from typing import Any, Literal, cast
 from . import __version__
 from . import manifest as mf
 from ._reporting import Reporter
-from ._source import SOURCES_DIRNAME, GoBuild, SourceBuild, go_toolchain_record
+from ._source import SOURCES_DIRNAME, CargoBuild, GoBuild, SourceBuild, toolchain_record
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
 from .declarative._compile import emit, mkosi_argv
@@ -568,7 +568,7 @@ def _assemble(
     argv = mkosi_argv(img, profile)
     mf.write_canonical(inputs / "mkosi-argv.json", {"argv": argv})
     summary = _summary(out / mf.TREE, argv, work, inputs / "summary.json")
-    toolchains = _go_toolchains(img, profile, locked, work)
+    toolchains = _toolchains(img, profile, locked, work)
     sources = [
         {
             "name": f.name,
@@ -576,7 +576,7 @@ def _assemble(
             "source": f.source,
             "ref": f.ref,
             "pin": f.digest,
-            **({"go_toolchain": toolchains[f.name]} if f.name in toolchains else {}),
+            **toolchains.get(str(f.name), {}),
         }
         for f in locked.lockfile.fetches
     ]
@@ -649,18 +649,31 @@ def _assemble(
     return payload
 
 
-def _go_toolchains(img: Lowered, profile: str, locked: Lock, work: Path) -> dict[str, Any]:
-    """Each Go source build of *profile* by lock name: the toolchain its prefetch recorded."""
+_TOOLCHAIN_MISSING = {
+    GoBuild: (
+        "go_toolchain",
+        "no prefetch recorded it: the host had no `go`, or its module download failed",
+    ),
+    CargoBuild: (
+        "rust_toolchain",
+        "no prefetch recorded it: the host had no `cargo` or `rustup`, or a download failed",
+    ),
+}
+"""The recipes whose prefetch records a toolchain: its key in the source, and why it is missing."""
+
+
+def _toolchains(img: Lowered, profile: str, locked: Lock, work: Path) -> dict[str, Any]:
+    """Each Go and Cargo source build of *profile* by lock name: ``{go_toolchain: ...}`` or
+    ``{rust_toolchain: ...}``, the toolchain its prefetch recorded."""
     pins = {f.name: f for f in locked.lockfile.fetches if f.name is not None}
     found: dict[str, Any] = {}
     for spec in img.select([profile]).lock_sources().values():
-        if not isinstance(spec, SourceBuild) or not isinstance(spec.build, GoBuild):
+        if not isinstance(spec, SourceBuild) or type(spec.build) not in _TOOLCHAIN_MISSING:
             continue
+        key, why = _TOOLCHAIN_MISSING[type(spec.build)]
         pin = spec.pin_from(pins)
-        record = None if pin is None else go_toolchain_record(spec, pin, work / SOURCES_DIRNAME)
-        found[spec.key] = record or mf.missing(
-            "no prefetch recorded it: the host had no `go`, or its module download failed"
-        )
+        record = None if pin is None else toolchain_record(spec, pin, work / SOURCES_DIRNAME)
+        found[spec.key] = {key: record or mf.missing(why)}
     return found
 
 

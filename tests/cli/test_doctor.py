@@ -13,7 +13,7 @@ import pytest
 
 from tests.helpers import run_main
 from tundravm.backends.local_linux import DEBIAN_KEYRING
-from tundravm.capabilities import GO_PURPOSE, Host, capabilities, default_backend
+from tundravm.capabilities import GO_PURPOSE, RUSTUP_PURPOSE, Host, capabilities, default_backend
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, doctor
 from tundravm.toolchain import MKOSI_PIN
 
@@ -27,6 +27,7 @@ TOOLS = {
     "gcloud": "Google Cloud SDK 500.0.0",
     "az": "azure-cli 2.66.0",
     "go": "go version go1.24.4 linux/amd64",
+    "rustup": "rustup 1.28.2 (e4f3ad6f8 2025-04-28)",
 }
 
 
@@ -102,35 +103,45 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
     assert rows == [
         f"build:x86-64     ready (mkosi {MKOSI_PIN.version}, user namespaces)",
         f"build:go         ready (go1.24.4, which {GO_PURPOSE})",
+        f"build:rustup     ready (rustup 1.28.2, which {RUSTUP_PURPOSE})",
         "run:simulated    ready (qemu 9.2.0, OVMF /usr/share/OVMF/OVMF_CODE_4M.fd, KVM)",
         "run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled",
         "deploy:gcp       ready (gcloud as ops@example.com)",
         "deploy:azure     ready (az as ops@example.com)",
-        rows[6],
         rows[7],
+        rows[8],
         "verify:azure     unsupported: Azure evidence is vTPM-bound: no TDX register can be "
         "predicted",
     ]
-    assert rows[6].startswith("verify:qemu      ready (built-in TDX replay ")
-    assert rows[7].startswith("verify:gcp       ready (built-in replay, GCP firmware table ")
+    assert rows[7].startswith("verify:qemu      ready (built-in TDX replay ")
+    assert rows[8].startswith("verify:gcp       ready (built-in replay, GCP firmware table ")
 
 
 @pytest.mark.parametrize(
-    ("version", "row"),
+    ("tool", "version", "row"),
     [
-        (None, f"blocked: no go on PATH, which {GO_PURPOSE}: install Go 1.21+"),
+        ("go", None, f"blocked: no go on PATH, which {GO_PURPOSE}: install Go 1.21+"),
         (
+            "go",
             "go version go1.19.8 linux/amd64",
             f"blocked: go1.19.8 predates toolchain switching (Go 1.21), and go {GO_PURPOSE}: "
             "install Go 1.21+",
         ),
+        (
+            "rustup",
+            None,
+            f"blocked: no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
+            "(https://rustup.rs, or the Debian package rustup)",
+        ),
     ],
-    ids=["no-go", "too-old"],
+    ids=["no-go", "too-old-go", "no-rustup"],
 )
-def test_the_host_go_row_says_what_go_is_for(version: str | None, row: str) -> None:
-    tools = {k: v for k, v in TOOLS.items() if k != "go"}
-    host, _ = _host(tools if version is None else {**tools, "go": version}, files=LINUX_FILES)
-    assert _rows(host)["build:go"] == row
+def test_the_host_toolchain_rows_say_what_each_is_for(
+    tool: str, version: str | None, row: str
+) -> None:
+    tools = {k: v for k, v in TOOLS.items() if k != tool}
+    host, _ = _host(tools if version is None else {**tools, tool: version}, files=LINUX_FILES)
+    assert _rows(host)[f"build:{tool}"] == row
     assert doctor(io.StringIO(), area="build", host=host) == EXIT_FAILURE
 
 
@@ -253,7 +264,7 @@ def _names(out: io.StringIO) -> list[str]:
 @pytest.mark.parametrize(
     ("area", "names"),
     [
-        ("build", ["build:x86-64", "build:go"]),
+        ("build", ["build:x86-64", "build:go", "build:rustup"]),
         ("run", ["run:simulated"]),
         ("tdx", ["run:tdx"]),
         ("azure", ["deploy:azure", "verify:azure"]),
@@ -280,6 +291,7 @@ def test_doctor_without_for_prints_every_row_and_fails_only_on_build() -> None:
     assert _names(out) == [
         "build:x86-64",
         "build:go",
+        "build:rustup",
         "run:simulated",
         "run:tdx",
         "deploy:gcp",

@@ -62,15 +62,14 @@ declaration order; the first line `demo  profile=production  debian/trixie x86_6
 - The README's Python block is the minimal image, while the commands under it run on the
   `App` project `new` wrote; left as is to keep the README near 400 words.
 
-### 2.9 `CargoBuild` ignores a source's `rust-toolchain.toml` (M)
-
-The Rust analogue of the Go toolchain fix is not addressed: Debian's `cargo` builds a
-source whatever its `rust-toolchain.toml` pins, and the manifest records no Rust toolchain.
-
 ## 3. Fixed on this branch (the commits carry the why)
 
 - Every image failed to build from tundra-tools master (`go 1.25.0` on trixie's Go 1.24):
   fixed later on `go-toolchain`, a Go source builds with the toolchain its go.mod names.
+- Fixed later on `rust-toolchain`: `CargoBuild` built with Debian's `cargo` whatever the
+  source's `rust-toolchain.toml` pins, and the manifest recorded no Rust toolchain. The host's
+  `rustup` installs the pinned toolchain into the workspace, the offline build runs it, the
+  manifest and `show BUILD` name it, and an unpinned channel is refused.
 - A finding's `at:` named the console script (`../../.venv/bin/tundravm:10`) when tundravm
   ran through a relative path: frame paths are normalized before the skip test.
 - `lock` without tundra-tools access suggested `--offline`, which `lock` does not have; it

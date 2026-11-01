@@ -72,30 +72,80 @@ def test_show_a_build(built: Build, cli: Cli) -> None:
     assert report["observations"]["id"] == built.id
 
 
-def test_a_build_records_and_shows_each_go_sources_toolchain(
-    project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+GO_RELEASE = {
+    "name": "go1.25.0",
+    "module": "golang.org/toolchain@v0.0.1-go1.25.0.linux-amd64",
+    "sum": "h1:toolchain=",
+}
+RUST_RELEASE = {
+    "name": "1.91.0-x86_64-unknown-linux-gnu",
+    "channel": "1.91.0",
+    "host": "x86_64-unknown-linux-gnu",
+    "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)",
+    "commit": "f8297e351a40c1439a467bbbb6879088047f50b3",
+    "profile": "minimal",
+    "components": [],
+    "targets": [],
+}
+PROBE = """
+from dataclasses import replace
+
+from tundravm import Service
+from tundravm.sources import CargoBinary, Git
+
+probe = CargoBinary("probe", Git("https://example.com/probe.git", "b" * 40))
+image = replace(image, services=[*image.services, Service("probe", [probe])])
+"""
+
+
+@pytest.mark.parametrize(
+    ("added", "kind", "release", "shown"),
+    [
+        (
+            "",
+            "go",
+            GO_RELEASE,
+            "  go toolchains\n    tdxs                   go1.25.0  h1:toolchain=\n",
+        ),
+        (
+            PROBE,
+            "cargo",
+            RUST_RELEASE,
+            "  rust toolchains\n    probe                  1.91.0  "
+            "rustc 1.91.0 (f8297e351 2025-10-28)\n",
+        ),
+    ],
+    ids=["go", "rust"],
+)
+def test_a_build_records_and_shows_each_sources_toolchain(
+    project: Path,
+    cli: Cli,
+    monkeypatch: pytest.MonkeyPatch,
+    added: str,
+    kind: str,
+    release: dict[str, object],
+    shown: str,
 ) -> None:
     """The toolchain the host prefetch recorded is the manifest's, by source, and show names
-    it with the checksum the checksum database vouched for."""
-    release = {
-        "name": "go1.25.0",
-        "module": "golang.org/toolchain@v0.0.1-go1.25.0.linux-amd64",
-        "sum": "h1:toolchain=",
-    }
+    it: Go's with the checksum the checksum database vouched for, Rust's by what its rustc
+    says."""
+    with (project / "demo.py").open("a", encoding="utf-8") as demo:
+        demo.write(added)
 
     def prefetch(build: SourceBuild, pin: str, checkout: Path, root: Path, **_: object) -> str:
+        toolchain = release if build.build.kind == kind else {"name": "local", "reason": "-"}
         (root / "deps").mkdir(parents=True, exist_ok=True)
-        (root / "deps" / str(build.deps_marker(pin))).write_text(json.dumps({"toolchain": release}))
-        return "go: prefetched"
+        marker = root / "deps" / str(build.deps_marker(pin))
+        marker.write_text(json.dumps({"toolchain": toolchain}))
+        return "prefetched"
 
     monkeypatch.setattr(lifecycle, "prefetch_deps", prefetch)
     assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
-    (tdxs,) = json.loads(cli("show", "latest", "--json").out)["manifest"]["sources"]
-    assert tdxs["name"] == "tdxs" and tdxs["go_toolchain"] == release
-    assert "  go toolchains\n    tdxs                   go1.25.0  h1:toolchain=\n" in (
-        cli("show", "latest").out
-    )
+    key = "go_toolchain" if kind == "go" else "rust_toolchain"
+    sources = json.loads(cli("show", "latest", "--json").out)["manifest"]["sources"]
+    assert [source[key] for source in sources if key in source] == [release]
+    assert shown in cli("show", "latest").out
 
 
 def test_show_a_build_by_path(built: Build, cli: Cli) -> None:

@@ -38,8 +38,9 @@ class FakeSources:
     ``fetch_source`` writes :data:`CHECKOUT_FILE` into the new checkout; a fake checkout
     answers git's ``rev-parse`` with its pin and ``status`` with a clean tree, so a second
     build reuses it. A dependency prefetch records an empty, complete cache, so an offline
-    build reuses it too; a Go build's toolchain is ``local`` (a fake checkout has no
-    go.mod). *fetched* lists every checkout made, in order.
+    build reuses it too; a Go build's toolchain is ``local`` and a Cargo build's
+    ``debian`` (a fake checkout has no go.mod or rust-toolchain.toml). *fetched* lists
+    every checkout made, in order.
     """
 
     fetched: list[FakeFetch] = field(default_factory=list)
@@ -76,10 +77,15 @@ class FakeSources:
             "spec": build.deps_spec(),
             "contents": {},
         }
-        toolchain = build.go_toolchain_file(pin)
+        toolchain = build.toolchain_file(pin)
         if toolchain is not None:
-            record["toolchain"], _ = _source._go_toolchain_entries(_source.GO_TOOLCHAIN_LOCAL, deps)
-            (deps / toolchain).write_text(f"{_source.GO_TOOLCHAIN_LOCAL}\n", encoding="utf-8")
+            if isinstance(build.build, _source.GoBuild):
+                name = _source.GO_TOOLCHAIN_LOCAL
+                record["toolchain"], _ = _source._go_toolchain_entries(name, deps)
+            else:
+                name = _source.RUST_TOOLCHAIN_DEBIAN
+                record["toolchain"] = {"name": name, "reason": _source._RUST_DEBIAN_REASON}
+            (deps / toolchain).write_text(f"{name}\n", encoding="utf-8")
         (deps / marker).write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
         return f"{build.build.deps}: prefetched"
 

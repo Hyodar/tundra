@@ -39,9 +39,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - The Linux backend runs the pinned mkosi in a child forked by mkosi's `fork_and_wait`,
   never from `PATH`; every other tool comes from the pinned tools tree. The Lima backend
   runs the same mkosi commit in an x86-64 Debian guest. Builds never switch backend.
-- `doctor` prints one row per capability (`build:x86-64`, `build:go`, `run:simulated`,
-  `run:tdx`, `deploy:gcp`, `deploy:azure`, `verify:*`), each failure with its fix; `--for`
-  picks one. `build:go` says what the host's `go` is for and wants 1.21 or newer.
+- `doctor` prints one row per capability (`build:x86-64`, `build:go`, `build:rustup`,
+  `run:simulated`, `run:tdx`, `deploy:gcp`, `deploy:azure`, `verify:*`), each failure with
+  its fix; `--for` picks one. `build:go` says what the host's `go` is for and wants 1.21 or
+  newer; `build:rustup` says what the host's `rustup` is for.
 - A Go source builds with the toolchain its `go.mod` names (the `toolchain` line, else the
   `go` line), pinned: the host's `go` fetches that release into the module cache with the
   modules (`GOTOOLCHAIN=<release>`), the offline build selects it from the copied cache,
@@ -51,6 +52,16 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `Go(env=)` refuses `GOTOOLCHAIN`. `Tdxs` builds tundra-tools as a Go build (prefetched modules and
   toolchain, `CGO_ENABLED=0`, `-buildvcs=false`) instead of a script that needed the
   network, so an image builds from tundra-tools master (`go 1.25.0`) on trixie (Go 1.24).
+- A Cargo source builds with the toolchain its `rust-toolchain.toml` (or `rust-toolchain`)
+  pins: the host's `rustup` installs that channel, with the file's components and targets
+  and `--profile minimal` unless it names another, into `.sources/deps/rustup`, the cargo
+  of that toolchain fetches the crates, and the offline build runs that toolchain's own
+  `cargo` and `rustc` (Debian's `cargo` is not rustup's proxy); Debian's toolchain only
+  links. A channel that is not pinned (`stable`, `1.91`, an undated `nightly`) is
+  `E_SOURCE` with the fix, a channel the host cannot install is `E_SOURCE` naming it, and
+  a pinned source on a host without `rustup` is `E_STATE` before any toolchain runs. A
+  source that pins none builds with Debian's `cargo`, and the manifest says so.
+  `Cargo(env=)` refuses `RUSTUP_TOOLCHAIN`.
 - Evidence: `docs/design/evidence/gate1-tree.md`.
 
 ### The concise SDK
@@ -153,9 +164,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   a development build writes a missing lock first.
 - `manifest.json` (`tundravm.manifest/1`) binds every artifact and input by sha256, the
   tree by a digest over paths, modes, contents and symlink targets, the UKI and its root
-  hash, the lock, the sources (each Go source with its toolchain and checksum), the
-  package manifest, the SBOM, the measurement records and the toolchain, with explicit
-  `missing` and `unchecked` states; `show BUILD` prints the Go toolchains. `verify` checks it
+  hash, the lock, the sources (each Go source with its toolchain and checksum, each Cargo
+  source with its Rust toolchain and what its `rustc -vV` says), the package manifest, the
+  SBOM, the measurement records and the toolchain, with explicit `missing` and `unchecked`
+  states; `show BUILD` prints the Go and Rust toolchains. `verify` checks it
   offline, a signature against an OpenSSH allowed-signers file, and `--rebuild`
   reproduces it. A signed manifest was verified from a second checkout.
 - `build --reproduce` builds again in an independent workspace and records the comparison

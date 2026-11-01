@@ -32,10 +32,12 @@ from tundravm._source import (
     NamedSource,
     Resolver,
     SourceBuild,
+    checkout_rust_toolchain,
     fetch_source,
     is_fetched,
     prefetch_deps,
     require_host_go,
+    require_host_rustup,
     resolve_pins,
     write_marker,
 )
@@ -797,10 +799,11 @@ def fetch_image(
     """Check out every source of *img*'s *profiles* under ``<build>/.sources``.
 
     The sources are the source builds, the built kernel's source and the ``EfiStub``
-    packages (``Lowered.lock_sources``). Each Go,
-    Cargo and .NET build's dependencies are then prefetched into
-    ``<build>/.sources/deps`` with the host's toolchain (``prefetch_deps``); without
-    it the build downloads them as before.
+    packages (``Lowered.lock_sources``). Once every source is checked out, each Go,
+    Cargo and .NET build's dependencies are prefetched into ``<build>/.sources/deps``
+    with the host's toolchain (``prefetch_deps``); without it the build downloads them
+    as before. A Cargo source that pins a Rust toolchain needs the host's ``rustup``,
+    which ``require_host_rustup`` checks before any toolchain runs.
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
@@ -842,10 +845,19 @@ def fetch_image(
                 copies=copies,
             )
             copies.setdefault((source_build.source, source.pin), source.path)
-            if isinstance(source_build, SourceBuild):
-                deps = _prefetch(source_build, source, root, progress, offline=offline)
-                source = replace(source, deps=deps)
             fetched.append(source)
+        prefetches = [
+            (index, source_build)
+            for index, source_build in enumerate(builds.values())
+            if isinstance(source_build, SourceBuild)
+        ]
+        if not offline:
+            pinned = {b.key: checkout_rust_toolchain(b, fetched[i].path) for i, b in prefetches}
+            require_host_rustup({key: rust for key, rust in pinned.items() if rust is not None})
+        for index, source_build in prefetches:
+            source = fetched[index]
+            deps = _prefetch(source_build, source, root, progress, offline=offline)
+            fetched[index] = replace(source, deps=deps)
     return tuple(fetched)
 
 

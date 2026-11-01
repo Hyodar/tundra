@@ -116,6 +116,7 @@ $ tundravm doctor --for build
 ```text
 build:x86-64     ready (mkosi 27.1, sudo, which may ask for a password, as this host has no unprivileged user namespaces)
 build:go         ready (go1.24.4, which fetches each Go source's modules and the toolchain its go.mod names for the offline build (every image's Tdxs is one))
+build:rustup     ready (rustup 1.28.2, which installs the toolchain each Cargo source's rust-toolchain.toml pins for the offline build)
 run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
 run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled
 deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI
@@ -699,6 +700,20 @@ toolchain, builds with Debian's `go`. The manifest records each Go source's tool
 its checksum, and `show BUILD` prints it. Without a host `go` 1.21 or newer, `build` of an
 image with a Go source stops before it fetches anything; `doctor --for build` checks it.
 
+A Cargo source builds with the toolchain its `rust-toolchain.toml` (or the legacy
+`rust-toolchain`) pins, looked up as `rustup` does from the build's directory up to the
+checkout. The host's `rustup` installs that channel, with the components and targets the
+file lists and `--profile minimal` unless it names another, into the workspace; that
+toolchain's `cargo` fetches the crates, and the offline build runs its own `cargo` and
+`rustc`, with Debian's compiler and linker underneath. The channel must be pinned: a
+release (`1.91.0`) or a dated channel (`nightly-2026-09-01`); `stable`, `1.91` or a bare
+`nightly` fail the build with `E_SOURCE`, since they move with each release. To build
+with another Rust, build a revision that pins it. A source without a toolchain file
+builds with Debian's `cargo`. The manifest records each Cargo source's toolchain (its
+channel and what its `rustc -vV` says, or `debian`), and `show BUILD` prints it. A pinned
+source on a host without `rustup` stops before any toolchain runs; `doctor --for build`
+checks it.
+
 ## Build
 
 ```console
@@ -751,7 +766,7 @@ hex digits of the sha256 of the document without `id`. It binds:
 | `root_hash`, `rootfs` | the verity root hash (or `null`) and the layout |
 | `tree` | a digest over the tree's paths, modes, contents and symlink targets |
 | `lock` | the lock it was built against and the committed one it was checked against |
-| `sources`, `packages`, `sbom`, `summary` | the source pins and each Go source's toolchain, the package manifest, the SBOM, mkosi's resolved summary |
+| `sources`, `packages`, `sbom`, `summary` | the source pins and each Go and Cargo source's toolchain, the package manifest, the SBOM, mkosi's resolved summary |
 | `measurements` | the state of each measurement record |
 | `toolchain` | the backend, mkosi, the tools tree, tundravm, the measurement tools |
 | `kind`, `profile`, `targets`, `ports` | what the build is |

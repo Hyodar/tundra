@@ -135,6 +135,17 @@ def build_report(build: Build) -> dict[str, object]:
     }
 
 
+def _toolchain(record: Mapping[str, Any]) -> str:
+    """A source's Go or Rust toolchain record, as ``show BUILD`` prints it."""
+    if record.get("state") == "missing":
+        return f"missing: {record.get('reason')}"
+    if record.get("sum"):
+        return f"{record.get('name')}  {record.get('sum')}"
+    if record.get("rustc"):
+        return f"{record.get('channel')}  {record.get('rustc')}"
+    return f"{record.get('name')} ({record.get('reason')})"
+
+
 def render_build(build: Build) -> str:
     m = build.manifest
     lines = [
@@ -173,21 +184,15 @@ def render_build(build: Build) -> str:
     lines.append(
         f"  toolchain     tundravm {toolchain.get('tundravm')}, backend {toolchain.get('backend')}"
     )
-    go = [
-        (str(source.get("name")), source["go_toolchain"])
-        for source in m.get("sources") or []
-        if isinstance(source, dict) and isinstance(source.get("go_toolchain"), dict)
-    ]
-    if go:
-        lines.append("  go toolchains")
-    for name, record in go:
-        if record.get("state") == "missing":
-            shown = f"missing: {record.get('reason')}"
-        elif record.get("sum"):
-            shown = f"{record.get('name')}  {record.get('sum')}"
-        else:
-            shown = f"{record.get('name')} ({record.get('reason')})"
-        lines.append(f"    {name:<22} {shown}")
+    for key, title in (("go_toolchain", "go toolchains"), ("rust_toolchain", "rust toolchains")):
+        records = [
+            (str(source.get("name")), source[key])
+            for source in m.get("sources") or []
+            if isinstance(source, dict) and isinstance(source.get(key), dict)
+        ]
+        if records:
+            lines.append(f"  {title}")
+        lines.extend(f"    {name:<22} {_toolchain(record)}" for name, record in records)
     observed = _json(build.path / mf.OBSERVATIONS) or {}
     if observed:
         runner = observed.get("runner") or {}

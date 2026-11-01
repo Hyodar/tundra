@@ -264,6 +264,201 @@ def test_a_toolchain_that_is_not_a_release_is_refused() -> None:
         _source.go_toolchain("go 1.25.0\ntoolchain go1.25.0-corp\n")
 
 
+RUST = "1.91.0-x86_64-unknown-linux-gnu"
+"""The toolchain ``channel = "1.91.0"`` installs: the build sandbox's host triple."""
+
+
+@pytest.mark.parametrize(
+    ("files", "pinned"),
+    [
+        ({}, None),
+        (
+            {
+                "rust-toolchain.toml": '[toolchain]\nchannel = "1.91.0"\n'
+                'components = ["rustfmt", "clippy"]\ntargets = ["wasm32-unknown-unknown"]\n'
+            },
+            ("1.91.0", ("rustfmt", "clippy"), ("wasm32-unknown-unknown",), "minimal"),
+        ),
+        (
+            {
+                "rust-toolchain.toml": '[toolchain]\nchannel = "nightly-2026-09-01"\n'
+                'profile = "default"\n'
+            },
+            ("nightly-2026-09-01", (), (), "default"),
+        ),
+        ({"../rust-toolchain": "1.91.1\n"}, ("1.91.1", (), (), "minimal")),
+        (
+            {
+                "rust-toolchain": "1.89.0\n",
+                "rust-toolchain.toml": '[toolchain]\nchannel = "1.91.0"\n',
+            },
+            ("1.89.0", (), (), "minimal"),
+        ),
+        (
+            {"rust-toolchain.toml": '[toolchain]\nchannel = "stable"\n'},
+            "channel 'stable', which is not pinned",
+        ),
+        ({"rust-toolchain": "1.91\n"}, "channel '1.91', which is not pinned"),
+        (
+            {"rust-toolchain.toml": '[toolchain]\nchannel = "nightly"\n'},
+            "channel 'nightly', which is not pinned",
+        ),
+        ({"rust-toolchain.toml": '[toolchain]\npath = "/opt/rust"\n'}, "custom toolchain"),
+        ({"rust-toolchain.toml": '[toolchain]\ncomponents = ["clippy"]\n'}, "names no channel"),
+    ],
+    ids=[
+        "none",
+        "release",
+        "nightly",
+        "legacy-in-a-parent",
+        "legacy-first",
+        "stable",
+        "minor",
+        "undated-nightly",
+        "path",
+        "no-channel",
+    ],
+)
+def test_the_rust_toolchain_is_the_one_its_file_pins(
+    tmp_path: Path, files: dict[str, str], pinned: tuple[object, ...] | str | None
+) -> None:
+    """As rustup looks it up, from the build's directory up to the checkout, the legacy
+    ``rust-toolchain`` first; a channel that names a different Rust as releases come is
+    refused with the fix."""
+    workdir = tmp_path / "checkout" / "crate"
+    workdir.mkdir(parents=True)
+    for name, text in files.items():
+        (workdir / name).write_text(text, encoding="utf-8")
+    if isinstance(pinned, str):
+        with pytest.raises(SourceError, match=pinned) as refused:
+            _source.rust_toolchain(workdir, tmp_path / "checkout")
+        assert 'channel = "1.91.0"' in str(refused.value.hint)
+        return
+    found = _source.rust_toolchain(workdir, tmp_path / "checkout")
+    shape = (
+        None if found is None else (found.channel, found.components, found.targets, found.profile)
+    )
+    assert shape == pinned
+
+
+@pytest.fixture
+def rust_repo(tmp_path: Path) -> tuple[str, str]:
+    """A crate whose ``rust-toolchain.toml`` pins 1.91.0 with clippy: ``(url, commit)``."""
+    path = tmp_path / "rust-upstream"
+    path.mkdir()
+    _git("init", "-q", "-b", "main", cwd=path)
+    (path / "Cargo.toml").write_text('[package]\nname = "tool"\n', encoding="utf-8")
+    (path / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+    (path / "rust-toolchain.toml").write_text(
+        '[toolchain]\nchannel = "1.91.0"\ncomponents = ["clippy"]\n', encoding="utf-8"
+    )
+    _git("add", ".", cwd=path)
+    _git("commit", "-qm", "one", cwd=path)
+    return path.as_uri(), _git("rev-parse", "HEAD", cwd=path)
+
+
+RUSTC_VV = (
+    "rustc 1.91.0 (f8297e351 2025-10-28)\nbinary: rustc\n"
+    "commit-hash: f8297e351a40c1439a467bbbb6879088047f50b3\nhost: x86_64-unknown-linux-gnu\n"
+)
+
+
+class _Rustup(_Toolchain):
+    """A fake ``rustup toolchain install`` that lays the toolchain out, its ``rustc -vV``,
+    and a ``cargo fetch`` that must be the toolchain's own."""
+
+    def run(
+        self, argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append((tuple(argv), cwd, dict(env)))
+        toolchain = Path(env["RUSTUP_HOME"]) / "toolchains" / RUST
+        if argv[0] == "rustup":
+            for rel in ("bin/cargo", "bin/rustc", "lib/rustlib/multirust-channel-manifest.toml"):
+                (toolchain / rel).parent.mkdir(parents=True, exist_ok=True)
+                (toolchain / rel).write_text(rel, encoding="utf-8")
+            (toolchain / "lib/rustlib/multirust-config.toml").write_text("clippy\n")
+            return subprocess.CompletedProcess(list(argv), 0, "", "")
+        if argv[0].endswith("/rustc"):
+            return subprocess.CompletedProcess(list(argv), 0, RUSTC_VV, "")
+        assert env["PATH"].split(":")[0] == str(toolchain / "bin")
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+
+def test_a_pinned_cargo_source_fetches_with_the_toolchain_rustup_installs(
+    tmp_path: Path, rust_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The host's rustup installs the pinned toolchain into the workspace's RUSTUP_HOME,
+    whose own cargo fetches the crates; the marker records what its rustc says, and a
+    toolchain that lost a file is installed again."""
+    url, first = rust_repo
+    tools = _Rustup(monkeypatch, ["rustup"])
+    monkeypatch.setattr(_source, "host_rustup_version", lambda: "1.28.2")
+    recipe = _recipe(_build(url, "cargo"))
+    out = tmp_path / "out"
+
+    (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=out)
+
+    deps = out / ".sources" / "deps"
+    home = str((deps / "rustup").resolve())
+    assert fetched.deps == "cargo: prefetched"
+    install, version, fetch_crates = tools.calls
+    assert install[0] == (
+        "rustup",
+        "toolchain",
+        "install",
+        RUST,
+        "--profile",
+        "minimal",
+        "--no-self-update",
+        "--component",
+        "clippy",
+    )
+    assert install[2]["RUSTUP_HOME"] == home
+    assert version[0] == (f"{home}/toolchains/{RUST}/bin/rustc", "-vV")
+    assert fetch_crates[0] == ("cargo", "fetch", "--locked")
+    assert fetch_crates[2]["RUSTUP_TOOLCHAIN"] == RUST and fetch_crates[2]["RUSTUP_HOME"] == home
+    (marker,) = deps.glob("*.cargo.json")
+    assert json.loads(marker.read_text(encoding="utf-8"))["toolchain"] == {
+        "name": RUST,
+        "channel": "1.91.0",
+        "host": "x86_64-unknown-linux-gnu",
+        "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)",
+        "commit": "f8297e351a40c1439a467bbbb6879088047f50b3",
+        "profile": "minimal",
+        "components": ["clippy"],
+        "targets": [],
+    }
+    assert marker.with_suffix(".toolchain").read_text(encoding="utf-8") == f"{RUST}\n"
+
+    (kept,) = fetch(recipe, lock=_locked(recipe, first), build=out)
+    assert kept.deps == "cargo: kept" and len(tools.calls) == 3
+
+    (deps / "rustup" / "toolchains" / RUST / "bin" / "cargo").unlink()
+    (repaired,) = fetch(recipe, lock=_locked(recipe, first), build=out)
+    assert repaired.deps == (
+        "cargo: prefetched (was incomplete: "
+        f"deps/rustup/toolchains/{RUST}/bin/cargo is missing or changed)"
+    )
+
+
+def test_a_pinned_cargo_source_needs_rustup_on_the_host_before_any_toolchain_runs(
+    tmp_path: Path, rust_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, first = rust_repo
+    tools = _Rustup(monkeypatch, ["cargo"])
+    monkeypatch.setattr(_source, "host_rustup_version", lambda: None)
+    recipe = _recipe(_build(url, "cargo"))
+    with pytest.raises(StateError) as error:
+        fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
+    message = str(error.value)
+    assert (
+        "Cargo source build 'tool' needs rustup on the host to install the Rust toolchain its "
+        "rust-toolchain.toml pins (1.91.0): there is no rustup on PATH." in message
+    )
+    assert "https://rustup.rs" in message and "tundravm doctor --for build" in message
+    assert tools.calls == [] and not (tmp_path / ".sources" / "deps").exists()
+
+
 @pytest.mark.parametrize("kind", ["go", "cargo", "dotnet"])
 def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch, kind: str
