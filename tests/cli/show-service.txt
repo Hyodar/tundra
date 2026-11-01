@@ -64,7 +64,7 @@ Files (15):
   /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf                0644  53B  sha256:08546e89161d
   /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
   /usr/lib/tundravm/instance-key                                                           0755  1112B  sha256:63e33f30e3b8
-  /usr/lib/tundravm/probe                                                                  0755  6451B  sha256:d013bfa727ae
+  /usr/lib/tundravm/probe                                                                  0755  6702B  sha256:04a027f0326d
   /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
   /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
 Groups (1):

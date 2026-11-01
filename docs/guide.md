@@ -294,7 +294,10 @@ instead.
 `Service.packaged("prometheus-node-exporter.service")` runs the unit a Debian package ships
 and installs the package (`package=` names another). Its sandbox is `hardening=`, `static`
 unless said, which replaces the package's own; beside it only `requires=`, a probe
-`readiness=`, `expose=` and `unit=DropIn(...)` apply.
+`readiness=`, `expose=` and `unit=DropIn(...)` apply. A time daemon's one capability is a deviation,
+`Service.packaged("systemd-timesyncd.service", hardening=Hardening.preset("static",
+capabilities=["CAP_SYS_TIME"]))`, which also lifts `ProtectClock=`; one it lacks shows at
+boot, as the probe's `service:` failure naming a denied capability.
 
 ## Components
 

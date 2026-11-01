@@ -54,6 +54,9 @@ _WORD = re.compile(r"~?@?[A-Za-z0-9_:-]+")
 
 _UNSET: Any = type("_Unset", (), {"__slots__": (), "__repr__": lambda self: "<strict>"})()
 """A :class:`Hardening` field's default: the :data:`_STRICT` value, not passed."""
+_CAPABILITY_SYSCALLS = {"CAP_SYS_TIME": "@clock"}
+"""The system call group a granted capability exists for: allowed back after the deny list
+(``@privileged`` holds ``@clock``), and ``ProtectClock=`` goes, so the grant takes effect."""
 _STRICT: dict[str, object] = {
     "protect_system": "strict",
     "protect_home": True,
@@ -132,7 +135,8 @@ class Hardening:
     (``Hardening.strict(jit=True)``), so a relaxation is visible where it is made.
     ``devices`` replaces ``PrivateDevices=yes`` with ``DevicePolicy=closed`` plus one
     ``DeviceAllow=<dev> rw`` each; ``capabilities``
-    ``None`` leaves the bounding set alone, ``()`` empties it, names keep (and grant) those;
+    ``None`` leaves the bounding set alone, ``()`` empties it, names keep (and grant) those,
+    and ``CAP_SYS_TIME`` also drops ``ProtectClock=`` and allows ``@clock`` back;
     ``jit=True`` drops ``MemoryDenyWriteExecute=`` (.NET, JVM, V8); ``network`` picks
     ``RestrictAddressFamilies=`` (``"any"``: no restriction); ``kernel`` covers
     ``ProtectKernel{Modules,Tunables,Logs}=``, ``ProtectControlGroups=`` and
@@ -254,7 +258,9 @@ class Hardening:
         elif self.private_devices:
             add(("PrivateDevices", "yes"))
         if self.kernel:
-            out += [("ProtectKernelLogs", "yes"), ("ProtectClock", "yes")]
+            add(("ProtectKernelLogs", "yes"))
+            if not self._sets_clock:
+                add(("ProtectClock", "yes"))
         if self.sandbox:
             for key in ("ProtectHostname", "RestrictRealtime", "RestrictNamespaces"):
                 add((key, "yes"))
@@ -295,8 +301,20 @@ class Hardening:
                 and not {"CAP_SETUID", "CAP_SETGID"} & set(caps)
             ):
                 out.append(("SystemCallFilter", "@setuid"))
+        if out:
+            out += [
+                ("SystemCallFilter", _CAPABILITY_SYSCALLS[cap])
+                for cap in self.capabilities or ()
+                if cap in _CAPABILITY_SYSCALLS
+            ]
+        if self.deny_syscalls:
             out.append(("SystemCallErrorNumber", "EPERM"))
         return out
+
+    @property
+    def _sets_clock(self) -> bool:
+        """Whether ``CAP_SYS_TIME`` is granted, which ``ProtectClock=`` would take away."""
+        return "CAP_SYS_TIME" in (self.capabilities or ())
 
     def patch_entries(self) -> tuple[tuple[str, str], ...]:
         """The directives a drop-in writes to make the :attr:`explicit` fields hold over
@@ -316,9 +334,10 @@ class Hardening:
             ("kernel", _KERNEL_KEYS, self.kernel),
             ("sandbox", _SANDBOX_KEYS, self.sandbox),
         )
+        off = {"ProtectClock"} if self._sets_clock else set()
         for name, keys, value in switches:
             if name in given:
-                out += [(key, on[value]) for key in keys]
+                out += [(key, on[value and key not in off]) for key in keys]
         if given & {"devices", "private_devices"}:
             out.append(("PrivateDevices", on[self.private_devices and not self.devices]))
             out.append(("DevicePolicy", "closed" if self.devices else "auto"))
@@ -344,6 +363,8 @@ class Hardening:
             out.append(("AmbientCapabilities", ""))
             if self.capabilities:
                 out.append(("AmbientCapabilities", " ".join(self.capabilities)))
+            if self._sets_clock and "kernel" not in given:
+                out.append(("ProtectClock", "no"))
         if "umask" in given:
             out.append(("UMask", self.umask or "0022"))  # None: systemd's default
         return tuple(out)

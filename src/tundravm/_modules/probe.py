@@ -522,6 +522,8 @@ probe_service() {{
         ok "exited 0"
     elif [ "$state" = inactive ] && [ "$result" = success ]; then
         fail "never started: a unit it requires failed; systemctl list-dependencies $1"
+    elif systemctl status --no-pager -n 20 "$1" 2>&1 | grep -Eq 'CAPABILIT|EPERM|Operation not permitted'; then
+        fail "$state ($result): a denied capability; grant it with Hardening.preset(..., capabilities=[...]); journalctl -u $1 says which"
     else
         fail "$state ($result): journalctl -u $1 says why"
     fi

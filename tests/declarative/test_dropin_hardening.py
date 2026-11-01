@@ -111,3 +111,39 @@ def test_a_patch_renders_only_the_fields_it_sets() -> None:
     text = image.file("/usr/lib/systemd/system/app.service.d/20-tundravm.conf").text
     assert text == "[Service]\nMemoryDenyWriteExecute=no\n"
     assert Hardening(jit=True) == Hardening.strict(jit=True)  # same unit, different patch
+
+
+CLOCK = Hardening.preset("static", capabilities=["CAP_SYS_TIME"])
+
+
+@pytest.mark.parametrize(
+    ("under", "patch", "clock", "filters"),
+    [
+        (
+            Hardening.strict(),
+            None,
+            "yes",
+            ("@system-service", "~@privileged @resources", "@setuid"),
+        ),
+        (CLOCK, None, "no", ("@system-service", "~@privileged @resources", "@setuid", "@clock")),
+        (
+            Hardening.strict(),
+            CLOCK,
+            "no",
+            ("@system-service", "~@privileged @resources", "@setuid", "@clock"),
+        ),
+        (
+            Hardening.strict(),
+            Hardening(capabilities=["CAP_SYS_TIME"]),
+            "no",
+            ("@system-service", "~@privileged @resources", "@setuid"),
+        ),
+    ],
+    ids=["strict", "granted", "granted-by-preset-patch", "granted-by-field-patch"],
+)
+def test_granting_cap_sys_time_lifts_the_clock_protections(
+    under: Hardening, patch: Hardening | None, clock: str, filters: tuple[str, ...]
+) -> None:
+    sandbox = effective(base(under) if patch is None else merged(under, patch))
+    assert sandbox["ProtectClock"] == clock
+    assert sandbox["SystemCallFilter"] == filters
