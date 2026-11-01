@@ -9,7 +9,6 @@ from tundravm.models import DeployRequest, DeployResult
 
 from .azure import AzureDeployAdapter
 from .gcp import GcpDeployAdapter
-from .qemu import QemuDeployAdapter
 
 
 class DeployAdapter(Protocol):
@@ -20,15 +19,13 @@ class DeployAdapter(Protocol):
 
 
 def get_adapter(target: str) -> DeployAdapter:
-    if target == "qemu":
-        return QemuDeployAdapter()
     if target == "azure":
         return AzureDeployAdapter()
     if target == "gcp":
         return GcpDeployAdapter()
     raise DeploymentError(
         "Unsupported deploy target.",
-        hint="Use one of: qemu, azure, gcp",
+        hint="Use one of: azure, gcp",
         context={"target": target},
     )
 
@@ -39,6 +36,5 @@ __all__ = [
     "DeployRequest",
     "DeployResult",
     "GcpDeployAdapter",
-    "QemuDeployAdapter",
     "get_adapter",
 ]

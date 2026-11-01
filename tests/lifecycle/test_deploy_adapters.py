@@ -8,7 +8,6 @@ import pytest
 from tundravm.deploy import DeployAdapter, get_adapter
 from tundravm.deploy.azure import AzureDeployAdapter
 from tundravm.deploy.gcp import GcpDeployAdapter
-from tundravm.deploy.qemu import QemuDeployAdapter
 from tundravm.errors import DeploymentError
 from tundravm.models import DeployRequest, OutputTarget
 
@@ -16,11 +15,10 @@ from tundravm.models import DeployRequest, OutputTarget
 @pytest.mark.parametrize(
     ("target", "adapter", "match"),
     [
-        ("qemu", QemuDeployAdapter, "QEMU binary not found"),
         ("azure", AzureDeployAdapter, "Azure CLI"),
         ("gcp", GcpDeployAdapter, "gcloud"),
     ],
-    ids=["qemu", "azure", "gcp"],
+    ids=["azure", "gcp"],
 )
 def test_each_adapter_requires_its_cli(
     tmp_path: Path,
@@ -29,7 +27,7 @@ def test_each_adapter_requires_its_cli(
     adapter: Callable[[], DeployAdapter],
     match: str,
 ) -> None:
-    """Each adapter raises when its CLI (qemu-system-x86_64, az, gcloud) is not found."""
+    """Each adapter raises when its CLI (az, gcloud) is not found."""
     request = _request(tmp_path, target=target)
     monkeypatch.setattr(f"tundravm.deploy.{target}.shutil.which", lambda _: None)
 
@@ -55,7 +53,6 @@ def test_get_adapter_rejects_unsupported_target() -> None:
 
 
 def test_get_adapter_returns_correct_types() -> None:
-    assert isinstance(get_adapter("qemu"), QemuDeployAdapter)
     assert isinstance(get_adapter("azure"), AzureDeployAdapter)
     assert isinstance(get_adapter("gcp"), GcpDeployAdapter)
 
@@ -92,202 +89,6 @@ class Recorder:
 
 def _reply(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
-
-
-def _qemu_request(tmp_path: Path, name: str = "node.efi", **params: str) -> DeployRequest:
-    artifact = tmp_path / "build" / "dev" / "output" / name
-    artifact.parent.mkdir(parents=True)
-    artifact.write_text("uki", encoding="utf-8")
-    return DeployRequest(profile="dev", target="qemu", artifact_path=artifact, parameters=params)
-
-
-@pytest.fixture
-def firmware(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    paths = {}
-    for name, constant in (
-        ("OVMF_CODE.fd", "OVMF_CODE_PATHS"),
-        ("OVMF_VARS.fd", "OVMF_VARS_PATHS"),
-        ("OVMF.fd", "TDVF_PATHS"),
-    ):
-        path = tmp_path / "fw" / name
-        path.parent.mkdir(exist_ok=True)
-        path.write_text("fw", encoding="utf-8")
-        monkeypatch.setattr(f"tundravm.deploy.qemu.{constant}", (str(path),))
-        paths[name] = str(path)
-    return paths
-
-
-def test_qemu_detaches_with_a_serial_log_and_monitor_socket_not_stdio(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    run = Recorder()
-    result = QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path))
-
-    run_dir = tmp_path / "build" / "dev"
-    (cmd,) = run.calls
-    assert "-nographic" not in cmd and "mon:stdio" not in cmd
-    assert cmd[cmd.index("-display") + 1] == "none"
-    assert cmd[cmd.index("-serial") + 1] == f"file:{run_dir}/qemu-serial.log"
-    assert cmd[cmd.index("-monitor") + 1] == f"unix:{run_dir}/qemu.monitor,server,nowait"
-    assert cmd[-3:] == ["-daemonize", "-pidfile", f"{run_dir}/qemu.pid"]
-    assert f"file={firmware['OVMF_CODE.fd']},if=pflash,format=raw,readonly=on" in cmd
-    assert f"file={run_dir}/qemu-ovmf-vars.fd,if=pflash,format=raw" in cmd
-    assert (run_dir / "qemu-ovmf-vars.fd").read_text(encoding="utf-8") == "fw"
-    assert result.metadata["serial_log"] == f"{run_dir}/qemu-serial.log"
-    assert result.metadata["monitor"] == f"{run_dir}/qemu.monitor"
-    assert result.metadata["pidfile"] == f"{run_dir}/qemu.pid"
-
-
-def test_qemu_attached_keeps_the_console_on_stdio(tmp_path: Path, firmware: dict[str, str]) -> None:
-    run = Recorder()
-    result = QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path, daemonize="false"))
-
-    (cmd,) = run.calls
-    assert cmd[-3:] == ["-nographic", "-serial", "mon:stdio"]
-    assert "-daemonize" not in cmd and "-monitor" not in cmd
-    assert "serial_log" not in result.metadata
-
-
-def test_qemu_tdx_boots_tdvf_through_bios_with_a_split_irqchip(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    run = Recorder()
-    QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path, tdx="true"))
-
-    (cmd,) = run.calls
-    assert cmd[1:5] == [
-        "-machine",
-        "q35,accel=kvm,kernel-irqchip=split,confidential-guest-support=tdx0",
-        "-object",
-        "tdx-guest,id=tdx0",
-    ]
-    assert cmd[cmd.index("-bios") + 1] == firmware["OVMF.fd"]
-    assert not any("if=pflash" in arg for arg in cmd)
-    assert "-kernel" in cmd
-
-
-def test_qemu_firmware_param_replaces_the_searched_image(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    own = tmp_path / "own" / "TDVF.fd"
-    own.parent.mkdir()
-    own.write_text("tdvf", encoding="utf-8")
-    run = Recorder()
-    result = QemuDeployAdapter(runner=run).deploy(
-        _qemu_request(tmp_path, tdx="true", firmware=str(own))
-    )
-    (tdx,) = run.calls
-    assert tdx[tdx.index("-bios") + 1] == str(own)
-    assert result.metadata["firmware"] == str(own)
-
-    run = Recorder()
-    QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path / "uki", firmware=str(own)))
-    (uki,) = run.calls
-    assert f"file={own},if=pflash,format=raw,readonly=on" in uki and "-bios" not in uki
-    assert any(arg.endswith("qemu-ovmf-vars.fd,if=pflash,format=raw") for arg in uki)
-
-    run = Recorder()
-    disk = _qemu_request(tmp_path / "disk", name="disk.qcow2", firmware=str(own))
-    QemuDeployAdapter(runner=run).deploy(disk)
-    (raw,) = run.calls
-    assert f"file={own},if=pflash,format=raw,readonly=on" in raw and "-bios" not in raw
-    assert any(arg.endswith("qemu-ovmf-vars.fd,if=pflash,format=raw") for arg in raw)
-
-
-def test_qemu_boots_the_raw_disk_through_ovmf_on_a_snapshot(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    """Without TDX, qemu.raw boots like the UKI does, from OVMF pflash, but through its ESP:
-    no -kernel, the disk attached read-only to the build (snapshot=on)."""
-    run = Recorder()
-    request = _qemu_request(tmp_path, name="qemu.raw")
-    result = QemuDeployAdapter(runner=run).deploy(request)
-
-    run_dir = tmp_path / "build" / "dev"
-    (cmd,) = run.calls
-    assert "-kernel" not in cmd and "-bios" not in cmd
-    assert f"file={firmware['OVMF_CODE.fd']},if=pflash,format=raw,readonly=on" in cmd
-    assert f"file={run_dir}/qemu-ovmf-vars.fd,if=pflash,format=raw" in cmd
-    assert f"file={request.artifact_path},format=raw,if=virtio,snapshot=on" in cmd
-    assert result.metadata["is_uki"] == "false"
-
-    run = Recorder()
-    QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path / "tdx", "qemu.raw", tdx="true"))
-    (tdx,) = run.calls
-    assert tdx[tdx.index("-bios") + 1] == firmware["OVMF.fd"]
-    assert not any("if=pflash" in arg or "snapshot=on" in arg for arg in tdx)
-
-
-def test_qemu_refuses_a_missing_firmware_before_launching(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    run = Recorder()
-    missing = tmp_path / "nope" / "OVMF.fd"
-    with pytest.raises(DeploymentError, match="QEMU firmware not found") as excinfo:
-        QemuDeployAdapter(runner=run).deploy(
-            _qemu_request(tmp_path, tdx="true", firmware=str(missing))
-        )
-    assert "TDVF" in (excinfo.value.hint or "")
-    assert excinfo.value.context["firmware"] == str(missing)
-    assert run.calls == []
-
-
-def test_qemu_forwards_every_port_besides_ssh(tmp_path: Path, firmware: dict[str, str]) -> None:
-    run = Recorder()
-    request = _qemu_request(
-        tmp_path, ssh_port="2200", ssh_guest_port="22", forward="8080:8080,9443:443"
-    )
-    result = QemuDeployAdapter(runner=run).deploy(request)
-
-    (cmd,) = run.calls
-    assert cmd[cmd.index("-netdev") + 1] == (
-        "user,id=net0,hostfwd=tcp::2200-:22,hostfwd=tcp::8080-:8080,hostfwd=tcp::9443-:443"
-    )
-    assert result.metadata["forward"] == "8080:8080,9443:443"
-    assert result.endpoint == "ssh://localhost:2200"
-
-
-def test_qemu_forwards_no_ssh_to_an_image_without_it(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    run = Recorder()
-    result = QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path, forward="8080:8080"))
-    (cmd,) = run.calls
-    assert cmd[cmd.index("-netdev") + 1] == "user,id=net0,hostfwd=tcp::8080-:8080"
-    assert result.endpoint is None and "ssh_port" not in result.metadata
-
-
-def test_qemu_attaches_a_data_disk_per_serial(tmp_path: Path, firmware: dict[str, str]) -> None:
-    run = Recorder()
-    request = _qemu_request(tmp_path, data_disks="tundra-data", data_disk_size="1G")
-    result = QemuDeployAdapter(runner=run).deploy(request)
-    (cmd,) = run.calls
-    disk = tmp_path / "build" / "dev" / "data-tundra-data.img"
-    assert disk.stat().st_size == 1 << 30
-    assert f"file={disk},if=none,id=data0,format=raw" in cmd
-    assert "virtio-blk-pci,drive=data0,serial=tundra-data" in cmd
-    assert result.metadata["data_disks"] == f"tundra-data={disk}"
-    with pytest.raises(DeploymentError, match="data disk serial"):
-        QemuDeployAdapter(runner=run).deploy(
-            DeployRequest("dev", "qemu", request.artifact_path, {"data_disks": "a b"})
-        )
-
-
-@pytest.mark.parametrize("forward", ["8080", "x:1", "8080:0", "2222:8080"])
-def test_qemu_rejects_a_bad_or_clashing_forward(
-    tmp_path: Path, firmware: dict[str, str], forward: str
-) -> None:
-    with pytest.raises(DeploymentError, match="port forward|same host port"):
-        QemuDeployAdapter(runner=Recorder()).deploy(
-            _qemu_request(tmp_path, forward=forward, ssh_guest_port="22")
-        )
-
-
-def test_qemu_launch_failure_carries_the_command(tmp_path: Path, firmware: dict[str, str]) -> None:
-    run = Recorder({"qemu-system-x86_64": _reply(returncode=1)})
-    with pytest.raises(DeploymentError, match="QEMU launch failed") as excinfo:
-        QemuDeployAdapter(runner=run).deploy(_qemu_request(tmp_path))
-    assert excinfo.value.context["command"].startswith("qemu-system-x86_64 -machine q35")
 
 
 AZURE_IMAGE = (
@@ -439,12 +240,3 @@ def _artifact(tmp_path: Path, name: str) -> Path:
     artifact = tmp_path / name
     artifact.write_text("artifact", encoding="utf-8")
     return artifact
-
-
-def test_qemu_refuses_a_monitor_path_too_long_for_a_unix_socket(
-    tmp_path: Path, firmware: dict[str, str]
-) -> None:
-    deep = tmp_path / ("d" * 120)
-    deep.mkdir()
-    with pytest.raises(DeploymentError, match="too long for a unix socket"):
-        QemuDeployAdapter(runner=Recorder()).deploy(_qemu_request(deep))

@@ -14,11 +14,6 @@ def run_captured(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(cmd), capture_output=True, text=True, check=False)
 
 
-def run_attached(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    """Run *cmd* in the foreground on this terminal (nothing captured)."""
-    return subprocess.run(list(cmd), text=True, check=False)
-
-
 def stderr_of(result: subprocess.CompletedProcess[str]) -> str:
     """The first 2000 characters of *result*'s stderr (empty when not captured)."""
     return result.stderr[:2000] if result.stderr else ""

@@ -85,3 +85,4 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - **Breaking:** `check --format` and the Markdown renderers.
 - **Breaking:** `tundravm.testing.fake_bake` and `bake_in_process`; use `FakeMkosi` and `FakeSources`.
 - The pre-v2 docs pages.
+- `tundravm.deploy.qemu.QemuDeployAdapter`, which no command reached: `run` launches QEMU.

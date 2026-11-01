@@ -15,7 +15,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 
 | Mechanism | Defends against | Does not defend against | State |
 |---|---|---|---|
-| TDX | the host reading or changing guest memory and registers | side channels, denial of service, a broken TDX module or firmware | images boot with a `tdx-guest` object under `run --mode tdx` and `deploy`; no real TDX launch is recorded yet (gate 2) |
+| TDX | the host reading or changing guest memory and registers | side channels, denial of service, a broken TDX module or firmware | images boot with a `tdx-guest` object under `run --mode tdx`, and as TDX confidential VMs under `deploy`; no real TDX launch is recorded yet (gate 2) |
 | Measured UKI | the host swapping the kernel, the initrd or the command line unnoticed: they are one PE file the firmware measures into RTMR1 and RTMR2 | a verifier that does not check, or approves the wrong values | implemented; predictions are offline replays, never compared with a real quote (gate 2) |
 | dm-verity root (`RootFS.verity()`) | changes to the root partition at rest: the root hash is on the measured command line | runtime writes, which land in a volatile overlay and vanish at reboot; volume data | proven: CI boots from dm-verity |
 | Firewall | inbound connections to anything not exposed | outbound traffic unless `Egress` is set; requests on exposed plaintext ports | implemented; the rendered rules are asserted |
