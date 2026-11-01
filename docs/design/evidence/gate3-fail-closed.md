@@ -201,10 +201,11 @@ production boots of the fixture and the verity fixture printed no probe line
 
 Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
 
-- `volume:`: `run` attaches a disk only for an `Image`'s runtime manifest, and `disk-setup`
-  builds from tundra-tools, which the fixture's job cannot read. The `boot` job's
-  `test_service_template_dev_probe_passes` skips with the other template tests while
-  tundra-tools is private, so no `Image` has booted its probe.
+- `volume:`: `run` attaches a disk only for an `Image`'s runtime manifest. Since
+  `disk-setup` and the other tools build from `tools/` of this repository, the `boot`
+  job's `test_service_template_dev_probe_passes` no longer skips: run `41311483505`
+  (`ci/tools-monorepo`) is the first to boot an `Image`'s probe; this entry leaves the
+  list once a green run records its `volume:` row.
 - `kernel:symbols`: no built kernel boots in CI, and the table of option to symbol
   (`SYMBOLS`, ten global functions) is unverified against a real `/proc/kallsyms`.
 
@@ -219,6 +220,5 @@ Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
 - A dev profile on QEMU records `simulated`, but its `tdxs` still issues as `tdx` and has no
   quote to give. So `attest` against a simulated instance of a real image fails at the
   issuer, unless the image configures the `simulator` issuer itself.
-- `Image` builds are not booted in CI: every image builds tdxs from the private
-  tundra-tools repository. The `Image` side is compiled and asserted in the unit tests
-  (the surge tree, `tests/compiler/test_execution_gate.py`).
+- ~~`Image` builds are not booted in CI~~: since `tools-monorepo` the `templates` and
+  `boot` jobs build and boot them from `tools/` (run `41311483505`).

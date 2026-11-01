@@ -1,7 +1,6 @@
-"""What the integration tests that build or boot share: the host check, the source check
-(:func:`require_sources`), build removal, a reader for the GPT of a disk image (raw, a
-fixed VHD, or a stream out of an archive), and what a production boot without TDX shows
-(:func:`assert_fail_closed`)."""
+"""What the integration tests that build or boot share: the host check, build removal, a
+reader for the GPT of a disk image (raw, a fixed VHD, or a stream out of an archive), and
+what a production boot without TDX shows (:func:`assert_fail_closed`)."""
 
 from __future__ import annotations
 
@@ -11,7 +10,6 @@ import socket
 import struct
 import subprocess
 import uuid
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -19,8 +17,6 @@ from typing import IO
 import pytest
 
 from tundravm._modules import execution
-from tundravm._source import GitSource
-from tundravm.declarative._lowered import Lowered
 from tundravm.testing import BootResult, boot_unavailable, build_unavailable
 from tundravm.testing._boot import DEFAULT_MARKERS, console_lines, on_console
 
@@ -41,69 +37,6 @@ def require_boot() -> None:
     if os.environ.get("TUNDRAVM_BOOT_REQUIRED") == "1":
         pytest.fail(f"cannot boot here: {reason}")
     pytest.skip(reason)
-
-
-TOKEN_SECRET = "TUNDRA_TOOLS_TOKEN"
-"""The repository secret CI's template jobs read tundra-tools with."""
-_PROBE_TIMEOUT = 20.0
-"""Seconds :func:`require_sources` gives ``git ls-remote``."""
-_NO_ACCESS = (
-    "not found",
-    "could not read username",
-    "authentication failed",
-    "permission denied",
-    "error: 401",
-    "error: 403",
-)
-"""What git says when a repository is private to this host or does not exist."""
-
-
-def require_sources(image: Lowered, profiles: Sequence[str]) -> None:
-    """Skip when a git source *image*'s *profiles* lock is a repository this host cannot
-    read (git answers that it is not found or refuses the credentials), naming it and the
-    secret; fail instead under ``TUNDRAVM_SOURCES_REQUIRED=1`` (CI's template jobs once the
-    secret is set). Anything else, a dead ref, a timeout or a failed fetch, is the bake's
-    to report."""
-    probed: set[str] = set()
-    for named in image.select(profiles).lock_sources().values():
-        source = named.source
-        if not isinstance(source, GitSource) or source.inline_pin is not None:
-            continue
-        if source.url in probed:
-            continue
-        probed.add(source.url)
-        refused = _refused(source)
-        if refused is None:
-            continue
-        reason = (
-            f"cannot read {source.url} ({refused}); CI reads it with the {TOKEN_SECRET} "
-            "repository secret"
-        )
-        if os.environ.get("TUNDRAVM_SOURCES_REQUIRED") == "1":
-            pytest.fail(reason)
-        pytest.skip(reason)
-
-
-def _refused(source: GitSource) -> str | None:
-    """git's error when ``git ls-remote`` finds *source*'s repository missing or refused,
-    else ``None``: it answered, or failed another way."""
-    try:
-        done = subprocess.run(
-            ["git", "ls-remote", source.url, source.ref],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_TIMEOUT,
-            check=False,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if done.returncode == 0:
-        return None
-    lines = [line.strip() for line in done.stderr.splitlines() if line.strip()]
-    said = next((line for line in lines if line.startswith("fatal:")), lines[0] if lines else "")
-    return said if any(words in said.lower() for words in _NO_ACCESS) else None
 
 
 def remove_build(path: Path) -> None:

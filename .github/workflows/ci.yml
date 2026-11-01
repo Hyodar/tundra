@@ -5,19 +5,9 @@
 # Rust: the runner's go fetches the one toolchain and its rustup installs the other. A
 # production build is a locked build, so each build root is locked first (`git ls-remote`
 # over the runner's network for the Git sources).
-# Every job sets up through .github/actions/setup.
-#
-# Every image implies the evidence service, which builds tundra-tools from
-# https://github.com/Hyodar/tundra-tools, a private repository the runner's GITHUB_TOKEN
-# cannot read. When the repository secret TUNDRA_TOOLS_TOKEN exists (a fine-grained token
-# with read-only Contents on tundra-tools), templates and boot rewrite that URL to carry it
-# in the runner's global git config, so the lock's `git ls-remote` and the host-side fetch
-# read it:
-#   gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra
-# No checkout keeps credentials: the GITHUB_TOKEN header actions/checkout persists for
-# github.com would override the token in the URL. With the token, the template tests must
-# pass (TUNDRAVM_SOURCES_REQUIRED=1); without it, they skip and say which repository they
-# could not read (require_sources in tests/integration/support.py).
+# Every job sets up through .github/actions/setup. Every image implies the evidence
+# service, which builds from tools/ of this checkout (a Local source), so no job needs
+# access to another repository.
 name: ci
 
 on:
@@ -68,10 +58,10 @@ jobs:
 
   templates:
     # Real mkosi builds on the runner: the smoke recipe (no source builds) and the service
-    # and cloud templates, whose evidence service needs tundra-tools (see the header).
+    # and cloud templates, whose evidence service builds from tools/ (see the header).
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -83,7 +73,6 @@ jobs:
         with:
           host: build
           doctor: build
-          tundra-tools-token: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
 
       - name: Bake the smoke recipe and the templates
         run: >-
@@ -94,12 +83,10 @@ jobs:
     # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
     # the runner exposes /dev/kvm, TCG otherwise; no TDX here): payload.efi through -kernel,
     # and the service template's qemu.raw as a disk OVMF boots through its ESP. The
-    # templates are Image files whose evidence service builds tundra-tools from its source
-    # repository: the bake fetches it, so this job needs read access to that repository
-    # (TUNDRA_TOOLS_TOKEN, see the header).
+    # templates are Image files whose evidence service builds from tools/ (see the header).
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    timeout-minutes: 75
+    timeout-minutes: 105
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -111,7 +98,6 @@ jobs:
         with:
           host: boot
           doctor: build run
-          tundra-tools-token: ${{ secrets.TUNDRA_TOOLS_TOKEN }}
 
       - name: Bake and boot the templates
         env:

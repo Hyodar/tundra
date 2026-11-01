@@ -7,16 +7,15 @@ virtio disk (no ``-kernel``) that OVMF boots from the same UKI on its ESP
 ``service`` template is baked once, unchanged, and booted both ways; each time the host
 fetches its page through a QEMU port forward (network, firewall and app end to end), and
 each boot's kernel prints the command line the UKI carries plus the harness's console words.
-The templates are ``Image`` files, and their evidence service builds tundra-tools from its
-source repository, which the bake fetches. There is no TDX here, so a production profile is
+The templates are ``Image`` files, and their evidence service builds from this checkout's
+``tools/``. There is no TDX here, so a production profile is
 fail-closed (plan 6.1: ``tdx-evidence.service`` refuses and no service starts): the
 ``minimal`` template's production profile is booted to show that, and the
 ``service`` template's ``dev`` profile, which runs simulated, serves its page and passes the
 boot probe its declarations compile in (``tundravm.testing.assert_probe``); the production
 profile prints no probe.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
-``qemu-system-x86_64``, OVMF and read access to tundra-tools (``support.require_sources``);
-skipped otherwise. ``test_fixture_boot.py`` boots the same
+``qemu-system-x86_64`` and OVMF; skipped otherwise. ``test_fixture_boot.py`` boots the same
 two paths on the gate 1 fixture, whose one source is public.
 CI's ``boot`` job runs it.
 Run with: uv run pytest tests/integration/test_templates_boot.py -m boot
@@ -45,7 +44,6 @@ from .support import (
     read_gpt,
     remove_build,
     require_boot,
-    require_sources,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.boot]
@@ -66,7 +64,6 @@ def _bake(tmp: Path, template: str, variant: str) -> Iterator[Artifact]:
     ``payload.efi``), removed with the build afterwards."""
     recipe_path = write_template(tmp / "node.py", template, backend="local")
     lowered = load_file(recipe_path).lowered()
-    require_sources(lowered, (variant,))
     out = tmp / "build"
     try:
         backend = LocalLinuxBackend()

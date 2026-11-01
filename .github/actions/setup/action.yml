@@ -1,7 +1,7 @@
 name: setup
 description: >-
   uv, Python 3.12 and the locked environment, for every job of ci.yml; optionally the mkosi
-  build host, QEMU with OVMF and /dev/kvm, the doctor checks and read access to tundra-tools.
+  build host, QEMU with OVMF and /dev/kvm, and the doctor checks.
 
 inputs:
   host:
@@ -12,12 +12,6 @@ inputs:
     default: none
   doctor:
     description: The `tundravm doctor --for` checks to run after the sync, space-separated.
-    default: ""
-  tundra-tools-token:
-    description: >-
-      A token that reads https://github.com/Hyodar/tundra-tools (the TUNDRA_TOOLS_TOKEN
-      secret). Set, the runner's global git config carries it for that URL and the template
-      tests must pass (TUNDRAVM_SOURCES_REQUIRED=1); empty, they skip.
     default: ""
 
 runs:
@@ -71,16 +65,3 @@ runs:
         for check in $CHECKS; do
           uv run tundravm doctor --for "$check"
         done
-
-    - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
-      # The job's checkout must not persist credentials: the GITHUB_TOKEN header
-      # actions/checkout writes for github.com would override the token in the URL.
-      if: inputs.tundra-tools-token != ''
-      shell: bash
-      env:
-        TUNDRA_TOOLS_TOKEN: ${{ inputs.tundra-tools-token }}
-      run: |
-        git config --global \
-          url."https://x-access-token:${TUNDRA_TOOLS_TOKEN}@github.com/Hyodar/tundra-tools".insteadOf \
-          "https://github.com/Hyodar/tundra-tools"
-        echo "TUNDRAVM_SOURCES_REQUIRED=1" >> "$GITHUB_ENV"

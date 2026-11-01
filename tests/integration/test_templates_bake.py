@@ -2,9 +2,8 @@
 
 Each bake builds the tree's default selection (``payload.efi`` and ``qemu.raw``); the checks
 read the payload's root, unpacked as root from the UKI's ``.initrd`` (the whole OS of an
-initramfs payload). Needs a host the Linux backend builds on and non-interactive sudo, and
-read access to tundra-tools, which every template's evidence service builds from
-(``support.require_sources``); skipped otherwise.
+initramfs payload). Every template's evidence service builds from this checkout's tools/.
+Needs a host the Linux backend builds on and non-interactive sudo; skipped otherwise.
 Run with: uv run pytest tests/integration/test_templates_bake.py -m integration
 """
 
@@ -30,8 +29,6 @@ from tundravm.models import BakeRequest, BakeResult
 from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
 from tundravm.testing import build_unavailable
-
-from .support import require_sources
 
 pytestmark = pytest.mark.integration
 
@@ -105,7 +102,6 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     tmp_path = tmp_path_factory.mktemp("service")
     recipe_path = write_template(tmp_path / "node.py", "service", backend="local")
     lowered = load_file(recipe_path).lowered()
-    require_sources(lowered, ("production",))
     backend = LocalLinuxBackend()
     out = tmp_path / "build"
     try:
@@ -359,7 +355,6 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
     )
     # The checks read the payload; the production variant declares all three disks.
     lowered = lower(replace(recipe, items=(*recipe.items, *repositories)))
-    require_sources(lowered, ("production",))
     backend = _Capturing(LocalLinuxBackend())
     out = tmp_path / "build"
     try:
