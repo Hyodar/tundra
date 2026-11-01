@@ -193,6 +193,11 @@ def test_tpm_seal_states_its_platform_policy_and_recovery() -> None:
         TpmSeal(platform="azure", pcrs=[7], recovery="operator-key")  # type: ignore[arg-type]
 
 
+def test_a_volume_mounts_at_its_name_under_persistent_unless_told() -> None:
+    assert Volume("db", unlock=OperatorKey()).directory("app").path == "/persistent/db/app"
+    assert Volume("db", mount="/srv/db/", unlock=OperatorKey()).mount == "/srv/db"
+
+
 @pytest.mark.parametrize(
     ("make", "message"),
     [

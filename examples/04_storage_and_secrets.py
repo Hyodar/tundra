@@ -2,10 +2,11 @@
 
 Teaches:
 
-- ``Volume(name, mount=, unlock=)``: a LUKS2 volume found by its attachment name
-  (``tundravm-<name>``, a QEMU serial or a GCP device name), formatted only while it is
-  uninitialised. ``unlock`` is the trust decision: ``OperatorKey()`` waits for a
-  passphrase an operator sends after attesting the instance (``tundravm secrets unlock``);
+- ``Volume(name, unlock=)``: a LUKS2 volume at ``/persistent/<name>`` (or ``mount=``),
+  found by its attachment name (``tundravm-<name>``, a QEMU serial or a GCP device name),
+  formatted only while it is uninitialised. ``unlock`` is the trust decision:
+  ``OperatorKey()`` waits for a passphrase an operator sends after attesting the instance
+  (``tundravm secrets unlock``);
   ``TpmSeal(platform=, pcrs=, recovery=)`` seals a random key to a vTPM and states which
   one. A key sealed to one platform's vTPM opens nowhere else, so ``TpmSeal`` is refused
   for any target that boots with another one: this image targets Azure only.
@@ -35,7 +36,7 @@ from tundravm.storage import OperatorKey, TpmSeal, Volume
 APP = GoBinary("app", Local("app"), package=".")
 
 # The data an operator protects: it opens only once they have attested this instance.
-data = Volume("data", mount="/persistent", unlock=OperatorKey())
+data = Volume("data", unlock=OperatorKey())
 # A cache the instance reopens unattended: its key is sealed to Azure's paravisor vTPM.
 # Today's key-gen keeps it in the vTPM's NV storage; pcrs= is recorded for gate 3 to bind.
 cache = Volume(

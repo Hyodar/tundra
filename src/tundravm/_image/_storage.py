@@ -22,6 +22,7 @@ from ._component import BootReady
 from ._secrets import RUNTIME_DIRECTORY, BrokerKey
 
 __all__ = [
+    "DEFAULT_MOUNT",
     "SERIAL_PREFIX",
     "TPM_PLATFORMS",
     "OperatorKey",
@@ -48,6 +49,9 @@ _TARGET_TPM: dict[str, str] = {"azure": "azure", "gcp": "gcp", "qemu": "swtpm"}
 _VOLUME_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,10}")
 _DIRECTORY = re.compile(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
 _GROUP = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+DEFAULT_MOUNT = "/persistent/<name>"
+"""Where a volume mounts unless ``mount=`` says otherwise, ``<name>`` its name."""
+
 _RESERVED_MOUNTS = ("/", "/usr", "/etc", "/boot", "/efi", "/run", "/proc", "/sys", "/dev")
 
 
@@ -147,9 +151,10 @@ type Unlock = OperatorKey | TpmSeal | BrokerKey
 
 @dataclass(frozen=True, slots=True)
 class Volume(Located):
-    """A persistent, encrypted volume: ``Volume("data", mount="/persistent", unlock=...)``.
+    """A persistent, encrypted volume: ``Volume("data", unlock=...)``.
 
-    The image says what the volume is called, where it mounts and how it unlocks; its
+    The image says what the volume is called, how it unlocks and, when ``/persistent/<name>``
+    will not do, where it mounts (*mount*); its
     size and the disk itself are deployment configuration (``deploy --volume
     data=create:100GiB``). The attachment is found by name: QEMU's ``serial=`` or GCP's
     device name ``tundravm-<name>`` (:attr:`serial`), through ``/dev/disk/by-id/``, never
@@ -169,8 +174,9 @@ class Volume(Located):
 
     name: str
     _: KW_ONLY
-    mount: str
     unlock: Unlock
+    mount: str = DEFAULT_MOUNT
+    """Where it mounts: ``/persistent/<name>`` unless given."""
     filesystem: Literal["ext4"] = "ext4"
 
     def __post_init__(self) -> None:
@@ -180,16 +186,18 @@ class Volume(Located):
                 hint="Use 1 to 11 of a-z, 0-9 and '-': it becomes the attachment name "
                 f"{SERIAL_PREFIX}<name>, which QEMU limits to 20 bytes.",
             )
+        if self.mount == DEFAULT_MOUNT:
+            object.__setattr__(self, "mount", DEFAULT_MOUNT.replace("<name>", self.name))
         if not isinstance(self.mount, str) or not self.mount.startswith("/"):
             raise ValidationError(
                 f"Volume {self.name!r}: mount {self.mount!r} must be absolute.",
-                hint="Pass mount='/persistent'.",
+                hint=f"Leave mount= out for /persistent/{self.name}.",
             )
         mount = posixpath.normpath(self.mount)
         if any(mount == r or (r != "/" and mount.startswith(r + "/")) for r in _RESERVED_MOUNTS):
             raise ValidationError(
                 f"Volume {self.name!r}: {mount} is part of the measured system.",
-                hint="Mount it at its own directory, e.g. mount='/persistent'.",
+                hint=f"Leave mount= out for /persistent/{self.name}.",
             )
         object.__setattr__(self, "mount", mount)
         if not isinstance(self.unlock, (OperatorKey, TpmSeal, BrokerKey)):

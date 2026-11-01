@@ -406,7 +406,7 @@ from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
 
-data = Volume("data", mount="/persistent", unlock=OperatorKey())
+data = Volume("data", unlock=OperatorKey())
 jwt = Secret("jwt")
 chain = Secret("taiko-chain")
 config = Secret("raiko-config")
@@ -499,7 +499,7 @@ from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
 
-data = Volume("data", mount="/persistent", unlock=OperatorKey())
+data = Volume("data", unlock=OperatorKey())
 config = Secret("raiko-config", rotation="restart")
 raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:8080")
 
@@ -514,11 +514,11 @@ image = Image(
 
 ### Volumes
 
-`Volume(name, mount=, unlock=)` is a LUKS2 volume with ext4 inside. Its size and the disk
-are deployment configuration (`deploy --volume data=create:100GiB`). The image finds the
-disk by name through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order. It formats a
-volume only while it carries no initialisation token: an unlock failure never permits
-formatting.
+`Volume(name, unlock=)` is a LUKS2 volume with ext4 inside, mounted at `/persistent/<name>`
+unless `mount=` says otherwise. Its size and the disk are deployment configuration
+(`deploy --volume data=create:100GiB`). The image finds the disk by name through
+`/dev/disk/by-id/*-tundravm-<name>`, never by probe order. It formats a volume only while it
+carries no initialisation token: an unlock failure never permits formatting.
 
 `unlock=` is the trust decision and has no default:
 

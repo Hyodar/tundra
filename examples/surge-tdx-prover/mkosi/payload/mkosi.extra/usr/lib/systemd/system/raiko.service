@@ -8,10 +8,10 @@ Type=exec
 ExecStart=/usr/bin/raiko --address=127.0.0.1:8080 --config-path=${CREDENTIALS_DIRECTORY}/raiko-config
 User=raiko
 SupplementaryGroups=tdx
-WorkingDirectory=/persistent/raiko
-Environment=STATE_DIRECTORY=/persistent/raiko
+WorkingDirectory=/persistent/data/raiko
+Environment=STATE_DIRECTORY=/persistent/data/raiko
 LoadCredential=raiko-config:/run/tundravm/credentials/raiko-config
-ReadWritePaths=-/persistent/raiko
+ReadWritePaths=-/persistent/data/raiko
 Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict

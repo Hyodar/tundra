@@ -351,7 +351,7 @@ _PROVER_RECIPE = r"""
 
 # An encrypted volume an operator unlocks on every boot, after attesting the instance
 # (`tundravm secrets unlock INSTANCE data`); deploy attaches it as tundravm-data.
-data = Volume("data", mount="/persistent", unlock=OperatorKey())
+data = Volume("data", unlock=OperatorKey())
 # A secret delivered after attestation (`tundravm secrets deliver INSTANCE api-token=@f`)
 # and read as a systemd credential: nothing is written into the image.
 token = Secret("api-token")

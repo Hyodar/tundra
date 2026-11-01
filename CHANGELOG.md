@@ -32,6 +32,7 @@ Breaking changes are marked **Breaking**.
 - On GCP, Google's own udev rules and `google_nvme_id` name NVMe disks, the hostname comes from the metadata server and load-balancer forwarded IPs are routed; each unit is inert off GCE.
 - On Azure, the image installs the `curl` its provisioning report needs, so a production build without a probe still reports ready.
 - **Breaking:** `Image(volumes=, secrets=)` are gone: the image collects each volume and secret from the services and the `TLS` ingress that use it.
+- A `Volume` mounts at `/persistent/<name>` unless `mount=` says otherwise; `unlock=` keeps no default.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
 - `KernelHardening()` also turns off `BLK_DEV_PCIESSD_MTIP32XX`, a driver no target needs, which every built kernel's check denies.
 - `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.

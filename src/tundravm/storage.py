@@ -1,7 +1,7 @@
 """Persistent storage: encrypted volumes, the directories services keep on them, and how
 each volume unlocks.
 
-``Volume("data", mount="/persistent", unlock=OperatorKey())`` is a LUKS2 volume an operator
+``Volume("data", unlock=OperatorKey())`` is a LUKS2 volume at ``/persistent/data`` an operator
 unlocks after attesting the instance (``tundravm secrets unlock INSTANCE data``);
 :class:`TpmSeal` and :class:`BrokerKey` are the unattended alternatives.
 ``volume.directory("app")`` is a :class:`VolumeDirectory` a service binds as its state.

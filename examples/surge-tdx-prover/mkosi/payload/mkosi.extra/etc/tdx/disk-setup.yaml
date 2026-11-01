@@ -4,6 +4,6 @@ disks:
     strategy_config:
       pattern: "/dev/disk/by-id/*-tundravm-data"
     format: "on_initialize"
-    mount_at: "/persistent"
+    mount_at: "/persistent/data"
     dirs: []
     encryption_key_path: "/run/tundravm/keys/data"

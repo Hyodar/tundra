@@ -49,11 +49,11 @@
     {
       "device": "/dev/disk/by-id/*-tundravm-data",
       "directories": [
-        "/persistent/nethermind",
-        "/persistent/raiko"
+        "/persistent/data/nethermind",
+        "/persistent/data/raiko"
       ],
       "filesystem": "ext4",
-      "mount": "/persistent",
+      "mount": "/persistent/data",
       "name": "data",
       "pipe": "/run/tundravm/unlock/data",
       "serial": "tundravm-data",

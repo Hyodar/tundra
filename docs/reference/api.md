@@ -1103,10 +1103,16 @@ Unlock with a random key sealed to a vTPM the operator trusts.
 *dataclass*
 
 ```python
-Volume(name: str, *, mount: str, unlock: Unlock, filesystem: Literal['ext4'] = 'ext4')
+Volume(
+    name: str,
+    *,
+    unlock: Unlock,
+    mount: str = '/persistent/<name>',
+    filesystem: Literal['ext4'] = 'ext4',
+)
 ```
 
-A persistent, encrypted volume: `Volume("data", mount="/persistent", unlock=...)`.
+A persistent, encrypted volume: `Volume("data", unlock=...)`.
 
 | Member | Does |
 |---|---|

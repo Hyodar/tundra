@@ -180,8 +180,8 @@ check=service:attested-tls-443.service
 probe_service attested-tls-443.service
 check=port:443/tcp
 probe_port tcp 443
-check=volume:/persistent
-probe_volume /persistent yes
+check=volume:/persistent/data
+probe_volume /persistent/data yes
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=hardening:nethermind.service

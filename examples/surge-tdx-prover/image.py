@@ -16,7 +16,7 @@ from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
 
-data = Volume("data", mount="/persistent", unlock=OperatorKey())
+data = Volume("data", unlock=OperatorKey())
 jwt = Secret("jwt")
 chain = Secret("taiko-chain")
 config = Secret("raiko-config")
