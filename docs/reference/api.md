@@ -59,14 +59,14 @@ build(
     *,
     lock: Lock,
     backend: Backend,
-    build: Path,
+    into: Path,
     profiles: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
     fetch: bool = True,
 ) -> tuple[Artifact, ...]
 ```
 
-Build *image*'s artifacts into the directory *build*, for *profiles* (default: all): what `tundravm build` does, frozen against *lock*.
+Build *image*'s artifacts into the build directory *into* (the command's `BUILD`), for *profiles* (default: all): what `tundravm build` does, frozen against *lock*.
 
 ### `compile`
 

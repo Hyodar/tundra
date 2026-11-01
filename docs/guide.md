@@ -826,7 +826,7 @@ build/demo/
 
 The directory is assembled beside its final place and published with one rename. Every
 file is read-only, and nothing writes into a published directory again. Building the same
-identity twice leaves the existing directory alone. `tundravm.build()` does it from Python.
+identity twice leaves the existing directory alone. `tundravm.build(image, lock=, backend=, into=BUILD)` does it from Python.
 
 `build` ends with a report, read back from that directory, so `show BUILD` prints it too.
 The fixture's production build in CI, digests cut short:
