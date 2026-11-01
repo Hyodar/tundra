@@ -3,7 +3,8 @@
 ``manifest.json`` (schema :data:`SCHEMA`) binds, by sha256, every file of the build
 directory but itself, its signature and ``observations.json`` (the *artifact index*), the
 ``tree/`` it was built from by a digest over paths, modes, contents and symlink targets
-(:func:`tree_digest`), the embedded UKI and the root hash on its command line, the
+(:func:`tree_digest`), the embedded UKI (its sha256 and the SHA-384 Authenticode digest
+the TDX event log records for it in RTMR1) and the root hash on its command line, the
 lockfile, the source pins, mkosi's package manifest, the SBOM, the measurement records and
 the toolchain. What a build could not establish is written down, never left out: a part
 that does not exist is ``{"state": "missing", "reason": ...}`` and every guarantee the
@@ -320,13 +321,19 @@ def _check_uki(root: Path, payload: Mapping[str, Any]) -> Check:
     path = root / str(uki.get("path", UKI))
     if not path.is_file() or sha256_file(path) != uki["sha256"]:
         return Check("uki", "failed", f"{uki.get('path')} is not the recorded UKI")
+    shown = str(uki["sha256"])[:12]
+    authenticode = uki.get("authenticode_sha384")
+    if authenticode is not None:
+        if uki_authenticode(path) != authenticode:
+            return Check("uki", "failed", "the UKI's Authenticode digest is not the recorded one")
+        shown += f", authenticode {str(authenticode)[:12]}"
     expected = payload.get("root_hash")
     if expected is None:
-        return Check("uki", "ok", str(uki["sha256"])[:12])
+        return Check("uki", "ok", shown)
     found = uki_root_hash(path)
     if found != expected:
         return Check("uki", "failed", f"the UKI's command line carries root hash {found}")
-    return Check("uki", "ok", f"{str(uki['sha256'])[:12]}, root hash {str(expected)[:12]}")
+    return Check("uki", "ok", f"{shown}, root hash {str(expected)[:12]}")
 
 
 def _check_part(payload: Mapping[str, Any], key: str, what: str) -> Check:
@@ -411,6 +418,17 @@ def uki_root_hash(uki: Path) -> str | None:
     return None
 
 
+def uki_authenticode(uki: Path) -> str | None:
+    """The SHA-384 Authenticode digest of *uki*, what OVMF extends RTMR1 with when it loads
+    the UKI (the CCEL event a fleet matches an image by); ``None`` when it is no PE image."""
+    from .measure import pe
+
+    try:
+        return pe.parse(uki.read_bytes()).authenticode("sha384").hex()
+    except (TdxError, ValueError, OSError):
+        return None
+
+
 def uki_cmdline(uki: Path) -> str | None:
     """The command line *uki* carries, ``None`` when it is no PE image."""
     from .measure import pe
@@ -458,6 +476,7 @@ __all__ = [
     "sha256_file",
     "sign",
     "tree_digest",
+    "uki_authenticode",
     "uki_cmdline",
     "uki_root_hash",
     "verify",

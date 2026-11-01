@@ -176,6 +176,11 @@ def report(build: Build) -> dict[str, Any]:
     Go or Rust toolchain its prefetch recorded, and whether this build fetched its checkout
     and dependencies or found them (``-`` where the build directory does not say). ``time``:
     seconds per phase and in total (``None`` for a phase that did not run).
+    ``authenticode_sha384``: the UKI's digest RTMR1's event log records. ``measurements``:
+    per record of ``measurements.json`` (target and boot path) one row per predicted MRTD or
+    RTMR, a register with several accepted values (a firmware table) as their count, the
+    platform registers paired by firmware on one row, and a record without a prediction
+    as its state.
     """
     m = build.manifest
     observed = _json(build.path / mf.OBSERVATIONS) or {}
@@ -213,7 +218,43 @@ def report(build: Build) -> dict[str, Any]:
     phases = _mapping(observed.get("phases"))
     time = {name: phases.get(name) for name in REPORT_PHASES}
     time["total"] = observed.get("duration_s")
-    return {"artifacts": artifacts, "sources": sources, "time": time}
+    measured = _json(build.path / mf.MEASUREMENTS) or {}
+    return {
+        "artifacts": artifacts,
+        "sources": sources,
+        "time": time,
+        "authenticode_sha384": _mapping(m.get("uki")).get("authenticode_sha384"),
+        "measurements": [row for r in mf.records_of(measured) for row in _measured(r)],
+    }
+
+
+TDX_REGISTERS = ("MRTD", "RTMR0", "RTMR1", "RTMR2")
+"""The registers a record predicts; RTMR3 is outside every policy."""
+
+
+def _measured(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The report rows of one ``measurements.json`` record."""
+    base = {"target": record.get("target"), "boot": record.get("boot")}
+    if record.get("state") != "predicted":
+        reason = str(record.get("reason") or "").splitlines()[:1]
+        note = f"{record.get('state')}: {reason[0]}" if reason else str(record.get("state"))
+        return [{**base, "register": None, "value": None, "note": note}]
+    registers = _mapping(record.get("registers"))
+    single = [r for r in TDX_REGISTERS if len(registers.get(r) or ()) == 1]
+    several = [r for r in TDX_REGISTERS if len(registers.get(r) or ()) > 1]
+    rows = []
+    if several:
+        counts = "/".join(str(len(registers[r])) for r in several)
+        note = f"{counts} accepted values, paired by firmware (show --measurements)"
+        rows.append({**base, "register": "/".join(several), "value": None, "note": note})
+    for name in single:
+        (value,) = registers[name]
+        shown = value.get("value") if isinstance(value, dict) else value
+        rows.append({**base, "register": name, "value": str(shown), "note": None})
+    if not rows:
+        note = "no TDX register predicted (show --measurements)"
+        rows.append({**base, "register": None, "value": None, "note": note})
+    return rows
 
 
 def _mapping(value: object) -> dict[str, Any]:
@@ -246,7 +287,9 @@ def _deps(outcome: object) -> str | None:
 
 
 def render_report(found: Mapping[str, Any]) -> list[str]:
-    """The :func:`report` as text: one row per artifact, the sources table, the time row."""
+    """The :func:`report` as text: one row per artifact, the sources table, the time row,
+    the UKI's Authenticode digest and the measurement rows (target, boot path, register,
+    value)."""
     lines = []
     for row in found["artifacts"]:
         esp = row.get("esp")
@@ -274,6 +317,13 @@ def render_report(found: Mapping[str, Any]) -> list[str]:
         for name in (*REPORT_PHASES, "total")
     ]
     lines.append("time  " + "  ".join(cells))
+    authenticode = found.get("authenticode_sha384")
+    lines.append(
+        f"measured  payload.efi authenticode sha384 {authenticode}" if authenticode else "measured"
+    )
+    for row in found.get("measurements") or ():
+        value = row["value"] or row["note"]
+        lines.append(f"  {row['target']:<6} {row['boot']:<5} {row['register'] or '-':<10} {value}")
     return lines
 
 

@@ -76,27 +76,44 @@ built build/demo/production/<hex>
 source  kind  ref     pin           toolchain  checkout  deps
   tdxs  git   master  111111111111  local      fetched   fetched
 time  checkouts <t>  prefetch <t>  mkosi <t>  measurements <t>  total <t>
+measured  payload.efi authenticode sha384 <sha384>
+  qemu   uki   RTMR1      <sha384>
+  qemu   uki   RTMR2      <sha384>
+  qemu   disk  RTMR1      <sha384>
+  qemu   disk  RTMR2      <sha384>
+  azure  disk  -          no TDX register predicted (show --measurements)
+  gcp    disk  MRTD/RTMR0 3/27 accepted values, paired by firmware (show --measurements)
+  gcp    disk  RTMR1      <sha384>
+  gcp    disk  RTMR2      <sha384>
   unchecked: RTMR3: outside the policy: no event schema is defined for RTMR3
 """
-"""What ``build`` prints of a fake build of every target: hex digests, the gzip's size and
+"""What ``build`` prints of a fake build of every target: digests, the gzip's size and
 durations masked."""
 
 
 def _masked(text: str) -> str:
+    text = re.sub(r"\b[0-9a-f]{96}\b", "<sha384>", text)
     text = re.sub(r"\b[0-9a-f]{16}\b", "<hex>", text)
     text = re.sub(r"\d+(?:\.\d+s|m\d\ds|h\d\dm)", "<t>", text)
     return re.sub(r"(gcp\.tar\.gz) +[\d.]+ \w?B", r"\1      <size>", text)
 
 
 def test_the_build_report(project: Path, cli: Cli) -> None:
-    """``build`` ends with the report (artifacts, sources, time) and what it does not check;
-    ``show BUILD`` prints the same report; a later build finds its checkouts cached."""
+    """``build`` ends with the report (artifacts, sources, time, the UKI's Authenticode
+    digest, the predicted registers per record) and what it does not check; the digest is
+    the manifest's and the registers are measurements.json's; ``show BUILD`` prints the same
+    report; a later build finds its checkouts cached."""
     (project / "demo.py").write_text(EVERY_CLOUD, encoding="utf-8")
     assert cli("lock").code == EXIT_OK
     result = cli("build")
     assert result.code == EXIT_OK, result.err
     assert _masked(result.out) == REPORT
     assert "[production]" in result.err  # progress goes to stderr
+    build = Build.open((project / "build/demo/latest-production").resolve())
+    records = json.loads((build.path / "measurements.json").read_text())["records"]
+    rows = [line.split() for line in result.out.splitlines()]
+    assert rows[8][-1] == build.manifest["uki"]["authenticode_sha384"]
+    assert rows[9][-1] == records[0]["registers"]["RTMR1"][0]
     report = "\n".join(result.out.splitlines()[1:-1])
     assert report in cli("show", "latest").out
     (project / "demo.py").write_text(EVERY_CLOUD.replace('"busybox"]', '"busybox", "jq"]'))

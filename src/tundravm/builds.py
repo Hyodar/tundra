@@ -657,7 +657,12 @@ def _assemble(
         "rootfs": img.mkosi.root,
         "recipe_digest": locked.recipe_digest,
         "artifacts": mf.artifact_index(out),
-        "uki": {"path": mf.UKI, **mf.file_record(uki), "cmdline": mf.uki_cmdline(uki)}
+        "uki": {
+            "path": mf.UKI,
+            **mf.file_record(uki),
+            "cmdline": mf.uki_cmdline(uki),
+            "authenticode_sha384": mf.uki_authenticode(uki),
+        }
         if uki.is_file()
         else mf.missing("the build produced no payload.efi"),
         "root_hash": root_hash,
