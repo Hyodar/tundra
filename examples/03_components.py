@@ -9,8 +9,10 @@ Teaches:
 - ``requires=`` on the class names components the same profile must also hold (lint
   reports ``component-requires-missing`` otherwise);
 - ``check()`` is a lint rule that sees each resolved profile;
-- ``compose()`` may still yield an internal declaration (``Repository``, ``Unit``,
-  ``Task``, ``ConfigFile``, ``Run``) while those concerns have no public spelling.
+- ``Service.packaged(unit)`` runs the unit a Debian package ships, installing the
+  package, under the same sandbox a ``Service`` gets;
+- ``compose()`` may still yield an internal declaration (``Repository``, ``Task``,
+  ``ConfigFile``, ``Run``) while those concerns have no public spelling.
 
     tundravm show examples/03_components.py
     tundravm check examples/03_components.py
@@ -21,9 +23,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tundravm import File, Image, Package
+from tundravm import File, Image, Package, Service
 from tundravm.components import Component, Diagnostic, Egress, Endpoint, Network, Resolved, Rule
-from tundravm.declarative import Repository, Task, Unit
+from tundravm.declarative import Repository, Task
 from tundravm.declarative.utils import ConfigFile, Run
 from tundravm.systemd import Every
 
@@ -49,8 +51,7 @@ class NodeExporter(Component):
     """Debian's Prometheus node exporter, enabled at boot."""
 
     def compose(self) -> Iterator[object]:
-        yield Package("prometheus-node-exporter")
-        yield Unit("prometheus-node-exporter.service", enabled=True)
+        yield Service.packaged("prometheus-node-exporter.service")
 
 
 class Metrics(Component, requires=("node-exporter",)):
@@ -69,7 +70,6 @@ class Metrics(Component, requires=("node-exporter",)):
         return Endpoint(self.listen, self.port, "/-/healthy", provider=self)
 
     def compose(self) -> Iterator[object]:
-        yield Package("prometheus")
         yield ConfigFile.yaml(
             "/etc/prometheus/prometheus.yml",
             {
@@ -82,7 +82,7 @@ class Metrics(Component, requires=("node-exporter",)):
         yield ConfigFile.env(
             "/etc/default/prometheus", {"ARGS": f"--web.listen-address={self.health.address}"}
         )
-        yield Unit("prometheus.service", enabled=True)
+        yield Service.packaged("prometheus.service")
 
     rules = (
         Rule(

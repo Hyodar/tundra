@@ -134,6 +134,16 @@ def image_source(texts: Mapping[str, str]) -> ImageSource:
         if converted is not None:
             service, description = converted
             out.services.append((" + ".join(group), service, description))
+    orphans = sorted(n for n in set(texts) - used if ".service.d/" in n and n.endswith(".conf"))
+    for unit in sorted({name.partition(".d/")[0] for name in orphans}):
+        group = [name for name in orphans if name.startswith(f"{unit}.d/")]
+        directives = _Directives()
+        for dropin in group:
+            directives.add(texts[dropin])
+        converted = _packaged(unit, group[0], directives, out)
+        if converted is not None:
+            used.update(group)
+            out.services.append((" + ".join(group), converted, None))
     for name in sorted(set(texts) - used):
         out.unsupported.append(
             f"{name}: no Image slot holds it (only a service, with its "
@@ -402,3 +412,62 @@ class _Service:
             self.unsupported.append(f"{key} (drop-in): a timer's service takes no unit=")
         self.dropin.clear()
         self.extra.clear()
+
+
+def _packaged(unit: str, first: str, d: _Directives, out: ImageSource) -> Any:
+    """Drop-ins over a unit the set does not hold: a package's unit, as
+    ``Service.packaged(unit, unit=DropIn(...))`` under a preset sandbox."""
+    from tundravm import Service
+    from tundravm.systemd import DropIn
+
+    stem = unit.removesuffix(".service")
+    notes = [f"no {unit} in the set: the unit of package {stem!r} (package= names another)"]
+    unsupported: list[str] = []
+    dropin: dict[str, Any] = {"name": first.partition(".d/")[2].removesuffix(".conf")}
+    for key, name in _RELATIONS.items():
+        words = [word for value in d.pop("Unit", key) for word in value.split()]
+        if words:
+            dropin[name] = tuple(dict.fromkeys(words))
+    environment: dict[str, str] = {}
+    for value in d.pop("Service", "Environment"):
+        try:
+            pairs = [word.partition("=") for word in shlex.split(value)]
+        except ValueError:
+            pairs = []
+        if not pairs or any(not sep or not key for key, sep, _ in pairs):
+            unsupported.append(f"Service.Environment={value}")
+            continue
+        environment.update((key, item) for key, _, item in pairs)
+    if environment:
+        dropin["env"] = environment
+    for key in ("ExecStart", "Type"):
+        if d.pop("Service", key):
+            unsupported.append(f"Service.{key}=: a packaged unit keeps its package's")
+    keys = {key for (section, key) in d.values if section == "Service"}
+    sandbox = sorted(keys & set(HARDENING_KEYS))
+    entries = [(key, value) for key in sandbox for value in d.pop("Service", key) or [""]]
+    preset = _preset(entries) or "static"
+    replaced = f", in place of the drop-ins' {', '.join(sandbox)}" if sandbox else ""
+    notes.append(f"it runs under the {preset!r} sandbox{replaced if preset == 'static' else ''}")
+    extra: dict[str, dict[str, Any]] = {}
+    for (section, key), values in d.values.items():
+        if section in ("Unit", "Service") and values:
+            extra.setdefault(section, {})[key] = values[0] if len(values) == 1 else tuple(values)
+        elif values and (section, key) != ("Install", "WantedBy"):
+            unsupported.append(f"{section}.{key}")
+    if extra:
+        dropin["extra"] = extra
+    try:
+        service = Service.packaged(
+            unit,
+            hardening=preset,  # type: ignore[arg-type]
+            unit=DropIn(**dropin) if len(dropin) > 1 else None,
+        )
+    except ValidationError as error:
+        service = None
+        unsupported.append(str(error).splitlines()[0])
+    out.notes += [f"{unit}: {note}" for note in notes]
+    out.unsupported += [f"{unit}: {item}" for item in unsupported]
+    if service is None:
+        out.unsupported.append(f"{unit}: not converted")
+    return service

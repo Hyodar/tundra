@@ -42,6 +42,7 @@ __all__ = ["Argument", "Requirement", "Sandbox", "Service", "executable_of"]
 _UNIT_STEM = re.compile(r"[A-Za-z0-9:_.\\@-]+")
 _DIRECTORY = re.compile(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
 _READINESS: tuple[type, ...] = (HttpProbe, TcpProbe, Notify)
+_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+")
 
 
 class Built(Protocol):
@@ -146,6 +147,8 @@ class Service(Located):
     ``timer=Every("1h")`` (or ``Calendar(...)``) runs it as a scheduled oneshot with every
     other keyword kept; what only a long-lived service has (``socket=``, ``readiness=``,
     ``expose=``, ``credentials=``, a volume ``state=``) is refused.
+
+    :meth:`packaged` runs the unit a Debian package ships, under ``hardening=``.
     """
 
     name: str
@@ -175,6 +178,9 @@ class Service(Located):
     binds it and renders as the path the service reads it at."""
     logs: str | None = None
     runtime: str | None = None
+    package: str | None = None
+    """The Debian package whose own unit this is (:meth:`packaged`): its ``ExecStart=``,
+    ``User=`` and ``Type=`` run, and *argv* is empty."""
 
     def __post_init__(self) -> None:
         self._freeze()
@@ -183,7 +189,10 @@ class Service(Located):
             raise _fail(self, f"{self.name!r} is not a service name.")
         if "." in self.name and not self.name.endswith(".service"):
             raise _fail(self, f"{self.name!r} must be a .service unit.")
-        self._check_argv()
+        if self.package is None:
+            self._check_argv()
+        else:
+            self._check_packaged()
         self._check_requires()
         self._check_values()
         self._check_bindings()
@@ -221,6 +230,91 @@ class Service(Located):
                 )
             if isinstance(argument, str) and "\n" in argument:
                 raise _fail(self, f"{self.name!r} argv holds a multi-line argument.")
+
+    @classmethod
+    def packaged(
+        cls,
+        name: str,
+        *,
+        package: str | None = None,
+        hardening: Sandbox = "static",
+        requires: Sequence[Requirement] = (),
+        readiness: TcpProbe | HttpProbe | None = None,
+        expose: Sequence[PortValue] = (),
+        unit: DropIn | None = None,
+    ) -> Service:
+        """The unit *name* the Debian *package* ships (default: the unit's stem), enabled
+        and run under ``hardening=``, which replaces the package's own sandbox.
+
+        The package is installed for you. Its unit keeps its ``ExecStart=``, ``User=``,
+        directories and ``Type=``; ``unit=DropIn(...)`` changes anything else systemd knows.
+        """
+        stem = name.removesuffix(".service") if isinstance(name, str) else name
+        return cls(
+            stem,
+            (),
+            package=stem if package is None else package,
+            hardening=hardening,
+            requires=requires,
+            readiness=readiness,
+            expose=expose,
+            unit=unit,
+        )
+
+    def _check_packaged(self) -> None:
+        """A package's unit decides what its own file says; only the sandbox, the order,
+        the ports and a drop-in are the image's."""
+        if not isinstance(self.package, str) or not _PACKAGE.fullmatch(self.package):
+            raise _fail(self, f"package= {self.package!r} is not a package name.")
+        if self.argv:
+            raise _fail(
+                self,
+                f"{self.name!r} is the unit of package {self.package!r}, which runs its own "
+                "ExecStart=.",
+                hint="Drop argv, or write Service(name, argv) without package=.",
+            )
+        given = {
+            "user": self.user,
+            "groups": self.groups,
+            "quotes": self.quotes,
+            "state": self.state,
+            "credentials": self.credentials,
+            "environment": self.environment,
+            "working_directory": self.working_directory,
+            "logs": self.logs,
+            "runtime": self.runtime,
+            "timer": self.timer,
+            "socket": self.socket,
+            "resources": self.resources,
+            "shutdown": self.shutdown,
+        }
+        for keyword, value in given.items():
+            if value:
+                raise _fail(
+                    self,
+                    f"{self.name!r} is the unit of package {self.package!r}, so {keyword}= "
+                    "does not apply: the package's unit file decides it.",
+                    hint="Say it in unit=DropIn(...), or write Service(name, argv) of your own.",
+                )
+        if isinstance(self.readiness, Notify):
+            raise _fail(
+                self,
+                f"{self.name!r} is the unit of package {self.package!r}, whose own Type= "
+                "decides when it is ready.",
+                hint="Use readiness=TcpProbe(port) or HttpProbe(url): a probe is its own unit.",
+            )
+        if self.hardening == Hardening.none():
+            raise _fail(
+                self,
+                f"{self.name!r} runs under a sandbox or not at all.",
+                hint='hardening="relaxed" is the loosest sandbox a packaged unit takes.',
+            )
+        if self.unit is not None and self.unit.hardening is not None:
+            raise _fail(
+                self,
+                f"{self.name!r} sets its sandbox in unit=DropIn(hardening=...).",
+                hint="Pass it as hardening=: it replaces the package's sandbox.",
+            )
 
     def _check_requires(self) -> None:
         for item in self.requires:
@@ -424,7 +518,8 @@ class Service(Located):
     @property
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""
-        return Ref(self, dm.Ref("Task" if self.timer is not None else "Service", (self.unit_name,)))
+        kind = "Task" if self.timer is not None else "Service" if self.package is None else "Unit"
+        return Ref(self, dm.Ref(kind, (self.unit_name,)))
 
     @property
     def stem(self) -> str:

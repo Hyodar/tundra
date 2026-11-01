@@ -1,0 +1,115 @@
+== payload/mkosi.extra/usr/lib/systemd/system/prometheus-node-exporter-ready.service
+[Unit]
+Description=Wait until prometheus-node-exporter.service is ready
+After=prometheus-node-exporter.service
+Requires=prometheus-node-exporter.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c "until (exec 3<>/dev/tcp/127.0.0.1/9100) 2>/dev/null; do sleep 0.5; done"
+User=prometheus-node-exporter-ready
+TimeoutStartSec=90s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+== payload/mkosi.extra/usr/lib/systemd/system/prometheus-node-exporter.service.d/20-tundravm.conf
+[Unit]
+After=tdx-evidence.service
+Requires=tdx-evidence.service
+
+[Service]
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+DevicePolicy=auto
+DeviceAllow=
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=
+SystemCallArchitectures=native
+SystemCallFilter=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+== payload/mkosi.extra/usr/lib/systemd/system/ssh.service.d/20-tundravm.conf
+[Unit]
+After=tdx-evidence.service
+Requires=tdx-evidence.service
+
+[Service]
+Environment=SSHD_OPTS=-e
+ProtectSystem=full
+ProtectHome=no
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=no
+PrivateDevices=no
+DevicePolicy=auto
+DeviceAllow=
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=no
+RestrictRealtime=no
+RestrictNamespaces=no
+LockPersonality=no
+RestrictAddressFamilies=
+SystemCallArchitectures=
+SystemCallFilter=
+CapabilityBoundingSet=
+CapabilityBoundingSet=~
+AmbientCapabilities=
+UMask=0022
+== enabled
+mkosi-chroot useradd --system --shell /usr/sbin/nologin prometheus-node-exporter-ready
+mkosi-chroot systemctl enable prometheus-node-exporter.service
+mkosi-chroot systemctl enable prometheus-node-exporter-ready.service
+mkosi-chroot systemctl enable ssh.service
+ln -sf "/etc/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/prometheus-node-exporter-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

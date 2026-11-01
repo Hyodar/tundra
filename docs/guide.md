@@ -283,6 +283,11 @@ has: `socket=`, `readiness=`, `expose=`, `credentials=`, a volume `state=`. Writ
 under `/etc/systemd/system` at boot is the `unit-written-at-runtime` error: declare it
 instead.
 
+`Service.packaged("prometheus-node-exporter.service")` runs the unit a Debian package ships
+and installs the package (`package=` names another). Its sandbox is `hardening=`, `static`
+unless said, which replaces the package's own; beside it only `requires=`, a probe
+`readiness=`, `expose=` and `unit=DropIn(...)` apply.
+
 ## Components
 
 A `Component` is a class that groups declarations and exports typed values. This one

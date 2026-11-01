@@ -197,6 +197,9 @@ def hardening_of(entries: list[tuple[str, str]]) -> Any:
     got: dict[str, list[str]] = {}
     for key, value in entries:
         got.setdefault(key, []).append(value)
+    for key, values in got.items():
+        if "" in values:  # an empty assignment resets the list: keep what follows it
+            got[key] = values[len(values) - values[::-1].index("") :] or [""]
 
     def on(key: str) -> bool:
         return got.get(key, [""])[0] == "yes"
@@ -212,7 +215,7 @@ def hardening_of(entries: list[tuple[str, str]]) -> Any:
         protect_home=on("ProtectHome"),
         private_tmp=on("PrivateTmp"),
         private_devices=on("PrivateDevices"),
-        devices=tuple(v.removesuffix(" rw") for v in got.get("DeviceAllow", [])),
+        devices=tuple(v.removesuffix(" rw") for v in got.get("DeviceAllow", []) if v),
         no_new_privileges=on("NoNewPrivileges"),
         capabilities=None if caps is None else tuple(caps[0].split()),
         jit=not on("MemoryDenyWriteExecute"),

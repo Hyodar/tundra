@@ -285,6 +285,7 @@ Service(
     environment: Mapping[str, str | Binding] = FrozenMap(),
     logs: str | None = None,
     runtime: str | None = None,
+    package: str | None = None,
 )
 ```
 
@@ -296,6 +297,7 @@ A program the image runs, as its own user, in a tested sandbox.
 | `Service.bindings` | Every credential this service binds: `credentials=`, then each one its argv or `environment=` names. |
 | `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL, a credential `${CREDENTIALS_DIRECTORY}/<name>`. |
 | `Service.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where this service answers on the loopback, with its readiness: what an ingress fronts (`upstream=app.endpoint(8080)`) or a dependent requires. It opens no port and changes no listen address. |
+| `Service.packaged(name: str, *, package: str \| None = None, hardening: Sandbox = 'static', requires: Sequence[Requirement] = (), readiness: TcpProbe \| HttpProbe \| None = None, expose: Sequence[PortValue] = (), unit: DropIn \| None = None) -> Service` | The unit *name* the Debian *package* ships (default: the unit's stem), enabled and run under `hardening=`, which replaces the package's own sandbox. |
 | `Service.probe_unit` | The bounded probe unit a dependent waits for, when readiness needs one. |
 | `Service.ready` | "This service is ready": what another service's `requires=` takes. |
 | `Service.ref` | What a `Profile` change targets. |

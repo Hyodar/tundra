@@ -164,6 +164,8 @@ def test_units_become_an_image_file_that_loads_and_checks(cli: Cli, tmp_path: Pa
     (units / "backup.service").write_text(BACKUP)
     (units / "backup.timer").write_text(BACKUP_TIMER)
     (units / "data.mount").write_text("[Mount]\nWhat=/dev/vdb\nWhere=/data\n")
+    (units / "exporter.service.d").mkdir()
+    (units / "exporter.service.d" / "10-args.conf").write_text("[Service]\nEnvironment=A=1\n")
     result = cli("convert", units, "--from", "systemd")
     assert result.code == EXIT_OK, result.err
     imports = [line for line in result.out.splitlines() if line.startswith(("from ", "import "))]
@@ -180,6 +182,8 @@ def test_units_become_an_image_file_that_loads_and_checks(cli: Cli, tmp_path: Pa
     assert services["web"].argv == ("/usr/bin/web", "--port", "8080")
     assert dict(services["worker"].environment) == {"MODE": "batch", "TRACE": "1"}
     assert services["backup"].timer == Calendar("daily")
+    assert services["exporter"].package == "exporter"
+    assert services["exporter"].unit is not None and services["exporter"].unit.env == {"A": "1"}
     checked = cli("check", image_file)
     assert checked.code == EXIT_FAILURE
     assert [line.split(" runs ")[1].split(",")[0] for line in _missing(checked.out)] == [

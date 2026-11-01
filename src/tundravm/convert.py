@@ -178,7 +178,10 @@ def from_systemd(path: Path) -> Converted:
     entries: list[str] = []
     for units, service, description in found.services:
         entries.append(f"# {units}" + (f": {description}" if description else ""))
-        entries.append(f"{_call(service, imports, lists=True)},")
+        call = (
+            _packaged(service, imports) if service.package else _call(service, imports, lists=True)
+        )
+        entries.append(f"{call},")
     services = "".join(f"        {entry}\n" for entry in entries)
     source = (
         f'"""{name}: converted from {path.name} by `tundravm convert --from systemd`."""\n\n'
@@ -205,6 +208,21 @@ def _call(value: Any, imports: set[str], *, lists: bool = False) -> str:
         text = _source(current, imports, lists=lists)
         args.append(text if required and not item.kw_only else f"{item.name}={text}")
     return f"{type(value).__name__}({', '.join(args)})"
+
+
+def _packaged(service: Any, imports: set[str]) -> str:
+    """A ``Service.packaged`` as that call: the unit, then what differs from its defaults."""
+    from .declarative.systemd import Hardening
+
+    imports.add("Service")
+    args = [_quoted(service.unit_name)]
+    if service.package != service.stem:
+        args.append(f"package={_quoted(service.package)}")
+    if service.hardening != Hardening.preset("static"):
+        args.append(f"hardening={_source(service.hardening, imports)}")
+    if service.unit is not None:
+        args.append(f"unit={_call(service.unit, imports)}")
+    return f"Service.packaged({', '.join(args)})"
 
 
 def _source(value: object, imports: set[str], *, lists: bool = False) -> str:

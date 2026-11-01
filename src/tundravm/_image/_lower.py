@@ -19,6 +19,7 @@ from typing import cast
 
 from tundravm._location import anchored, declared_at, display_location
 from tundravm._modules import tdxs as _tdxs
+from tundravm._modules.execution import GATE_UNIT
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
@@ -593,15 +594,23 @@ class _Lowering:
     # ── Services ────────────────────────────────────────────────────
 
     def service(self, item: Service) -> Iterator[dm.Declaration | dm.Fragment]:
-        """A ``Service`` as the builds its argv pulls in and its units."""
+        """A ``Service`` as the builds its argv pulls in, its package and its units."""
         if isinstance(item.readiness, HttpProbe):
             self.curl = True
+        if item.package is not None:
+            yield dm.Package(item.package)
         yield from item.binaries()
         yield from self.units(item)
 
     def units(self, item: Service) -> Iterator[dm.Declaration]:
         """*item*'s units: its ``.service`` and its probe, or its timer task, then its
-        drop-in."""
+        drop-in; a package's unit with its one drop-in, then its probe."""
+        if item.package is not None:
+            yield self.packaged(item)
+            probe = self.probe(item)
+            if probe is not None:
+                yield probe
+            return
         if item.timer is not None:
             yield self.timer_task(item)
         else:
@@ -653,6 +662,28 @@ class _Lowering:
             timeout_stop=None if shutdown is None else shutdown.timeout,
             kill_mode=None if shutdown is None else shutdown.kill_mode,
             directives={"Service": directives} if directives else {},
+        )
+
+    def packaged(self, item: Service) -> dm.Unit:
+        """A ``Service.packaged`` as the package's unit, enabled, with one drop-in: the
+        sandbox (a preset sets every field, so it replaces the package's), the execution
+        gate every service waits for, ``requires=`` and the image's ``unit=``."""
+        units = (*self.required_units(item), GATE_UNIT)
+        hardening = cast("Hardening", item.hardening)
+        if item.unit is None:
+            dropin = dm.DropIn(hardening=hardening, after=units, requires=units)
+        else:
+            dropin = replace(
+                item.unit,
+                hardening=hardening,
+                after=(*item.unit.after, *units),
+                requires=(*item.unit.requires, *units),
+            )
+        return dm.Unit(
+            item.unit_name,
+            enabled=True,
+            dropin=dropin,
+            ports=tuple(dm.Port(port.port, port.protocol) for port in item.expose),
         )
 
     def timer_task(self, item: Service) -> dm.Task:
