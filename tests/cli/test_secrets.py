@@ -15,6 +15,7 @@ import pytest
 from tests.cli.conftest import Cli
 from tests.cli.test_attest import PEER, FakeIssuer, _tcp, policy
 from tundravm import bootstrap, instances
+from tundravm._modules import instance_key
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 
@@ -38,7 +39,13 @@ class FakeSsh:
             return subprocess.CompletedProcess(
                 list(argv), 0, json.dumps(reply).encode() + b"\n", b""
             )
+        if instance_key.PUBLIC in argv[-1]:
+            return subprocess.CompletedProcess(list(argv), 0, f"{PUB}\n".encode(), b"")
         return subprocess.CompletedProcess(list(argv), 0, b"", b"")
+
+
+PUB = "03" + "ab" * 32
+"""The guest's instance public key the fake session reads."""
 
 
 @pytest.fixture
@@ -109,6 +116,7 @@ def test_attest_over_the_bootstrap_session(
     assert result.code == EXIT_OK, result.out + result.err
     assert "verdict: simulated" in result.out
     assert f"channel: {bootstrap.UNVERIFIED}" in result.out
+    assert f"instance key  {PUB}  (not yet bound to the quote)" in result.out
     [(url, body)] = posted
     assert url == "http://127.0.0.1:18745/"
     assert body.decode() == key.with_name("operator.pub").read_text().split()[1]
@@ -120,6 +128,7 @@ def test_attest_over_the_bootstrap_session(
     assert kinds == ["first-contact", "attested"]
     receipt = json.loads((instance.path / "instance.json").read_text())
     assert receipt["attested"]["verdict"] == "simulated"
+    assert receipt["instance_key"] == PUB
     assert receipt["bootstrap"]["first_contact"] == "unverified"
     again = cli("attest", instance.id, "--policy", simulated_policy, "--identity", key, "--json")
     assert again.code == EXIT_OK

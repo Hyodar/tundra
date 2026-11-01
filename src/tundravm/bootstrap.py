@@ -40,10 +40,12 @@ import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from . import manifest as mf
+from ._modules import instance_key as instance_key_module
 from ._modules.execution import MODE_FILE
 from .attestation import Attestation, Transport
 from .attestation import attest as check_quote
@@ -177,6 +179,14 @@ class Session:
         said = said.strip()
         return said or None
 
+    def instance_key(self) -> str | None:
+        """The guest's instance public key (``/run/tundravm/instance-key.pub``), ``None``
+        when it has none (an image older than the instance key)."""
+        path = instance_key_module.PUBLIC
+        said = self.run(f"head -c 80 {path} 2>/dev/null || true").decode(errors="replace")
+        said = said.strip()
+        return said if instance_key_module.PUBLIC_KEY.fullmatch(said) else None
+
     def transport(self) -> Transport:
         """tdxs's JSON lines over this session (one ``socat`` per request)."""
 
@@ -287,6 +297,8 @@ def attest(
             guest_mode=None if session is None else session.guest_mode(),
             transport=send,
         )
+        if session is not None:
+            result = replace(result, instance_key=session.instance_key())
         if result.passed and hosts.is_file():
             shutil.copyfile(hosts, known_hosts(instance))
     instance.event(
@@ -299,6 +311,8 @@ def attest(
         nonce=result.nonce,
         channel=UNVERIFIED if issuer is None else f"issuer {issuer}",
     )
+    if result.instance_key is not None:
+        instance.data["instance_key"] = result.instance_key
     if result.passed:
         instance.data["attested"] = {
             "policy": str(policy.resolve()),
@@ -306,6 +320,7 @@ def attest(
             "verdict": result.verdict,
             "at": result.observed_at,
         }
+    if result.passed or result.instance_key is not None:
         instance.save()
     return result
 

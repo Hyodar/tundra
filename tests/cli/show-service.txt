@@ -33,6 +33,7 @@ Services (5):
   tdx-evidence.service           /usr/lib/tundravm/tdx-evidence  restart=no  type=oneshot  env=TUNDRAVM_EXECUTION  after=systemd-udev-trigger.service
   tdxs.service                   /usr/bin/tdxs --config /etc/tdxs/config.yaml --log-level info  restart=on-failure  type=notify  user=tdxs  group=tdx  after=tdxs.socket,tdx-evidence.service  requires=tdxs.socket,tdx-evidence.service  disabled
   tundravm-instance-key.service  /bin/sh /usr/lib/tundravm/instance-key  restart=no  type=oneshot
+Instance key: secp256k1, fresh each boot; taken by no service
 Hooks:
   build (2):
     echo 'tundravm: source build tdxs is not pinned: run tundravm lock, then tund...
@@ -80,6 +81,7 @@ Services (6):
   tdxs.service                   /usr/bin/tdxs --config /etc/tdxs/config.yaml --log-level info  restart=on-failure  type=notify  user=tdxs  group=tdx  after=tdxs.socket,tdx-evidence.service  requires=tdxs.socket,tdx-evidence.service  disabled
   tundravm-instance-key.service  /bin/sh /usr/lib/tundravm/instance-key  restart=no  type=oneshot
   tundravm-probe.service         /bin/sh /usr/lib/tundravm/probe  restart=no  type=oneshot  after=tdx-evidence.service,tdxs.socket,app.service,app-ready.service,nftables.service,systemd-udev-trigger.service,systemd-modules-load.service,tundravm-instance-key.service
+Instance key: secp256k1, fresh each boot; taken by no service
 Hooks:
   build (2):
     echo 'tundravm: source build tdxs is not pinned: run tundravm lock, then tund...

@@ -16,6 +16,7 @@ import pytest
 from tests.cli.conftest import Cli
 from tests.helpers import fake_ovmf
 from tundravm import instances
+from tundravm._modules import instance_key
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 
@@ -112,6 +113,12 @@ def test_status_logs_mode_and_stop(dev_built: Build, project: Path, cli: Cli, qe
     assert status.code == EXIT_OK
     assert "state          running" in status.out
     assert "control_plane  not listening" in status.out
+    assert "instance_key" not in status.out
+    pub = "02" + "cd" * 32
+    with (project / ".tundravm/instances/demo-1/console.log").open("a") as console:
+        console.write(f"[    2.0] sh[201]: {instance_key.CONSOLE}{pub}\r\n")
+    assert f"instance_key   {pub}" in cli("run", "status", "demo-1").out
+    assert _receipt(project, "demo-1")["instance_key"] == pub
     report = json.loads(cli("run", "status", "demo-1", "--json").out)
     assert report["schema"] == "tundravm.run/1" and report["state"] == "running"
     logs = cli("run", "logs", "demo-1")

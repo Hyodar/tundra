@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from typing import TYPE_CHECKING, Any, cast, get_args
 
+from ._modules import instance_key
 from ._modules.init import runtime_init_order
 from ._options import MkosiOptions
 from .compiler import PHASE_ORDER
@@ -127,6 +128,11 @@ def describe(
             }
             for svc in sorted(profile_state.services, key=lambda item: item.name)
         ],
+        "instance_key": sorted(
+            unit_name(svc.name)
+            for svc in profile_state.services
+            if svc.credentials.get(instance_key.CREDENTIAL) == instance_key.KEY
+        ),
         "skeleton_files": _describe_files(profile_state.skeleton_files),
         "sources": _describe_sources(image, selected, profile_state, pins),
         "targets": list(image.targets.get(selected, profile_state.output_targets)),
@@ -288,6 +294,10 @@ def render(description: dict[str, object]) -> str:
             if svc.get("security_profile", "default") != "default":
                 parts.append(f"security={svc['security_profile']}")
             lines.append("  " + "  ".join(parts))
+
+    if "instance_key" in description:
+        takers = ", ".join(_as_list(description["instance_key"])) or "no service"
+        lines.append(f"Instance key: {instance_key.CURVE}, fresh each boot; taken by {takers}")
 
     partitions = _as_list(description.get("partitions"))
     if partitions:

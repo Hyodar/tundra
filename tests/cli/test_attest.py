@@ -362,6 +362,7 @@ def test_to_dict_is_the_stable_json_shape() -> None:
         "checks",
         "debug",
         "guest_mode",
+        "instance_key",
         "issuer",
         "nonce",
         "passed",

@@ -289,6 +289,9 @@ class Attestation:
     """What the guest's execution gate recorded (``/run/tundravm/mode``: ``tdx`` or
     ``simulated``), read over the session; ``None`` when not read. The guest says it, so it
     can only make evidence ``simulated``, never the reverse."""
+    instance_key: str | None = None
+    """The guest's instance public key (``/run/tundravm/instance-key.pub``), read over the
+    session; ``None`` when not read. The quote does not bind it yet (gate 3)."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -374,6 +377,9 @@ class Attestation:
             "checks": CHECKS_NOTE,
             "debug": self.debug,
             "guest_mode": self.guest_mode,
+            "instance_key": None
+            if self.instance_key is None
+            else {"public": self.instance_key, "bound_to_quote": False},
             "issuer": self.issuer,
             "nonce": {
                 "value": self.nonce,
@@ -1132,6 +1138,11 @@ def _signature_line(result: Attestation) -> str:
     return f"signature invalid ({result.validator}): {result.validator_error}"
 
 
+INSTANCE_KEY_NOTE = "not yet bound to the quote"
+"""What ``attest`` says beside the instance public key until tundra-tools binds it into the
+quote's ``report_data`` (gate 3)."""
+
+
 def render_attestation(result: Attestation, fmt: str) -> str:
     """*result* as ``text`` (one line per register) or ``json``."""
     if fmt == "json":
@@ -1159,6 +1170,8 @@ def render_attestation(result: Attestation, fmt: str) -> str:
                 else (f"one of {len(accepted_values)} accepted values")
             )
             lines.append(f"{'':<6} {'policy':<9}  {shown}")
+    if result.instance_key is not None:
+        lines.append(f"instance key  {result.instance_key}  ({INSTANCE_KEY_NOTE})")
     if result.validator is None:
         lines.append(f"note: {CHECKS_NOTE}")
     if result.verdict == "partial":

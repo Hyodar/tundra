@@ -1,10 +1,11 @@
 """Instances: what ``run`` and ``deploy`` started, one directory each under ``.tundravm/instances``.
 
 ``<instance-id>/instance.json`` (schema :data:`SCHEMA`) is the receipt: the build it runs
-(path, id, kind), the security mode, the platform, its endpoints and, for a local VM, the
-QEMU process; ``events.jsonl`` appends one record per thing done to it (launched,
-attested, delivered, unlocked, stopped, upgraded), never a secret value; ``console.log`` is
-the serial console of a local VM. An instance id is ``<image>-<n>``.
+(path, id, kind), the security mode, the platform, its endpoints, the instance public key
+once read and, for a local VM, the QEMU process; ``events.jsonl`` appends one record per
+thing done to it (launched, attested, delivered, unlocked, stopped, upgraded), never a
+secret value; ``console.log`` is the serial console of a local VM. An instance id is
+``<image>-<n>``.
 
 :func:`launch` is ``run``: the build's ``qemu.raw`` through OVMF from its ESP (the disk
 path), on a snapshot so the build directory is never written, with every TCP port the
@@ -36,6 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
+from ._modules import instance_key as instance_key_module
 from ._modules import probe as probe_module
 from .builds import Build
 from .deploy import qemu as qemu_paths
@@ -459,9 +461,27 @@ def fail_closed(instance: Instance) -> bool:
     return bool(instance.mode == "simulated" and instance.data["build"]["kind"] == "production")
 
 
+def instance_key(instance: Instance) -> str | None:
+    """This boot's instance public key: the last ``tundravm-instance-key: pub`` line on a
+    local instance's console, recorded in the receipt (``instance_key``), else what the
+    receipt holds (``attest`` records it too); ``None`` before the guest printed one."""
+    from .testing._boot import console_lines
+
+    console = instance.path / CONSOLE
+    if console.is_file():
+        text = console.read_text(encoding="utf-8", errors="replace")
+        found = instance_key_module.public_key(console_lines(text))
+        if found is not None and found != instance.data.get("instance_key"):
+            instance.data["instance_key"] = found
+            instance.save()
+    recorded = instance.data.get("instance_key")
+    return recorded if isinstance(recorded, str) else None
+
+
 def status(instance: Instance) -> dict[str, object]:
-    """``run status``: the process, then readiness when it runs, and :data:`FAIL_CLOSED` as
-    ``services`` for a production build in a simulated instance."""
+    """``run status``: the process, then readiness when it runs, the instance public key
+    once the guest printed it, and :data:`FAIL_CLOSED` as ``services`` for a production
+    build in a simulated instance."""
     running = alive(instance)
     if not running and instance.data.get("state") == "running":
         instance.data["state"] = "exited"
@@ -474,6 +494,9 @@ def status(instance: Instance) -> dict[str, object]:
     }
     if fail_closed(instance):
         report["services"] = FAIL_CLOSED
+    key = instance_key(instance)
+    if key is not None:
+        report["instance_key"] = key
     if running:
         report.update(readiness(instance))
     return report
@@ -590,6 +613,7 @@ __all__ = [
     "fail_closed",
     "forwards",
     "free_port",
+    "instance_key",
     "launch",
     "logs",
     "open_instance",

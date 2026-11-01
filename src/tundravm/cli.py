@@ -1345,7 +1345,8 @@ def _run_action(
         if args.json:
             print(json_report("run", report), file=out)
         else:
-            for key in ("id", "mode", "state", "services", "control_plane", "application"):
+            shown = ("id", "mode", "state", "services", "control_plane", "application")
+            for key in (*shown, "instance_key"):
                 if key in report:
                     print(f"{key:<14} {report[key]}", file=out)
             build = cast(Mapping[str, object], report["build"])
