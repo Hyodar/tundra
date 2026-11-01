@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import pytest
 
-from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import ATTESTED_NODE, REPO_ROOT
 from tundravm._source import BUILD_MARKER
 from tundravm.declarative import (
     Build,
@@ -56,20 +56,9 @@ def _source_builds(recipe: Recipe) -> dict[str, dict[str, object]]:
 # ── Example modules ─────────────────────────────────────────────────
 
 
-def _surge_stack() -> Recipe:
-    """The surge image: Nethermind, the taiko driver and Raiko from tundravm.components."""
-    return load_recipe(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
-
-
-@pytest.mark.parametrize(
-    ("name", "cache_namespace"),
-    [
-        ("taiko-client", "taiko-client-feat_tdx-proving"),
-        ("nethermind", "nethermind-1.32.3-linux-x64"),
-    ],
-)
-def test_surge_stack_builds_copy_the_fetched_checkouts(name: str, cache_namespace: str) -> None:
-    recipe = _surge_stack()
+def test_the_attested_node_builds_copy_the_fetched_checkout() -> None:
+    name, cache_namespace = "nethermind", "nethermind-1.32.3-linux-x64"
+    recipe = load_recipe(ATTESTED_NODE / "image.py", extra_paths=[REPO_ROOT])
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
     assert "git clone" not in pinned and "fetch -q" not in pinned
     (hook,) = (line for line in pinned.splitlines() if f'"$BUILDROOT/build/{name}"' in line)

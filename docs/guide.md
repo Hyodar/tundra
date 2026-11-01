@@ -378,7 +378,6 @@ a `when=` phrase per other.
 | `Nethermind` | Nethermind built with the .NET 10 SDK, `dotnet` preset | `rpc`, `ws`, `engine_api` |
 | `Lighthouse` | a beacon node from the Lighthouse release | `http` |
 | `TaikoClient` | the taiko-client driver, built with Go | none |
-| `Raiko` | the Raiko TDX prover, built with Cargo | `http` |
 
 A service that asks for quotes (`quotes=True`) joins the `tdx` group and requires
 `EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
@@ -388,35 +387,8 @@ them.
 the installed commit (from a checkout of it, its `tools/` directory, pinned by digest).
 `Tdxs(source=Git(mirror, commit, subdir="tools"))` points every one of them at a mirror.
 
-The surge prover in `examples/surge-tdx-prover/image.py` is the three workloads wired
-through their exports:
-
-```python
-from tundravm import Image, RootFS
-from tundravm.components import DevAccess, Egress, Nethermind, Network, Raiko, TaikoClient
-from tundravm.ports import AttestedTLS
-from tundravm.secrets import Secret
-from tundravm.storage import OperatorKey, Volume
-
-data = Volume("data", unlock=OperatorKey())
-jwt = Secret("jwt")
-chain = Secret("taiko-chain")
-config = Secret("raiko-config")
-
-execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
-driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
-prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"))
-
-image = Image(
-    "surge-tdx-prover",
-    components=[execution, driver, prover],
-    ingress=[AttestedTLS(443, upstream=prover.http)],
-    network=Network(egress=Egress()),
-    rootfs=RootFS.verity(),
-    targets=("qemu", "azure", "gcp"),
-    dev=DevAccess(password="tdx"),
-)
-```
+The attested node in `examples/attested-node/` wires `Nethermind` to a service of its own:
+see [Volumes, secrets and ingress](#volumes-secrets-and-ingress).
 
 ## Profiles
 
@@ -480,25 +452,40 @@ not depend on which profiles a compile selects. `build --profile staging` is
 
 ## Volumes, secrets and ingress
 
-The image collects each volume and secret from the services that bind it; the prover
-template uses all three runtime contracts:
+The image collects each volume and secret from the services that bind it. The attested
+node, `examples/attested-node/image.py`, uses all three runtime contracts: Nethermind on
+Hoodi, and `signer/`, a Go proxy that signs its block responses with the key each boot
+generates (`InstanceKey()`):
 
+<!-- fragment -->
 ```python
-from tundravm import Image, RootFS
-from tundravm.components import DevAccess, Raiko
+from tundravm import Image, RootFS, Service
+from tundravm.components import DevAccess, Egress, Nethermind, Network
 from tundravm.ports import AttestedTLS
-from tundravm.secrets import Secret
+from tundravm.secrets import Generated, InstanceKey
+from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, Volume
+from tundravm.systemd import TcpProbe
 
 data = Volume("data", unlock=OperatorKey())
-config = Secret("raiko-config")
-raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:8080")
+jwt = Generated("jwt")
+nethermind = Nethermind(jwt=jwt, config="hoodi", state=data.directory("nethermind"))
+signer = Service(
+    "signer",
+    [GoBinary("signer", Local("signer")), "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
+    credentials=[InstanceKey()],
+    requires=[nethermind.rpc],
+    readiness=TcpProbe(8547),
+)
 
 image = Image(
-    "prover",
-    components=[raiko],
-    ingress=[AttestedTLS(443, upstream=raiko.http)],
+    "attested-node",
+    components=[nethermind],
+    services=[signer],
+    ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
+    network=Network(egress=Egress()),
     rootfs=RootFS.verity(),
+    targets=("qemu", "azure", "gcp"),
     dev=DevAccess(password="tdx"),
 )
 ```
@@ -523,7 +510,7 @@ carries no initialisation token: an unlock failure never permits formatting.
 target, and a key sealed on one platform does not open on another. On a cloud it is a
 `volume-tpm-on-cloud` info: that platform's vTPM decides who opens it.
 
-`data.directory("raiko")` is a directory on the volume. A service binds it with
+`data.directory("nethermind")` is a directory on the volume. A service binds it with
 `state=`, and the image creates it, owned by that service, once the volume is open. The
 service waits for it. `directory(name, group=)` shares it through a group.
 
@@ -533,7 +520,7 @@ service waits for it. `directory(name, group=)` shares it through a group.
 after attestation:
 
 ```console
-$ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json raiko-config=@raiko.json
+$ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json api-token=@token.txt
 ```
 
 It lands in `/run/tundravm/credentials/<name>`, root-owned tmpfs, mode 0600. A service
@@ -557,7 +544,7 @@ hex to `/run/tundravm/secrets/<name>`, which every service binding it reads.
 
 ### Ingress
 
-`AttestedTLS(443, upstream=raiko.http)` is the confidential way in. It opens 443 and
+`AttestedTLS(8546, upstream=signer.endpoint(8547))` is the confidential way in. It opens 8546 and
 nothing else. The upstream must listen on the loopback and expose no port of its own, or
 the image is refused, so the ingress is the only path to it. Today the relay is `socat`'s
 OpenSSL listener, as its own user with only `CAP_NET_BIND_SERVICE`, with a self-signed
@@ -584,8 +571,8 @@ recorded in the manifest, never switched by a size threshold.
 traffic, accepting what the baseline (NTS time, resolvers, cloud metadata) and each
 component's `outbound()` send. A host may be `HOST:PORT`, and since nftables matches no
 names, `"logs.example:443"` opens 443 to any address. A production profile without it is
-an `egress-unfiltered` warning. `TaikoClient(l1=["HOST:PORT"])` and `Raiko(l1=)` name the
-L1 endpoints their secrets hold, and `Observability(proxy="IP:PORT")` reaches every sink
+an `egress-unfiltered` warning. `TaikoClient(l1=["HOST:PORT"])` names the
+L1 endpoints its secret holds, and `Observability(proxy="IP:PORT")` reaches every sink
 through that one address.
 
 `observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
@@ -999,7 +986,7 @@ measured into the vTPM.
 
 ```console
 $ tundravm secrets unlock prover-1 data
-$ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json raiko-config=@raiko.json
+$ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json api-token=@token.txt
 ```
 
 Both verify again on a session of their own and write on it only, once per name per
@@ -1017,8 +1004,8 @@ never go on argv, in a log, a tree or a receipt.
 ### Upgrade and rollback
 
 ```console
-$ tundravm deploy upgrade prover-1 --build build/prover/production/<id2> --policy policies/prover-gcp.json raiko-config=@raiko.json
-$ tundravm deploy rollback prover-1 --policy policies/prover-gcp.json raiko-config=@raiko.json
+$ tundravm deploy upgrade prover-1 --build build/prover/production/<id2> --policy policies/prover-gcp.json api-token=@token.txt
+$ tundravm deploy rollback prover-1 --policy policies/prover-gcp.json api-token=@token.txt
 ```
 
 `upgrade` runs the one replacement workflow, on GCP: launch the candidate without volumes,

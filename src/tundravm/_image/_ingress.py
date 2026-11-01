@@ -29,7 +29,7 @@ def _check(owner: object, port: object, upstream: object) -> None:
     if not isinstance(upstream, Endpoint):
         raise ValidationError(
             f"{kind}({port}): upstream {upstream!r} is not an Endpoint.",
-            hint="Pass the endpoint a component exports: upstream=raiko.http.",
+            hint="Pass the endpoint a service answers at: upstream=signer.endpoint(8547).",
         )
     if not upstream.loopback:
         raise ValidationError(
@@ -49,7 +49,7 @@ def _check(owner: object, port: object, upstream: object) -> None:
 class AttestedTLS(Located):
     """The confidential ingress: TLS on *port*, relayed to *upstream* on the loopback.
 
-    ``AttestedTLS(443, upstream=raiko.http)`` opens *port* in the firewall and nothing
+    ``AttestedTLS(8546, upstream=signer.endpoint(8547))`` opens *port* in the firewall and nothing
     else: the upstream must listen on the loopback and expose no port of its own, so this
     is the only way requests reach it (the image refuses anything else). The listener
     generates its key pair inside the guest at every start and never stores it.

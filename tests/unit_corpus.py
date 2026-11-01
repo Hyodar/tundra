@@ -1,7 +1,7 @@
 """Every systemd unit text in the repository, for the unit text and unit lint tests.
 
-Sources: the committed surge tree, the unit constants of modules, examples and templates,
-and the emitted tree of every example, surge variant and ``init`` template.
+Sources: the committed attested node tree, the unit constants of modules, examples and templates,
+and the emitted tree of every example, the attested node and ``init`` template.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 
-from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE, write_template
+from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT, write_template
 
 _UNIT_PATH = re.compile(r"(^|/)(usr/lib|etc)/systemd/system/")
 _UNIT_SUFFIX = re.compile(r"\.(service|socket|target|timer|mount|path|conf)$")
@@ -23,8 +23,8 @@ def is_unit_file(path: str) -> bool:
 
 
 def golden_units() -> Iterator[tuple[str, str]]:
-    """``(path, text)`` for every unit file in the committed surge golden tree."""
-    root = SURGE_EXAMPLE / "mkosi"
+    """``(path, text)`` for every unit file in the committed attested node tree."""
+    root = ATTESTED_NODE / "mkosi"
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
         if path.is_file() and not path.is_symlink() and is_unit_file(relative):
@@ -41,12 +41,12 @@ def constant_units() -> Iterator[tuple[str, str]]:
 
 
 def recipe_paths(scratch: Path) -> dict[str, Path]:
-    """Every example recipe, the surge recipe and every ``init`` template, by name; the
+    """Every example recipe, the attested node and every ``init`` template, by name; the
     templates are rendered into *scratch*."""
     from tundravm.templates import TEMPLATES
 
     paths = {path.stem: path for path in EXAMPLE_RECIPES}
-    paths["surge"] = SURGE_EXAMPLE / "image.py"
+    paths["attested-node"] = ATTESTED_NODE / "image.py"
     for template in TEMPLATES:
         path = write_template(scratch / template / f"{template}.py", template, title=template)
         paths[f"init-{template}"] = path

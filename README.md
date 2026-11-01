@@ -78,7 +78,7 @@ $ uv sync
 $ uv run ruff check . && uv run ruff format --check src tests examples
 $ uv run mypy .
 $ uv run pytest -q -m "not integration"
-$ uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+$ uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
 ```
 
 After a docstring or parser change, `uv run python -m tundravm._reference docs/reference`

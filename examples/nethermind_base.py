@@ -12,8 +12,8 @@ Teaches building a real base image from the slots alone:
 
 Everything else the historical base carried is implied by every image now: NTS time
 replaces openntpd, systemd-networkd and the firewall replace the custom ``/init`` and its
-network script, and the evidence service is ``Tdxs()``. The surge prover
-(``surge-tdx-prover/image.py``) builds on Debian's tested kernel instead.
+network script, and the evidence service is ``Tdxs()``. The attested node
+(``attested-node/image.py``) builds on Debian's tested kernel instead.
 
     tundravm show examples/nethermind_base.py
     tundravm check examples/nethermind_base.py   # source-unpinned until locked

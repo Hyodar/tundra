@@ -81,7 +81,7 @@ def test_a_tree_tundravm_wrote_converts_its_payload_and_targets_and_checks(
     cli: Cli, tmp_path: Path, wrappers: tuple[str, ...], targets: tuple[str, ...]
 ) -> None:
     tree = tmp_path / "mkosi"
-    shutil.copytree(REPO_ROOT / "examples" / "surge-tdx-prover" / "mkosi", tree, symlinks=True)
+    shutil.copytree(REPO_ROOT / "examples" / "attested-node" / "mkosi", tree, symlinks=True)
     for cloud in {"azure", "gcp"} - set(wrappers):
         shutil.rmtree(tree / "mkosi.images" / cloud)
     result = cli("convert", tree, "--from", "mkosi")

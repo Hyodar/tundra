@@ -178,7 +178,7 @@ class Endpoint:
 
 @dataclass(frozen=True, slots=True)
 class ServiceRef:
-    """A service a component composed, named from outside: ``raiko.service("raiko")``.
+    """A service a component composed, named from outside: ``nethermind.service("nethermind")``.
 
     ``.ready`` waits for it and ``.ref`` is what a :class:`~tundravm.Profile`
     edits or removes, so a caller changes one service of a component without the

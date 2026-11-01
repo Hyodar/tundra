@@ -130,7 +130,7 @@ NO_RUSTUP = (
     f"no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
     "(https://rustup.rs, or the Debian package rustup)"
 )
-NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("raiko",))
+NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
 
 
 @pytest.mark.parametrize(

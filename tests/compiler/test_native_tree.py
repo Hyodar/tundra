@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE, write_template
+from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT, write_template
 from tundravm.check import declaration_check
 from tundravm.compiler.emit_mkosi import (
     ESP_MKFS_ENVIRONMENT,
@@ -473,7 +473,7 @@ def test_every_emitted_key_is_an_mkosi_setting_in_its_section() -> None:
 
 # ── every tree tundravm writes ──────────────────────────────────────────
 
-_RECIPES = [*EXAMPLE_RECIPES, SURGE_EXAMPLE / "image.py", FIXTURE / "recipe.py"]
+_RECIPES = [*EXAMPLE_RECIPES, ATTESTED_NODE / "image.py", FIXTURE / "recipe.py"]
 
 
 @pytest.mark.parametrize("path", _RECIPES, ids=lambda p: Path(p).stem)
@@ -541,15 +541,15 @@ def test_the_lock_records_the_tools_tree_mkosi_resolves() -> None:
     assert locked.lockfile.toolchain.tools_tree == resolved
 
 
-def test_surge_tree_resolves_every_node() -> None:
-    tree = SURGE_EXAMPLE / "mkosi"
+def test_the_attested_node_tree_resolves_every_node() -> None:
+    tree = ATTESTED_NODE / "mkosi"
     summary = mkosi_summary(tree, "--profile=dev", "--dependency=azure", "--dependency=gcp")
     images = by_image(summary)
     assert list(images) == ["default-initrd", "payload", "azure", "gcp", "main"]
     # RootFS.verity(): the payload is a disk with an erofs root, booted by mkosi's initrd.
     assert images["payload"]["Format"] == "disk"
     assert images["payload"]["Dependencies"] == ["default-initrd"]
-    assert images["payload"]["ImageId"] == "surge-tdx-prover-dev"
+    assert images["payload"]["ImageId"] == "attested-node-dev"
     assert "openssh-server" in images["payload"]["Packages"]
     assert images["main"]["Dependencies"] == ["payload", "azure", "gcp"]
     for name in ("azure", "gcp"):

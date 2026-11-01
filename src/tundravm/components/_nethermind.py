@@ -58,8 +58,8 @@ class Nethermind(Component, build_network=True):
     The workload contract: a ``dotnet publish`` with the .NET 10 SDK, deterministic
     properties and the restore it needs (the build reaches NuGet, so the image builds
     with the network on), installed under ``/usr/lib/nethermind`` with its plugins; the
-    network configuration *config* is one Nethermind ships (``surge-hoodi``,
-    ``taiko-alethia``...). It reads the Engine API secret *jwt* as a credential (a
+    network configuration *config* is one Nethermind ships (``hoodi``, the default,
+    ``mainnet``, ``taiko-alethia``...). It reads the Engine API secret *jwt* as a credential (a
     delivered :class:`~tundravm.secrets.Secret`, or ``Generated("jwt")`` when only the
     image's own consensus client calls the Engine API), keeps its database in *state* (a
     volume directory; ``None`` keeps it on the volatile root, so it resyncs at every boot,
@@ -73,7 +73,7 @@ class Nethermind(Component, build_network=True):
 
     jwt: Secret | Generated
     state: VolumeDirectory | None = None
-    config: str = "surge-hoodi"
+    config: str = "hoodi"
     source: dm.Git = NETHERMIND_SOURCE
     rpc_port: int = 8545
     engine_port: int = 8551
@@ -89,7 +89,7 @@ class Nethermind(Component, build_network=True):
         if not isinstance(self.config, str) or not self.config or "/" in self.config:
             raise ValidationError(
                 f"Nethermind: config {self.config!r} is not a configuration name.",
-                hint="Name one Nethermind ships, e.g. config='surge-hoodi'.",
+                hint="Name one Nethermind ships, e.g. config='hoodi'.",
             )
         if self.rpc_port == self.engine_port:
             raise ValidationError(

@@ -1,13 +1,13 @@
 """The ``tundravm.declarative.utils`` fragments, file by file; the evidence service's
-against the committed surge tree, which holds it."""
+against the committed attested node tree, which holds it."""
 
 from __future__ import annotations
 
 import pytest
 from examples.nethermind_base import EFI_STUB_VERSION
-from examples.nethermind_base import SNAPSHOT as SURGE_SNAPSHOT
+from examples.nethermind_base import SNAPSHOT as BASE_SNAPSHOT
 
-from tests.helpers import SURGE_EXAMPLE
+from tests.helpers import ATTESTED_NODE
 from tundravm.declarative import (
     BootStep,
     Build,
@@ -35,10 +35,10 @@ from tundravm.declarative.utils import (
 )
 from tundravm.errors import ValidationError
 
-GOLDEN = SURGE_EXAMPLE / "mkosi"
+GOLDEN = ATTESTED_NODE / "mkosi"
 SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
-PLATFORM = Debian("trixie", snapshot=SURGE_SNAPSHOT, boot=None)
-"""The surge platform's archive, without its packages: the files the fragments render
+PLATFORM = Debian("trixie", snapshot=BASE_SNAPSHOT, boot=None)
+"""The base example's archive, without its packages: the files the fragments render
 depend on the snapshot (backports sources, the EFI stub URL)."""
 GENERIC = ("payload/mkosi.conf", "payload/mkosi.conf.d/", "payload/mkosi.build.d/")
 """What every fragment touches (its packages, its build hooks): not the fragment's own files."""
@@ -92,10 +92,10 @@ def _files(tree: Tree) -> dict[str, bytes]:
     ],
     ids=["tdxs", "devtools", "backports"],
 )
-def test_fragment_files_match_the_committed_surge_tree(
+def test_fragment_files_match_the_committed_attested_node_tree(
     fragment: Fragment, golden: str | None, paths: tuple[str, ...]
 ) -> None:
-    """Each fragment adds exactly its files; those surge ships match its tree byte for byte."""
+    """Each fragment adds exactly its files; those the node ships match its tree byte for byte."""
     files = _files(compile(_recipe(fragment)))
     base = _files(compile(_recipe()))
     added = {path for path in set(files) - set(base) if not path.startswith(GENERIC)}
@@ -108,7 +108,7 @@ def test_fragment_files_match_the_committed_surge_tree(
 
 
 def test_efi_stub_hook_lands_in_the_postinst_script() -> None:
-    stub = EfiStub(snapshot=SURGE_SNAPSHOT, version=EFI_STUB_VERSION)
+    stub = EfiStub(snapshot=BASE_SNAPSHOT, version=EFI_STUB_VERSION)
     (hook,) = stub.items
     assert isinstance(hook, Hook) and hook.script == stub.render_script()
     tree = compile(_recipe(stub))

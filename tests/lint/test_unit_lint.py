@@ -152,8 +152,8 @@ UNIT_CODES = frozenset(
     }
 )
 EXPECTED_UNIT_FINDINGS: dict[str, set[str]] = {}
-"""What the repository's own images report: nothing, since every one of them, the surge
-prover and the nethermind-tdx base included, emits typed units only."""
+"""What the repository's own images report: nothing, since every one of them, the attested
+node and the nethermind-tdx base included, emits typed units only."""
 
 
 def test_repository_recipes_report_only_the_expected_unit_findings(

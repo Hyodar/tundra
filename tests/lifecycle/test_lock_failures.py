@@ -15,7 +15,7 @@ from tundravm.declarative import Lock, lock, lock_status, read_lock, write_lock
 from tundravm.errors import ErrorCode, LockfileError, SourceError
 from tundravm.recipe import load_recipe
 
-RAIKO = "https://github.com/taikoxyz/raiko"
+PROVER = "https://github.com/example/prover"
 NETHERMIND = "https://github.com/NethermindEth/nethermind"
 TOOL = "https://example.com/tool-1.0.tar.gz"
 SHA = "c" * 40
@@ -27,8 +27,8 @@ from tundravm.declarative import Build, Fragment, Git, Http, Install, Recipe
 recipe = Recipe(
     "prover",
     items=(
-        Build("raiko", Git({RAIKO!r}, "feat/tdx"), script="make",
-              install=(Install("raiko", "/usr/bin/raiko"),)),
+        Build("prover", Git({PROVER!r}, "feat/tdx"), script="make",
+              install=(Install("prover", "/usr/bin/prover"),)),
         Build("nethermind", Git({NETHERMIND!r}, "master"), script="make",
               install=(Install("nethermind", "/usr/bin/nethermind"),)),
         Build("tool", Http({TOOL!r}), script="make",
@@ -37,13 +37,13 @@ recipe = Recipe(
 )
 """
 
-RAIKO_LINE = f"  raiko: git {RAIKO} @ feat/tdx: ref 'feat/tdx' not found"
+PROVER_LINE = f"  prover: git {PROVER} @ feat/tdx: ref 'feat/tdx' not found"
 TOOL_LINE = f"  tool: http {TOOL}: HTTP 404"
 HINT = "Fix it upstream. A source left out of `tundravm lock --update NAME` keeps its pin."
 
 
 class _Upstream:
-    """A resolver whose upstream lost the raiko branch and the tool tarball."""
+    """A resolver whose upstream lost the prover branch and the tool tarball."""
 
     def __init__(self, *, broken: bool = True) -> None:
         self.broken = broken
@@ -51,7 +51,7 @@ class _Upstream:
 
     def __call__(self, source: Source) -> str:
         self.calls.append(source.url)
-        reason = {RAIKO: "ref 'feat/tdx' not found", TOOL: "HTTP 404"}.get(source.url)
+        reason = {PROVER: "ref 'feat/tdx' not found", TOOL: "HTTP 404"}.get(source.url)
         if self.broken and reason is not None:
             described = source.describe()
             raise SourceError(
@@ -82,17 +82,17 @@ def test_lock_attempts_every_source_and_reports_each_failure(image_file: Path) -
     with pytest.raises(LockfileError) as caught:
         lock(load_recipe(image_file), resolver=upstream)
     error = caught.value
-    assert sorted(upstream.calls) == sorted([RAIKO, NETHERMIND, TOOL])
+    assert sorted(upstream.calls) == sorted([PROVER, NETHERMIND, TOOL])
     assert error.code == ErrorCode.LOCKFILE
     assert error.args[0].splitlines() == [
         "Cannot lock: 2 sources could not be resolved:",
-        RAIKO_LINE,
+        PROVER_LINE,
         TOOL_LINE,
         "1 of 3 sources resolved; nothing written.",
     ]
     assert error.hint == HINT
     assert {name: e.reason for name, e in error.failures.items()} == {
-        "raiko": "ref 'feat/tdx' not found",
+        "prover": "ref 'feat/tdx' not found",
         "tool": "HTTP 404",
     }
     assert all(e.code == ErrorCode.SOURCE for e in error.failures.values())
@@ -117,16 +117,16 @@ def test_other_resolver_errors_are_collected_too(image_file: Path) -> None:
             False,
             (),
             "Cannot lock: 2 sources could not be resolved:\n"
-            f"{RAIKO_LINE}\n{TOOL_LINE}\n1 of 3 sources resolved; nothing written.",
+            f"{PROVER_LINE}\n{TOOL_LINE}\n1 of 3 sources resolved; nothing written.",
         ),
         (
             True,
-            ("--update", "raiko"),
+            ("--update", "prover"),
             "Cannot lock: 1 source could not be resolved:\n"
-            f"{RAIKO_LINE}\n2 of 3 sources resolved; nothing written.",
+            f"{PROVER_LINE}\n2 of 3 sources resolved; nothing written.",
         ),
     ],
-    ids=["no-lock", "existing-lock-update-raiko"],
+    ids=["no-lock", "existing-lock-update-prover"],
 )
 def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
     image_file: Path,
@@ -151,16 +151,16 @@ def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
 def test_offline_lock_reports_every_unpinned_source_at_once(image_file: Path) -> None:
     recipe = load_recipe(image_file)
     full = lock(recipe, resolver=_Upstream(broken=False))
-    partial = read_lock_without(full, "raiko", "tool", tmp=image_file.parent)
+    partial = read_lock_without(full, "prover", "tool", tmp=image_file.parent)
     with pytest.raises(LockfileError) as caught:
         lock(recipe, previous=partial, offline=True)
     assert caught.value.args[0].splitlines() == [
         "Cannot lock offline: 2 sources need the network to resolve:",
-        f"  raiko: git {RAIKO} @ feat/tdx: not pinned in the lockfile",
+        f"  prover: git {PROVER} @ feat/tdx: not pinned in the lockfile",
         f"  tool: http {TOOL}: not pinned in the lockfile",
         "1 of 3 sources resolved; nothing written.",
     ]
-    assert sorted(caught.value.failures) == ["raiko", "tool"]
+    assert sorted(caught.value.failures) == ["prover", "tool"]
 
 
 def test_lock_check_names_unpinned_sources_without_the_network(
@@ -169,15 +169,15 @@ def test_lock_check_names_unpinned_sources_without_the_network(
     recipe = load_recipe(image_file)
     target = image_file.parent / "build" / "tundravm.lock"
     full = lock(recipe, resolver=_Upstream(broken=False))
-    write_lock(read_lock_without(full, "raiko", tmp=image_file.parent), target)
+    write_lock(read_lock_without(full, "prover", tmp=image_file.parent), target)
     found = {d.subject: d.message for d in lock_status(recipe, read_lock(target))}
-    assert found == {"sources.raiko": "source raiko is not pinned"}
+    assert found == {"sources.prover": "source prover is not pinned"}
     # conftest refuses network resolution; --check must not need it.
     out = io.StringIO()
     code = main(["lock", str(image_file), "--check"], stdout=out)
     assert (code, out.getvalue()) == (
         EXIT_FAILURE,
-        "+ sources.raiko: source raiko is not pinned\n",
+        "+ sources.prover: source prover is not pinned\n",
     )
 
 

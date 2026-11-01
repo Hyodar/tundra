@@ -1,4 +1,4 @@
-"""The Taiko/Surge workloads: the ``taiko-client`` driver and the Raiko TDX prover."""
+"""The Taiko workload: the ``taiko-client`` driver."""
 
 from __future__ import annotations
 
@@ -7,37 +7,19 @@ from collections.abc import Iterator, Sequence
 from tundravm._image._component import Component, Endpoint
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
-from tundravm._image._storage import VolumeDirectory
-from tundravm._image._values import TCP, Egress, TcpProbe, egress_host
+from tundravm._image._values import TCP, Egress, egress_host
 from tundravm.declarative import model as dm
-from tundravm.declarative.systemd import Hardening
-from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
-from ._base import INTEL_PCS
-
-__all__ = ["RAIKO_SOURCE", "TAIKO_CLIENT_SOURCE", "Raiko", "TaikoClient"]
-
-RAIKO_SOURCE = dm.Git("https://github.com/NethermindEth/raiko.git", "feat/tdx")
-"""The Raiko branch with the TDX prover; ``tundravm lock`` pins it to a commit."""
+__all__ = ["TAIKO_CLIENT_SOURCE", "TaikoClient"]
 
 TAIKO_CLIENT_SOURCE = dm.Git(
     "https://github.com/NethermindEth/surge-taiko-mono",
     "feat/tdx-proving",
     subdir="packages/taiko-client",
 )
-"""The taiko-client of the Surge monorepo; ``tundravm lock`` pins it to a commit."""
+"""The taiko-client of NethermindEth's Taiko monorepo; ``tundravm lock`` pins it to a commit."""
 
-_RAIKO_BUILD = dm.Cargo(
-    output="raiko-host",
-    package="raiko-host",
-    features=("tdx",),
-    env={"CARGO_PROFILE_RELEASE_LTO": "thin", "CARGO_PROFILE_RELEASE_PANIC": "abort"},
-    packages=("build-essential", "pkg-config", "git", "clang", "cargo", "libssl-dev"),
-)
-"""``cargo auditable build --release --frozen --features tdx --package raiko-host`` with the
-toolchain raiko's ``rust-toolchain`` pins, and the reproducible flags ``Cargo`` adds (generic
-CPU, no build id, v0 symbols, one codegen unit, no incremental build)."""
 _TAIKO_TOOLCHAIN = ("golang", "git", "build-essential")
 _TAIKO_BUILD = (
     'GO111MODULE=on CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
@@ -139,103 +121,4 @@ class TaikoClient(Component, build_network=True):
             ["/bin/sh", "-eu", "-c", driver],
             requires=[self.engine, self.rpc],
             credentials=[self.jwt, self.chain],
-        )
-
-
-class Raiko(Component, build_network=True):
-    """Raiko, the TDX prover: proves L2 blocks inside the TD and answers on *listen*.
-
-    The workload contract: ``raiko-host`` from *source* built with ``cargo`` and the
-    ``tdx`` feature, with the Rust toolchain the source pins (``tundravm build`` installs it
-    and fetches the crates on the host; the image builds with the network on for raiko's
-    build scripts),
-    installed as ``/usr/bin/raiko``, run in the ``tdx`` group after the evidence service
-    is ready, since every proof carries a quote. *config* is Raiko's configuration file,
-    delivered because it names the L1 and L2 endpoints and their provider keys; *l2_rpc*,
-    when given, is the execution client it proves blocks of, and Raiko starts after it.
-    *state* keeps its proof cache. *l1* is the ``HOST:PORT`` of each L1 endpoint *config*
-    names. :meth:`outbound` is Intel's collateral service over HTTPS and *l1*; the
-    collateral rule is TCP 443 to any address (nftables matches no names), which also
-    carries the HTTPS endpoints *config* names, so without *l1* an endpoint on 443 needs
-    nothing more.
-
-    Exports :attr:`http`, ready once the listener accepts connections: put it behind
-    ``AttestedTLS(443, upstream=raiko.http)``, the only way requests should reach it.
-    """
-
-    config: Secret
-    state: VolumeDirectory | None = None
-    listen: str = "127.0.0.1:8080"
-    l2_rpc: Endpoint | None = None
-    l1: Sequence[str] = ()
-    source: dm.Git = RAIKO_SOURCE
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "l1", _l1(self, self.l1))
-        if not isinstance(self.config, Secret):
-            raise ValidationError(
-                "Raiko: config= must be the Secret the image declares.",
-                hint="Declare config = Secret('raiko-config') and pass it to the image and Raiko.",
-            )
-        host, _, port = self.listen.rpartition(":")
-        if not host or not port.isdigit() or not 0 < int(port) < 65536:
-            raise ValidationError(
-                f"Raiko: listen {self.listen!r} is not HOST:PORT.",
-                hint="Pass listen='127.0.0.1:8080'.",
-            )
-        if self.l2_rpc is not None:
-            _endpoint("Raiko", "l2_rpc", self.l2_rpc)
-
-    @property
-    def http(self) -> Endpoint:
-        """Raiko's HTTP API."""
-        host, _, port = self.listen.rpartition(":")
-        return Endpoint(host, int(port), ready=self.service("raiko").ready)
-
-    def outbound(self) -> Egress:
-        """Intel's PCS over HTTPS (TDX collateral), *l1*, and *l2_rpc* when it is not on the
-        loopback."""
-        return Egress(hosts=list(dict.fromkeys([INTEL_PCS, *self.l1, *_remote(self.l2_rpc)])))
-
-    def compose(self) -> Iterator[object]:
-        yield dm.Build(
-            "raiko",
-            self.source,
-            using=_RAIKO_BUILD,
-            install=(dm.Install(_RAIKO_BUILD.artifact, "/usr/bin/raiko"),),
-            cache_namespace=f"raiko-{self.source.ref}",
-        )
-        host, _, port = self.listen.rpartition(":")
-        yield Service(
-            "raiko",
-            ["/usr/bin/raiko", f"--address={self.listen}", f"--config-path={self.config.path}"],
-            requires=[] if self.l2_rpc is None else [self.l2_rpc],
-            readiness=TcpProbe(int(port), host=host),
-            state="raiko" if self.state is None else self.state,
-            credentials=[self.config],
-            quotes=True,
-            hardening=Hardening.preset("static", devices=["/dev/tdx_guest"]),
-        )
-
-    rules = (
-        Rule(
-            "raiko-listens-publicly",
-            "warning",
-            "Raiko listens beyond the loopback, so requests reach the prover without going "
-            "through its AttestedTLS ingress.",
-            "Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress.",
-        ),
-    )
-
-    def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
-        """``raiko-listens-publicly``: a prover reachable around its attested ingress."""
-        if self.http.loopback:
-            return ()
-        return (
-            dm.Diagnostic(
-                "raiko-listens-publicly",
-                "warning",
-                f"Raiko listens on {self.listen}: requests can reach it without going "
-                "through AttestedTLS (listen on 127.0.0.1)",
-            ),
         )

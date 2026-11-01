@@ -166,8 +166,8 @@ class Volume(Located):
     over the attested channel each boot), :class:`TpmSeal` (a key sealed to a stated vTPM)
     or :class:`BrokerKey` (released by a key broker after attestation).
 
-    ``volume.directory("raiko")`` is a directory on it, which a service binds as its
-    state (``Service(state=data.directory("raiko"))``) and a component takes as a field;
+    ``volume.directory("app")`` is a directory on it, which a service binds as its
+    state (``Service(state=data.directory("app"))``) and a component takes as a field;
     ``volume.ready`` waits until the volume is open and its directories exist.
     """
 
@@ -259,7 +259,7 @@ class Volume(Located):
 
 @dataclass(frozen=True, slots=True)
 class VolumeDirectory:
-    """A directory on a :class:`Volume`: ``data.directory("raiko")``, bound as a state.
+    """A directory on a :class:`Volume`: ``data.directory("app")``, bound as a state.
 
     The image creates it once the volume is open, owned by the one service that binds it
     (or ``root:<group>`` when it is shared), and the service waits for that before it
@@ -282,7 +282,7 @@ class VolumeDirectory:
         if not isinstance(self.name, str) or not _DIRECTORY.fullmatch(self.name):
             raise ValidationError(
                 f"Volume {self.volume.name!r}: {self.name!r} is not a directory name.",
-                hint="Use a relative path such as 'raiko' or 'state/raiko'.",
+                hint="Use a relative path such as 'app' or 'state/app'.",
             )
         if ".." in self.name.split("/"):
             raise ValidationError(

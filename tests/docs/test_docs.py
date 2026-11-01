@@ -96,7 +96,7 @@ def test_python_blocks_run(
 
 def test_the_prose_has_python_blocks_that_run() -> None:
     runnable = [block for block in _python_blocks() if not block[3]]
-    assert len(runnable) >= 8
+    assert len(runnable) >= 6
 
 
 def _commands() -> list[tuple[str, int, list[str]]]:

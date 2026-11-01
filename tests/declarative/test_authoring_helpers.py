@@ -167,13 +167,13 @@ def test_editing_the_build_behind_an_executable_is_reported() -> None:
 
 
 def test_cargo_binary_lowers_like_the_hand_written_build() -> None:
-    source = Git("https://github.com/taikoxyz/raiko", "v1.0.0")
-    binary = CargoBinary("raiko", source, bin="raiko-host", install="/usr/bin/raiko")
+    source = Git("https://github.com/example/prover", "v1.0.0")
+    binary = CargoBinary("prover", source, bin="prover-host", install="/usr/bin/prover")
     by_hand = Build(
-        "raiko",
+        "prover",
         source,
-        using=Cargo(output="raiko", bin="raiko-host"),
-        install=(Install("target/release/raiko-host", "/usr/bin/raiko"),),
+        using=Cargo(output="prover", bin="prover-host"),
+        install=(Install("target/release/prover-host", "/usr/bin/prover"),),
     )
     assert binary.items == (by_hand,)
     _same_lowering(_recipe(binary), _recipe(by_hand))

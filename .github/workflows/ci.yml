@@ -63,10 +63,10 @@ jobs:
         working-directory: tools
         run: go test ./...
 
-      - name: Check the surge image and its committed tree
-        # The surge image tracks upstream branches on purpose and ships no lockfile, so
-        # source-unpinned warnings are expected; errors and tree drift fail the step.
-        run: uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+      - name: Check the attested node image and its committed tree
+        # The example ships no lockfile, so source-unpinned warnings are expected; errors
+        # and tree drift fail the step.
+        run: uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
 
   templates:
     # Real mkosi builds on the runner: the smoke recipe (no source builds) and the service

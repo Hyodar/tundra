@@ -24,7 +24,6 @@ from tundravm.components import (
     Observability,
     PrometheusRemoteWrite,
     Proxy,
-    Raiko,
     SshAccess,
     TaikoClient,
     Tdxs,
@@ -45,17 +44,15 @@ MIRROR = Git("https://mirror.example/tools.git", "v1.2.0")
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 jwt = Secret("jwt")
 chain = Secret("taiko-chain")
-config = Secret("raiko-config")
 execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
 driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
-prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"))
 CHECKPOINT = "https://checkpoint.example"
 beacon = Lighthouse(execution=execution.engine_api, jwt=jwt, checkpoint_sync_url=CHECKPOINT)
 
 
 def stack(**changes: object) -> Image:
     fields: dict[str, object] = {
-        "components": [execution, driver, prover],
+        "components": [execution, driver],
     }
     fields.update(changes)
     return Image("stack", **fields)  # type: ignore[arg-type]
@@ -80,15 +77,11 @@ def test_endpoints_carry_their_readiness_across_components(planned: PlannedImage
     # The driver waits for what proves Nethermind ready (its probe), not for its exec.
     assert "nethermind-ready.service" in _after(planned, "taiko-client.service")
     assert planned.unit("nethermind-ready.service").get("Service", "Type") == "oneshot"
-    # Raiko waits for the evidence service and the execution client it proves.
-    raiko = _after(planned, "raiko.service")
-    assert "tdxs.service" in raiko and "nethermind-ready.service" in raiko
-    assert planned.service("raiko").values("Service", "SupplementaryGroups") == ("tdx",)
 
 
 def test_component_readiness_names_what_proves_it() -> None:
     assert Tdxs().readiness() == (EVIDENCE,)
-    assert prover.readiness() == (prover.service("raiko").ready,)
+    assert execution.readiness() == (execution.service("nethermind").ready,)
     assert Network().readiness() == (Network().online,)
     service = Service("x", ["/usr/bin/x"], requires=[Tdxs().ready])
     planned = plan(Image("x", services=[service]), "production")
@@ -97,7 +90,7 @@ def test_component_readiness_names_what_proves_it() -> None:
 
 def test_the_workloads_pin_their_sources_and_read_their_secrets(planned: PlannedImage) -> None:
     builds = lower(stack()).source_builds()
-    assert {"nethermind", "taiko-client", "raiko"} <= set(builds)
+    assert {"nethermind", "taiko-client"} <= set(builds)
     nethermind = planned.service("nethermind")
     assert "--JsonRpc.JwtSecretFile=${CREDENTIALS_DIRECTORY}/jwt" in (nethermind.exec_start or "")
     assert nethermind.get("Service", "WorkingDirectory") == "/persistent/nethermind"
@@ -108,8 +101,6 @@ def test_the_workloads_pin_their_sources_and_read_their_secrets(planned: Planned
         "taiko-chain:/run/tundravm/credentials/taiko-chain",
     )
     assert "--l2.auth=http://127.0.0.1:8551/" in (driver_unit.exec_start or "")
-    raiko = planned.service("raiko")
-    assert raiko.values("Service", "DeviceAllow") == ("/dev/tdx_guest rw",)
     # Their builds fetch crates, modules and NuGet packages: the tree says so.
     assert recipe_of(stack()).mkosi.build_network
 
@@ -118,9 +109,6 @@ def test_component_checks_report_what_the_contract_warns_about() -> None:
     volatile = Image("x", components=[Nethermind(jwt=jwt)])
     found = {d.code for d in plan(volatile, "production").lint()}
     assert "nethermind-volatile-state" in found
-    public = Raiko(config=config, listen="0.0.0.0:8080")
-    found = {d.code for d in plan(Image("x", components=[public])).lint()}
-    assert "raiko-listens-publicly" in found
     clockless = Image("x", components=[TeeBase(time=False)])
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
     unchecked = Image("x", components=[Tdxs(validator="tdx")])
@@ -172,9 +160,6 @@ TAIKO: dict[str, Any] = {
             TaikoClient(**TAIKO, l1=["l1.example:8546", "10.0.0.9:5052"]),
             Egress(hosts=["l1.example:8546", "10.0.0.9:5052"]),
         ),
-        (prover, Egress(hosts=[PCS])),
-        (Raiko(config=config, l2_rpc=REMOTE), Egress(hosts=[PCS, "10.0.0.7:8545"])),
-        (Raiko(config=config, l1=["10.0.0.9:8545"]), Egress(hosts=[PCS, "10.0.0.9:8545"])),
         (beacon, Egress([TCP(9000), UDP(9000), UDP(9001)], ["checkpoint.example:443"])),
         (
             Lighthouse(execution=REMOTE, jwt=jwt, checkpoint_sync_url="http://10.0.0.9:5052"),
@@ -215,9 +200,7 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
             ),
             "readiness",
         ),
-        (lambda: Raiko(config=config, listen="8080"), "HOST:PORT"),
         (lambda: TaikoClient(**TAIKO, l1="l1.example:8546"), "a list of HOST:PORT"),
-        (lambda: Raiko(config=config, l1=["l1.example"]), "'l1.example' is not HOST:PORT"),
         (
             lambda: Observability(logs=JournalExport("https://l.example"), proxy="p.example:80"),
             "proxy 'p.example:80' is not IP:PORT",
@@ -240,7 +223,7 @@ def test_component_configuration_is_checked(make: object, message: str) -> None:
 
 
 def test_an_explicit_tdxs_builds_the_evidence_and_the_volume_tools_from_its_source() -> None:
-    image = stack(components=[execution, driver, prover, Tdxs(source=MIRROR)])
+    image = stack(components=[execution, driver, Tdxs(source=MIRROR)])
     builds = lower(image).source_builds()
     for name in ("tdxs", "key-generation", "disk-encryption", "attested-endpoint"):
         assert builds[name].source.url == MIRROR.url, name

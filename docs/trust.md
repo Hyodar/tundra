@@ -192,7 +192,7 @@ The volume outlives the VM. Deploy the same build again and attach the existing 
 $ tundravm deploy gcp --build build/prover/production/<id> --volume data=existing:<disk>
 $ tundravm attest prover-2 --policy policies/prover-gcp.json
 $ tundravm secrets unlock prover-2 data
-$ tundravm secrets deliver prover-2 --policy policies/prover-gcp.json raiko-config=@raiko.json
+$ tundravm secrets deliver prover-2 --policy policies/prover-gcp.json api-token=@token.txt
 ```
 
 Make sure the old instance is stopped first: two instances must never hold one volume.

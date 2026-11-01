@@ -25,13 +25,13 @@ from typing import Any
 import pytest
 
 from tests.compiler.test_native_tree import FIXTURE, mkosi_summary, normalised, recipe_with
-from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT
 from tundravm.compiler import PAYLOAD, PHASE_DIRECTORIES
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.declarative import Recipe, Tree, compile, load, lower, mkosi_argv
 
 CHAIN = REPO_ROOT / "tests" / "fixtures" / "profile-chain" / "chain.py"
-RECIPES = [*EXAMPLE_RECIPES, SURGE_EXAMPLE / "image.py", FIXTURE / "recipe.py", CHAIN]
+RECIPES = [*EXAMPLE_RECIPES, ATTESTED_NODE / "image.py", FIXTURE / "recipe.py", CHAIN]
 OVERLAYS = "mkosi.profiles/"
 
 
@@ -147,9 +147,9 @@ def _resolved(tree: Path, recipe: Recipe, scratch: Path) -> dict[str, dict[str, 
     [
         (FIXTURE / "tree-initramfs", lambda: recipe_with("initramfs")),
         (FIXTURE / "tree-verity", lambda: recipe_with("verity")),
-        (SURGE_EXAMPLE / "mkosi", lambda: load(SURGE_EXAMPLE / "image.py")),
+        (ATTESTED_NODE / "mkosi", lambda: load(ATTESTED_NODE / "image.py")),
     ],
-    ids=["fixture-initramfs", "fixture-verity", "surge"],
+    ids=["fixture-initramfs", "fixture-verity", "attested-node"],
 )
 def test_each_profile_resolves_to_the_shared_payload_plus_its_overlay(
     tree: Path, recipe: Any, tmp_path: Path

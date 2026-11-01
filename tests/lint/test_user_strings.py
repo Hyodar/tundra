@@ -80,6 +80,9 @@ DENYLIST = {
     "Recipe for the image file (image file, Image)": re.compile(
         r"\bRecipe (?:file|has|factory|factories|attribute|defines)\b|\bbinds a Recipe\b"
     ),
+    "removed workload (Raiko) or example (surge; examples/attested-node)": re.compile(
+        r"(?i)\braiko\b|\bsurge\b(?!-taiko-mono\b)"
+    ),
     "variant for a profile (profile)": re.compile(
         r"\b[Uu]nknown variant|\bDeclared variants\b|\bin variant\b|\bvariant=(?:\{|\s*$)"
         r"|\bInherits: |\bvariants\.[a-z]"
@@ -319,6 +322,10 @@ def test_removed_verbs_are_caught(text: str) -> None:
         ("Duplicate user name 'a' in variant 'dev'.", "variant for a profile (profile)"),
         ("  variant=", "variant for a profile (profile)"),
         ("variants.dev.files changed since the lock", "variant for a profile (profile)"),
+        (
+            "Name one Nethermind ships, e.g. config='surge-hoodi'.",
+            "removed workload (Raiko) or example (surge; examples/attested-node)",
+        ),
     ],
 )
 def test_internal_names_are_caught(text: str, what: str) -> None:
@@ -388,7 +395,7 @@ def test_bare_string_statements_are_documentation() -> None:
         ),
         ("from tundravm import Image, bake", "tundravm.bake (tundravm.build)"),
         (
-            "from tundravm.components.taiko import Raiko",
+            "from tundravm.components.taiko import TaikoClient",
             "tundravm.components.<workload> (tundravm.components)",
         ),
     ],

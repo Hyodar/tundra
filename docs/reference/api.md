@@ -828,7 +828,7 @@ Nethermind(
     *,
     jwt: Secret | Generated,
     state: VolumeDirectory | None = None,
-    config: str = 'surge-hoodi',
+    config: str = 'hoodi',
     source: dm.Git = Git(url='https://github.com/NethermindEth/nethermind.git', ref='1.32.3', subdir=None, submodules=False),
     rpc_port: int = 8545,
     engine_port: int = 8551,
@@ -920,28 +920,6 @@ The fixed-address proxy both exporters reach their sinks through: `Proxy("10.0.0
 | `Proxy.endpoint` | `IP:PORT` (`[IPv6]:PORT`), what the firewall allows. |
 | `Proxy.url` | The URL the exporters reach the proxy at: `https://<tls_name>:<port>` or `http://<endpoint>`. |
 
-### `Raiko`
-
-*dataclass*
-
-```python
-Raiko(
-    *,
-    config: Secret,
-    state: VolumeDirectory | None = None,
-    listen: str = '127.0.0.1:8080',
-    l2_rpc: Endpoint | None = None,
-    l1: Sequence[str] = (),
-    source: dm.Git = Git(url='https://github.com/NethermindEth/raiko.git', ref='feat/tdx', subdir=None, submodules=False),
-)
-```
-
-| Member | Does |
-|---|---|
-| `Raiko.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `raiko-listens-publicly`: a prover reachable around its attested ingress. |
-| `Raiko.http` | Raiko's HTTP API. |
-| `Raiko.outbound() -> Egress` | Intel's PCS over HTTPS (TDX collateral), *l1*, and *l2_rpc* when it is not on the loopback. |
-
 ### `Resolved`
 
 *dataclass*
@@ -1003,7 +981,7 @@ ServiceReady(unit: str, probe: Readiness | None = None)
 ServiceRef(unit: str, probe: Readiness | None = None, service: Service | None = None)
 ```
 
-A service a component composed, named from outside: `raiko.service("raiko")`.
+A service a component composed, named from outside: `nethermind.service("nethermind")`.
 
 | Member | Does |
 |---|---|
@@ -1206,7 +1184,7 @@ A persistent, encrypted volume: `Volume("data", unlock=...)`.
 VolumeDirectory(volume: Volume, name: str, *, mode: int = 488, group: str | None = None)
 ```
 
-A directory on a `Volume`: `data.directory("raiko")`, bound as a state.
+A directory on a `Volume`: `data.directory("app")`, bound as a state.
 
 | Member | Does |
 |---|---|

@@ -1,4 +1,4 @@
-"""The surge image compiles byte for byte to its committed tree, whole and per profile.
+"""The attested node image compiles byte for byte to its committed tree, whole and per profile.
 
 The tree is the mkosi-native one: ``dev`` is the only profile overlay, ``azure`` and
 ``gcp`` the only wrappers, and the root is the verity layout (root and hash partitions
@@ -12,22 +12,22 @@ from __future__ import annotations
 
 import pytest
 
-from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import ATTESTED_NODE, REPO_ROOT
 from tundravm.declarative import Recipe, compile, load
 from tundravm.testing import assert_tree
 from tundravm.testing._model import assert_tree_matches
 
-GOLDEN = SURGE_EXAMPLE / "mkosi"
-SURGE_PROFILES = ("production", "dev")
+GOLDEN = ATTESTED_NODE / "mkosi"
+PROFILES = ("production", "dev")
 
 
 @pytest.fixture(scope="module")
-def surge() -> Recipe:
-    return load(SURGE_EXAMPLE / "image.py", extra_paths=[REPO_ROOT])
+def node() -> Recipe:
+    return load(ATTESTED_NODE / "image.py", extra_paths=[REPO_ROOT])
 
 
-def test_surge_image_declares_the_golden_profiles(surge: Recipe) -> None:
-    assert tuple(v.name for v in surge.variants) == SURGE_PROFILES
+def test_the_attested_node_declares_the_golden_profiles(node: Recipe) -> None:
+    assert tuple(v.name for v in node.variants) == PROFILES
     assert sorted(p.name for p in GOLDEN.iterdir()) == [
         "mkosi.conf",
         "mkosi.images",
@@ -45,10 +45,10 @@ def test_surge_image_declares_the_golden_profiles(surge: Recipe) -> None:
         assert repart == ["00-esp.conf", "10-root.conf", "11-root-verity.conf"], wrapper
 
 
-def test_surge_image_matches_the_committed_tree(surge: Recipe) -> None:
-    assert_tree(compile(surge), GOLDEN, update=False)
+def test_the_attested_node_matches_the_committed_tree(node: Recipe) -> None:
+    assert_tree(compile(node), GOLDEN, update=False)
 
 
-def test_the_dev_profile_compiles_alone_to_its_golden_tree(surge: Recipe) -> None:
-    diff = assert_tree_matches(surge, GOLDEN, profiles=["dev"], update=False)
+def test_the_dev_profile_compiles_alone_to_its_golden_tree(node: Recipe) -> None:
+    diff = assert_tree_matches(node, GOLDEN, profiles=["dev"], update=False)
     assert diff.is_clean
