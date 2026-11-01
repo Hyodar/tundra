@@ -14,7 +14,8 @@ with content becomes an ``Image``: the payload of a tree tundravm wrote
 (``mkosi.images/payload/``), whose QEMU disk and cloud wrappers tundravm generates again
 (the wrappers present are written as ``targets=``), else the image with ``Packages=``
 (not mkosi's own ``default-initrd``), else the main one: ``Distribution=debian`` and
-``Release=`` as ``base=``, ``Packages=`` as ``packages=``,
+``Release=`` as ``base=``, ``Packages=`` as ``packages=`` less what tundravm implies
+(:func:`implied_packages`, named in a note),
 ``ExtraTrees=`` and ``SkeletonTrees=`` as ``Tree(...)`` (one per target, beside the image
 file), ``Verity=hash`` as ``RootFS.verity()``, the scripts as ``Mkosi(scripts=)``;
 every other setting that differs from mkosi's default is reported as unsupported, with its
@@ -28,7 +29,7 @@ import os
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -365,10 +366,17 @@ def _image_source(
         args.append(f"base=Debian({_quoted(str(release))})")
     else:
         unsupported.append(f"Distribution={distribution}: tundravm builds Debian only")
-    if str(config.get("Verity") or "") == "hash":
+    verity = str(config.get("Verity") or "") == "hash"
+    if verity:
         imports.append("RootFS")
         args.append("rootfs=RootFS.verity()")
-    packages = list(config.get("Packages") or ())
+    implied = implied_packages(
+        str(release) if distribution == "debian" and release else None,
+        verity=verity,
+        targets=targets,
+    )
+    listed = list(config.get("Packages") or ())
+    packages = [package for package in listed if package not in implied]
     if packages:
         wrapped = textwrap.wrap(
             ", ".join(_quoted(p) for p in packages),
@@ -419,6 +427,9 @@ def _image_source(
         elif key not in MAPPED:
             unsupported.append(f"{key}={_shown(value, root)}")
     notes = []
+    dropped = sorted(set(listed) & implied)
+    if dropped:
+        notes.append(f"implied packages, dropped from packages=: {', '.join(dropped)}")
     if generated:
         notes.append(
             f"payload {', '.join(generated)}: what tundravm generated from the Image file that "
@@ -433,6 +444,26 @@ def _image_source(
         + f"image = Image(\n    {body},\n)\n"
     )
     return Converted(source, unsupported, notes)
+
+
+def implied_packages(
+    release: str | None, *, verity: bool = False, targets: Sequence[str] = ()
+) -> frozenset[str]:
+    """The packages the compiler installs in an image of *release* (default: tundravm's)
+    that lists none: the platform, the TEE baseline, the firewall and the glue of
+    *targets*, plus the account tools every service's user needs."""
+    from ._image import Debian, Image, RootFS, lower
+    from .compiler.emit_mkosi import ACCOUNT_TOOLS_PACKAGE
+
+    image = Image(
+        "implied",
+        base=Debian() if release is None else Debian(release),
+        rootfs=RootFS.verity() if verity else RootFS.initramfs(),
+        targets=tuple(targets) or ("qemu",),  # type: ignore[arg-type]
+    )
+    lowered = lower(image)
+    profile = lowered.state.profiles[lowered.default_profile]
+    return frozenset({*profile.packages, ACCOUNT_TOOLS_PACKAGE})
 
 
 def _quoted(text: str) -> str:
@@ -466,5 +497,6 @@ __all__ = [
     "executable_inputs",
     "from_mkosi",
     "from_systemd",
+    "implied_packages",
     "render",
 ]

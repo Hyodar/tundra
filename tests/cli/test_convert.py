@@ -12,6 +12,7 @@ import tundravm
 from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.convert import implied_packages
 from tundravm.systemd import Calendar, Hardening
 
 pytestmark = pytest.mark.boundary  # convert reads the tree through mkosi's own parser
@@ -90,10 +91,16 @@ def test_a_tree_tundravm_wrote_converts_its_payload_and_targets_and_checks(
     assert tuple(tundravm.load(image_file).targets) == targets
     checked = cli("check", image_file)
     assert checked.code == EXIT_OK, checked.out
-    assert "systemd-boot-efi" in ast.literal_eval(
-        ast.unparse(next(k.value for k in _image_call(result.out).keywords if k.arg == "packages"))
+    packages = next(k.value for k in _image_call(result.out).keywords if k.arg == "packages")
+    listed = set(ast.literal_eval(ast.unparse(packages)))
+    assert {"cryptsetup", "socat"} <= listed and "systemd-boot-efi" not in listed
+    assert not listed & implied_packages("trixie", verity=True, targets=targets)
+    notes = (
+        "implied packages, dropped from packages=: ca-certificates, chrony, ",
+        "main image (disk)",
+        "payload Bootloader",
+        *(f"subimage {w}" for w in wrappers),
     )
-    notes = ("main image (disk)", "payload Bootloader", *(f"subimage {w}" for w in wrappers))
     for note in notes:
         assert f"# note: {note}" in result.out, note
     assert "# unsupported:" not in result.out
