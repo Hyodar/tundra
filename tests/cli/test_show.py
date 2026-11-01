@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.cli.conftest import Cli
+from tests.cli.conftest import STARTER, Cli
 from tundravm._source import SourceBuild
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
@@ -52,6 +52,16 @@ def test_show_the_image_units_and_tree(project: Path, cli: Cli) -> None:
     assert units.code == EXIT_OK
     assert "# payload/mkosi.extra/usr/lib/systemd/system/app.service" in units.out
     assert "ExecStart=/usr/bin/busybox httpd" in units.out
+    assert units.out.endswith("\n# egress: not filtered (no Egress)\n")
+    filtered = STARTER.replace("import DevAccess", "import Egress, Network")
+    filtered = filtered.replace('dev=DevAccess(password="tdx")', "network=Network(egress=Egress())")
+    (project / "filtered.py").write_text(filtered, encoding="utf-8")
+    assert (
+        "\n# egress\ntee-base  4460/tcp, 123/udp, 1.1.1.1"
+        in cli("show", "filtered.py", "--units").out
+    )
+    egress = json.loads(cli("show", "filtered.py", "--json").out)["egress"]
+    assert egress["tee-base"][:2] == ["4460/tcp", "123/udp"]
     tree = json.loads(cli("show", "demo.py", "--tree", "--json").out)["tree"]
     paths = {row["path"] for row in tree}
     assert "mkosi.conf" in paths and "payload/mkosi.extra/srv/www/index.html" in paths

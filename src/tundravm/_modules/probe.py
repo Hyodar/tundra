@@ -52,7 +52,7 @@ from tundravm.models import ServiceSpec, unit_name
 from . import execution
 
 if TYPE_CHECKING:
-    from tundravm.declarative.model import Declaration
+    from tundravm.declarative.model import Declaration, EgressRule
 
 UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
@@ -225,7 +225,7 @@ def derive(
             )
     firewall = next((i for i in items if isinstance(i, Firewall) and i.egress == "filter"), None)
     if firewall is not None:
-        denied = _denied(firewall.egress_hosts, firewall.egress_ports)
+        denied = _denied(firewall.egress_rules)
         if denied is not None:
             address, number = denied
             checks.append(
@@ -304,8 +304,10 @@ def _service(item: object) -> list[Check]:
     ]
 
 
-def _denied(hosts: Sequence[str], ports: Sequence[object]) -> tuple[str, int] | None:
+def _denied(rules: Sequence[EgressRule]) -> tuple[str, int] | None:
     """An IPv4 address and UDP port no egress rule accepts, else ``None``."""
+    hosts = [rule.host for rule in rules if rule.host is not None]
+    ports = [rule.port for rule in rules if rule.host is None]
     networks = [ipaddress.ip_network(host, strict=False) for host in hosts]
     address = next(
         (

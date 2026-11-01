@@ -11,7 +11,7 @@ public contract over them.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,6 +24,7 @@ from tundravm._image._values import (
     Notify,
     PortValue,
     StaticAddress,
+    egress_host,
 )
 from tundravm._modules import tdxs as _tdxs
 from tundravm._source import FrozenMap
@@ -40,6 +41,7 @@ __all__ = [
     "SshAccess",
     "Tdxs",
     "TeeBase",
+    "egress_rules",
 ]
 
 EVIDENCE = ServiceReady("tdxs.service", Notify())
@@ -89,6 +91,13 @@ class TeeBase(Component):
             firewall=False,
         )
         yield from base.items
+
+    def outbound(self) -> Egress:
+        """NTS time (TCP 4460, NTP on UDP 123) with *time*, *nameservers* with *dns*."""
+        return Egress(
+            ports=[TCP(4460), UDP(123)] if self.time else [],
+            hosts=list(self.nameservers) if self.dns else [],
+        )
 
     rules = (
         Rule(
@@ -200,7 +209,9 @@ class Firewall(Component):
     Inbound it drops everything except the ports services ``expose=``, an ingress's port,
     the management ingress on :data:`~tundravm._image._values.MANAGEMENT_PORT` and *allow*
     (ports something other than a ``Service`` listens on: a packaged daemon). Outbound it
-    filters only with *egress*. The image holds ``Firewall()`` by default;
+    filters only with *egress*, and then accepts what the baseline and every component's
+    ``outbound()`` send as well, each rule commented with who asked for it. The image
+    holds ``Firewall()`` by default;
     ``network=Network(egress=...)`` is the usual way to set *egress*. Component name:
     ``firewall``.
     """
@@ -233,10 +244,7 @@ class Firewall(Component):
             yield dm.Firewall(allow=allow)
             return
         yield dm.Firewall(
-            allow=allow,
-            egress="filter",
-            egress_ports=tuple(dm.Port(p.port, p.protocol) for p in self.egress.ports),
-            egress_hosts=tuple(self.egress.hosts),
+            allow=allow, egress="filter", egress_rules=egress_rules((("image", self.egress),))
         )
 
     rules = (
@@ -575,3 +583,21 @@ class Tdxs(Component):
                 "any genuine TD, whatever it runs",
             ),
         )
+
+
+def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.EgressRule, ...]:
+    """The output-chain rules *contributions* (``(who, egress)`` pairs) ask for: one per
+    destination, with every ``(who, host name)`` that asked for it, in the order asked."""
+    found: dict[tuple[dm.Port | None, str | None], list[tuple[str, str]]] = {}
+    for who, egress in contributions:
+        for value in egress.ports:
+            found.setdefault((dm.Port(value.port, value.protocol), None), []).append((who, ""))
+        for entry in egress.hosts:
+            host, number, named = egress_host(egress, entry)
+            port = None if number is None else dm.Port(number)
+            key = (port, None) if named else (port, host)
+            found.setdefault(key, []).append((who, host if named else ""))
+    return tuple(
+        dm.EgressRule(port, host, tuple(dict.fromkeys(origins)))
+        for (port, host), origins in found.items()
+    )

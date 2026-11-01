@@ -14,6 +14,7 @@ from tundravm.models import unit_name
 
 from .model import (
     Declaration,
+    EgressRule,
     File,
     Firewall,
     Listen,
@@ -191,13 +192,24 @@ def _egress_rules(firewall: Firewall) -> list[str]:
         'udp sport 68 udp dport 67 accept comment "DHCPv4 requests"',
         'udp sport 546 udp dport 547 accept comment "DHCPv6 requests"',
     ]
-    ports = [port for port in firewall.egress_ports if isinstance(port, Port)]
-    for port in sorted(ports, key=lambda p: (p.number, p.protocol)):
-        rules.append(f'{port.protocol} dport {port.number} accept comment "egress port"')
-    for host in firewall.egress_hosts:
-        family = "ip6" if ":" in host else "ip"
-        rules.append(f'{family} daddr {host} accept comment "egress host"')
+    anywhere = [rule for rule in firewall.egress_rules if rule.host is None]
+    hosts = [rule for rule in firewall.egress_rules if rule.host is not None]
+    for rule in [*sorted(anywhere, key=_port_order), *hosts]:
+        match = [] if rule.host is None else [f"{_family(rule.host)} daddr {rule.host}"]
+        if rule.port is not None:
+            match.append(f"{rule.port.protocol} dport {rule.port.number}")
+        comment = _comment([rule.comment]) if rule.origins else "egress"
+        rules.append(f'{" ".join(match)} accept comment "{comment}"')
     return rules
+
+
+def _family(host: str) -> str:
+    return "ip6" if ":" in host else "ip"
+
+
+def _port_order(rule: EgressRule) -> tuple[int, str]:
+    assert rule.port is not None
+    return rule.port.number, rule.port.protocol
 
 
 def expand_firewall(firewall: Firewall, items: Iterable[Declaration]) -> tuple[Declaration, ...]:

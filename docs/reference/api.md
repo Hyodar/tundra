@@ -633,6 +633,7 @@ A named group of declarations, written as a class, with typed exports.
 |---|---|
 | `Component.compose() -> Iterable[object]` | The declarations and nested components this component stands for. |
 | `Component.name` | The component's name, as `show` and its diagnostics print it. |
+| `Component.outbound() -> Egress` | Where this component sends, derived from its fields: `Egress()` (nothing), unless a subclass overrides it. |
 | `Component.readiness() -> tuple[Readied, ...]` | What `ready` waits for: the readiness of each service it composes that declares one. A component whose readiness is not a service of its own (one that wraps a packaged or internal unit) overrides this. |
 | `Component.ready` | "Every service this component declares readiness for is ready". |
 | `Component.service(name: str) -> ServiceRef` | The service called *name*, for `requires=` and for a profile's `changes=`. |
@@ -1033,6 +1034,7 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 | Member | Does |
 |---|---|
 | `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
+| `TeeBase.outbound() -> Egress` | NTS time (TCP 4460, NTP on UDP 123) with *time*, *nameservers* with *dns*. |
 
 ## tundravm.storage
 

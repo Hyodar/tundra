@@ -10,6 +10,7 @@ Each one stands for one concern and lowers onto the internal declarations in
 
 from __future__ import annotations
 
+import ipaddress
 import posixpath
 import re
 from collections.abc import Mapping, Sequence
@@ -44,6 +45,7 @@ __all__ = [
     "TcpProbe",
     "Tree",
     "UDP",
+    "egress_host",
 ]
 
 LOCKED_SNAPSHOT = "20261018T082309Z"
@@ -416,7 +418,13 @@ class Egress:
     output chain accepts the replies of accepted inbound traffic, loopback, the DHCP
     client, the ICMPv6 messages IPv6 needs, what the baseline sends (``TeeBase``'s NTS
     time on TCP 4460 and UDP 123, its resolvers, the metadata servers of the image's
-    clouds), *ports* and *hosts*, and drops the rest.
+    clouds), what each component's :meth:`~tundravm.components.Component.outbound` names,
+    *ports* and *hosts*, and drops the rest.
+
+    *ports* go to any address. Each of *hosts* is an address or CIDR block (any port) or
+    ``HOST:PORT`` (TCP to that port; ``[ADDRESS]:PORT`` for IPv6). nftables matches
+    addresses, not names, so a host name needs its port and ``"logs.example:443"`` accepts
+    TCP 443 to any address: the rule is per port, and the name is its comment.
     """
 
     ports: Sequence[PortValue] = ()
@@ -425,14 +433,49 @@ class Egress:
     def __post_init__(self) -> None:
         if isinstance(self.ports, (TCP, UDP)):
             raise _fail(self, "ports= takes a list of ports.", hint="Pass ports=[TCP(443)].")
+        if isinstance(self.hosts, str):
+            raise _fail(self, "hosts= takes a list of hosts.", hint="Pass hosts=['10.0.0.5'].")
         object.__setattr__(self, "ports", tuple(self.ports))
         object.__setattr__(self, "hosts", tuple(self.hosts))
         for port in self.ports:
             if not isinstance(port, (TCP, UDP)):
                 raise _fail(self, f"ports= entry {port!r} is not TCP(...) or UDP(...).")
         for host in self.hosts:
-            if not isinstance(host, str) or not host:
-                raise _fail(self, f"hosts= entry {host!r} is not an address or a CIDR block.")
+            egress_host(self, host)
+
+
+_HOST_NAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?)+")
+
+
+def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
+    """An ``Egress(hosts=)`` entry as ``(host, port, named)``: *port* ``None`` for an address
+    or CIDR block, *named* when *host* is a name the firewall cannot match."""
+    text = host if isinstance(host, str) else ""
+    name, port = text, None
+    if text.startswith("[") and "]:" in text:
+        name, _, number = text[1:].partition("]:")
+        port = int(number) if number.isdigit() else 0
+    elif text.count(":") == 1:
+        name, _, number = text.partition(":")
+        port = int(number) if number.isdigit() else 0
+    try:
+        ipaddress.ip_network(name, strict=False)
+        named = False
+    except ValueError:
+        named = True
+    hint = "Pass '10.0.0.5', '10.0.0.0/8', '10.0.0.5:8545' or 'logs.example:443'."
+    if port is not None and not 0 < port < 65536:
+        raise _fail(owner, f"hosts= entry {host!r} has no port in 1..65535.", hint=hint)
+    if named and (port is None or not _HOST_NAME.fullmatch(name)):
+        problem = (
+            "is not an address, a CIDR block or HOST:PORT"
+            if port is not None or not _HOST_NAME.fullmatch(name)
+            else "is a host name without a port, which the firewall cannot match"
+        )
+        raise _fail(owner, f"hosts= entry {host!r} {problem}.", hint=hint)
+    if port is not None and "/" in name:
+        raise _fail(owner, f"hosts= entry {host!r} gives a CIDR block a port.", hint=hint)
+    return name, port, named
 
 
 @dataclass(frozen=True, slots=True)

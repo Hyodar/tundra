@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from tundravm._location import anchored, declared_at, display_location
 from tundravm.declarative import model as dm
@@ -42,8 +42,6 @@ from ._secrets import Secret
 from ._service import Binding, Service
 from ._storage import VolumeDirectory
 from ._values import (
-    TCP,
-    UDP,
     Credential,
     Egress,
     File,
@@ -51,9 +49,6 @@ from ._values import (
     Package,
     Tree,
 )
-
-if TYPE_CHECKING:
-    from tundravm.components import TeeBase
 
 __all__ = ["OWNED_FILES", "component_classes", "recipe_of"]
 
@@ -188,6 +183,7 @@ class _Lowering:
         """What every image gets: the TEE baseline, the network, the firewall and the
         evidence service, each the image's own when it passed one in ``components=``."""
         from tundravm.components import Firewall, Network, Tdxs, TeeBase
+        from tundravm.components._base import egress_rules
 
         network = self.image.network
         if network is not None and self.explicit(Network) is not None:
@@ -203,17 +199,21 @@ class _Lowering:
                 hint="Set it once: network=Network(egress=Egress(...)).",
             )
         tee = self.explicit(TeeBase) or TeeBase()
+        tdxs = self.explicit(Tdxs) or Tdxs()
         egress = network.egress if firewall is None or firewall.egress is None else firewall.egress
-        if egress is not None:
-            egress = _with_baseline(egress, tee, tuple(self.image.targets))
         if firewall is None:
             firewall = Firewall(egress=egress)
         elif egress is not None:
             firewall = Firewall(allow=firewall.allow, egress=egress)
+        filtering = self.component(firewall)
+        if egress is not None:
+            rules = egress_rules(self.outbound(egress, (tee, tdxs, network)))
+            with _at(firewall):
+                filtering = _with_rules(filtering, rules)
         found: list[dm.Declaration | dm.Fragment] = [
             self.component(tee),
-            self.component(firewall),
-            self.component(self.explicit(Tdxs) or Tdxs()),
+            filtering,
+            self.component(tdxs),
             self.component(network),
         ]
         if self.backports:
@@ -221,6 +221,22 @@ class _Lowering:
         if self.curl:
             found.append(dm.Package("curl"))
         return tuple(found)
+
+    def outbound(
+        self, egress: Egress, baseline: Sequence[Component]
+    ) -> Iterator[tuple[str, Egress]]:
+        """Who sends where: the image's *egress*, the ``outbound()`` of the *baseline*, of
+        every component and of what each composes, then the metadata servers of the
+        image's clouds."""
+        image = self.image
+        yield "image", egress
+        own = [item for item in image.components if not isinstance(item, self.baseline_types)]
+        observability = [] if image.observability is None else [image.observability]
+        for component in (*baseline, *own, *observability):
+            yield from _outbound(component)
+        for target in image.targets:
+            if target in _CLOUD_EGRESS:
+                yield target, Egress(hosts=_CLOUD_EGRESS[target])
 
     def shared_groups(self) -> tuple[str, ...]:
         """The groups shared volume directories name, declared once each."""
@@ -672,13 +688,27 @@ _CLOUD_EGRESS: dict[str, tuple[str, ...]] = {
 (its DNS resolver, too)."""
 
 
-def _with_baseline(egress: Egress, tee: TeeBase, targets: Sequence[str]) -> Egress:
-    """*egress* plus what the baseline sends: *tee*'s NTS time (TCP 4460, NTP on UDP 123)
-    and resolvers, and the metadata servers of the clouds in *targets*."""
-    ports = [*egress.ports, *((TCP(4460), UDP(123)) if tee.time else ())]
-    hosts = [*egress.hosts, *(tee.nameservers if tee.dns else ())]
-    hosts += [host for target in targets for host in _CLOUD_EGRESS.get(target, ())]
-    return Egress(ports=list(dict.fromkeys(ports)), hosts=list(dict.fromkeys(hosts)))
+def _outbound(component: Component) -> Iterator[tuple[str, Egress]]:
+    """*component*'s ``outbound()`` under its name, then that of each component it composes."""
+    sends = component.outbound()
+    if not isinstance(sends, Egress):
+        raise ValidationError(
+            f"{type(component).__name__}.outbound() returned {sends!r}, not an Egress.",
+            hint="Return Egress(ports=[...], hosts=[...]), or Egress() when it sends nothing.",
+        )
+    yield component.name, sends
+    for item in composed(component):
+        if isinstance(item, Component):
+            yield from _outbound(item)
+
+
+def _with_rules(fragment: dm.Fragment, rules: tuple[dm.EgressRule, ...]) -> dm.Fragment:
+    """*fragment* with its ``Firewall`` filtering by *rules*."""
+    items = tuple(
+        replace(item, egress_rules=rules) if isinstance(item, dm.Firewall) else item
+        for item in fragment.items
+    )
+    return replace(fragment, items=items)
 
 
 @contextmanager

@@ -24,7 +24,7 @@ from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 from ._change import Ref
-from ._values import Readiness
+from ._values import Egress, Readiness
 
 if TYPE_CHECKING:
     from ._service import Service
@@ -271,7 +271,8 @@ class Component(Located, metaclass=_ComponentMeta):
     nested components it stands for; they are resolved before validation, so a component
     cannot be smuggled into ``services=``. An optional ``check(self, resolved)`` returning
     diagnostics becomes the component's lint rule; each code it reports is declared in
-    the class's :attr:`rules`, which ``tundravm check --explain`` prints.
+    the class's :attr:`rules`, which ``tundravm check --explain`` prints. :meth:`outbound`
+    says what it sends to, so an image's ``Egress`` accepts it without being told.
 
     Its name, which ``show`` and every diagnostic about it print, comes from the class
     (``TaikoClient`` is ``taiko-client``), from an ``id`` or ``name`` field when it has
@@ -323,6 +324,17 @@ class Component(Located, metaclass=_ComponentMeta):
         declares one. A component whose readiness is not a service of its own (one that
         wraps a packaged or internal unit) overrides this."""
         return tuple(service.ready for service in self.services() if service.readiness is not None)
+
+    def outbound(self) -> Egress:
+        """Where this component sends, derived from its fields: ``Egress()`` (nothing), unless
+        a subclass overrides it.
+
+        An image that declares an ``Egress`` accepts it as it accepts the baseline's
+        traffic, and each rule's comment in ``nftables.conf`` names the component. A URL
+        field becomes ``HOST:PORT``; a host name the firewall cannot match becomes its port
+        with the name as the comment (see :class:`~tundravm.components.Egress`).
+        """
+        return Egress()
 
     def service(self, name: str) -> ServiceRef:
         """The service called *name*, for ``requires=`` and for a profile's ``changes=``.

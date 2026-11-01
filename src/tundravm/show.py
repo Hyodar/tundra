@@ -32,6 +32,7 @@ from .builds import Build
 from .compiler.emit_mkosi import ESP_BYTES, UKI_CAPACITY
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
+from .declarative.lower import declared_firewall
 from .declarative.model import Recipe
 from .declarative.resolve import COMMON_LEVEL
 from .declarative.resolve import describe as describe_identity
@@ -122,6 +123,28 @@ def image_units(img: Lowered, profiles: Sequence[str], locked: Lock | None) -> d
         for entry in tree.entries
         if entry.content is not None and entry.symlink is None and _is_unit(entry.path)
     }
+
+
+def image_egress(recipe: Recipe, profile: str) -> dict[str, list[str]] | None:
+    """What *profile*'s output chain accepts, by who asked for it (``image``, a component,
+    a cloud); ``None`` when it does not filter."""
+    variant = next((v for v in recipe.variants if v.name == profile), None)
+    firewall = None if variant is None else declared_firewall(recipe, variant)
+    if firewall is None or firewall.egress != "filter":
+        return None
+    found: dict[str, list[str]] = {}
+    for rule in firewall.egress_rules:
+        for who, name in rule.origins:
+            found.setdefault(who, []).append(f"{rule} ({name})" if name else str(rule))
+    return found
+
+
+def render_egress(egress: Mapping[str, Sequence[str]] | None) -> str:
+    if egress is None:
+        return "# egress: not filtered (no Egress)"
+    width = max(map(len, egress), default=0)
+    rows = (f"{who:<{width}}  {', '.join(rules)}" for who, rules in egress.items())
+    return "\n".join(["# egress", *rows])
 
 
 def image_tree(
@@ -574,12 +597,14 @@ __all__ = [
     "build_tree",
     "build_units",
     "diff_builds",
+    "image_egress",
     "image_report",
     "image_tree",
     "image_units",
     "ordered_profiles",
     "render_build",
     "render_diff",
+    "render_egress",
     "render_files",
     "render_image",
     "render_measurements",

@@ -313,7 +313,7 @@ def _probes(
         profile = builder.state.effective_profile(name)
         modules = _curated(profile, spec, kernel, verity=recipe.mkosi.root == "verity")
         items = resolved[name].items
-        firewall = _declared_firewall(recipe, variant)
+        firewall = declared_firewall(recipe, variant)
         if firewall is not None:
             items = (*items, firewall)
         probe = probe_module.derive(items, modules=modules, kernel_off=off)
@@ -322,7 +322,7 @@ def _probes(
     return found
 
 
-def _declared_firewall(recipe: Recipe, variant: Variant) -> Firewall | None:
+def declared_firewall(recipe: Recipe, variant: Variant) -> Firewall | None:
     """The ``Firewall`` *variant* builds with, which resolution replaces with what it renders:
     the last one its chain of variants (and the image's items) declares."""
     chain: list[Variant] = []
@@ -849,6 +849,7 @@ __all__ = [
     "CONFIGURE_SCRIPTS",
     "INIT_SERVICE",
     "PLATFORM_CONCERN",
+    "declared_firewall",
     "inject_after_init",
     "lower",
 ]

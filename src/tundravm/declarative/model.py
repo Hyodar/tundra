@@ -2536,9 +2536,8 @@ class Firewall(Declared):
     (``"reject"``); nothing is forwarded.
 
     Outbound traffic is unfiltered until *egress* is ``"filter"``: then the output chain
-    drops what no rule accepts, and *egress_ports* (destination ports) and *egress_hosts*
-    (destination addresses or CIDR blocks) are the rules, beside the replies to accepted
-    inbound traffic, loopback, the DHCP client and the ICMPv6 messages IPv6 needs.
+    drops what no rule accepts, and *egress_rules* are the rules, beside the replies to
+    accepted inbound traffic, loopback, the DHCP client and the ICMPv6 messages IPv6 needs.
     """
 
     allow: tuple[Port | int, ...] = ()
@@ -2547,31 +2546,73 @@ class Firewall(Declared):
     ssh: bool = False
     collect: bool = True
     egress: Literal["unfiltered", "filter"] = "unfiltered"
-    egress_ports: tuple[Port | int, ...] = ()
-    egress_hosts: tuple[str, ...] = ()
+    egress_rules: tuple[EgressRule, ...] = ()
 
     def __post_init__(self) -> None:
         _require_ports(self, "allow")
-        _require_ports(self, "egress_ports")
         _require_choice(self, self.default, ("drop", "reject"), "default")
         _require_choice(self, self.egress, ("unfiltered", "filter"), "egress")
         _require_bool(self, self.ssh, "ssh")
         _require_bool(self, self.collect, "collect")
-        _freeze(self, "egress_hosts")
-        for host in self.egress_hosts:
-            if not isinstance(host, str) or not _EGRESS_HOST.fullmatch(host):
-                raise _fail(
-                    self,
-                    f"egress host {host!r} is not an address or a CIDR block.",
-                    hint="Pass '10.0.0.5' or '10.0.0.0/8'.",
-                )
-        if self.egress == "unfiltered" and (self.egress_ports or self.egress_hosts):
+        _freeze(self, "egress_rules")
+        for rule in self.egress_rules:
+            if not isinstance(rule, EgressRule):
+                raise _fail(self, f"egress rule {rule!r} is not an EgressRule.")
+        if self.egress == "unfiltered" and self.egress_rules:
             raise _fail(
                 self,
-                "egress_ports and egress_hosts need egress='filter'; nothing is filtered "
-                "outbound without it.",
+                "egress_rules need egress='filter'; nothing is filtered outbound without it.",
                 hint="Pass egress='filter' to drop the outbound traffic no rule accepts.",
             )
+
+
+@dataclass(frozen=True, slots=True)
+class EgressRule:
+    """One accept of a filtered output chain: *port* (``None``: every port) of *host* (an
+    address or CIDR block; ``None``: any address).
+
+    *origins* say who asked for it, each a ``(who, name)`` pair: the component (``image``
+    for the image's own ``Egress``, a target for its cloud's metadata servers) and the host
+    name the rule stands for when it cannot match one (``""`` otherwise). They become the
+    rule's comment.
+    """
+
+    port: Port | None = None
+    host: str | None = None
+    origins: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.port is not None and not isinstance(self.port, Port):
+            raise _fail(self, f"port {self.port!r} is not a Port.")
+        if self.host is not None and (
+            not isinstance(self.host, str) or not _EGRESS_HOST.fullmatch(self.host)
+        ):
+            raise _fail(
+                self,
+                f"egress host {self.host!r} is not an address or a CIDR block.",
+                hint="Pass '10.0.0.5' or '10.0.0.0/8'.",
+            )
+        if self.port is None and self.host is None:
+            raise _fail(self, "a rule needs a port, a host or both.")
+        object.__setattr__(self, "origins", tuple(tuple(o) for o in self.origins))
+
+    @property
+    def comment(self) -> str:
+        """*origins* as ``who (name, name), who``."""
+        names: dict[str, list[str]] = {}
+        for who, name in self.origins:
+            found = names.setdefault(who, [])
+            if name and name not in found:
+                found.append(name)
+        return ", ".join(f"{who} ({', '.join(n)})" if n else who for who, n in names.items())
+
+    def __str__(self) -> str:
+        if self.host is None:
+            return str(self.port)
+        if self.port is None:
+            return self.host
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        return f"{host}:{self.port}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2904,6 +2945,7 @@ __all__ = [
     "Dotnet",
     "EMPTY_FRAGMENT",
     "Edit",
+    "EgressRule",
     "ExternalDelivery",
     "File",
     "FileTree",

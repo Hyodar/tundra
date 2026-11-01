@@ -1201,11 +1201,12 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
     given = [*(args.profile or ()), *([DEV_PROFILE] if args.dev else [])]
     names = show.ordered_profiles(loaded.variants, _profiles(img, given))
     locked = _locked(found)
+    egress = show.image_egress(loaded.recipe, names[0])
     if args.units:
         units = show.image_units(img, names, locked)
+        text = f"{show.render_units(units)}\n\n{show.render_egress(egress)}"
         print(
-            json_report("show", {"units": units}) if args.json else show.render_units(units),
-            file=out,
+            json_report("show", {"units": units, "egress": egress}) if args.json else text, file=out
         )
         return EXIT_OK
     if args.tree:
@@ -1223,6 +1224,7 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
     report = show.image_report(img, names, described, file=found.image)
     if args.json:
         report["provenance"] = show.provenance(loaded.recipe, names)
+        report["egress"] = egress
     print(json_report("show", report) if args.json else show.render_image(report), file=out)
     return EXIT_OK
 

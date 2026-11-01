@@ -20,7 +20,7 @@ from tundravm.components import (
     Rule,
 )
 from tundravm.errors import ValidationError
-from tundravm.ports import TCP
+from tundravm.ports import TCP, UDP
 from tundravm.systemd import Resources, TcpProbe
 from tundravm.testing import plan
 
@@ -327,11 +327,56 @@ def test_an_egress_filters_the_output_chain() -> None:
     image = Image("x", network=Network(egress=egress), targets=("qemu", "azure"))
     rules = plan(image, "production").file("/etc/nftables.conf").text
     assert "hook output priority filter; policy drop" in rules
-    assert "tcp dport 443 accept" in rules
-    assert "ip daddr 1.1.1.1 accept" in rules
+    assert 'tcp dport 443 accept comment "image"' in rules
+    assert 'ip daddr 1.1.1.1 accept comment "image, tee-base"' in rules
     # what the baseline sends: NTS time, TeeBase's resolvers, Azure's wireserver
-    assert "tcp dport 4460 accept" in rules and "udp dport 123 accept" in rules
-    assert "ip daddr 1.0.0.1 accept" in rules and "ip daddr 168.63.129.16 accept" in rules
+    assert 'tcp dport 4460 accept comment "tee-base"' in rules and "udp dport 123 accept" in rules
+    assert "ip daddr 1.0.0.1 accept" in rules
+    assert 'ip daddr 168.63.129.16 accept comment "azure"' in rules
+
+
+class Sink(Component):
+    """A component whose outbound() is a peer port and the host it ships to."""
+
+    host: str = "logs.example:19532"
+
+    def compose(self) -> Iterator[object]:
+        yield from ()
+
+    def outbound(self) -> Egress:
+        return Egress(ports=[UDP(30303)], hosts=[self.host])
+
+
+@pytest.mark.parametrize(
+    ("host", "rule"),
+    [
+        ("logs.example:19532", 'tcp dport 19532 accept comment "sink (logs.example)"'),
+        ("10.0.0.5:8545", 'ip daddr 10.0.0.5 tcp dport 8545 accept comment "sink"'),
+        ("[fd00::5]:8545", 'ip6 daddr fd00::5 tcp dport 8545 accept comment "sink"'),
+        ("10.0.0.0/8", 'ip daddr 10.0.0.0/8 accept comment "sink"'),
+    ],
+)
+def test_a_components_outbound_joins_the_image_egress(host: str, rule: str) -> None:
+    egress = Network(egress=Egress(ports=[UDP(30303)]))
+    filtered = Image("x", components=[Sink(host=host)], network=egress)
+    rules = plan(filtered, "production").file("/etc/nftables.conf").text
+    assert rule in rules and 'udp dport 30303 accept comment "image, sink"' in rules
+    unfiltered = plan(Image("x", components=[Sink(host=host)]), "production")
+    assert "30303" not in unfiltered.file("/etc/nftables.conf").text
+
+
+@pytest.mark.parametrize(
+    ("host", "message"),
+    [
+        ("logs.example", "host name without a port"),
+        ("10.0.0.0/8:443", "gives a CIDR block a port"),
+        ("logs.example:0", "no port in 1..65535"),
+        ("not a host", "is not an address"),
+    ],
+)
+def test_an_egress_host_is_an_address_a_block_or_host_port(host: str, message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Egress(hosts=[host])
 
 
 def test_a_network_takes_dhcp_or_a_static_address() -> None:
