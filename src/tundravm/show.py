@@ -325,17 +325,7 @@ def render_report(found: Mapping[str, Any]) -> list[str]:
         )
         size = format_size(int(row["size"]))
         lines.append(f"  {row['name']:<12} {size:>10}  sha256 {str(row['sha256'])[:16]}{room}")
-    columns = ("name", "kind", "ref", "pin", "toolchain", "checkout", "deps")
-    rows = [
-        [f"  {source['name']}", *(_cell(source, key) for key in columns[1:])]
-        for source in found["sources"]
-    ]
-    if rows:
-        table = [["source", *columns[1:]], *rows]
-        widths = [max(len(cells[i]) for cells in table) for i in range(len(columns))]
-        for cells in table:
-            text = "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
-            lines.append(text.rstrip())
+    lines.extend(sources_table(found["sources"]))
     time = found["time"]
     cells = [
         f"{name} {'-' if time.get(name) is None else format_duration(float(time[name]))}"
@@ -350,6 +340,26 @@ def render_report(found: Mapping[str, Any]) -> list[str]:
         value = row["value"] or row["note"]
         lines.append(f"  {row['target']:<6} {row['boot']:<5} {row['register'] or '-':<10} {value}")
     return lines
+
+
+SOURCE_COLUMNS = ("kind", "ref", "pin", "toolchain", "checkout", "deps")
+"""The build report's sources table, after the name."""
+
+
+def sources_table(
+    sources: Sequence[Mapping[str, Any]], columns: Sequence[str] = SOURCE_COLUMNS
+) -> list[str]:
+    """*sources* as the report's table: a ``source`` header, then one row per source with
+    its *columns*; nothing without a source."""
+    rows = [[f"  {source['name']}", *(_cell(source, key) for key in columns)] for source in sources]
+    if not rows:
+        return []
+    table = [["source", *columns], *rows]
+    widths = [max(len(cells[i]) for cells in table) for i in range(len(columns) + 1)]
+    return [
+        "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True)).rstrip()
+        for cells in table
+    ]
 
 
 def _cell(source: Mapping[str, Any], key: str) -> str:
@@ -612,4 +622,5 @@ __all__ = [
     "render_report",
     "render_units",
     "report",
+    "sources_table",
 ]

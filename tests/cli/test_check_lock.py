@@ -116,7 +116,11 @@ def test_tree_drift(project: Path, cli: Cli) -> None:
 def test_lock_writes_then_check_reports_drift(project: Path, cli: Cli) -> None:
     result = cli("lock")
     assert result.code == EXIT_OK
-    assert result.out.startswith("locked build/tundravm.lock")
+    said = result.out.splitlines()
+    assert said[0] == "locked build/tundravm.lock"
+    assert re.fullmatch(r"  snapshot: debian/trixie \d{8}T\d{6}Z", said[1])
+    assert re.fullmatch(r"  source +kind +ref +pin", said[2])
+    assert re.fullmatch(r"    tdxs +git +master +1{12}", said[3])
     assert (project / "build" / "tundravm.lock").is_file()
     clean = cli("lock", "--check")
     assert clean.code == EXIT_OK and "up to date" in clean.out

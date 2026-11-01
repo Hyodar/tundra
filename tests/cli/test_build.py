@@ -203,6 +203,9 @@ def test_tree_only_writes_a_tree_and_no_build(project: Path, cli: Cli) -> None:
     assert (project / "tree-out" / "payload" / "mkosi.profiles" / "dev").is_dir()
     assert result.out.splitlines()[1] == "  dev: mkosi -C tree-out --profile=dev build"
     assert not (project / "build" / "demo").exists()
+    assert "drifts once they are; run `tundravm lock`, then write it again" in result.err
+    assert cli("lock").code == EXIT_OK
+    assert cli("build", "--tree-only", "tree-out").err == ""
     refused = cli("build", "--tree-only", "x", "--reproduce")
     assert refused.code == EXIT_SDK_ERROR and "--tree-only builds nothing" in refused.err
 

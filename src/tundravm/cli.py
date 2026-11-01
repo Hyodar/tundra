@@ -1012,10 +1012,33 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
         )
         return EXIT_OK
     print(f"locked {path}", file=out)
-    recorded = locked.lockfile.toolchain
-    if recorded is not None and recorded.mkosi is not None:
-        print(f"  toolchain: {recorded.summary()}", file=out)
+    for line in _pinned(locked):
+        print(line, file=out)
     return EXIT_OK
+
+
+def _pinned(locked: Lock) -> list[str]:
+    """What *locked* pins: the snapshot, each source's ref and pin (the build report's
+    sources table) and the toolchain."""
+    lockfile = locked.lockfile
+    lines = []
+    distribution = lockfile.recipe.get("distribution")
+    if isinstance(distribution, dict) and distribution.get("snapshot"):
+        lines.append(f"  snapshot: {distribution.get('base')} {distribution['snapshot']}")
+    sources = [
+        {
+            "name": fetch.name or fetch.source,
+            "kind": fetch.kind,
+            "ref": fetch.ref,
+            "pin": fetch.digest,
+        }
+        for fetch in lockfile.fetches
+    ]
+    lines.extend(f"  {line}" for line in show.sources_table(sources, ("kind", "ref", "pin")))
+    recorded = lockfile.toolchain
+    if recorded is not None and recorded.mkosi is not None:
+        lines.append(f"  toolchain: {recorded.summary()}")
+    return lines
 
 
 def _no_lockfile(args: argparse.Namespace, path: Path, out: TextIO) -> int:
@@ -1066,9 +1089,13 @@ def _cmd_build(args: argparse.Namespace, out: TextIO) -> int:
                     img,
                     targets={**dict(img.targets), name: builds.choose_targets(img, name, targets)},
                 )
-        locked = _locked(found)
-        if locked is not None:
+        if _locked(found) is not None:
             img = replace(img, lock_file=found.lockfile)
+        else:
+            _err(
+                f"note: no lockfile at {found.lockfile}: the tree builds its sources unpinned "
+                f"and drifts once they are; run `{lock_command()}`, then write it again"
+            )
         argv = builds.export_tree(img, profiles, args.tree_only)
         print(f"wrote {args.tree_only}", file=out)
         for name, options in zip(profiles or img.profile_names, argv, strict=True):
