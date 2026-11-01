@@ -67,7 +67,10 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
 - **Breaking:** `attest`, `secrets deliver` and `secrets unlock` speak TLS to the attested endpoint instead of relaying over SSH: a fresh nonce, evidence for another nonce or TLS key refused, a simulator's quote checked by its tag (`simulated`, registers never compared), `known_hosts` from the bound host keys, the instance key printed as bound to the quote; `secrets` verifies again on its own session and writes on it alone, and loses `--identity`.
 - `tundravm.testing.FakeEndpoint` plays the endpoint, with `relay`, `replay` and `wrong-key` misbehaviours.
-- `doctor` prints one row per capability with its fix; `build:go` blocks without `go`.
+- `doctor` prints one row per capability, then a `fix:` block with the one command that clears each row (`sudo apt install golang`, `sudo apt install qemu-system-x86 ovmf`, the user-namespace sysctl, the cloud login), in `--json` too; `build:go` blocks without `go`.
+- `tundravm` with no arguments prints the first four commands, `doctor`, `new`, `check` and `dev`, and points at `--help`.
+- `dev` and `run --mode simulated` ask for QEMU and OVMF before anything builds, and name every missing apt package in one command.
+- `convert` breaks long lines as `ruff format` does where ruff is not installed, as in a `uv tool install`.
 - **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset; both conversions write double-quoted Python.
 - **Breaking:** `convert --from mkosi` ends with one line per setting the tree sets, `kept` (the image's tree resolves it to the same value), `mapped` (the slot, named), `defaulted` (the opinion, named) or `refused` (why, and what to do), the files mkosi read for no selection included; the `# unsupported:` lines are gone, and `--json` prints source and report as one object.
 - `convert --from mkosi` maps `mkosi.profiles/` to `profiles=`, the units inside `mkosi.extra/` to `Service` values left out of the `Tree`, `KernelCommandLine=` and `KernelModules=` to `Kernel.default(cmdline=, modules=)`, `Snapshot=` to `Debian(snapshot=)`, `Repositories=` to an `AptRepository`, `VolatilePackages=` to packages, and `Locale=`, `Timezone=`, `Hostname=` and the like to `Mkosi(settings=)`; a tree naming no distribution is resolved for Debian and says so.
@@ -111,6 +114,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** one example, `examples/attested-node/`, built in six stages the guide walks through: Nethermind on Hoodi as a component the example writes, Lighthouse, a Go proxy signing block responses with the instance key behind attested TLS that serves a quote over that key (`quotes=True`), and operating it, an hourly sync-status timer included. The six small examples and `examples/app/` are gone.
 - The guide's stage section follows the stage files, and says why the example leaves out `TpmSeal`, `AptRepository`, `Kernel.build`, `Tdxs.from_policy` and `Service.packaged`.
 - `docs/release.md`: a `v*` tag tests, builds, installs and releases tundravm on GitHub, with the wheel and the sdist; install a release with `uv tool install git+https://github.com/Hyodar/tundra@vX.Y.Z`.
+- `README.md` and `docs/release.md` name the four Debian or Ubuntu packages `dev` needs beside tundravm: `debian-archive-keyring`, `golang`, `qemu-system-x86`, `ovmf`.
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 
 ### Removed

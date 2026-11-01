@@ -264,7 +264,7 @@ the project, and `build --dev` to see the stop after QEMU.
 | `tundravm --version` | `tundravm 0.0.post1.dev556+g57f93a87e` | confusing until a tag: hatch-vcs counts from 0.0 |
 | `tundravm` | 41 lines: the argparse help of 13 commands, the resolution epilog, then `new`, `lock`, `build`, `dev` | confusing |
 | `tundravm doctor` | 10 rows, exit 1 | confusing |
-| `tundravm new demo` | five files, `check demo.py: no findings`, then the six next steps | clear |
+| `tundravm new demo` | stage 1 of the attested node in five files, `check demo.py: no findings`, then six next steps from `cd demo` to `uv run tundravm dev` (after `example-polish`) | clear |
 | `tundravm check` | the `lock-missing` note, `no findings` | clear |
 | `tundravm lock` | `locked build/tundravm.lock`, the snapshot, `tdxs git 57f93a87ec15`, the toolchain | clear |
 | `tundravm dev --no-follow` | `error [E_DEPLOYMENT]: qemu-system-x86_64 is not installed.` | confusing |
@@ -307,3 +307,25 @@ commit>, subdir="tools")`. The build does not fetch Go itself: `require_host_go`
 Go source without a host `go` 1.21+, which fetches the toolchain each go.mod names, and
 every image builds `Tdxs` from Go. So the host needs `golang` (Debian 13, Ubuntu 24.04)
 or a Go from go.dev/dl, and neither `doctor` nor the README names the package.
+
+### Fixed on this branch (the commits carry the why)
+
+- `doctor`: each row says why, and a `fix:` block under the rows gives one command per
+  row: `sudo apt install golang`, `sudo apt install qemu-system-x86 ovmf` (every missing
+  piece of `run:simulated` at once), the user-namespace sysctl (on a sudo-ready row too),
+  the kvm group on a TCG row, the cloud CLI and its login. `--json` carries each fix.
+- `tundravm` with no arguments prints `doctor`, `new`, `check` and `dev`, and `--help`.
+- `dev` and `run --mode simulated` check QEMU and OVMF before the build and name every
+  missing package: `dev cannot boot the image here: no qemu-system-x86_64.` then
+  `fix: sudo apt install qemu-system-x86, then ...`.
+- `convert` without ruff breaks long lines as `ruff format` does (the five real trees
+  match it line for line).
+- README and `docs/release.md`: `sudo apt install debian-archive-keyring golang
+  qemu-system-x86 ovmf` before the install, `doctor` after it.
+
+### Not fixed
+
+19. The documented `@v2.0.0` does not exist: cutting the release (`docs/release.md`) fixes
+    the install line and `--version` (S; a release step).
+20. The build needs a host `go` 1.21+ to prefetch Go sources; fetching the Go toolchain
+    without one would make `golang` optional (M; `_source.py`).
