@@ -431,7 +431,8 @@ def _freeze_recipe(build: object, mappings: Sequence[str], sequences: Sequence[s
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GoBuild:
-    """``go build -trimpath`` of *package* into ``<output_dir>/<output>``.
+    """``go build -trimpath`` of *package* (the module root, ``"."``, by default) into
+    ``<output_dir>/<output>``.
 
     ``output_dir`` is relative to the source tree. ``mkdir`` creates it before the
     build; ``go build -o`` creates it too, so turning it off only drops the step.
@@ -443,7 +444,7 @@ class GoBuild:
     """
 
     output: str
-    package: str = "./..."
+    package: str = "."
     ldflags: str = "-s -w -buildid="
     tags: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=FrozenMap)

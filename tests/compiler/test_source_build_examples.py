@@ -113,6 +113,7 @@ def test_go_build_output_dir_and_mkdir() -> None:
     )
     made = Go(output="tool", output_dir="out/bin")
     assert made.command("/w").startswith("cd /w && mkdir -p out/bin && go build")
+    assert made.command("/w").endswith(" -o out/bin/tool .")
     build = Build(
         "tool",
         Git(REPO, "main"),
