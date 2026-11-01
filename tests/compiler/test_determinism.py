@@ -15,6 +15,7 @@ import struct
 import subprocess
 import textwrap
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -150,21 +151,34 @@ def test_the_converters_reproduce_their_outputs(tmp_path: Path) -> None:
     tools.mkdir()
     (tools / "qemu-img").write_text(FAKE_QEMU_IMG)
     (tools / "qemu-img").chmod(0o755)
-    digests = []
-    for run in ("one", "two"):
-        out = tmp_path / run
+    _disk(tmp_path / "disk.raw")
+    disk = (tmp_path / "disk.raw").read_bytes()
+    runs = {run: tmp_path / run for run in ("one", "two")}
+    for out in runs.values():
         out.mkdir()
-        _disk(out / "azure.raw")
-        _disk(out / "gcp.raw")
-        raws = {name: _sha_file(out / name) for name in ("azure.raw", "gcp.raw")}
+        (out / "azure.raw").write_bytes(disk)
+        (out / "gcp.raw").write_bytes(disk)
+    raws = {name: hashlib.sha256(disk).hexdigest() for name in ("azure.raw", "gcp.raw")}
+
+    def convert(out: Path, script: str) -> None:
         env = {
             **os.environ,
             "PATH": f"{tools}:{os.environ['PATH']}",
             "OUTPUTDIR": str(out),
             "SOURCE_DATE_EPOCH": "0",
         }
-        for script in (AZURE_CONVERTER, GCP_CONVERTER):
-            subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True)
+        subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True)
+
+    with ThreadPoolExecutor() as pool:
+        jobs = [
+            pool.submit(convert, out, script)
+            for out in runs.values()
+            for script in (AZURE_CONVERTER, GCP_CONVERTER)
+        ]
+        for job in jobs:
+            job.result()
+    digests = []
+    for run, out in runs.items():
         assert sorted(p.name for p in out.iterdir()) == [
             "azure.raw",
             "azure.vhd",
