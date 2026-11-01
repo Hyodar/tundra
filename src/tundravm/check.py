@@ -2226,16 +2226,19 @@ _GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "inf
 # Declarations composed by tundravm's shipped fragments are skipped (the recipe
 # cannot change them).
 
+_SETS_IT = "Drop it: tundravm sets it, so a build reproduces."
 TYPED_SETTINGS: dict[tuple[str, str], str] = {
-    ("Output", "Seed"): "Mkosi(seed=...)",
-    ("Output", "OutputDirectory"): "Mkosi(output_dir=...)",
-    ("Output", "CompressOutput"): "Mkosi(compress=...)",
-    ("Output", "ManifestFormat"): "Mkosi(manifest=...)",
-    ("Build", "PackageCacheDirectory"): "Mkosi(package_cache=...)",
-    ("Build", "WithNetwork"): "Mkosi(build_network=...)",
-    ("Content", "CleanPackageMetadata"): "Debian(clean_package_metadata=...)",
+    ("Output", "Seed"): "Drop it: tundravm sets a fixed seed, so the partition UUIDs reproduce.",
+    ("Output", "OutputDirectory"): "Drop it: `tundravm build` publishes under build/.",
+    ("Output", "CompressOutput"): _SETS_IT,
+    ("Output", "ManifestFormat"): _SETS_IT,
+    ("Build", "PackageCacheDirectory"): _SETS_IT,
+    ("Build", "WithNetwork"): "Drop it: the build runs offline; a component whose builds fetch "
+    "dependencies says class X(Component, build_network=True).",
+    ("Content", "CleanPackageMetadata"): _SETS_IT,
 }
-"""mkosi keys a typed field sets, and that field (lint ``setting-raw``)."""
+"""mkosi keys the compiler sets from a typed field, each with the sentence the public
+``Mkosi(settings=)`` refuses it with (``RESERVED_SETTINGS``): the hint of ``setting-raw``."""
 _CHROOT = "mkosi-chroot "
 _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"groupadd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'Group("{name}")'),
@@ -2325,10 +2328,10 @@ def _declaration_findings(item: object, variant: str) -> Iterator[Diagnostic]:
                 Diagnostic(
                     code="setting-raw",
                     severity="info",
-                    message=f"Setting {item.section}.{item.key} has a typed spelling: {typed}",
+                    message=f"Setting {item.section}.{item.key} sets what tundravm writes itself",
                     subject=f"{item.section}.{item.key}",
                     profile=variant,
-                    hint=f"Drop it from Mkosi(settings=): tundravm sets {item.key}= itself.",
+                    hint=typed,
                 ),
                 item,
             )

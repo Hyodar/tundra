@@ -725,7 +725,8 @@ RESERVED_SETTINGS: dict[str, str] = {
     "ToolsTreeMirror": "Drop it: tundravm reads snapshot.debian.org at Debian(snapshot=...).",
     "ToolsTreeRelease": _RELEASE,
     "ToolsTreeSnapshot": _SNAPSHOT,
-    "WithNetwork": "Drop it: the build runs offline; declare a Git or Http source instead.",
+    "WithNetwork": "Drop it: the build runs offline; a component whose builds fetch "
+    "dependencies says class X(Component, build_network=True).",
 }
 """mkosi keys :class:`Mkosi` refuses, each with the public slot that sets it, or what
 tundravm does instead."""

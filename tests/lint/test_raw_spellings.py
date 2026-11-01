@@ -3,7 +3,8 @@
 import pytest
 
 from tests.helpers import REPO_ROOT
-from tundravm.check import declaration_check
+from tundravm._image._values import RESERVED_SETTINGS
+from tundravm.check import TYPED_SETTINGS, declaration_check
 from tundravm.declarative import (
     BootStep,
     Debian,
@@ -81,7 +82,7 @@ def test_run_rejects_what_it_cannot_run(bad: dict[str, object]) -> None:
         Run(**fields)  # type: ignore[arg-type]
 
 
-def test_setting_raw_names_the_typed_field() -> None:
+def test_setting_raw_says_what_the_public_mkosi_refuses() -> None:
     [clean, seed] = _findings(
         Setting("Output", "Seed", ("630b5f72-a36a-4e83-b23d-6ef47c82fd9c",)),
         Setting("Content", "CleanPackageMetadata", ("no",)),
@@ -92,9 +93,15 @@ def test_setting_raw_names_the_typed_field() -> None:
         "",
         "Output.Seed",
     )
-    assert "Mkosi(seed=...)" in seed.message and seed.location
+    assert "sets what tundravm writes itself" in seed.message and seed.location
+    assert seed.hint == RESERVED_SETTINGS["Seed"]
     assert clean.subject == "Content.CleanPackageMetadata"
-    assert "Debian(clean_package_metadata=...)" in clean.message
+    assert clean.hint == RESERVED_SETTINGS["CleanPackageMetadata"]
+
+
+@pytest.mark.parametrize(("section", "key"), sorted(TYPED_SETTINGS))
+def test_every_typed_setting_hint_is_the_reserved_keys_sentence(section: str, key: str) -> None:
+    assert TYPED_SETTINGS[(section, key)] == RESERVED_SETTINGS[key]
 
 
 def test_settings_the_tree_writes_itself_are_refused() -> None:
