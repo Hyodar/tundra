@@ -437,9 +437,10 @@ def build_parser() -> argparse.ArgumentParser:
         "Without BUILD: the image as it resolves, its name and file first, then each\n"
         "profile's packages, files, units, sources and kernel (--json adds where each\n"
         "declaration came from). With BUILD (a build directory, an id prefix, or `latest`):\n"
-        "the report `build` printed, then the manifest's provenance and unchecked\n"
-        "guarantees. --units, --tree and --measurements narrow it. --diff OLD NEW compares\n"
-        "two builds: packages, files, units, boot payload, measurements, policy coverage.",
+        "the report `build` printed, then the manifest's provenance, unchecked guarantees\n"
+        "and boot probe checks. --units, --tree and --measurements narrow it. --diff OLD\n"
+        "NEW compares two builds: packages, files, units, boot payload, measurements,\n"
+        "policy coverage.",
         as_json,
     )
     show_cmd.add_argument(
@@ -473,7 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = command(
         "run",
         _cmd_run,
-        "Run a build locally as a named instance; status|logs|stop|ssh|mode.",
+        "Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.",
         "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]\n"
         "    boot qemu.raw through OVMF from its ESP on a snapshot (the build is never\n"
         "    written), forward every TCP port the image's firewall accepts or its services\n"
@@ -730,9 +731,9 @@ def build_parser() -> argparse.ArgumentParser:
         "Report what this host can build, run, deploy and verify.",
         "One row per capability: ready, blocked (with the fix), optional, unavailable or\n"
         "unsupported. --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1\n"
-        "when a build row (or, with --for, a row of that area) is blocked. build:go and\n"
-        "build:rustup block only when IMAGE has a Go source, or a Cargo source that pins a\n"
-        "Rust toolchain; without an image they are optional.",
+        "when a build row (or, with --for, a row of that area) is blocked. build:go blocks\n"
+        "without go, image or not (every image's Tdxs is Go); build:rustup only when IMAGE\n"
+        "has a Cargo source that pins a Rust toolchain.",
         image,
         as_json,
     )

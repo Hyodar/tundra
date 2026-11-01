@@ -9,7 +9,7 @@ Generated from the `tundravm` argument parser by `uv run python -m tundravm._ref
 | [`lock`](#tundravm-lock) | Resolve or check the lock: snapshot, sources, toolchain. |
 | [`build`](#tundravm-build) | Build into an immutable build directory, with its manifest. |
 | [`show`](#tundravm-show) | Show the resolved image or a build; --diff two builds. |
-| [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode. |
+| [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode\|probe. |
 | [`deploy`](#tundravm-deploy) | Deploy a build to Azure or GCP; status\|logs\|mode\|upgrade\|rollback. |
 | [`attest`](#tundravm-attest) | Verify an instance's evidence against a policy; delivers nothing. |
 | [`secrets`](#tundravm-secrets) | Deliver credentials or unlock a volume after a fresh attestation. |
@@ -31,7 +31,7 @@ positional arguments:
     lock      Resolve or check the lock: snapshot, sources, toolchain.
     build     Build into an immutable build directory, with its manifest.
     show      Show the resolved image or a build; --diff two builds.
-    run       Run a build locally as a named instance; status|logs|stop|ssh|mode.
+    run       Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.
     deploy    Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.
     attest    Verify an instance's evidence against a policy; delivers nothing.
     secrets   Deliver credentials or unlock a volume after a fresh attestation.
@@ -199,9 +199,10 @@ usage: tundravm show [-h] [--json] [--traceback]
 Without BUILD: the image as it resolves, its name and file first, then each
 profile's packages, files, units, sources and kernel (--json adds where each
 declaration came from). With BUILD (a build directory, an id prefix, or `latest`):
-the report `build` printed, then the manifest's provenance and unchecked
-guarantees. --units, --tree and --measurements narrow it. --diff OLD NEW compares
-two builds: packages, files, units, boot payload, measurements, policy coverage.
+the report `build` printed, then the manifest's provenance, unchecked guarantees
+and boot probe checks. --units, --tree and --measurements narrow it. --diff OLD
+NEW compares two builds: packages, files, units, boot payload, measurements,
+policy coverage.
 
 positional arguments:
   BUILD           A build, or an image file.
@@ -222,7 +223,7 @@ options:
 
 ## tundravm run
 
-Run a build locally as a named instance; status|logs|stop|ssh|mode.
+Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.
 
 ```text
 usage: tundravm run [-h] [--json] [--traceback] [--mode {simulated,tdx}] [--dev] [--detach]
@@ -483,9 +484,9 @@ usage: tundravm doctor [-h] [--attr NAME] [--pythonpath DIR] [--json] [--traceba
 
 One row per capability: ready, blocked (with the fix), optional, unavailable or
 unsupported. --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1
-when a build row (or, with --for, a row of that area) is blocked. build:go and
-build:rustup block only when IMAGE has a Go source, or a Cargo source that pins a
-Rust toolchain; without an image they are optional.
+when a build row (or, with --for, a row of that area) is blocked. build:go blocks
+without go, image or not (every image's Tdxs is Go); build:rustup only when IMAGE
+has a Cargo source that pins a Rust toolchain.
 
 positional arguments:
   IMAGE                 The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
