@@ -143,7 +143,8 @@ class Hardening:
     ``ProtectClock=``; ``sandbox`` covers ``ProtectHostname=``, ``RestrictRealtime=``,
     ``RestrictNamespaces=``, ``LockPersonality=`` and ``SystemCallArchitectures=native``.
     A unit renders :meth:`entries`; a ``DropIn`` renders :meth:`patch_entries`, only the
-    fields passed (:attr:`explicit`; a preset passes them all).
+    fields passed (:attr:`explicit`; a preset passes them all), and a capability grant
+    that needs a system call group (``CAP_SYS_TIME``) rewrites the filter with it.
     """
 
     protect_system: ProtectSystem = _UNSET
@@ -302,14 +303,19 @@ class Hardening:
             ):
                 out.append(("SystemCallFilter", "@setuid"))
         if out:
-            out += [
-                ("SystemCallFilter", _CAPABILITY_SYSCALLS[cap])
-                for cap in self.capabilities or ()
-                if cap in _CAPABILITY_SYSCALLS
-            ]
+            out += [("SystemCallFilter", group) for group in self._granted_syscalls]
         if self.deny_syscalls:
             out.append(("SystemCallErrorNumber", "EPERM"))
         return out
+
+    @property
+    def _granted_syscalls(self) -> tuple[str, ...]:
+        """The system call groups granted capabilities exist for (:data:`_CAPABILITY_SYSCALLS`)."""
+        return tuple(
+            _CAPABILITY_SYSCALLS[cap]
+            for cap in self.capabilities or ()
+            if cap in _CAPABILITY_SYSCALLS
+        )
 
     @property
     def _sets_clock(self) -> bool:
@@ -351,7 +357,8 @@ class Hardening:
             out.append(("RestrictAddressFamilies", ""))
             if self.network != "any":
                 out.append(("RestrictAddressFamilies", _FAMILIES[self.network]))
-        if given & {"syscalls", "deny_syscalls"}:
+        granted = "capabilities" in given and self._granted_syscalls
+        if given & {"syscalls", "deny_syscalls"} or granted:
             out.append(("SystemCallFilter", ""))
             out.extend(self._syscall_entries())
         if "capabilities" in given:

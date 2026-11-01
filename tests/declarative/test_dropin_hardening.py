@@ -136,7 +136,7 @@ CLOCK = Hardening.preset("static", capabilities=["CAP_SYS_TIME"])
             Hardening.strict(),
             Hardening(capabilities=["CAP_SYS_TIME"]),
             "no",
-            ("@system-service", "~@privileged @resources", "@setuid"),
+            ("@system-service", "~@privileged @resources", "@setuid", "@clock"),
         ),
     ],
     ids=["strict", "granted", "granted-by-preset-patch", "granted-by-field-patch"],
