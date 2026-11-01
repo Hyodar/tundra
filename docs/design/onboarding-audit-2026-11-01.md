@@ -111,3 +111,71 @@ a `tundravm.declarative.Unit`, which no `Image` slot takes. Proposal: treat a mi
 `doctor` agrees with every refusal it covers (`run` without QEMU, `run --mode tdx`), a
 misspelt command gets a "did you mean", and the mkosi tree, `lock --check`, `verify` and
 the fake-build loop behave as the guide says.
+
+## 5. Second pass
+
+Base: master at `c73d730`, after the eight landings and `component-rules`. Branch:
+`walkthrough-2`. Host: no QEMU, no `go`, no user namespaces, sudo only with a password;
+`rustup` and tundra-tools read access.
+
+### What was run
+
+In a scratch directory, as a user: `new demo`, `new prov --template prover --ci` (and
+`new vault`, to catch names baked into templates), `uv sync`, `check` (text, `--json`,
+`--explain` known, unknown and a component's, `--tree` before and after the tree,
+`--profile`), `lock`, `lock --check` (text, `--json`, with an edited `app/`), `build
+--tree-only`, the generated `pytest`, `show` (image, `--dev`, `--profile`, `--units`,
+`--tree`, `--json`, `--measurements`, `latest`, `--diff`), `doctor` and each `--for`, in and
+outside a project, `build` and `build --dev` (both refuse: no host `go`, naming Go 1.21 and
+`doctor --for build`; a stale `Local` names `tundravm lock`), `run` (no mode, simulated,
+tdx), `run status|logs|stop|ssh|mode`, `attest`, `secrets deliver|unlock`, `deploy gcp`
+with and without `--build`, `deploy status`, `verify`, `convert --from mkosi` on the demo's
+tree, `convert --from systemd` on a unit with a timer, and surge through `check --tree`
+and `show`. The generated workflow was parsed as YAML.
+
+### Fixed on this branch (the commits carry the why)
+
+- `verify latest-development` without a build said `tundravm build`: it says `build --dev`.
+- `show --dev` in a project means the dev build: its refusal and `--help` name
+  `show --profile dev` for the image's dev profile.
+- A missing instance offered only `run`; it offers `deploy` too, for `deploy status`.
+- The Go host error ("its toolchain" of several sources), the doctor row ("no go on PATH,
+  which fetches"), the stale-lock hint ("but to") and `under build.` read as written.
+- `show --json` provenance said profile `common` and `fragments`: `image`, `components`.
+- `lock --check --json` on a clean lock listed "lock is up to date" as drift: `[]`.
+- `lock --help` said a build never changes the lock; `build --dev` writes and re-pins it.
+- `show --help` promised provenance the text view lacks and omitted the build report.
+- `policies/README.md` hardcoded `build/prover/` and `prover-gcp.json`: it names the project.
+- The `--ci` build job had no read access to tundra-tools, so every build failed: it reads
+  `TUNDRA_TOOLS_TOKEN`, and the header says to add it.
+- The App docstrings said "Component name"; the project README names its build directory.
+- Guide: one ESP limit (126 MiB, not "about 125"), the order of the loop, the lock and
+  `build:go` rules said once, `show --dev` corrected, "recipe digest" gone.
+- README: the starter is a Go program in `app/`, not a busybox page.
+- CHANGELOG: one release note, grouped, every break marked.
+
+### Not fixed, ranked
+
+1. `convert --from systemd` of a python unit passes `check` with no `python3` package and
+   the `static` preset: no rule checks that argv[0] exists in the image (M; `check.py`,
+   `convert.py`).
+2. Hints say `tundravm lock IMAGE`, a literal placeholder, where the drift hints say
+   `tundravm lock`; `local-changed` names only `lock`, not that `build --dev` re-pins (S;
+   `check.py`, `declarative/_bake.py`).
+3. One source, two subjects: `source-unpinned [dev, production] server` but
+   `local-changed [image] sources.server` (S; `check.py`, lock drift).
+4. The public API still shows the internal model: `Resolved.fragments` and `.outputs`,
+   `GoBinary.compose() -> Fragment`, and in `tundravm.testing` `Recipe`, `fragment_plan`,
+   `fake_fragment`, `recipe_file`, `ImageFile.fragment` (L; components, testing).
+5. A new project is `ruff format` clean only at line length 100, which its `pyproject.toml`
+   does not set: ruff's default 88 reformats the image and its test (S; `templates.py`).
+6. `doctor` without an image calls a missing `go` optional, yet every image's `Tdxs` is a Go
+   source (S; `capabilities.py`).
+7. `show` names the probe unit `app-ready` beside `app.service`, and its Hooks lines are
+   shell internals (S; `_describe.py`).
+8. `lock` prints the toolchain but not what it pinned; `build --tree-only` before `lock`
+   writes a tree that drifts once locked, without a word (S; `cli.py`).
+9. `convert --from mkosi` of a tundravm tree lists implied packages (`chrony`, `nftables`)
+   as the image's own (S; `convert.py`).
+10. The guide is at 7875 of its 8000 words: the next paragraph needs a cut first; the
+    doctor sample and the Imports table (the API reference has both) are the candidates.
