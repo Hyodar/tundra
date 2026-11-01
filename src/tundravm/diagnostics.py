@@ -95,8 +95,10 @@ class Rule:
     reports at, the default first and then in the order the policy escalates to them;
     *when* says, for each level after the default, when the code reports at it
     (``"under Policy(storage_safety='warn')"``). *summary* is one line: what it checks and
-    why it matters; *fix* is what clears it. *checks* are the passes of tundravm's own
-    compiler that report it; a component's rule has none.
+    why it matters; *fix* is what clears it, in the words of an ``Image`` file. *checks* are
+    the passes of tundravm's own compiler that report it; a component's rule has none.
+    *internal* marks a code only the internal model reaches: an ``Image`` file cannot write
+    what it checks, so one reported for an image file is a bug in tundravm's own lowering.
     """
 
     code: str
@@ -107,6 +109,9 @@ class Rule:
     checks: tuple[RuleCheck, ...]
     when: tuple[str, ...]
     """When the code reports at each level after the default, one phrase per level."""
+    internal: bool
+    """Only the internal model reaches it; ``docs/reference/lint.md`` lists it apart and
+    ``check --explain`` says so."""
 
     def __init__(
         self,
@@ -117,6 +122,7 @@ class Rule:
         checks: Sequence[RuleCheck] = (),
         *,
         when: Sequence[str] = (),
+        internal: bool = False,
     ) -> None:
         levels = (severity,) if isinstance(severity, str) else tuple(severity)
         for name, value in (("code", code), ("summary", summary), ("fix", fix)):
@@ -147,6 +153,7 @@ class Rule:
         object.__setattr__(self, "fix", fix)
         object.__setattr__(self, "checks", tuple(checks))
         object.__setattr__(self, "when", phrases)
+        object.__setattr__(self, "internal", bool(internal))
 
     @property
     def severity_text(self) -> str:

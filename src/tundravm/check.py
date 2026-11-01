@@ -289,8 +289,8 @@ def _rule_service_user_missing(
         if re.search(rf"\b(useradd|adduser)\b[^\n;&|]*\b{re.escape(user)}\b", commands):
             continue
         hint = (
-            f"Declare User({user!r}) in profile {profile_name!r}, or drop user= to run as "
-            "a system user named after the service."
+            f"Declare User({user!r}) in users= of the image or profile {profile_name!r}, or "
+            "drop user= to run as the system user named after the service, declared for you."
         )
         yield Diagnostic(
             severity="error",
@@ -320,9 +320,9 @@ def _rule_user_group_undefined(
                 code="user-group-undefined",
                 message=f"user {user.name!r} joins group {group!r}, which is never created",
                 hint=(
-                    f"Declare Group({group!r}) in profile "
-                    f"{profile_name!r}, or drop it from groups=; useradd fails on an "
-                    "unknown group."
+                    f"Add Group({group!r}) to groups= of the image or profile "
+                    f"{profile_name!r}, or drop it from the User's groups=; useradd fails "
+                    "on an unknown group."
                 ),
                 profile=profile_name,
                 subject=user.name,
@@ -553,7 +553,11 @@ def _rule_debloat_removes_declared_file(
                     severity="warning",
                     code="debloat-removes-declared-file",
                     message=f"debloat deletes {pattern} at finalize, after this file is placed",
-                    hint=f"Ship the file outside {pattern}, which the debloat removes.",
+                    hint=(
+                        f"Ship the file outside {pattern}, which the image empties at the "
+                        "end of the build; a service's logs= and state= directories are "
+                        "made at boot."
+                    ),
                     profile=profile_name,
                     subject=path,
                 )
@@ -754,11 +758,11 @@ def _rule_recipe_arch_unsupported(
 
 
 SECRET_HINT = (
-    "Deliver it at boot instead of baking it into the image, where every copy and every "
-    "registry holding it exposes it: declare a Secret and pass it in the service's argv or "
-    "environment=, where it is the path the service reads it at and binds itself."
+    "Deliver it at boot instead of baking it into the image: declare Secret(NAME) and pass "
+    "it in the service's argv or environment=, where it renders as the path the service "
+    "reads it at and binds it; `tundravm secrets deliver` sends it after attestation."
 )
-"""The secret lints' hint."""
+"""The secret lints' hint, and the fix of ``secret-in-file`` and ``secret-in-env``."""
 
 
 def _secret_allowed(image: Lowered, profile_name: str, subject: str) -> bool:
@@ -1065,8 +1069,8 @@ def _rule_unit_written_at_runtime(
                 "that unit runs"
             ),
             hint=(
-                "Declare the unit in the image as a Service(...), so the measurement "
-                "covers it; a value it needs at boot comes from a Secret through "
+                "Declare the unit as a Service(...) in services=, so the measurement "
+                "covers it; a value it needs at boot comes from a Secret(NAME) in "
                 "credentials=, never from writing the unit."
             ),
             profile=profile_name,
@@ -1132,9 +1136,9 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             message=f"unit {name!r} runs as root ({spelled})",
             subject=name,
             profile=variant,
-            hint="Drop user= to run as a system user named after the unit (declared for you); "
-            'grant one capability with Hardening.preset("static", capabilities=(...)) if it '
-            "needs one.",
+            hint="Drop user= to run as a system user named after the service (declared for "
+            'you); grant one capability with hardening=Hardening.preset("static", '
+            "capabilities=[...]) if it needs one.",
         )
     sandbox = item.sandbox if isinstance(item, TypedService) else item.hardening
     entries = STRICT_HARDENING if sandbox is None else sandbox.entries()
@@ -1142,12 +1146,13 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
         yield Diagnostic(
             code="hardening-disabled",
             severity="warning",
-            message=f"unit {name!r} runs without a sandbox (Hardening.none())",
+            message=f"unit {name!r} runs without a sandbox (hardening=Hardening.none())",
             subject=name,
             profile=variant,
-            hint='Pick the preset for its runtime (hardening="NAME"), relax one knob of it '
-            '(Hardening.preset("static", devices=(...), capabilities=(...))) or use '
-            'hardening="relaxed", instead of dropping them all.',
+            hint='Name the preset for its runtime (hardening="static", "jit", "node", '
+            '"python" or "dotnet"), relax one knob of it (hardening=Hardening.preset('
+            '"static", devices=[...], capabilities=[...])) or use hardening="relaxed", '
+            "instead of dropping them all.",
         )
         return
     keys = {key for key, _ in entries}
@@ -1164,8 +1169,8 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             message=f"unit {name!r} relaxes the strict sandbox: {', '.join(dropped)}{legacy}",
             subject=name,
             profile=variant,
-            hint="Each relaxed knob widens what a compromised process can do; keep the ones "
-            "the program does not need (docs/reference/api.md: Hardening).",
+            hint="Each relaxed knob widens what a compromised process can do; keep only the "
+            "ones the program needs (docs/reference/api.md: Hardening).",
         )
 
 
@@ -1266,7 +1271,11 @@ def _unit_as_file(path: str, variant: str) -> Diagnostic:
         message=f"the unit file {path!r} is shipped as a File",
         subject=path,
         profile=variant,
-        hint="Declare it as a Service(...) instead, so tundravm renders the unit and lints it.",
+        hint=(
+            f"Declare it as a Service({posixpath.splitext(posixpath.basename(path))[0]!r}, "
+            "argv, ...) in services=, so tundravm renders, orders and sandboxes the unit; "
+            "Service.packaged(NAME) runs a package's own."
+        ),
     )
 
 
@@ -1299,41 +1308,47 @@ _REGISTRY: tuple[Rule, ...] = (
         "A profile's edit sets a field to a value the declaration refuses.",
         "Fix the field values in the profile's changes=; the message carries the "
         "declaration's own error.",
+        internal=True,
     ),
     Rule(
         "edit-missing",
         "error",
-        "A profile edits a declaration it does not inherit, so the edit changes nothing.",
-        "Edit only what the profile inherits from the profile it extends (or the image), "
-        "or declare the value in its add= instead.",
+        "A profile's changes= edit a value it does not inherit from the image or the profile "
+        "it extends, so the edit changes nothing.",
+        "Edit only what the profile inherits (value.ref.edit(...) on a value the image or the "
+        "extended profile declares); to declare the value in this profile, put it in add=.",
     ),
     Rule(
         "remove-missing",
         "error",
-        "A profile removes a declaration it does not inherit, so the removal does nothing.",
-        "Remove only what the profile inherits from the profile it extends (or the image), "
-        "or drop the removal from its changes=.",
+        "A profile's changes= remove a value it does not inherit from the image or the "
+        "profile it extends, so the removal does nothing.",
+        "Remove only what the profile inherits (value.ref.remove() on a value the image or "
+        "the extended profile declares), or drop the removal from changes=.",
     ),
     Rule(
         "identity-collision",
         "error",
-        "Two declarations with one identity (a path, a unit, an account) hold different "
-        "values, so the image could only keep one of them.",
-        "Declare it once. To change an inherited declaration in a profile, edit it in the "
-        "profile's changes= instead of declaring it again.",
+        "One thing is declared twice with different values (a File at one path, a Service and "
+        "Service.packaged() of one name, a User), so the image could keep only one of them.",
+        "Declare it once; a profile that needs another value edits the inherited one in "
+        "changes= with value.ref.edit(...) instead of declaring it again in add=.",
     ),
     Rule(
         "component-conflict",
         "error",
-        "Two different component configurations share one name, so their declarations "
-        "and exports would mix.",
-        "Use one configuration of the component, or give the second one its own name.",
+        "Two configurations of one component are included under one name (components=, a "
+        "profile's add=), so their declarations and exports would mix.",
+        "Include one configuration of the component, or name the second one apart: a name= "
+        'or id= field on it, or class Second(Component, name="...").',
     ),
     Rule(
         "component-requires-missing",
         "error",
-        "A component needs another component that the profile does not include.",
-        "Add the required component to components= (or to the profile's add=).",
+        "A component holds an export (an Endpoint, a ServiceRef, a readiness) of a component "
+        "the profile does not include.",
+        "Add the component that exports it to components= (or to the profile's add=), beside "
+        "the one that holds it.",
     ),
     Rule(
         "target-inconsistent",
@@ -1341,31 +1356,36 @@ _REGISTRY: tuple[Rule, ...] = (
         "A profile targets outputs that drop the cloud platform integration it inherits, "
         "so its UKI carries glue for a cloud it never boots on.",
         tundravm_sets("each profile's targets"),
+        internal=True,
     ),
     Rule(
         "unit-collision",
         "error",
-        "Two declarations write the same unit file, so one would silently replace the other.",
-        "Rename one of them. A Service's own unit changes through its fields and unit=DropIn(...).",
+        'Two services write one unit file (Service("app", argv) and Service("app", argv, '
+        "timer=...)), so one silently replaces the other.",
+        "Give each its own name; what a service's unit says changes through its keywords "
+        "and unit=DropIn(...), never through a second Service.",
     ),
     Rule(
         "port-unreachable",
         "warning",
         "A service listens on a port the firewall drops, so nothing outside reaches it.",
-        "Open it with the service's expose=[TCP(PORT)], or Firewall(allow=[TCP(PORT)]) for a "
-        "program no Service runs.",
+        tundravm_sets("the ports the firewall opens: each service's expose="),
+        internal=True,
     ),
     Rule(
         "network-missing",
         "warning",
         "The profile serves ports or syncs time but brings up no network interface.",
-        "Add network=Network() to the Image, or ship a .network file.",
+        tundravm_sets("the network: every image implies Network()"),
+        internal=True,
     ),
     Rule(
         "step-undefined",
         "error",
         "A boot step orders itself after or before a step the profile does not declare.",
         tundravm_sets("the boot steps and their order"),
+        internal=True,
     ),
     Rule(
         "step-cycle",
@@ -1373,33 +1393,37 @@ _REGISTRY: tuple[Rule, ...] = (
         "The boot steps' after= and before= form a cycle, so runtime-init has no order to "
         "run them in.",
         tundravm_sets("the boot steps and their order"),
+        internal=True,
     ),
     Rule(
         "needs-undefined",
         "error",
         "A unit waits for a boot step or boot task the profile does not declare, so it "
         "would wait forever.",
-        "Declare what it requires in the same profile, or drop it from requires=.",
+        tundravm_sets("what a unit waits for: a service's requires="),
+        internal=True,
     ),
     Rule(
         "needs-without-init",
         "warning",
         "A unit waits for runtime-init, but the profile declares no runtime-init step, so "
         "it waits for nothing.",
-        "Declare what the unit requires in the same profile, or drop it from requires= so "
-        "it starts without waiting.",
+        tundravm_sets("what a unit waits for: a service's requires="),
+        internal=True,
     ),
     Rule(
         "hook-after-undefined",
         "error",
         "A build hook runs after a hook the profile does not declare.",
         tundravm_sets("the build hooks and their order"),
+        internal=True,
     ),
     Rule(
         "hook-order",
         "error",
         "A build hook is ordered after a hook of a later phase, which only runs after it.",
         tundravm_sets("the build hooks and their order"),
+        internal=True,
     ),
     Rule(
         "disk-key-undefined",
@@ -1408,6 +1432,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "unlocked at boot.",
         tundravm_sets("a volume's key"),
         _MODULES,
+        internal=True,
     ),
     Rule(
         "secret-store-undefined",
@@ -1416,13 +1441,16 @@ _REGISTRY: tuple[Rule, ...] = (
         tundravm_sets("where the secrets are stored"),
         _MODULES,
         when=("when the compiled profile, not its declarations, lacks the disk",),
+        internal=True,
     ),
     Rule(
         "export-stale",
         ("error", "warning"),
-        "A component holds an export of a provider that this profile configures differently.",
-        "Pass the consumer the export of the component this profile includes, or change "
-        "the provider through its own arguments instead of editing what it composed.",
+        "A component holds an export of a provider this profile configures differently: "
+        "another configuration in add=, or changes= editing what the provider composed, "
+        "which its exports do not follow.",
+        "Pass the consumer the export of the configuration this profile includes, or change "
+        "the provider through its own fields instead of editing what it composed.",
         when=(
             "when the profile only edits what the provider composed, which exports do not follow",
         ),
@@ -1430,10 +1458,10 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "executable-stale",
         "error",
-        "A service runs a path a Build installed before a profile edited or removed it, so "
-        "the command names a file the image no longer has.",
-        "Point the service's command at what the edited Build installs, or edit the "
-        "command in the same profile.",
+        "A service's argv names a path a Build installed before the profile's changes= "
+        "edited or removed that Build, so the image no longer has the file.",
+        "Point the argv at what the edited Build installs (its install= destination), or "
+        "edit the service's argv in the same profile.",
     ),
     Rule(
         "external-delivery-unwired",
@@ -1441,16 +1469,17 @@ _REGISTRY: tuple[Rule, ...] = (
         "Nothing in the image can tell when the secret delivery has written the secrets, "
         "so services start without them.",
         tundravm_sets("the secret delivery"),
+        internal=True,
     ),
     Rule(
         "volume-tpm-on-cloud",
         "info",
-        "A volume's key is sealed to a cloud's vTPM (Azure's paravisor, Google's "
-        "hypervisor), so the platform, not an attested release, decides who opens it; "
-        "today's key-gen binds no PCR.",
+        "A Volume(unlock=TpmSeal(...)) seals its key to a cloud's vTPM (Azure's paravisor, "
+        "Google's hypervisor), so the platform, not an attested release, decides who opens "
+        "it; today's key-gen binds no PCR.",
         "Unlock it with OperatorKey() (an operator sends the key after attesting the "
-        "instance) or BrokerKey(url, audience=...) (a key broker does); keep TpmSeal when "
-        "that platform's vTPM is a boundary you accept.",
+        "instance) or BrokerKey(url, audience=...) (a key broker does); keep TpmSeal(...) "
+        "when that platform's vTPM is a boundary you accept.",
     ),
     # ── components ──
     Rule(
@@ -1469,6 +1498,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "unlock finds no key.",
         tundravm_sets("where a volume's key is written"),
         _MODULES,
+        internal=True,
     ),
     Rule(
         "disk-device-guessed",
@@ -1478,6 +1508,7 @@ _REGISTRY: tuple[Rule, ...] = (
         tundravm_sets("each volume's device"),
         _MODULES,
         when=("under Policy(storage_safety='warn')",),
+        internal=True,
     ),
     Rule(
         "disk-device-unstable",
@@ -1486,6 +1517,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "and can point at another disk on the next boot.",
         tundravm_sets("each volume's device"),
         _MODULES,
+        internal=True,
     ),
     Rule(
         "secret-target-unsupported",
@@ -1493,6 +1525,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "A secret goes to a target its delivery does not write at boot, so it never arrives.",
         tundravm_sets("where each secret is delivered"),
         _MODULES,
+        internal=True,
     ),
     Rule(
         "secret-env-service-unknown",
@@ -1501,6 +1534,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "generates, ships nor enables.",
         tundravm_sets("which service a secret is delivered to"),
         _MODULES,
+        internal=True,
     ),
     Rule(
         "key-pipe-outside-run",
@@ -1509,31 +1543,35 @@ _REGISTRY: tuple[Rule, ...] = (
         "replaced by a regular file.",
         tundravm_sets("where a volume's key pipe is"),
         _MODULES,
+        internal=True,
     ),
     # ── the compiler: each profile's lowered state ──
     Rule(
         "service-user-missing",
         "error",
-        "A service (or a unit's User=/Group=) runs as an account that nothing creates, so "
-        "systemd refuses to start it.",
-        "Declare the User or Group in the same profile, or drop user= to run as a system "
-        "user named after the service.",
+        "A Service(user=...) (or a shipped unit file's User=/Group=) names an account that "
+        "nothing creates, so systemd refuses to start it.",
+        "Declare User(NAME) in users= (Group(NAME) in groups=) of the image or the same "
+        "profile, or drop user= to run as the system user named after the service, which "
+        "is declared for you.",
         (_rule_service_user_missing, _rule_unit_text),
     ),
     Rule(
         "user-group-undefined",
         "error",
-        "A user joins a group that nothing creates, so useradd fails during the build.",
-        "Declare the Group in the same profile, or drop it from the user's groups=.",
+        "A User(groups=[...]) names a group that nothing creates, so useradd fails during "
+        "the build.",
+        "Add Group(NAME) to groups= of the image or the same profile, or drop it from the "
+        "User's groups=.",
         (_rule_user_group_undefined,),
     ),
     Rule(
         "file-path-duplicate",
         "error",
-        "One path is declared several times with different content, and only the last "
-        "one ends up in the image.",
-        "Keep a single declaration; if two components write the path, drop one or merge "
-        "their content into one File.",
+        "One path is shipped twice with different content (a File and a Tree holding the "
+        "same path, two components), and only the last one ends up in the image.",
+        "Keep one: drop the File, or leave the path out of the Tree with Tree(exclude=[...]); "
+        "if two components write it, drop one or merge their content into one File.",
         (_rule_file_path_duplicate,),
     ),
     Rule(
@@ -1542,12 +1580,13 @@ _REGISTRY: tuple[Rule, ...] = (
         "A file path contains '..' and may escape the image root.",
         "Write the normalized absolute path instead.",
         (_rule_file_path_relative,),
+        internal=True,
     ),
     Rule(
         "service-program-missing",
         "error",
-        "A service's program (its argv's first element) is nothing the image ships: no "
-        "declared file, tree or build installs it, and no listed package is known to.",
+        "A Service's program (its argv's first element) is nothing the image ships: no "
+        "File, Tree or Build installs it, and no listed package is known to.",
         "Add the Debian package that ships it to packages=, or run a GoBinary, CargoBinary "
         "or Build as the argv's first element, or ship it with File.copy(Path(...), PATH, "
         "mode=0o755).",
@@ -1556,25 +1595,27 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "profile-empty",
         "info",
-        "A profile declares nothing of its own, so it builds the same image as the one it extends.",
-        "Declare what it adds in its add= or changes=, or remove it.",
+        "A Profile declares nothing of its own (no add=, no changes=), so it builds the same "
+        "image as the one it extends.",
+        "Declare what it adds in add= or changes=, or take it out of profiles=.",
         (_rule_profile_empty,),
     ),
     Rule(
         "debloat-removes-needed-unit",
         "warning",
-        "The systemd debloat masks a unit a service is, or depends on, so the service "
-        "stops or never starts.",
-        "Drop the dependency, or rename a Service called systemd-*; tundravm decides which "
-        "systemd units the debloat keeps, so report one the image needs.",
+        "A Service is named like a systemd unit the image's debloat masks (systemd-*), or a "
+        "shipped unit file depends on one, so it stops or never starts.",
+        "Rename the Service, or drop the dependency; tundravm decides which systemd units "
+        "the debloat keeps, so report one the image needs.",
         (_rule_debloat_removes_needed_unit,),
     ),
     Rule(
         "debloat-removes-declared-file",
         "warning",
-        "The debloat deletes a path at finalize, after a declared file was placed there, "
-        "so the file never reaches the image.",
-        "Ship the file outside the path the debloat removes (the message names it).",
+        "A File is shipped under a directory the image empties at the end of the build "
+        "(/var/log, /var/cache), so the file never reaches the image.",
+        "Ship the file outside the directory the message names; a service's logs= and "
+        "state= directories are made at boot.",
         (_rule_debloat_removes_declared_file,),
     ),
     Rule(
@@ -1598,6 +1639,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "A bootable image installs no kernel, so mkosi cannot build its UKI.",
         tundravm_sets("the kernel package"),
         (_rule_kernel_missing,),
+        internal=True,
     ),
     Rule(
         "kernel-modules-ignored",
@@ -1606,6 +1648,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "selection does nothing.",
         tundravm_sets("a built kernel's modules"),
         (_rule_built_kernel_modules,),
+        internal=True,
     ),
     Rule(
         "debloat-removes-modules",
@@ -1614,6 +1657,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "tdx_guest, cloud NICs) from there, so they never load.",
         tundravm_sets("whether the debloat keeps the kernel's modules"),
         (_rule_debloat_removes_modules, _rule_built_kernel_modules),
+        internal=True,
     ),
     Rule(
         "image-arch-unsupported",
@@ -1622,29 +1666,28 @@ _REGISTRY: tuple[Rule, ...] = (
         "target. TDX guests are x86-64.",
         tundravm_sets("the architecture"),
         (_rule_recipe_arch_unsupported,),
+        internal=True,
     ),
     Rule(
         "secret-in-file",
         "error",
-        "A shipped file holds what looks like a secret, baked into every copy of the image "
-        "and every registry that holds it.",
-        "Deliver it at boot: declare a Secret and pass it in the service's argv or "
-        "environment=, where it is the path the service reads it at and binds itself.",
+        "A File ships what looks like a secret (a private key, a token), baked into every "
+        "copy of the image and every registry that holds it.",
+        SECRET_HINT,
         (_rule_secret_in_file,),
     ),
     Rule(
         "secret-in-env",
         "error",
-        "A unit's environment or command line holds what looks like a secret, baked into "
-        "every copy of the image.",
-        "Deliver it at boot: declare a Secret and pass it in the service's argv or "
-        "environment=, where it is the path the service reads it at and binds itself.",
+        "A Service's environment= or argv (or a shipped unit file) holds what looks like a "
+        "secret, baked into every copy of the image.",
+        SECRET_HINT,
         (_rule_secret_in_env,),
     ),
     Rule(
         "instance-key-exposed",
         "error",
-        "A file, a unit drop-in or a service's unit names /run/tundravm/instance-key.pem, "
+        "A File, a unit=DropIn(...) or a shipped unit file names /run/tundravm/instance-key.pem, "
         "the private key the image generates at boot, which only the services that bind it "
         "may read, and only through their credentials.",
         "Bind it: Service(credentials=[InstanceKey()]) (or InstanceKey() in argv or "
@@ -1655,108 +1698,124 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "unit-written-at-runtime",
         "error",
-        "A service, boot task or boot step writes a unit under /etc/systemd/system, "
-        "/run/systemd/system or /usr/lib/systemd/system at boot (cp, tee, install, ln, a "
-        "shell redirection, a tmpfiles.d line), so the attested image does not pin what runs.",
-        "Declare the unit in the image as a Service(...); a value it needs at boot comes "
-        "from a Secret through credentials=.",
+        "A service's argv (cp, tee, install, ln, a shell redirection) or a shipped tmpfiles.d "
+        "line writes a unit under /etc/systemd/system, /run/systemd/system or "
+        "/usr/lib/systemd/system at boot, so the attested image does not pin what runs.",
+        "Declare the unit as a Service(...) in services=; a value it needs at boot comes "
+        "from a Secret(NAME) in credentials=, never from writing the unit.",
         (_rule_unit_written_at_runtime,),
     ),
     # ── systemd unit text: every unit a profile ships, raw or generated ──
     Rule(
         "unit-section-invalid",
         "error",
-        "A unit has a section its type does not allow, which systemd ignores.",
-        "Move its directives to [Unit], [Install] or the unit type's own section.",
+        "A shipped unit file (a File under a systemd unit directory) has a section its unit "
+        "type does not allow, which systemd ignores.",
+        "Move its directives to [Unit], [Install] or the unit type's own section; a "
+        "Service(...) in services= renders a unit with the right sections.",
         _UNIT_TEXT,
     ),
     Rule(
         "unit-directive-unknown",
         "warning",
-        "A unit sets a directive systemd 257 does not know, which systemd ignores.",
-        "Check the spelling against systemd.directives(7); X- keys are left alone.",
+        "A shipped unit file sets a directive systemd 257 does not know, which systemd ignores.",
+        "Check the spelling against systemd.directives(7); X- keys are left alone. A "
+        "Service(...) keyword or unit=DropIn(...) is checked for you.",
         _UNIT_TEXT,
     ),
     Rule(
         "unit-value-invalid",
         "error",
-        "A unit gives a directive a value it does not accept, so systemd keeps the default.",
-        "Use a value the directive accepts; the message names what is wrong with it.",
+        "A shipped unit file gives a directive a value it does not accept, so systemd keeps "
+        "the default.",
+        "Use a value the directive accepts; the message names what is wrong with it. A "
+        "Service(...) keyword is checked for you.",
         _UNIT_TEXT,
     ),
     Rule(
         "unit-exec-relative",
         "warning",
-        "A unit command (ExecStart= and the other Exec directives) names its program by a "
-        "relative name, and systemd's search path is not $PATH.",
+        "A unit command (ExecStart= and the other Exec directives, unit=DropIn(exec_start_pre=) "
+        "included) names its program by a relative name, and systemd's search path is not "
+        "$PATH.",
         "Spell the absolute path (/usr/bin/NAME or /usr/sbin/NAME).",
         _UNIT_TEXT,
     ),
     Rule(
         "state-dir-mkdir",
         "info",
-        "ExecStartPre= creates a state directory that systemd can create and own for the "
-        "service user.",
-        "Use StateDirectory=, LogsDirectory=, RuntimeDirectory= or CacheDirectory= instead.",
+        "A unit=DropIn(exec_start_pre=...) (or a shipped unit file's ExecStartPre=) creates a "
+        "state directory that systemd can create and own for the service user.",
+        "Pass state=NAME, logs=NAME or runtime=NAME on the Service; a shipped unit file "
+        "uses StateDirectory=, LogsDirectory=, RuntimeDirectory= or CacheDirectory=.",
         _UNIT_TEXT,
     ),
     Rule(
         "relation-conflict",
         "error",
-        "A unit's relations contradict each other: it pulls in and conflicts with a unit, "
-        "is ordered both before and after one, or names itself.",
+        "A unit's relations contradict each other: it pulls in and conflicts with one unit "
+        "(unit=DropIn(requires=[...], conflicts=[...])), is ordered both before and after "
+        "one, or names itself.",
         "Drop one of the relations.",
         _UNIT_TEXT,
     ),
     Rule(
         "requires-without-after",
         "info",
-        "A unit Requires= another without After=, so both start in parallel.",
-        "Add After= for the same unit, so this one starts once it is up.",
+        "A shipped unit file Requires= another without After=, so both start in parallel.",
+        "Add After= for the same unit, so this one starts once it is up; a Service's "
+        "requires=[other.ready] renders both.",
         _UNIT_TEXT,
     ),
     Rule(
         "socket-service-unpaired",
         ("error", "warning"),
-        "A socket activates a service the profile neither ships nor enables.",
-        "Ship the service next to the socket, or name the one it starts with Service=.",
+        "A shipped .socket file activates a service the profile neither ships nor enables.",
+        "Ship the service next to the socket, or name the one it starts with Service=; a "
+        "Service(socket=Listen(...)) renders both units.",
         _UNIT_TEXT,
         when=("when the profile installs packages, which may ship it",),
     ),
     Rule(
         "timer-unit-missing",
         ("error", "warning"),
-        "A timer activates a unit the profile neither ships nor enables.",
-        "Ship the unit next to the timer, or name the one it starts with Unit=.",
+        "A shipped .timer file activates a unit the profile neither ships nor enables.",
+        "Ship the unit next to the timer, or name the one it starts with Unit=; a "
+        'Service(timer=Every("1h")) renders both units.',
         _UNIT_TEXT,
         when=("when the profile installs packages, which may ship it",),
     ),
     Rule(
         "timer-service-enabled",
         "warning",
-        "A service a timer starts is also enabled at boot, so it runs off schedule.",
-        "Leave it out of [Install] and do not enable it; enable the timer alone.",
+        "A service a shipped .timer file starts is also enabled at boot, so it runs off schedule.",
+        'Declare the schedule on the service instead, Service(..., timer=Every("1h")) or '
+        "Calendar(...), which enables the timer alone; a shipped unit file leaves [Install] "
+        "out of the service.",
         _UNIT_TEXT,
     ),
     Rule(
         "socket-service-started",
         "info",
-        "A service a socket starts on demand is also enabled at boot.",
-        "Leave it out of [Install] and do not enable it; enable the socket alone.",
+        "A service a shipped .socket file starts on demand is also enabled at boot.",
+        "Declare the socket on the service instead, Service(..., socket=Listen(...)), which "
+        "enables the socket alone; a shipped unit file leaves [Install] out of the service.",
         _UNIT_TEXT,
     ),
     Rule(
         "unit-enable-noop",
         "warning",
-        "A unit is enabled but has no [Install] section, so systemctl enable does nothing.",
-        "Add [Install] WantedBy=, or stop enabling it.",
+        "A unit the image enables (Service.packaged(NAME)) is shipped by a File without an "
+        "[Install] section, so systemctl enable does nothing.",
+        "Add [Install] WantedBy=multi-user.target to the shipped unit text, or declare it as "
+        "a Service(NAME, argv) instead of shipping its file.",
         _UNIT_TEXT,
     ),
     Rule(
         "cloud-glue-unconditional",
         "warning",
-        "A unit that only works on one cloud has no ConditionVirtualization= for it, while "
-        "the profile's UKI also boots elsewhere, where it runs and fails.",
+        "A unit that only works on one cloud (a cloud agent's) has no ConditionVirtualization= "
+        "for it, while the image's targets= also boot elsewhere, where it runs and fails.",
         "Gate it on its cloud, so it stays inert elsewhere: Service(..., unit=DropIn("
         'extra={"Unit": {"ConditionVirtualization": "ID"}})).',
         _UNIT_TEXT,
@@ -1765,30 +1824,31 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "service-runs-as-root",
         "info",
-        "A service runs as root, so a compromise owns the whole guest.",
-        "Drop user= to run as a system user named after the unit (declared for you); "
-        'grant one capability with Hardening.preset("static", capabilities=(...)) if it '
-        "needs one.",
+        'A Service runs as root (user="root"), so a compromise owns the whole guest.',
+        "Drop user= to run as a system user named after the service (declared for you); "
+        'grant one capability with hardening=Hardening.preset("static", capabilities=[...]) '
+        "if it needs one.",
     ),
     Rule(
         "hardening-disabled",
         "warning",
-        "A unit runs without a sandbox (Hardening.none()).",
-        'Pick the preset for its runtime (hardening="NAME"), relax one knob of it '
-        '(Hardening.preset("static", devices=(...), capabilities=(...))) or use '
-        'hardening="relaxed", instead of dropping them all.',
+        "A Service runs without a sandbox (hardening=Hardening.none()).",
+        'Name the preset for its runtime (hardening="static", "jit", "node", "python" or '
+        '"dotnet"), relax one knob of it (hardening=Hardening.preset("static", '
+        'devices=[...], capabilities=[...])) or use hardening="relaxed", instead of '
+        "dropping them all.",
     ),
     Rule(
         "hardening-relaxed",
         "info",
-        "A unit relaxes knobs of the strict sandbox, and each one widens what a "
-        "compromised process can do.",
-        "Keep the knobs the program does not need; the message lists the relaxed ones.",
+        'A Service relaxes knobs of the strict sandbox (hardening="relaxed", or a preset\'s '
+        "deviations), and each one widens what a compromised process can do.",
+        "Keep only the knobs the program needs; the message lists the relaxed ones.",
     ),
     Rule(
         "unit-extra",
         "info",
-        "A service's unit=DropIn(...), or raw unit directives, set what a Service keyword "
+        "A Service's unit=DropIn(...) (or a shipped unit file) sets what a Service keyword "
         "covers, which nothing then types or validates.",
         "Use the keyword the finding names (resources=, shutdown=, environment=, ...); keep "
         "unit=DropIn(...) for what no keyword covers.",
@@ -1799,25 +1859,30 @@ _REGISTRY: tuple[Rule, ...] = (
         "A service is hand-written unit text instead of a typed Service.",
         "Declare Service(NAME, argv, ...): the compiler renders the unit, its ordering "
         "after requires= and its enablement.",
+        internal=True,
     ),
     Rule(
         "unit-as-file",
         "info",
-        "A unit file is shipped as a File, so tundravm neither renders, orders nor lints it.",
-        "Declare it as a Service(...); its timer= and socket= render those units.",
+        "A unit file is shipped as a File under a systemd unit directory, so tundravm "
+        "neither renders, orders nor sandboxes it.",
+        "Declare it as a Service(NAME, argv, ...) in services=; its timer= and socket= "
+        "render those units, and Service.packaged(NAME) runs a package's own.",
     ),
     Rule(
         "setting-raw",
         "info",
         "An mkosi setting sets a key tundravm already sets itself.",
         "Drop it from Mkosi(settings=); it is for keys tundravm does not set.",
+        internal=True,
     ),
     Rule(
         "hook-covered",
         "info",
-        "A build hook or boot step runs a command a declaration already covers (useradd, "
-        "systemctl enable, mkdir and chown).",
-        "Declare what the message names instead of the command.",
+        "A Mkosi(scripts=[...]) script runs a command a declaration already covers (useradd, "
+        "groupadd, usermod, systemctl enable).",
+        "Declare what the message names (User(...), Group(...), Service(...)) instead of "
+        "running the command.",
     ),
     Rule(
         "mkosi-configure-script",
@@ -1825,6 +1890,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "An mkosi setting adds ConfigureScripts, which rewrite the configuration after "
         "`mkosi summary` resolved it, so the summary would not describe the build.",
         CONFIGURE_SCRIPT_HINT,
+        internal=True,
     ),
     Rule(
         "mkosi-environment-passthrough",
@@ -1832,6 +1898,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "An mkosi setting passes the host's environment into the build, so the build "
         "depends on the machine it runs on.",
         ENVIRONMENT_HINT,
+        internal=True,
     ),
     # ── the lock, the toolchain, the host and the committed tree ──
     Rule(
@@ -2026,9 +2093,10 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
     """What each of *codes* checks and how to fix it, as ``tundravm check --explain`` prints it.
 
     A code is looked up in :data:`RULES`, then in *declared* (default: the shipped
-    components' rules), and a component's rule says which class declares it. An unknown
-    code is a :class:`~tundravm.errors.ValidationError` whose hint names the closest code
-    and the lint reference.
+    components' rules), and a component's rule says which class declares it; an internal
+    rule says an image file cannot reach it. An unknown code is a
+    :class:`~tundravm.errors.ValidationError` whose hint names the closest code and the
+    lint reference.
     """
     components = shipped_rules() if declared is None else declared
     known = [*RULES, *components]
@@ -2053,6 +2121,8 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
             for text in (rule.summary, f"fix: {rule.fix}")
         )
         by = "" if origin is None else f"\n    declared by {origin}"
+        if rule.internal:
+            by = "\n    internal: an image file cannot reach it; one that does is a bug to report"
         heading = textwrap.fill(
             f"{rule.code}: {rule.severity_text}",
             88,

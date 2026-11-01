@@ -402,14 +402,25 @@ def lint_markdown() -> str:
     from tundravm.check import RULES
 
     lines = _header("Lint reference", "the `tundravm check` rule registry")
+    rules = sorted(RULES.values(), key=_code)
     lines += [
-        "Every code tundravm itself reports. `tundravm check --explain CODE` prints one "
-        "row. The severity is the default, then each other level a code reports at and "
-        "when.",
+        "Every code an `Image` file can hit, and what to change in it. `tundravm check "
+        "--explain CODE` prints one row. The severity is the default, then each other level "
+        "a code reports at and when.",
         "",
         "| Code | Severity | What it checks | How to fix |",
         "|---|---|---|---|",
-        *(f"| {_rule_row(rule)} |" for rule in sorted(RULES.values(), key=_code)),
+        *(f"| {_rule_row(rule)} |" for rule in rules if not rule.internal),
+        "",
+        "## Internal model",
+        "",
+        "These codes check what only the internal model declares: an `Image` file cannot "
+        "write it, and tundravm's own lowering keeps it clean. One reported for an image "
+        "file is a bug: report it with the file. `--explain` marks them `internal`.",
+        "",
+        "| Code | Severity | What it checks | How to fix |",
+        "|---|---|---|---|",
+        *(f"| {_rule_row(rule)} |" for rule in rules if rule.internal),
         "",
         "## Shipped components",
         "",
