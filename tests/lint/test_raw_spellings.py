@@ -86,7 +86,7 @@ def test_setting_raw_names_the_typed_field() -> None:
         Setting("Output", "Seed", ("630b5f72-a36a-4e83-b23d-6ef47c82fd9c",)),
         Setting("Content", "CleanPackageMetadata", ("no",)),
     )
-    assert (seed.code, seed.severity, seed.variant, seed.subject) == (
+    assert (seed.code, seed.severity, seed.profile, seed.subject) == (
         "setting-raw",
         "info",
         "",

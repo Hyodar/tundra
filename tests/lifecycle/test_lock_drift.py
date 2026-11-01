@@ -113,7 +113,7 @@ def test_drift_names_the_profile_the_section_and_the_change(
         "error",
         f"{key} changed since the lock: {detail}",
         subject=key,
-        variant="default",
+        profile="default",
         hint=found.hint,
     )
     drift = compare_lock(locked.lockfile, _payload(recipe))

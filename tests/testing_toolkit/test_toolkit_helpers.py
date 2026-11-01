@@ -181,7 +181,7 @@ def test_assert_clean_returns_lint_diagnostics_as_given() -> None:
 def test_assert_diagnostic_filters_by_profile() -> None:
     recipe = _ghost(where="azure")
     found = assert_diagnostic(recipe, "service-user-missing", profile="azure")
-    assert found.variant == "azure"
+    assert found.profile == "azure"
     assert assert_diagnostic(recipe, "service-user-missing", profile="azure") == found
     with pytest.raises(AssertionError, match="no findings"):
         assert_diagnostic(recipe, "service-user-missing", profiles="default")

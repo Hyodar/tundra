@@ -38,7 +38,7 @@ def test_recipe_fixture_builds_against_the_fake_mkosi(
     _, (artifact,) = bake_image(
         lower(curl), None, locked=None, backend=LocalLinuxBackend(), build=tmp_path / "build"
     )
-    assert (artifact.variant, artifact.target) == ("default", "qemu")
+    assert (artifact.profile, artifact.target) == ("default", "qemu")
     assert artifact.path.is_file()
     assert (tmp_path / "build" / "mkosi" / "payload" / "mkosi.conf").is_file()
     assert fake_mkosi.verbs() == ["summary", "build"]

@@ -90,7 +90,7 @@ def _resolver(calls: list[str]) -> object:
 def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None:
     recipe = _recipe()
     tree = compile(recipe)
-    assert isinstance(tree, Tree) and tree.variants == ("default", "azure")
+    assert isinstance(tree, Tree) and tree.profiles == ("default", "azure")
     paths = {e.path for e in tree.entries}
     assert {"mkosi.conf", "payload/mkosi.conf", "mkosi.images/azure/mkosi.conf"} <= paths
     assert compile(recipe).digest == tree.digest
@@ -107,7 +107,7 @@ def test_compile_tree_round_trip_matches_lowered_compile(tmp_path: Path) -> None
 
 def test_compile_selected_variants(tmp_path: Path) -> None:
     only = compile(_recipe(), variants=("default",))
-    assert only.variants == ("default",)
+    assert only.profiles == ("default",)
     # without profile overlays a variant's tree is the whole tree: the payload and every
     # wrapper are shared, whichever variants compile
     assert only.digest == compile(_recipe()).digest
@@ -220,7 +220,7 @@ def test_bake_writes_the_outputs_each_variant_declares(tmp_path: Path) -> None:
     lines: list[str] = []
     artifacts = _baked(tmp_path, lines)
     # each variant's artifacts are its declared outputs
-    assert {(a.variant, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
+    assert {(a.profile, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
     assert all(a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
     assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
@@ -235,7 +235,7 @@ def test_bake_one_variant_against_a_lock_of_every_variant(tmp_path: Path) -> Non
         _recipe(), lock=locked, backend=Backend("local"), build=tmp_path, variants=("azure",)
     )
 
-    assert {(a.variant, a.target) for a in artifacts} == {("azure", "azure")}
+    assert {(a.profile, a.target) for a in artifacts} == {("azure", "azure")}
     with pytest.raises(LockfileError, match="stale"):
         bake(
             _recipe(motd="bye\n"),

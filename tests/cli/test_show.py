@@ -25,10 +25,10 @@ def test_show_an_image_file(project: Path, cli: Cli) -> None:
         assert internal not in result.out, internal
     payload = json.loads(cli("show", "demo.py", "--json").out)
     assert payload["schema"] == "tundravm.show/1" and payload["image"] == "demo"
-    assert set(payload["variants"]) == {"production", "dev"}
+    assert set(payload["profiles"]) == {"production", "dev"}
     assert len(payload["digest"]) == 64
     only = json.loads(cli("show", "demo.py", "--json", "--profile", "dev").out)
-    assert set(only["variants"]) == {"dev"}
+    assert set(only["profiles"]) == {"dev"}
 
 
 def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli) -> None:

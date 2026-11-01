@@ -48,7 +48,7 @@ def test_policy_requires_frozen_lock_for_bake(
     recipe = load_recipe(path)
     assert isinstance(recipe.policy, Policy) and recipe.policy.require_frozen_lock
     artifacts = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "api")
-    assert [(a.variant, a.target) for a in artifacts] == [("default", "qemu")]
+    assert [(a.profile, a.target) for a in artifacts] == [("default", "qemu")]
 
 
 def test_policy_network_offline_locks_without_the_network() -> None:

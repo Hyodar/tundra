@@ -245,14 +245,14 @@ class Variant(Located):
         if self.inherits is not None:
             _require_name(self, self.inherits, "inherits")
             if self.inherits == self.name:
-                raise _fail(self, f"variant {self.name!r} cannot inherit itself.")
+                raise _fail(self, f"profile {self.name!r} cannot inherit itself.")
         if not isinstance(self.add, Fragment):
             raise _fail(self, f"add= of {self.name!r} must be a Fragment.")
         _check_changes(self)
         for target in self.outputs:
             _require_choice(self, target, TARGETS, "output")
         if len(set(self.outputs)) != len(self.outputs):
-            raise _fail(self, f"variant {self.name!r} lists an output twice.")
+            raise _fail(self, f"profile {self.name!r} lists an output twice.")
 
 
 def _check_changes(variant: Variant) -> None:
@@ -269,14 +269,14 @@ def _check_changes(variant: Variant) -> None:
         target = change.target
         seen = touched.get(target, set())
         if target in touched and (seen is None or isinstance(change, Remove)):
-            raise _fail(variant, f"variant {variant.name!r} changes {target} twice.")
+            raise _fail(variant, f"profile {variant.name!r} changes {target} twice.")
         if isinstance(change, Remove):
             touched[target] = None
             continue
         assert seen is not None
         for name in change.fields:
             if name in seen:
-                raise _fail(variant, f"variant {variant.name!r} edits {target}.{name} twice.")
+                raise _fail(variant, f"profile {variant.name!r} edits {target}.{name} twice.")
             seen.add(name)
         touched[target] = seen
 
@@ -549,7 +549,7 @@ class Recipe:
             if not isinstance(variant, Variant):
                 raise _fail(self, f"variants= holds {variant!r}, not a Variant.")
             if variant.name in names:
-                raise _fail(self, f"variant {variant.name!r} is declared twice.")
+                raise _fail(self, f"profile {variant.name!r} is declared twice.")
             names.add(variant.name)
         if not isinstance(self.platform, Platform):
             raise _fail(
@@ -2749,11 +2749,11 @@ DECLARATION_TYPES: tuple[type, ...] = (
 class Resolved:
     """One profile of the image after expansion, profile changes and reference checks.
 
-    *variant* is the profile's name, *items* every declaration it holds, *fragments* the
+    *profile* is the profile's name, *items* every declaration it holds, *fragments* the
     names of the components they came from. A component's ``check(resolved)`` reads it.
     """
 
-    variant: str
+    profile: str
     outputs: tuple[Target, ...]
     """Every target the profile builds, own or inherited (never empty)."""
     items: tuple[Declaration, ...]
@@ -2762,7 +2762,7 @@ class Resolved:
     def __post_init__(self) -> None:
         _freeze(self, "outputs")
         if not self.outputs:
-            raise _fail(self, f"profile {self.variant!r} resolved to no targets.")
+            raise _fail(self, f"profile {self.profile!r} resolved to no targets.")
 
     def bind(self, ref: Ref) -> Declaration:
         """The profile's final declaration *ref* names; ``ValidationError`` when absent."""
@@ -2770,7 +2770,7 @@ class Resolved:
             if item.ref == ref:
                 return item
         raise ValidationError(
-            f"profile {self.variant!r} does not declare {ref}.",
+            f"profile {self.profile!r} does not declare {ref}.",
             hint=f"Declare {ref} in the image or the profile, or reference one it declares.",
         )
 

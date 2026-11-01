@@ -365,7 +365,9 @@ The rules:
 - Exports are properties returning an `Endpoint`, a `ServiceRef` (`self.service("app")`) or
   a `ServiceReady`. A caller writes `requires=[app.http]` or puts `app.http` in an argv,
   where it renders as its URL. Nobody outside names a unit, a port or a path inside it.
-- `check(resolved)` returns diagnostics. It becomes a lint rule that `tundravm check` runs.
+- `check(resolved)` returns diagnostics. It becomes a lint rule that `tundravm check` runs,
+  once per profile: `resolved.profile` names it, and a finding without `profile=` is that
+  profile's.
 - `class X(Component, build_network=True)` says its builds fetch dependencies, so the
   tree builds with `WithNetwork=yes`.
 

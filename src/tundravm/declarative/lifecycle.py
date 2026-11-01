@@ -138,7 +138,7 @@ class Entry:
 
 @dataclass(frozen=True, slots=True)
 class Tree:
-    """A compiled mkosi project held in memory; ``variants`` are the variants it builds.
+    """A compiled mkosi project held in memory; ``profiles`` are the profiles it builds.
 
     ``digest`` covers each path, its bytes or symlink target and, for files, the
     exec bit alone: the umask and git keep nothing more, so the same tree hashes
@@ -147,7 +147,7 @@ class Tree:
 
     entries: tuple[Entry, ...]
     digest: str
-    variants: tuple[str, ...] = ()
+    profiles: tuple[str, ...] = ()
 
     def write(self, path: Path) -> None:
         """Write the tree to *path*, replacing what it holds and dropping stale mkosi
@@ -202,7 +202,7 @@ class Backend:
 @dataclass(frozen=True, slots=True)
 class Artifact:
     path: Path
-    variant: str
+    profile: str
     target: Target
     sha256: str
     recipe_digest: str
@@ -382,7 +382,7 @@ def read_tree(
     return Tree(
         entries=tuple(entries),
         digest=_tree_digest(entries),
-        variants=tuple(variants),
+        profiles=tuple(variants),
     )
 
 
@@ -529,7 +529,7 @@ def check_report(
             *_check.declaration_check(recipe, variants=names),
             *_check.unit_declaration_check(recipe, variants=names),
         ]
-    checked = sorted(checked, key=lambda d: (d.variant, _SEVERITY[d.severity], d.code, d.subject))
+    checked = sorted(checked, key=lambda d: (d.profile, _SEVERITY[d.severity], d.code, d.subject))
     found.extend(d for d in checked if d not in found)
     return found
 
@@ -541,8 +541,8 @@ def _located(recipe: Recipe, diagnostics: Sequence[Diagnostic]) -> list[Diagnost
     """*diagnostics* pointed at the declarations their subjects name in their variants."""
     declared = {v.name for v in recipe.variants}
     out: list[Diagnostic] = []
-    for name in dict.fromkeys(d.variant for d in diagnostics):
-        group = [d for d in diagnostics if d.variant == name]
+    for name in dict.fromkeys(d.profile for d in diagnostics):
+        group = [d for d in diagnostics if d.profile == name]
         if name in declared and any(not d.location and d.subject for d in group):
             group = locate(group, resolve(recipe, variant=name).items)
         out.extend(group)
@@ -702,7 +702,7 @@ def image_lock_status(
         elif detail:
             message = detail
         found.append(
-            Diagnostic(code, "error", message, subject=subject, variant=profile, hint=_DRIFT_HINT)
+            Diagnostic(code, "error", message, subject=subject, profile=profile, hint=_DRIFT_HINT)
         )
     if not found and not drift.digest_matches:
         found.append(
@@ -1046,7 +1046,7 @@ def bake_image(
                 artifacts.append(
                     Artifact(
                         path=_under(Path(ref.path), destination),
-                        variant=name,
+                        profile=name,
                         target=target,
                         sha256=ref.digest or "",
                         recipe_digest=recipe_digest,
@@ -1146,7 +1146,7 @@ def bake(
 
 def verify_artifact(artifact: Artifact) -> None:
     """Raise ``ArtifactError`` unless *artifact*'s file still hashes to its recorded sha256."""
-    context = {"variant": artifact.variant, "target": artifact.target, "path": str(artifact.path)}
+    context = {"profile": artifact.profile, "target": artifact.target, "path": str(artifact.path)}
     rebake = "Build the profile again (`tundravm build`) to record the artifact it should be."
     if not artifact.sha256:
         raise ArtifactError(
@@ -1188,7 +1188,7 @@ def measure(artifact: Artifact, *, scheme: Scheme = "qemu") -> Measurements:
     uki = _measured_uki(artifact)
     target = artifact.target
     profile = ProfileBuildResult(
-        profile=artifact.variant,
+        profile=artifact.profile,
         artifacts={
             target: ArtifactRef(
                 target=target,
@@ -1200,7 +1200,7 @@ def measure(artifact: Artifact, *, scheme: Scheme = "qemu") -> Measurements:
     )
     found = derive_measurements(
         backend=scheme,
-        profile=artifact.variant,
+        profile=artifact.profile,
         profile_result=profile,
     )
     tool = str(found.source)

@@ -123,10 +123,10 @@ def _measurable(tmp_path: Path, uki: Path) -> Artifact:
 def _derived(artifact: Artifact, scheme: MeasurementBackend) -> Measurements:
     """The compiler's measurement record of *artifact* (exports and verification)."""
     profile = ProfileBuildResult(
-        profile=artifact.variant,
+        profile=artifact.profile,
         artifacts={artifact.target: ArtifactRef(target=artifact.target, path=artifact.path)},
     )
-    return derive_measurements(backend=scheme, profile=artifact.variant, profile_result=profile)
+    return derive_measurements(backend=scheme, profile=artifact.profile, profile_result=profile)
 
 
 def _hex(value: object) -> bool:
@@ -211,7 +211,7 @@ def _no_uki(tmp_path: Path, variant: str) -> Artifact:
         variants=(Variant("default", outputs=("qemu",)), Variant("gcp", outputs=("gcp",))),
     )
     built = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build")
-    return next(a for a in built if a.variant == variant)
+    return next(a for a in built if a.profile == variant)
 
 
 @pytest.mark.parametrize(

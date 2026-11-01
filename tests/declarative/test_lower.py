@@ -152,7 +152,7 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
 
     assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE
     assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
-    assert [(d.severity, d.code, d.variant, d.subject) for d in check(lowered)] == [
+    assert [(d.severity, d.code, d.profile, d.subject) for d in check(lowered)] == [
         ("error", "disk-device-guessed", "default", "disk_persistent"),
         ("error", "kernel-missing", "default", ""),
         ("warning", "source-unpinned", "default", "app"),

@@ -8,9 +8,9 @@ or remove what the image declares, by reference (``motd.ref`` for a value you ho
 image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated at boot
 (``ConditionVirtualization=``), so one set of measurements covers all three.
 
-    tundravm show examples/02_variants.py --profile production --profile staging
-    tundravm lock examples/02_variants.py
-    tundravm build examples/02_variants.py --profile production
+    tundravm show examples/02_profiles.py --profile production --profile staging
+    tundravm lock examples/02_profiles.py
+    tundravm build examples/02_profiles.py --profile production
 """
 
 from tundravm import File, Image, Profile, Service
@@ -21,9 +21,9 @@ from tundravm.systemd import Resources
 motd = File.text("/etc/motd", "production\n")
 
 image = Image(
-    "variants",
+    "profiles",
     packages=["ca-certificates", "busybox"],
-    files=[motd, File.text("/srv/www/index.html", "<h1>variants</h1>\n")],
+    files=[motd, File.text("/srv/www/index.html", "<h1>profiles</h1>\n")],
     services=[
         Service(
             "app",

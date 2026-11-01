@@ -134,6 +134,11 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   every `CompiledTree` reader, `fragment_plan(profile=)`, `assert_diagnostic(profile=,
   profiles=)`, `profiles=` on `compile_tree`, `assert_clean`, `assert_tree_matches` and the
   `compiled` fixture, and the `Profiles` alias (was `Variants`).
+- The rest of the SDK says profile too: `Diagnostic(profile=)` and `.profile`, `"profile"`
+  in `check --json`, `Resolved.profile`, `Tree.profiles` from `tundravm.compile()`,
+  `Artifact.profile` from `tundravm.bake()`, `profiles` and `profile` in `show --json`, the
+  `profile` key of error contexts, and the lint code `profile-empty` (was `variant-empty`).
+  `examples/02_variants.py` is `examples/02_profiles.py`.
 - Evidence: `docs/design/evidence/gate4-sdk.md`.
 
 ### Profiles and the ESP

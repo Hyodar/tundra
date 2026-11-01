@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import inspect
 import pkgutil
+import re
 from pathlib import Path
 
 import pytest
@@ -253,3 +256,23 @@ def test_the_internal_model_is_not_exported() -> None:
         assert name not in exported, name
         assert not hasattr(tundravm, name), name
         assert hasattr(declarative, name), f"{name} must stay importable from the internals"
+
+
+def test_the_public_surface_says_profile() -> None:
+    """No public signature or docstring, nor those of what compile and bake return, says variant."""
+    lifecycle = declarative.lifecycle
+    values = [
+        getattr(importlib.import_module(module), name)
+        for module in _reference.MODULES
+        for name in importlib.import_module(module).__all__
+    ]
+    found = []
+    for value in [*values, lifecycle.Tree, lifecycle.Artifact]:
+        members = [value, *vars(value).values()] if isinstance(value, type) else [value]
+        for member in filter(callable, members):
+            text = inspect.getdoc(member) or ""
+            with contextlib.suppress(TypeError, ValueError):
+                text += str(inspect.signature(member))
+            if re.search(r"(?<!in)variant", text, re.IGNORECASE):
+                found.append(getattr(member, "__qualname__", repr(member)))
+    assert found == []

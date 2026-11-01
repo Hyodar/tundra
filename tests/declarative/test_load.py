@@ -42,7 +42,7 @@ def recipe_file(tmp_path: Path) -> Path:
 def test_cli_shows_and_compiles_a_declarative_recipe(recipe_file: Path, tmp_path: Path) -> None:
     code, out = run_main("show", str(recipe_file), "--json")
     assert code == EXIT_OK
-    payload = json.loads(out)["variants"]
+    payload = json.loads(out)["profiles"]
     assert set(payload) == {"default", "azure"}
     assert payload["default"]["base"] == "debian/bookworm"
 

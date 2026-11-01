@@ -36,7 +36,7 @@ GLOBAL_LABEL = "tundravm"
 class Event:
     """One progress event.
 
-    ``profile`` is the variant the event concerns (``variant`` in :meth:`to_dict`),
+    ``profile`` is the profile the event concerns,
     or ``None`` for a step that spans several. ``elapsed_s`` counts seconds since
     the operation started.
     Phase events carry ``extra["phase"]`` and ``extra["status"]`` (``start``,
@@ -56,7 +56,7 @@ class Event:
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.kind,
-            "variant": self.profile,
+            "profile": self.profile,
             "message": self.message,
             "elapsed_s": round(self.elapsed_s, 3),
             "extra": dict(self.extra),

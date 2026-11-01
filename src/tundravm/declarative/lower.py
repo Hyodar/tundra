@@ -252,7 +252,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             f"{default.name!r}'s mkosi settings, kernel and source builds.",
             hint=f"Declare those settings, the kernel and the builds once, for {default.name!r} "
             "(in the image itself); or make the profile an image of its own.",
-            context={"variants": ", ".join(name for name, _ in rejected)},
+            context={"profiles": ", ".join(name for name, _ in rejected)},
         )
     extra: dict[str, Any] = {} if recipe.policy is None else {"policy": recipe.policy}
     lowered = Lowered(
@@ -301,7 +301,7 @@ def _require_shared_distribution(lowered: Lowered) -> None:
                 f"cached for {default!r}'s toolchain.",
                 hint=f"Declare those build packages and repositories in {default!r} (in the "
                 "image itself), or make the profile an image of its own.",
-                context={"variant": name},
+                context={"profile": name},
             )
 
 

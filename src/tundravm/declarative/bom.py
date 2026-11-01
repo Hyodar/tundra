@@ -228,7 +228,7 @@ def manifest_path(artifact: Artifact) -> Path:
     ``<variant>.manifest.json`` and ``<artifact stem>.manifest`` are taken too when
     they exist; the first candidate is returned when none does.
     """
-    return package_manifest(artifact.path, artifact.variant)
+    return package_manifest(artifact.path, artifact.profile)
 
 
 def read_manifest(path: Path) -> tuple[dict[str, str], tuple[Component, ...]]:
@@ -306,7 +306,7 @@ def sbom(
     unbound = _unbound(artifact, lock, path)
     if unbound and not allow_unbound:
         raise ArtifactError(
-            f"The SBOM of {artifact.variant}/{artifact.target} would not describe the build: "
+            f"The SBOM of {artifact.profile}/{artifact.target} would not describe the build: "
             + "; ".join(unbound)
             + ".",
             hint=(
@@ -314,15 +314,15 @@ def sbom(
                 "artifact, or build again. allow_unbound=True writes the document anyway, "
                 "marked incomplete."
             ),
-            context={"variant": artifact.variant, "target": artifact.target},
+            context={"profile": artifact.profile, "target": artifact.target},
         )
     payload = lock.lockfile.recipe if lock is not None else {}
     profiles = payload.get("profiles") or {}
-    profile: Mapping[str, Any] = profiles.get(artifact.variant) or {}
+    profile: Mapping[str, Any] = profiles.get(artifact.profile) or {}
     distribution: Mapping[str, Any] = payload.get("distribution") or payload
     declared: Iterable[str] = ()
     if lock is not None:
-        declared = lock.lockfile.dependencies.get(artifact.variant) or profile.get("packages", ())
+        declared = lock.lockfile.dependencies.get(artifact.profile) or profile.get("packages", ())
     notes = [f"unbound, the document is incomplete: {problem}" for problem in unbound]
     shown = _relative(path, artifact.build)
     missing = ("manifest",) if artifact.manifest_sha256 is not None and not path.is_file() else ()
@@ -333,9 +333,9 @@ def sbom(
         notes.append("no lockfile: source pins are not listed")
     base = str(distribution.get("base") or _base_of(config))
     arch = str(distribution.get("arch") or _FROM_MKOSI_ARCH.get(config.get("architecture", ""), ""))
-    sources = () if lock is None else _locked_sources(lock, artifact.variant, profile)
+    sources = () if lock is None else _locked_sources(lock, artifact.profile, profile)
     return Sbom(
-        variant=artifact.variant,
+        variant=artifact.profile,
         components=_sorted(packages + sources),
         base=base,
         arch=arch,

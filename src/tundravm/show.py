@@ -47,7 +47,7 @@ def image_report(
     return {
         "image": img.image_id,
         "digest": img.select(profiles).digest(),
-        "variants": {name: given.get(name) or describe(img, profile=name) for name in profiles},
+        "profiles": {name: given.get(name) or describe(img, profile=name) for name in profiles},
     }
 
 
@@ -65,7 +65,7 @@ def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[s
                 "origins": [
                     {
                         "action": origin.action,
-                        "variant": origin.variant,
+                        "profile": origin.variant,
                         "fragments": [f for f, _ in origin.fragments],
                         "fields": list(origin.fields),
                         "location": display_location(origin.location),
@@ -82,7 +82,7 @@ def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[s
 
 
 def render_image(report: Mapping[str, Any]) -> str:
-    return "\n\n".join(render(d).rstrip() for d in report["variants"].values())
+    return "\n\n".join(render(d).rstrip() for d in report["profiles"].values())
 
 
 def image_units(img: Lowered, profiles: Sequence[str], locked: Lock | None) -> dict[str, str]:

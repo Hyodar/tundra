@@ -374,7 +374,7 @@ class DevAccess(Component):
             _diagnostic(
                 "dev-access-rsa-key",
                 "info",
-                f"profile {resolved.variant!r} accepts {len(rsa)} RSA SSH key(s): prefer "
+                f"profile {resolved.profile!r} accepts {len(rsa)} RSA SSH key(s): prefer "
                 "ed25519 (ssh-keygen -t ed25519)",
             ),
         )

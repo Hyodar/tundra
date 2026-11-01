@@ -81,7 +81,7 @@ def test_fragment_requires_and_checks() -> None:
         ),
     )
     found = lint(recipe)
-    assert {(d.code, d.variant, d.severity) for d in found} == {
+    assert {(d.code, d.profile, d.severity) for d in found} == {
         ("fragment-requires-missing", "default", "error"),
         ("curl-missing", "default", "warning"),
     }
@@ -107,7 +107,7 @@ def test_ancestry_parents_resolve_first_and_targets_inherit() -> None:
     assert dev.outputs == ("azure",)
     rescue = resolve(recipe, variant="rescue")
     assert names(rescue) == ["busybox"] and rescue.outputs == ("qemu",)
-    assert [r.variant for r in resolve_all(recipe)] == ["default", "azure", "azure-dev", "rescue"]
+    assert [r.profile for r in resolve_all(recipe)] == ["default", "azure", "azure-dev", "rescue"]
 
 
 def test_unknown_inherits_and_cycles_are_malformed() -> None:
@@ -233,7 +233,7 @@ def test_identity_collisions_fail_and_equal_repeats_dedupe() -> None:
     )
     found = lint(recipe)
     # The common-level collision is reported once, for no particular variant.
-    assert [(d.code, d.variant) for d in found] == [
+    assert [(d.code, d.profile) for d in found] == [
         ("identity-collision", ""),
         ("identity-collision", "other"),
     ]
@@ -407,4 +407,4 @@ def test_hook_unit_and_target_checks() -> None:
         "hook-after-undefined",
         "needs-without-init",
     ]
-    assert {d.variant for d in found} == {"local"}
+    assert {d.profile for d in found} == {"local"}

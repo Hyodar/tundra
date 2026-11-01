@@ -132,7 +132,7 @@ class KeyGeneration(Module):
                     "Place pipes under /run (tmpfs): a FIFO on persistent storage "
                     "survives reboots and can be replaced by a regular file."
                 ),
-                variant=profile,
+                profile=profile,
                 subject=spec.name,
             )
 

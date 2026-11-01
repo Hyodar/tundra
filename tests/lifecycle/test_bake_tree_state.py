@@ -170,6 +170,6 @@ def test_bake_warns_about_unreadable_leftovers_instead_of_crashing(tmp_path: Pat
             if path.exists():
                 path.chmod(0o755)
 
-    assert [a.variant for a in artifacts] == ["default"]
+    assert [a.profile for a in artifacts] == ["default"]
     warnings = [e.message for e in reporter.events if e.kind == "warning"]
     assert len(warnings) == 1 and "mkosi.extra/locked" in warnings[0]

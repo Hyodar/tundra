@@ -219,7 +219,7 @@ def compile_tree(
     root = Path(path) if path is not None else Path(tempfile.mkdtemp(prefix="tundravm-tree-"))
     tree = lifecycle.compile(recipe, variants=_names(profiles))
     tree.write(root)
-    return CompiledTree(root, tree.variants, default_profile=tree.variants[0])
+    return CompiledTree(root, tree.profiles, default_profile=tree.profiles[0])
 
 
 Lintable = Recipe | PlannedImage | Sequence[Diagnostic]
@@ -289,7 +289,7 @@ def assert_diagnostic(
         if (
             d.code == code
             and (severity is None or d.severity == severity)
-            and (profile is None or d.variant == profile)
+            and (profile is None or d.profile == profile)
             and (wanted_subject is None or d.subject == wanted_subject)
             and (location is None or d.location == location)
         ):

@@ -444,7 +444,7 @@ def test_show_lists_sources_and_hooks_at_their_pins(
     if locked:
         pins = lock(load_recipe(path), resolver=_Fixed(SHA_A))
         write_lock(pins, tmp_path / "build" / "tundravm.lock")  # the one lockfile the CLI reads
-    info = json.loads(_inspect(path, "--json"))["variants"]["default"]
+    info = json.loads(_inspect(path, "--json"))["profiles"]["default"]
     assert info["sources"] == [
         {
             "build": "script",

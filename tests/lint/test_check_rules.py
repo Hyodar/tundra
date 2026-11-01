@@ -187,12 +187,12 @@ def test_cloud_variants_lint_clean() -> None:
     assert report(subject, "azure", "gcp", "agent", "both") == []
 
 
-# f. variant-empty
+# f. profile-empty
 
 
-def test_variant_empty() -> None:
+def test_profile_empty() -> None:
     [diag] = report(recipe(variants=(DEFAULT, Variant("bare"))), "bare")
-    assert (diag.severity, diag.code, diag.variant) == ("info", "variant-empty", "bare")
+    assert (diag.severity, diag.code, diag.profile) == ("info", "profile-empty", "bare")
 
 
 def test_variant_with_content_or_default_is_not_empty() -> None:
@@ -357,7 +357,7 @@ def test_secret_target_unsupported_by_an_external_provider() -> None:
 def test_kernel_missing() -> None:
     subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT,))
     [diag] = report(subject)
-    assert (diag.severity, diag.code, diag.variant) == ("error", "kernel-missing", "default")
+    assert (diag.severity, diag.code, diag.profile) == ("error", "kernel-missing", "default")
     assert "A kernel must be installed" in diag.message
     for fix in ("linux-image-amd64", "Kernel(...)", '"Bootable", ("no",)'):
         assert fix in (diag.hint or "")
@@ -384,7 +384,7 @@ def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> Non
 def test_kernel_missing_is_per_variant() -> None:
     booted = Variant("booted", add=Fragment("booted", items=(KERNEL,)))
     subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT, booted))
-    assert [(d.variant, d.code) for d in report(subject, "default", "booted")] == [
+    assert [(d.profile, d.code) for d in report(subject, "default", "booted")] == [
         ("default", "kernel-missing")
     ]
 
@@ -438,16 +438,16 @@ def test_ordering_is_deterministic() -> None:
     )
     img = lower(subject)
     diags = check(img, profiles=["b", "a", "default"])
-    keys = [(d.variant, d.severity, d.code) for d in diags]
+    keys = [(d.profile, d.severity, d.code) for d in diags]
     assert keys == [
         ("a", "warning", "service-command-not-shipped"),
-        ("a", "info", "variant-empty"),
+        ("a", "info", "profile-empty"),
         ("b", "error", "file-path-relative"),
         ("b", "warning", "service-command-not-shipped"),
         ("default", "warning", "service-command-not-shipped"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
-    assert [(d.variant, d.code) for d in lint(subject)] == [
+    assert [(d.profile, d.code) for d in lint(subject)] == [
         (profile, code) for profile, _, code in keys
     ]
 
@@ -459,17 +459,17 @@ def test_render_text_and_dict() -> None:
         "error",
         "boom",
         subject="app",
-        variant="default",
+        profile="default",
         hint="fix it",
         context=(("user", "app"), ("group", "app")),
     )
-    info = Diagnostic("variant-empty", "info", "m", variant="x")
+    info = Diagnostic("profile-empty", "info", "m", profile="x")
     whole = Diagnostic("lock-stale", "warning", "w")
     text = render([diag, info, whole])
     assert text.splitlines() == [
         "error service-user-missing [default] app: boom",
         "    hint: fix it",
-        "info variant-empty [x]: m",
+        "info profile-empty [x]: m",
         "warning lock-stale [image]: w",
         "1 error, 1 warning, 1 info",
     ]
@@ -479,7 +479,7 @@ def test_render_text_and_dict() -> None:
         "severity": "error",
         "message": "boom",
         "subject": "app",
-        "variant": "default",
+        "profile": "default",
         "location": "",
         "hint": "fix it",
         "context": {"group": "app", "user": "app"},
@@ -491,12 +491,12 @@ def test_render_joins_profiles_and_states_a_shared_hint_once() -> None:
         return Diagnostic("source-unpinned", "warning", name, name, profile, hint="lock")
 
     found = [unpinned("a", "dev"), unpinned("b", "dev"), unpinned("a", "prod")]
-    found.append(Diagnostic("variant-empty", "info", "m", variant="prod", hint="drop it"))
+    found.append(Diagnostic("profile-empty", "info", "m", profile="prod", hint="drop it"))
     assert render(found).splitlines() == [
         "warning source-unpinned [dev, prod] a: a",
         "warning source-unpinned [dev] b: b",
         "    hint (all 2 above): lock",
-        "info variant-empty [prod]: m",
+        "info profile-empty [prod]: m",
         "    hint: drop it",
         "0 errors, 3 warnings, 1 info (3 lines)",
     ]
@@ -504,7 +504,7 @@ def test_render_joins_profiles_and_states_a_shared_hint_once() -> None:
 
 
 def test_a_source_location_is_rendered_where_it_is_known() -> None:
-    placed = Diagnostic("app-port", "warning", "port 80", variant="default", location="node.py:27")
+    placed = Diagnostic("app-port", "warning", "port 80", profile="default", location="node.py:27")
     plain = Diagnostic("lock-stale", "warning", "w")
     assert render([placed]).splitlines()[:2] == [
         "warning app-port [default]: port 80",
@@ -560,7 +560,7 @@ def test_cli_variant_selection(tmp_path: Path) -> None:
     recipe_path = write_recipe(tmp_path, 'variants.append(Variant("bare"))\n')
     code, out = run(str(recipe_path), "--profile", "default", "--profile", "bare")
     assert code == 0
-    assert "info variant-empty [bare]" in out
+    assert "info profile-empty [bare]" in out
     assert run(str(recipe_path), "--profile", "default")[1] == "no findings\n"
 
 

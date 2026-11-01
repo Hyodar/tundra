@@ -113,6 +113,9 @@ RENAMED = {
     "tundravm.observability/platforms (internal: _reporting, _platforms)": re.compile(
         r"\btundravm\.(?:observability|platforms)\b"
     ),
+    "variant-empty, resolved.variant (profile-empty, resolved.profile)": re.compile(
+        r"\bvariant-empty\b|\bresolved\.variant\b"
+    ),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {
@@ -132,6 +135,8 @@ RENAMED_KEYWORDS = {
     },
     "assert_diagnostic": {"variants": "profiles=", "variant": "profile="},
     "fragment_plan": {"variant": "profile="},
+    "Diagnostic": {"variant": "profile="},
+    "Resolved": {"variant": "profile="},
     "Recipe": {
         "common": "items=",
         **{
@@ -388,6 +393,8 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         'BootStep("state", "true", priority=25)',
         'fake_fragment("late", init="echo late", priority=40)',
         "the init-priority-collision warning",
+        'Diagnostic("app-x", "error", "m", variant=resolved.variant)',
+        "the variant-empty finding",
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:

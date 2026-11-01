@@ -180,13 +180,13 @@ class DiskEncryption(Module):
                     code="disk-key-undefined",
                     message=(
                         f"disk {disk.name!r} uses key {key_ref!r}, which no "
-                        "Key in this variant declares"
+                        "Key in this profile declares"
                     ),
                     hint=(
                         f"Declared keys: {declared}. Declare Key({key_ref!r}, ...) "
-                        "in this variant, or fix the Disk's key."
+                        "in this profile, or fix the Disk's key."
                     ),
-                    variant=profile,
+                    profile=profile,
                     subject=disk.name,
                 )
             elif disk.key_path is not None and key.output != disk.key_path:
@@ -202,7 +202,7 @@ class DiskEncryption(Module):
                         f"Set Key({key.name!r}, output={disk.key_path!r}) or point the Disk "
                         "at the key's output."
                     ),
-                    variant=profile,
+                    profile=profile,
                     subject=disk.name,
                 )
 
@@ -227,7 +227,7 @@ class DiskEncryption(Module):
                         "format='never' for a disk prepared beforehand; "
                         "Policy(storage_safety='warn') makes this a warning."
                     ),
-                    variant=profile,
+                    profile=profile,
                     subject=disk.name,
                 )
             elif _KERNEL_NAME.fullmatch(disk.device):
@@ -242,7 +242,7 @@ class DiskEncryption(Module):
                         "Kernel names follow probe order; name the disk by a stable link: "
                         "/dev/disk/by-id/ (a virtio serial, a SCSI WWN) or /dev/disk/by-path/."
                     ),
-                    variant=profile,
+                    profile=profile,
                     subject=disk.name,
                 )
 

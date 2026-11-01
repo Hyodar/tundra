@@ -160,7 +160,7 @@ def test_editing_the_build_behind_an_executable_is_reported() -> None:
         ),
     )
     recipe = Recipe("r", items=(binary, service), variants=variants)
-    stale = {d.variant: d.message for d in lint(recipe) if d.code == "executable-stale"}
+    stale = {d.profile: d.message for d in lint(recipe) if d.code == "executable-stale"}
     assert set(stale) == {"moved", "gone"}
     assert "runs /usr/bin/tool, which Build 'tool' no longer installs" in stale["moved"]
     assert "edited in profile 'moved'" in stale["moved"]

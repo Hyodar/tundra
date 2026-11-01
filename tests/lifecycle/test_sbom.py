@@ -106,7 +106,7 @@ def _artifact(tmp_path: Path, *, manifest: bool = True, lock: Lock | None = None
         recorded = hashlib.sha256(text.encode()).hexdigest()
     return Artifact(
         path=path,
-        variant="default",
+        profile="default",
         target="qemu",
         sha256=UKI_SHA,
         recipe_digest="r" * 64,

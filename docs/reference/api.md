@@ -680,7 +680,7 @@ Diagnostic(
     severity: Severity,
     message: str,
     subject: str = '',
-    variant: str = '',
+    profile: str = '',
     location: str = '',
     hint: str | None = None,
     context: Context = (),
@@ -878,7 +878,7 @@ Raiko(
 
 ```python
 Resolved(
-    variant: str,
+    profile: str,
     outputs: tuple[Target, ...],
     items: tuple[Declaration, ...],
     fragments: tuple[str, ...],

@@ -24,7 +24,7 @@ class Diagnostic:
     """One finding: a lint *code*, its *severity* and a one-line *message*.
 
     *subject* names what it is about (a path, unit, user, lockfile section;
-    ``""`` for none). *variant* is the profile it is in, ``""`` for the image as a
+    ``""`` for none). *profile* is the profile it is in, ``""`` for the image as a
     whole (what every profile shares, the lockfile, the host). *location* is the source
     line it points at, ``file:line`` with the file relative to the working directory
     (absolute outside it), ``""`` when unknown: built-in checks fill it from the
@@ -40,7 +40,7 @@ class Diagnostic:
     severity: Severity
     message: str
     subject: str = ""
-    variant: str = ""
+    profile: str = ""
     location: str = ""
     hint: str | None = None
     context: Context = ()
@@ -67,7 +67,7 @@ class Diagnostic:
             "severity": self.severity,
             "message": self.message,
             "subject": self.subject,
-            "variant": self.variant,
+            "profile": self.profile,
             "location": self.location,
             "hint": self.hint,
             "context": dict(self.context),

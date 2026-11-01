@@ -221,7 +221,7 @@ def _rule_service_user_missing(
             code="service-user-missing",
             message=f"service {svc.name!r} runs as user {user!r}, which is never created",
             hint=hint,
-            variant=profile_name,
+            profile=profile_name,
             subject=svc.name,
         )
 
@@ -248,7 +248,7 @@ def _rule_user_group_undefined(
                     f"{profile_name!r}, or drop it from groups=; useradd fails on an "
                     "unknown group."
                 ),
-                variant=profile_name,
+                profile=profile_name,
                 subject=user.name,
             )
 
@@ -280,7 +280,7 @@ def _rule_file_path_duplicate(
                     "Keep a single declaration. If two components write this path, drop "
                     "one of them or merge the content into one File."
                 ),
-                variant=profile_name,
+                profile=profile_name,
                 subject=path,
             )
 
@@ -300,7 +300,7 @@ def _rule_file_path_relative(
                 code="file-path-relative",
                 message=f"{kind} path contains '..' and may escape the image root",
                 hint=f"Write the normalized absolute path instead, e.g. {_norm(path)!r}.",
-                variant=profile_name,
+                profile=profile_name,
                 subject=path,
             )
 
@@ -335,12 +335,12 @@ def _rule_service_command_not_shipped(
                 f"fires when the profile installs no packages and no file or hook mentions "
                 f"{name!r}; ignore it if the base image already has the binary."
             ),
-            variant=profile_name,
+            profile=profile_name,
             subject=svc.name,
         )
 
 
-def _rule_variant_empty(
+def _rule_profile_empty(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
     if profile_name == image.default_profile:
@@ -372,10 +372,10 @@ def _rule_variant_empty(
     hint = f"Declare what it adds to {state.extends!r} in its add= or changes=, or remove it."
     yield Diagnostic(
         severity="info",
-        code="variant-empty",
+        code="profile-empty",
         message=message,
         hint=hint,
-        variant=profile_name,
+        profile=profile_name,
     )
 
 
@@ -405,7 +405,7 @@ def _rule_debloat_removes_needed_unit(
                     f"Add it to Debloat(keep_units_extra=({unit!r},)) so the "
                     "systemd minimization keeps it."
                 ),
-                variant=profile_name,
+                profile=profile_name,
                 subject=svc.name,
             )
         for dep in (*svc.requires, *svc.wants):
@@ -419,7 +419,7 @@ def _rule_debloat_removes_needed_unit(
                     f"Add it to Debloat(keep_units_extra=({dep!r},)), or drop "
                     "the dependency; a Requires= on a masked unit stops the service."
                 ),
-                variant=profile_name,
+                profile=profile_name,
                 subject=svc.name,
             )
 
@@ -443,7 +443,7 @@ def _rule_debloat_removes_declared_file(
                         f"Add {pattern!r} to Debloat(keep_paths=(...)) or move the file "
                         "outside the removed path."
                     ),
-                    variant=profile_name,
+                    profile=profile_name,
                     subject=path,
                 )
                 break
@@ -467,7 +467,7 @@ def _rule_source_unpinned(
             code="source-unpinned",
             message=message,
             hint=hint,
-            variant=profile_name,
+            profile=profile_name,
             subject=spec.name,
         )
 
@@ -524,7 +524,7 @@ def _rule_kernel_missing(
             'declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) '
             "with Debian(boot=None) for a non-bootable image."
         ),
-        variant=profile_name,
+        profile=profile_name,
     )
 
 
@@ -557,7 +557,7 @@ def _rule_built_kernel_modules(
             ),
             hint="Drop kernel_modules and build those drivers in (KernelConfig), or pass "
             "Kernel(modules=True).",
-            variant=profile_name,
+            profile=profile_name,
             subject="kernel_modules",
         )
     config = state.debloat
@@ -575,7 +575,7 @@ def _rule_built_kernel_modules(
                 ),
                 hint="Debloat(keep_modules=True) keeps them; or build them in "
                 "(Kernel(modules=False)).",
-                variant=profile_name,
+                profile=profile_name,
                 subject=MODULES_PATH,
             )
 
@@ -609,7 +609,7 @@ def _rule_debloat_removes_modules(
             "Debloat(keep_modules=True) keeps them; Debloat(keep_modules=False) removes them "
             "on purpose; or declare Kernel(...) built with everything the image needs."
         ),
-        variant=profile_name,
+        profile=profile_name,
         subject=MODULES_PATH,
     )
 
@@ -634,7 +634,7 @@ def _rule_recipe_arch_unsupported(
                 "EfiStub downloads systemd-boot-efi_<version>_amd64.deb only: drop EfiStub "
                 "from aarch64 recipes, or build for x86_64."
             ),
-            variant=profile_name,
+            profile=profile_name,
             subject="EfiStub",
         )
     if "qemu" in state.output_targets:
@@ -642,14 +642,14 @@ def _rule_recipe_arch_unsupported(
             severity="error",
             code="recipe-arch-unsupported",
             message=(
-                "the platform's arch is aarch64 but the variant targets qemu, whose deploy adapter "
+                "the platform's arch is aarch64 but the profile targets qemu, whose deploy adapter "
                 "boots images with qemu-system-x86_64"
             ),
             hint=(
                 "The qemu adapter runs qemu-system-x86_64 only, and TDX guests are x86-64: "
                 "set Debian(..., arch='x86_64')."
             ),
-            variant=profile_name,
+            profile=profile_name,
             subject="qemu",
         )
 
@@ -719,7 +719,7 @@ def _rule_secret_in_file(
                 code="secret-in-file",
                 message=_secret_message("the file", findings),
                 hint=secret_hint(image, profile_name),
-                variant=profile_name,
+                profile=profile_name,
                 subject=path,
             )
 
@@ -779,7 +779,7 @@ def _rule_secret_in_env(
                 code="secret-in-env",
                 message=_secret_message(f"service {name!r}", found),
                 hint=secret_hint(image, profile_name),
-                variant=profile_name,
+                profile=profile_name,
                 subject=name,
             )
     for path, content in _shipped_files(state):
@@ -792,7 +792,7 @@ def _rule_secret_in_env(
                 code="secret-in-env",
                 message=_secret_message("the unit file", findings),
                 hint=secret_hint(image, profile_name),
-                variant=profile_name,
+                profile=profile_name,
                 subject=path,
             )
 
@@ -890,7 +890,7 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             severity="info",
             message=f"unit {name!r} runs as root ({spelled})",
             subject=name,
-            variant=variant,
+            profile=variant,
             hint="Drop user= to run as a system user named after the unit (declared for you); "
             "grant one capability with Hardening.strict(capabilities=(...)) if it needs one.",
         )
@@ -902,7 +902,7 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             severity="warning",
             message=f"unit {name!r} runs without a sandbox (Hardening.none())",
             subject=name,
-            variant=variant,
+            profile=variant,
             hint="Use hardening=Hardening.relaxed() or relax one knob of Hardening.strict(...) "
             "(jit=True, devices=(...), capabilities=(...)) instead of dropping them all.",
         )
@@ -920,7 +920,7 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             severity="info",
             message=f"unit {name!r} relaxes the strict sandbox: {', '.join(dropped)}{legacy}",
             subject=name,
-            variant=variant,
+            profile=variant,
             hint="Each relaxed knob widens what a compromised process can do; keep the ones "
             "the program does not need (docs/reference/api.md: Hardening).",
         )
@@ -933,7 +933,7 @@ def _unit_extra(name: str, extra: Mapping[str, Mapping[str, object]], variant: s
         severity="info",
         message=f"unit {name!r} sets {keys} through the extra= escape hatch",
         subject=name,
-        variant=variant,
+        profile=variant,
         hint=(
             "extra= is for directives no typed field covers; prefer a field when one exists "
             "(docs/reference/api.md lists them), so the setting stays typed and validated."
@@ -947,7 +947,7 @@ def _unit_raw(name: str, variant: str) -> Diagnostic:
         severity="info",
         message=f"unit {name!r} is hand-written unit text",
         subject=name,
-        variant=variant,
+        profile=variant,
         hint=(
             f"Declare Service({posixpath.splitext(name)[0]!r}, command, ...) instead: the "
             "compiler renders the unit, its ordering after needs= and its enablement."
@@ -961,7 +961,7 @@ def _unit_as_file(path: str, variant: str) -> Diagnostic:
         severity="info",
         message=f"the unit file {path!r} is shipped as a File",
         subject=path,
-        variant=variant,
+        profile=variant,
         hint="Ship it as Unit(name, text) so enabled=, needs= and the unit lint apply to it.",
     )
 
@@ -1291,11 +1291,11 @@ _REGISTRY: tuple[Rule, ...] = (
         (_rule_service_command_not_shipped,),
     ),
     Rule(
-        "variant-empty",
+        "profile-empty",
         "info",
         "A profile declares nothing of its own, so it builds the same image as the one it extends.",
         "Declare what it adds in its add= or changes=, or remove it.",
-        (_rule_variant_empty,),
+        (_rule_profile_empty,),
     ),
     Rule(
         "debloat-removes-needed-unit",
@@ -1613,7 +1613,7 @@ _PASSES: tuple[RuleCheck, ...] = tuple(dict.fromkeys(c for rule in _REGISTRY for
 
 
 def _sort_key(d: Diagnostic) -> tuple[str, int, str, str, str]:
-    return (d.variant, _SEVERITY[d.severity], d.code, d.subject or "", d.message)
+    return (d.profile, _SEVERITY[d.severity], d.code, d.subject or "", d.message)
 
 
 def check(image: Lowered, *, profiles: Sequence[str] | None = None) -> list[Diagnostic]:
@@ -1645,7 +1645,7 @@ _SOURCE_LINE = re.compile(r"(?P<file>.+):(?P<line>[0-9]+)")
 
 def _where(d: Diagnostic) -> str:
     """*d*'s profile as the reports show it: ``image`` for the whole image."""
-    return d.variant or "image"
+    return d.profile or "image"
 
 
 def render(diagnostics: Sequence[Diagnostic]) -> str:
@@ -1680,7 +1680,7 @@ def _merged(diagnostics: Sequence[Diagnostic]) -> list[tuple[Diagnostic, str]]:
     the profiles it is in (``dev, production``)."""
     groups: dict[Diagnostic, list[str]] = {}
     for d in diagnostics:
-        groups.setdefault(replace(d, variant=""), []).append(_where(d))
+        groups.setdefault(replace(d, profile=""), []).append(_where(d))
     return [(d, ", ".join(dict.fromkeys(where))) for d, where in groups.items()]
 
 
@@ -1861,7 +1861,7 @@ def _unreproducible_setting(setting: Any, variant: str) -> Iterator[Diagnostic]:
             message=f"Setting {subject} rewrites the configuration after `mkosi summary` "
             "resolved it",
             subject=subject,
-            variant=variant,
+            profile=variant,
             hint="Declare what the script would set as typed declarations or Settings.",
         )
     passed = [v for v in setting.values if "=" not in v]
@@ -1872,7 +1872,7 @@ def _unreproducible_setting(setting: Any, variant: str) -> Iterator[Diagnostic]:
             message=f"Setting {subject} passes the host's {', '.join(passed or setting.values)} "
             "into the build",
             subject=subject,
-            variant=variant,
+            profile=variant,
             hint="Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
         )
 
@@ -1890,7 +1890,7 @@ def _declaration_findings(item: object, variant: str) -> Iterator[Diagnostic]:
                     severity="info",
                     message=f"Setting {item.section}.{item.key} has a typed spelling: {typed}",
                     subject=f"{item.section}.{item.key}",
-                    variant=variant,
+                    profile=variant,
                     hint=f"Declare {typed} instead; Setting is for keys tundravm has no field for."
                     + (
                         _VARIANT_SETTING
@@ -1909,7 +1909,7 @@ def _declaration_findings(item: object, variant: str) -> Iterator[Diagnostic]:
                     severity="info",
                     message=f"{type(item).__name__} {item.name!r} runs what {declaration} declares",
                     subject=item.name,
-                    variant=variant,
+                    profile=variant,
                     hint=f"Declare {declaration} instead of the command.",
                 ),
                 item,

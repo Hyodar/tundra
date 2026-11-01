@@ -25,7 +25,7 @@ SHORT_DIGEST_LEN = 12
 
 
 _IMAGE_PARENT: Any = object()
-"""``describe(inherits=...)`` default: the profile the lowered image builds the variant on."""
+"""``describe(inherits=...)`` default: the profile the lowered image builds *profile* on."""
 
 
 def describe(
@@ -35,15 +35,15 @@ def describe(
     inherits: str | None = _IMAGE_PARENT,
     fragments: Sequence[str] = (),
 ) -> dict[str, object]:
-    """Describe what *image* will produce for variant *profile* (default: the active one).
+    """Describe what *image* will produce for *profile* (default: the active one).
 
     Keys are sorted; lists are sorted by their natural identity (path, name,
     ...) except hooks, which keep registration order within each phase.
     File and init-script contents are summarized as short sha256 digests.
-    A variant built on another is described as built: merged over it. Hooks and
+    A profile built on another is described as built: merged over it. Hooks and
     sources show the pins of the lockfile *image* reads, as compile renders them.
     *inherits* and *fragments* are the recipe's ``Variant.inherits`` and the
-    fragment names the variant resolved to.
+    fragment names the profile resolved to.
     """
     selected = image.profile(profile)
     pins = image.build_pins()
@@ -150,7 +150,7 @@ def describe(
             }
             for u in sorted(profile_state.users, key=lambda item: item.name)
         ],
-        "variant": selected,
+        "profile": selected,
     }
 
 
@@ -164,7 +164,7 @@ def render(description: dict[str, object]) -> str:
 
     lines: list[str] = [
         f"Image: {description['base']} ({description['arch']})"
-        f"  profile={description['variant']}"
+        f"  profile={description['profile']}"
         f"  reproducible={_yes_no(description['reproducible'])}"
     ]
     if description.get("mirror"):

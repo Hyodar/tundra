@@ -48,6 +48,7 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `network-no-route` | warning | A static address without a gateway reaches its own subnet only, so NTS time and every remote endpoint fail. | Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")). |
 | `observability-plaintext` | warning | An Observability sink is http://, so the host and every hop read what the guest logs. | Point the sink at an https:// URL. |
 | `port-unreachable` | warning | A service listens on a port the firewall drops, so nothing outside reaches it. | Open it with Firewall(allow=(PORT,)), or Firewall(collect=True) to open every port a service declares. |
+| `profile-empty` | info | A profile declares nothing of its own, so it builds the same image as the one it extends. | Declare what it adds in its add= or changes=, or remove it. |
 | `raiko-listens-publicly` | warning | Raiko listens beyond the loopback, so requests reach the prover without going through its AttestedTLS ingress. | Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress. |
 | `recipe-arch-unsupported` | error | An aarch64 image uses what only boots x86-64: EfiStub's amd64 stub or the qemu target. TDX guests are x86-64. | Build for x86_64 (Debian(..., arch='x86_64')), or drop EfiStub and the qemu target from the aarch64 image. |
 | `relation-conflict` | error | A unit's relations contradict each other: it pulls in and conflicts with a unit, is ordered both before and after one, or names itself. | Drop one of the relations. |
@@ -87,4 +88,3 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `unit-section-invalid` | error | A unit has a section its type does not allow, which systemd ignores. | Move its directives to [Unit], [Install] or the unit type's own section. |
 | `unit-value-invalid` | error | A unit gives a directive a value it does not accept, so systemd keeps the default. | Use a value the directive accepts; the message names what is wrong with it. |
 | `user-group-undefined` | error | A user joins a group that nothing creates, so useradd fails during the build. | Declare the Group in the same profile, or drop it from the user's groups=. |
-| `variant-empty` | info | A profile declares nothing of its own, so it builds the same image as the one it extends. | Declare what it adds in its add= or changes=, or remove it. |

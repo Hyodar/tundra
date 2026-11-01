@@ -74,7 +74,7 @@ def _finding(
         severity=severity,
         message=message,
         subject=unit.subject,
-        variant=facts.variant,
+        profile=facts.variant,
         hint=hint,
     )
 

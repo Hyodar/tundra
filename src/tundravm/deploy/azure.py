@@ -54,7 +54,7 @@ class AzureDeployAdapter:
                     "unsigned UKI, or sign it with keys Azure's firmware trusts and pass "
                     "--param signed=true (Azure(signed=True))."
                 ),
-                context={"adapter": self.name, "variant": request.profile},
+                context={"adapter": self.name, "profile": request.profile},
             )
 
         # Check if az CLI is available

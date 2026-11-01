@@ -195,13 +195,13 @@ class SecretDelivery(Module):
             severity="warning",
             code="secret-store-undefined",
             message=(
-                f"secrets are stored on disk {store!r}, which no Disk in this variant declares"
+                f"secrets are stored on disk {store!r}, which no Disk in this profile declares"
             ),
             hint=(
-                f"Declared disks: {declared}. Declare Disk({store!r}, ...) in this variant, "
+                f"Declared disks: {declared}. Declare Disk({store!r}, ...) in this profile, "
                 "pass Secrets(store=) one of the declared disks, or store=None."
             ),
-            variant=profile,
+            profile=profile,
             subject=store,
         )
 
@@ -220,7 +220,7 @@ class SecretDelivery(Module):
                         f"{self.provider!r} provider does not write at boot{only}"
                     ),
                     hint=self._unsupported_hint(target.kind),
-                    variant=profile,
+                    profile=profile,
                     subject=spec.name,
                 )
 
@@ -246,15 +246,15 @@ class SecretDelivery(Module):
                 severity="error",
                 code="secret-env-service-unknown",
                 message=(
-                    f"a SecretEnv delivers to service {service!r}, which this variant "
+                    f"a SecretEnv delivers to service {service!r}, which this profile "
                     "neither generates, ships nor enables"
                 ),
                 hint=(
                     f"Declare Service({service.removesuffix('.service')!r}, ...) or "
-                    f"Unit({service!r}, ...) in this variant, Unit({service!r}, "
+                    f"Unit({service!r}, ...) in this profile, Unit({service!r}, "
                     "enabled=True) for a packaged unit, or fix the SecretEnv's service=."
                 ),
-                variant=profile,
+                profile=profile,
                 subject=service,
             )
 

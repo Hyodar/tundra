@@ -169,7 +169,7 @@ def _findings(*items: Fragment) -> list[tuple[str, str, str]]:
     """The error and warning findings of *items* planned together."""
     plan = fragment_plan(Fragment("exports", items=items))
     findings = plan.lint()
-    return [(d.variant, d.code, d.severity) for d in findings if d.severity != "info"]
+    return [(d.profile, d.code, d.severity) for d in findings if d.severity != "info"]
 
 
 def _stale() -> dict[str, Diagnostic]:
@@ -184,7 +184,7 @@ def _stale() -> dict[str, Diagnostic]:
             Variant("edited", inherits="same", changes=(edit,)),
         ),
     )
-    return {d.variant: d for d in lint(recipe) if d.code == "export-stale"}
+    return {d.profile: d for d in lint(recipe) if d.code == "export-stale"}
 
 
 @pytest.mark.parametrize(

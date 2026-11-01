@@ -80,7 +80,7 @@ def test_describe_structure() -> None:
 
     assert info["base"] == "debian/trixie"
     assert info["arch"] == "x86_64"
-    assert info["variant"] == "default"
+    assert info["profile"] == "default"
     assert info["inherits"] is None and info["fragments"] == []
     assert info["reproducible"] is True
     assert info["mirror"] == "https://deb.example"
@@ -158,7 +158,7 @@ def test_describe_is_pure_and_serializable(profile: str) -> None:
     assert image.state == state_after_first
     assert image.digest() == digest_before
     payload = json.dumps(first, sort_keys=True)
-    assert json.loads(payload)["variant"] == profile
+    assert json.loads(payload)["profile"] == profile
     assert payload == json.dumps(second, sort_keys=True)
     assert payload == json.dumps(describe(lower(_recipe()), profile=profile), sort_keys=True)
 
@@ -167,10 +167,10 @@ def test_describe_per_variant() -> None:
     image = lower(_recipe())
     azure = describe(image, profile="azure")
 
-    assert azure["variant"] == "azure"
+    assert azure["profile"] == "azure"
     assert azure["inherits"] == "default"
     assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "udev", "waagent"]
-    assert "modules" not in azure and "profile" not in azure
+    assert "modules" not in azure
     lineage = describe(image, profile="azure", inherits="base", fragments=("common", "azure"))
     assert (lineage["inherits"], lineage["fragments"]) == ("base", ["common", "azure"])
     assert azure["targets"] == ["azure"]

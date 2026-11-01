@@ -166,7 +166,7 @@ class _Resolution:
                 severity,
                 message,
                 subject=subject,
-                variant=self.variant,
+                profile=self.variant,
                 location=location,
                 hint=hint,
             )
@@ -585,7 +585,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     _check_executables(state, items)
     _check_deliveries(state, items)
     resolved = Resolved(
-        variant=name,
+        profile=name,
         outputs=_targets(chain),
         items=items,
         fragments=tuple(state.fragments),
@@ -602,7 +602,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 )
         for check in fragment.checks:
             for diagnostic in locate(check(resolved), items):
-                found = diagnostic if diagnostic.variant else replace(diagnostic, variant=name)
+                found = diagnostic if diagnostic.profile else replace(diagnostic, profile=name)
                 state.diagnostics.append(found)
     return resolved, state
 
@@ -888,7 +888,7 @@ def resolve(recipe: Recipe, *, variant: str) -> Resolved:
         raise ValidationError(
             f"profile {variant!r}: {first.code}: {first.message}{at}{more}",
             hint="Run `tundravm check IMAGE` for every diagnostic.",
-            context={"variant": variant, "codes": ", ".join(d.code for d in errors[:5])},
+            context={"profile": variant, "codes": ", ".join(d.code for d in errors[:5])},
         )
     return resolved
 
