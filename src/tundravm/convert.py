@@ -10,15 +10,19 @@ says so, and what no ``Image`` slot holds is listed as unsupported.
 ``parse_config``): includes, ``mkosi.conf.d``, profiles and subimages are mkosi's to
 read, not ours. Parsing runs a tree's executable inputs (an executable ``mkosi.version``,
 ``mkosi.configure``), so a tree with one is refused unless ``--allow-scripts``. The image
-with content (the one with ``Packages=``, else the main image) becomes an ``Image``:
+with content becomes an ``Image``: the payload of a tree tundravm wrote
+(``mkosi.images/payload/``), whose QEMU disk and cloud wrappers tundravm generates again,
+else the image with ``Packages=`` (not mkosi's own ``default-initrd``), else the main one:
 ``Distribution=debian`` and ``Release=`` as ``base=``, ``Packages=`` as ``packages=``,
-``ExtraTrees=`` and ``SkeletonTrees=`` as ``Tree(...)``, the scripts as ``Mkosi(scripts=)``;
+``ExtraTrees=`` and ``SkeletonTrees=`` as ``Tree(...)`` (one per target, beside the image
+file), ``Verity=hash`` as ``RootFS.verity()``, the scripts as ``Mkosi(scripts=)``;
 every other setting that differs from mkosi's default is reported as unsupported, with its
 value, and nothing is silently dropped.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -50,6 +54,7 @@ MAPPED = frozenset(
         "SkeletonTrees",
         "ImageId",
         "Image",
+        "Verity",
         *SCRIPTS,
     }
 )
@@ -91,6 +96,25 @@ IMPLIED = frozenset(
     }
 )
 """Settings tundravm decides itself for every image (the tree it emits sets them)."""
+
+PAYLOAD = "payload"
+"""The subimage holding the OS in a tree tundravm wrote (``mkosi.images/payload/``)."""
+
+GENERATED = frozenset(
+    {
+        "ExtraTrees",
+        "SkeletonTrees",
+        *SCRIPTS,
+        "Bootloader",
+        "BuildPackages",
+        "Initrds",
+        "KernelCommandLine",
+    }
+)
+"""What a payload tundravm wrote holds because its Image file generated it."""
+
+DEFAULT_INITRD = "default-initrd"
+"""The initrd image mkosi adds to every bootable tree that names none."""
 
 
 @dataclass(slots=True)
@@ -258,19 +282,38 @@ def from_mkosi(tree: Path, *, allow_scripts: bool = False) -> Converted:
 
     summary = _mkosi.summary(root)
     images = list(summary.images)
-    content = next((i for i in images if i.get("Packages")), summary.main)
-    converted = _image_source(content, root)
-    for image in images:
-        if image is content:
-            continue
-        name = image.get("Image") or "main"
-        fmt = image.get("Format")
+    written = (root / "mkosi.images" / PAYLOAD).is_dir()
+    own = [i for i in images if i.get("Image") != DEFAULT_INITRD]
+    content = next(
+        (i for i in own if i.get("Image") == PAYLOAD)
+        if written
+        else (i for i in own if i.get("Packages")),
+        summary.main,
+    )
+    converted = _image_source(
+        content,
+        root,
+        name=summary.main.get("ImageId"),
+        written=written and content is not summary.main,
+    )
+    others = [(i.get("Image") or "main", i.get("Format")) for i in images if i is not content]
+    if written:
+        # A cloud wrapper no profile selects is in the tree but not in mkosi's summary.
+        listed = {name for name, _ in others} | {content.get("Image")}
+        found = sorted(d.name for d in (root / "mkosi.images").iterdir() if d.is_dir())
+        others += [(name, "disk") for name in found if name not in listed]
+    for name, fmt in others:
         if name == "main" and fmt == "disk":
             converted.notes.append(
                 "main image (disk): the QEMU disk tundravm builds for every image"
             )
+        elif name == DEFAULT_INITRD:
+            converted.notes.append(f"{name}: mkosi's own initrd, which tundravm's UKI uses too")
         elif name in ("azure", "gcp"):
-            converted.notes.append(f"subimage {name}: targets=(..., {name!r})")
+            converted.notes.append(
+                f"subimage {name}: the {name} disk tundravm wraps the payload in, "
+                f"targets=(..., {name!r})"
+            )
         else:
             converted.unsupported.append(f"subimage {name} (Format={fmt}): no Image slot")
     if scripts:
@@ -289,58 +332,93 @@ def _defaults() -> dict[str, Any]:
         return dict(_mkosi.summary(Path(scratch)).main)
 
 
-def _image_source(config: Mapping[str, Any], root: Path) -> Converted:
+def _image_source(
+    config: Mapping[str, Any], root: Path, *, name: object = None, written: bool = False
+) -> Converted:
+    """*config* as an ``Image`` file; *written*: a payload tundravm wrote, whose trees,
+    scripts and boot settings are what its own Image file generated, so none is copied."""
     defaults = _defaults()
-    name = str(config.get("ImageId") or config.get("Image") or root.name)
+    name = str(name or config.get("ImageId") or config.get("Image") or root.name)
     unsupported: list[str] = []
     imports = ["Image"]
-    args: list[str] = [repr(name)]
+    args: list[str] = [_quoted(name)]
     distribution, release = config.get("Distribution"), config.get("Release")
     if distribution == "debian":
         imports.append("Debian")
-        args.append(f"base=Debian({release!r})")
+        args.append(f"base=Debian({_quoted(str(release))})")
     else:
         unsupported.append(f"Distribution={distribution}: tundravm builds Debian only")
+    if str(config.get("Verity") or "") == "hash":
+        imports.append("RootFS")
+        args.append("rootfs=RootFS.verity()")
     packages = list(config.get("Packages") or ())
     if packages:
-        wrapped = textwrap.wrap(", ".join(repr(p) for p in packages), width=84)
+        wrapped = textwrap.wrap(
+            ", ".join(_quoted(p) for p in packages),
+            width=84,
+            break_on_hyphens=False,
+            break_long_words=False,
+        )
         args.append("packages=[\n        " + "\n        ".join(wrapped) + ",\n    ]")
-    trees = []
-    for key in ("ExtraTrees", "SkeletonTrees"):
+    trees: dict[str, str] = {}
+    for key in () if written else ("ExtraTrees", "SkeletonTrees"):
         for entry in config.get(key) or ():
             tree = Path(str(entry.get("Source")))
             if not tree.exists():
                 continue
-            trees.append(f"Tree({_relative(tree, root)!r}, {str(entry.get('Target') or '/')!r})")
+            source, target = _relative(tree, root), str(entry.get("Target") or "/")
+            if target in trees:
+                unsupported.append(
+                    f"{key}={source}: a second tree at {target}, and an Image holds one Tree "
+                    "per target: merge it into the first"
+                )
+                continue
+            trees[target] = f"Tree(HERE / {_quoted(source)}, {_quoted(target)})"
             if key == "SkeletonTrees":
                 unsupported.append(
-                    f"SkeletonTrees={_relative(tree, root)}: installed as files, after the packages"
+                    f"SkeletonTrees={source}: installed as files, after the packages"
                 )
     if trees:
         imports.append("Tree")
-        args.append("files=[\n        " + ",\n        ".join(trees) + ",\n    ]")
+        args.append("files=[\n        " + ",\n        ".join(trees.values()) + ",\n    ]")
     scripts: list[str] = []
-    for key, stage in SCRIPTS.items():
+    for key, stage in {} if written else SCRIPTS.items():
         for script in config.get(key) or ():
             path = Path(str(script))
             if path.is_file():
-                scripts.append(f"({stage!r}, (HERE / {_relative(path, root)!r}).read_text())")
+                relative = _quoted(_relative(path, root))
+                scripts.append(f"({_quoted(stage)}, (HERE / {relative}).read_text())")
     if scripts:
         imports.append("Mkosi")
         args.append("mkosi=Mkosi(scripts=[\n        " + ",\n        ".join(scripts) + ",\n    ])")
+    generated: list[str] = []
     for key, value in sorted(config.items()):
-        if key in MAPPED or key in IMPLIED or value == defaults.get(key):
+        if key in MAPPED - GENERATED or key in IMPLIED or value == defaults.get(key):
             continue
-        unsupported.append(f"{key}={_shown(value, root)}")
+        if written and key in GENERATED:
+            generated.append(key)
+        elif key not in MAPPED:
+            unsupported.append(f"{key}={_shown(value, root)}")
+    notes = []
+    if generated:
+        notes.append(
+            f"payload {', '.join(generated)}: what tundravm generated from the Image file that "
+            "wrote this tree (its services, components, files, kernel and builds), not copied"
+        )
     body = ",\n    ".join(args)
-    header = "from pathlib import Path\n\n" if scripts else ""
+    header = "from pathlib import Path\n\n" if scripts or trees else ""
     source = (
         f'"""{name}: converted from {root.name} by `tundravm convert --from mkosi`."""\n\n'
         f"{header}from tundravm import {', '.join(sorted(imports))}\n\n"
-        + ("HERE = Path(__file__).parent\n\n" if scripts else "")
+        + ("HERE = Path(__file__).parent\n\n" if scripts or trees else "")
         + f"image = Image(\n    {body},\n)\n"
     )
-    return Converted(source, unsupported)
+    return Converted(source, unsupported, notes)
+
+
+def _quoted(text: str) -> str:
+    """*text* as a Python string literal in double quotes, as ``ruff format`` writes it."""
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _relative(path: Path, root: Path) -> str:

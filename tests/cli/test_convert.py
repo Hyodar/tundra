@@ -40,33 +40,51 @@ def _image_call(source: str) -> ast.Call:
     raise AssertionError("no Image(...) in the source")
 
 
+PACKAGES = [
+    "busybox",
+    "curl",
+    *(f"systemd-{part}" for part in ("cryptsetup", "repart", "resolved", "timesyncd")),
+    *(f"libtss2-tcti-device{n}" for n in range(8)),
+]
+"""Enough hyphenated names that the list wraps, which once broke a name at a hyphen."""
+
+
 def test_an_mkosi_tree_becomes_an_image_file(cli: Cli, tmp_path: Path) -> None:
-    result = cli("convert", TREE, "--from", "mkosi")
-    assert result.code == EXIT_OK, result.err
-    source, _, report = result.out.partition("\n# ")
-    call = _image_call(result.out)
-    assert ast.literal_eval(call.args[0]) == "fixture"
-    keywords = {kw.arg: kw.value for kw in call.keywords}
-    assert ast.unparse(keywords["base"]) == "Debian('trixie')"
-    packages = ast.literal_eval(keywords["packages"])
-    assert {"busybox", "curl", "linux-image-amd64"} <= set(packages)
-    assert "Tree('payload/mkosi.extra', '/')" in ast.unparse(keywords["files"])
-    assert "postinst" in ast.unparse(keywords["mkosi"])
-    assert "# note: main image (disk): the QEMU disk tundravm builds for every image" in result.out
-    assert "# unsupported: SkeletonTrees=payload/mkosi.skeleton" in result.out
-    assert str(TREE) not in result.out  # paths are relative to the tree
-    assert source and report
-
-
-def test_a_converted_file_loads_beside_the_tree(cli: Cli, tmp_path: Path) -> None:
-    tree = tmp_path / "tree"
-    shutil.copytree(TREE, tree, symlinks=True)
+    tree = tmp_path / "plain"
+    for directory in ("mkosi.extra", "mkosi.skeleton"):
+        (tree / directory / "etc").mkdir(parents=True)
+    (tree / "mkosi.conf").write_text(
+        "[Distribution]\nDistribution=debian\nRelease=trixie\n\n[Output]\nImageId=plain\n\n"
+        "[Content]\nPackages=" + " ".join(PACKAGES) + "\n"
+    )
+    (tree / "mkosi.postinst").write_text("#!/bin/sh\ntrue\n")
     result = cli("convert", tree, "--from", "mkosi")
-    (tree / "image.py").write_text(result.out, encoding="utf-8")
-    from tundravm.recipe import load_file
+    assert result.code == EXIT_OK, result.err
+    call = _image_call(result.out)
+    assert ast.literal_eval(call.args[0]) == "plain"
+    keywords = {kw.arg: ast.unparse(kw.value) for kw in call.keywords}
+    assert keywords["base"] == "Debian('trixie')"
+    assert ast.literal_eval(keywords["packages"]) == sorted(PACKAGES)
+    assert keywords["files"] == "[Tree(HERE / 'mkosi.extra', '/')]"
+    assert "postinst" in keywords["mkosi"]
+    assert "'" not in result.out.partition("\n# ")[0]  # double quotes, as ruff format writes
+    assert "# unsupported: SkeletonTrees=mkosi.skeleton: a second tree at /" in result.out
+    assert str(tree) not in result.out  # paths are relative to the image file
 
-    loaded = load_file(tree / "image.py")
-    assert loaded.recipe.name == "fixture"
+
+def test_a_tree_tundravm_wrote_converts_its_payload_and_checks(cli: Cli, tmp_path: Path) -> None:
+    tree = tmp_path / "mkosi"
+    shutil.copytree(REPO_ROOT / "examples" / "surge-tdx-prover" / "mkosi", tree, symlinks=True)
+    result = cli("convert", tree, "--from", "mkosi")
+    assert result.code == EXIT_OK, result.err
+    (tree / "image.py").write_text(result.out, encoding="utf-8")
+    assert cli("check", tree / "image.py").code == EXIT_OK
+    assert "systemd-boot-efi" in ast.literal_eval(
+        ast.unparse(next(k.value for k in _image_call(result.out).keywords if k.arg == "packages"))
+    )
+    for note in ("main image (disk)", "subimage azure", "subimage gcp", "payload Bootloader"):
+        assert f"# note: {note}" in result.out, note
+    assert "# unsupported:" not in result.out
 
 
 def test_a_tree_that_runs_scripts_while_parsing_needs_allow_scripts(
