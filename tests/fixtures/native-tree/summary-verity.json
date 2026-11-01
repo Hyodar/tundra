@@ -8,7 +8,7 @@
         "Image": "default-initrd",
         "Output": "initrd",
         "Release": "trixie",
-        "Snapshot": "20251113T083151Z"
+        "Snapshot": "20261018T082309Z"
       },
       {
         "Architecture": "x86-64",
@@ -114,7 +114,7 @@
             "Target": null
           }
         ],
-        "Snapshot": "20251113T083151Z",
+        "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
         "SplitArtifacts": [
           "uki",
@@ -186,7 +186,7 @@
         "SandboxTrees": [],
         "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
         "SkeletonTrees": [],
-        "Snapshot": "20251113T083151Z",
+        "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
         "SplitArtifacts": [
           "uki",
@@ -205,7 +205,7 @@
       "Mirror": null,
       "Output": "mkosi.tools",
       "Release": "trixie",
-      "Snapshot": "20251113T083151Z"
+      "Snapshot": "20261018T082309Z"
     }
   },
   "every-node": {
@@ -217,7 +217,7 @@
         "Image": "default-initrd",
         "Output": "initrd",
         "Release": "trixie",
-        "Snapshot": "20251113T083151Z"
+        "Snapshot": "20261018T082309Z"
       },
       {
         "Architecture": "x86-64",
@@ -336,7 +336,7 @@
             "Target": null
           }
         ],
-        "Snapshot": "20251113T083151Z",
+        "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
         "SplitArtifacts": [
           "uki",
@@ -412,7 +412,7 @@
         "SandboxTrees": [],
         "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
         "SkeletonTrees": [],
-        "Snapshot": "20251113T083151Z",
+        "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
         "SplitArtifacts": [
           "uki",
@@ -489,7 +489,7 @@
         "SandboxTrees": [],
         "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
         "SkeletonTrees": [],
-        "Snapshot": "20251113T083151Z",
+        "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
         "SplitArtifacts": [
           "uki",
@@ -566,7 +566,7 @@
         "SandboxTrees": [],
         "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
         "SkeletonTrees": [],
-        "Snapshot": "20251113T083151Z",
+        "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
         "SplitArtifacts": [
           "uki",
@@ -585,7 +585,7 @@
       "Mirror": null,
       "Output": "mkosi.tools",
       "Release": "trixie",
-      "Snapshot": "20251113T083151Z"
+      "Snapshot": "20261018T082309Z"
     }
   }
 }

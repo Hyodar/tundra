@@ -7,7 +7,7 @@ is generated from the committed evidence; the tests keep it honest:
 - `tests/fixtures/native-tree/recipe.py`: the fixture recipe (a `greeter` service and its
   component `Greeter`, a `web` service serving a page over `Network`, a `boot-probe` task
   printing the command line and what the root is, a `dev` variant adding SSH by public key,
-  `azure` and `gcp` output variants, Debian trixie at snapshot `20251113T083151Z`), with
+  `azure` and `gcp` output variants, Debian trixie at snapshot `20261018T082309Z`), with
   `Mkosi(root="initramfs")` (`recipe`) and `Mkosi(root="verity")` (`verity_recipe`, which
   `tundravm bake ... --attr verity_recipe` selects).
 - `tests/fixtures/native-tree/tree-initramfs/`, `tree-verity/`: what it compiles to, every
@@ -195,7 +195,7 @@ Dependencies=payload
 Distribution=debian
 Release=trixie
 Architecture=x86-64
-Snapshot=20251113T083151Z
+Snapshot=20261018T082309Z
 
 [Output]
 Format=disk
@@ -208,7 +208,7 @@ Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70
 ToolsTree=default
 ToolsTreeDistribution=debian
 ToolsTreeRelease=trixie
-ToolsTreeSnapshot=20251113T083151Z
+ToolsTreeSnapshot=20261018T082309Z
 ToolsTreePackages=qemu-utils
 History=no
 WithNetwork=no
@@ -383,9 +383,9 @@ Packages=
 
 | image | format | output | dependencies | profiles | image id | seed | snapshot |
 |---|---|---|---|---|---|---|---|
-| payload | uki | payload | - | - | fixture | 6a5f3c1e | 20251113T083151Z |
-| main | disk | qemu | payload | - | fixture | 6a5f3c1e | 20251113T083151Z |
-| tools | directory | mkosi.tools | - | - | - | - | 20251113T083151Z |
+| payload | uki | payload | - | - | fixture | 6a5f3c1e | 20261018T082309Z |
+| main | disk | qemu | payload | - | fixture | 6a5f3c1e | 20261018T082309Z |
+| tools | directory | mkosi.tools | - | - | - | - | 20261018T082309Z |
 
 - payload `Packages`: busybox, curl, dmidecode, kmod, linux-image-amd64, passwd, systemd, systemd-boot-efi, systemd-sysv, udev
 - payload `KernelCommandLine`: (none)
@@ -399,11 +399,11 @@ Packages=
 
 | image | format | output | dependencies | profiles | image id | seed | snapshot |
 |---|---|---|---|---|---|---|---|
-| payload | uki | payload | - | dev | fixture-dev | 6a5f3c1e | 20251113T083151Z |
-| azure | disk | azure | payload | dev | fixture | 6a5f3c1e | 20251113T083151Z |
-| gcp | disk | gcp | payload | dev | fixture | 6a5f3c1e | 20251113T083151Z |
-| main | disk | qemu | payload, azure, gcp | dev | fixture | 6a5f3c1e | 20251113T083151Z |
-| tools | directory | mkosi.tools | - | - | - | - | 20251113T083151Z |
+| payload | uki | payload | - | dev | fixture-dev | 6a5f3c1e | 20261018T082309Z |
+| azure | disk | azure | payload | dev | fixture | 6a5f3c1e | 20261018T082309Z |
+| gcp | disk | gcp | payload | dev | fixture | 6a5f3c1e | 20261018T082309Z |
+| main | disk | qemu | payload, azure, gcp | dev | fixture | 6a5f3c1e | 20261018T082309Z |
+| tools | directory | mkosi.tools | - | - | - | - | 20261018T082309Z |
 
 - payload `Packages`: busybox, curl, dmidecode, kmod, linux-image-amd64, openssh-server, passwd, systemd, systemd-boot-efi, systemd-sysv, udev
 - payload `KernelCommandLine`: (none)
@@ -532,7 +532,7 @@ Dependencies=payload
 Distribution=debian
 Release=trixie
 Architecture=x86-64
-Snapshot=20251113T083151Z
+Snapshot=20261018T082309Z
 
 [Output]
 Format=disk
@@ -545,7 +545,7 @@ Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70
 ToolsTree=default
 ToolsTreeDistribution=debian
 ToolsTreeRelease=trixie
-ToolsTreeSnapshot=20251113T083151Z
+ToolsTreeSnapshot=20261018T082309Z
 ToolsTreePackages=qemu-utils
 History=no
 WithNetwork=no
@@ -815,10 +815,10 @@ Minimize=best
 
 | image | format | output | dependencies | profiles | image id | seed | snapshot |
 |---|---|---|---|---|---|---|---|
-| default-initrd | cpio | initrd | - | - | - | - | 20251113T083151Z |
-| payload | disk | payload | default-initrd | - | fixture | 6a5f3c1e | 20251113T083151Z |
-| main | disk | qemu | payload | - | fixture | 6a5f3c1e | 20251113T083151Z |
-| tools | directory | mkosi.tools | - | - | - | - | 20251113T083151Z |
+| default-initrd | cpio | initrd | - | - | - | - | 20261018T082309Z |
+| payload | disk | payload | default-initrd | - | fixture | 6a5f3c1e | 20261018T082309Z |
+| main | disk | qemu | payload | - | fixture | 6a5f3c1e | 20261018T082309Z |
+| tools | directory | mkosi.tools | - | - | - | - | 20261018T082309Z |
 
 - payload `Packages`: busybox, curl, dmidecode, kmod, linux-image-amd64, passwd, systemd, systemd-boot-efi, systemd-sysv, udev
 - payload `KernelCommandLine`: root=/dev/mapper/root systemd.verity_root_data=/dev/disk/by-partuuid/9a94e2e0-42d7-582e-baec-aa6600df7a19 systemd.verity_root_hash=/dev/disk/by-partuuid/b79bc3b9-65fa-5287-852a-34759dffe29f systemd.volatile=overlay
@@ -832,12 +832,12 @@ Minimize=best
 
 | image | format | output | dependencies | profiles | image id | seed | snapshot |
 |---|---|---|---|---|---|---|---|
-| default-initrd | cpio | initrd | - | - | - | - | 20251113T083151Z |
-| payload | disk | payload | default-initrd | dev | fixture-dev | 6a5f3c1e | 20251113T083151Z |
-| azure | disk | azure | payload | dev | fixture | 6a5f3c1e | 20251113T083151Z |
-| gcp | disk | gcp | payload | dev | fixture | 6a5f3c1e | 20251113T083151Z |
-| main | disk | qemu | payload, azure, gcp | dev | fixture | 6a5f3c1e | 20251113T083151Z |
-| tools | directory | mkosi.tools | - | - | - | - | 20251113T083151Z |
+| default-initrd | cpio | initrd | - | - | - | - | 20261018T082309Z |
+| payload | disk | payload | default-initrd | dev | fixture-dev | 6a5f3c1e | 20261018T082309Z |
+| azure | disk | azure | payload | dev | fixture | 6a5f3c1e | 20261018T082309Z |
+| gcp | disk | gcp | payload | dev | fixture | 6a5f3c1e | 20261018T082309Z |
+| main | disk | qemu | payload, azure, gcp | dev | fixture | 6a5f3c1e | 20261018T082309Z |
+| tools | directory | mkosi.tools | - | - | - | - | 20261018T082309Z |
 
 - payload `Packages`: busybox, curl, dmidecode, kmod, linux-image-amd64, openssh-server, passwd, systemd, systemd-boot-efi, systemd-sysv, udev
 - payload `KernelCommandLine`: root=/dev/mapper/root systemd.verity_root_data=/dev/disk/by-partuuid/9a94e2e0-42d7-582e-baec-aa6600df7a19 systemd.verity_root_hash=/dev/disk/by-partuuid/b79bc3b9-65fa-5287-852a-34759dffe29f systemd.volatile=overlay

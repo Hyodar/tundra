@@ -325,7 +325,7 @@ class _Capturing:
         self.inner.cleanup(request)
 
 
-SNAPSHOT_ARCHIVE = "https://snapshot.debian.org/archive/{}/20251113T083151Z"
+SNAPSHOT_ARCHIVE = "https://snapshot.debian.org/archive/{}/20261018T082309Z"
 """The template's snapshot; the test's extra repositories read from it too."""
 
 
@@ -371,11 +371,11 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
 
         tree = out / "mkosi"
         conf = (tree / "mkosi.conf").read_text(encoding="utf-8")
-        assert "\nSnapshot=20251113T083151Z\n" in conf
+        assert "\nSnapshot=20261018T082309Z\n" in conf
         # the tools tree is the image's release at the image's snapshot (mkosi's default
         # release is testing, whose package-manager profile wants a dnf5 trixie lacks)
         assert "\nToolsTreeRelease=trixie\n" in conf
-        assert "\nToolsTreeSnapshot=20251113T083151Z\n" in conf
+        assert "\nToolsTreeSnapshot=20261018T082309Z\n" in conf
         assert "Mirror=" not in conf and "SandboxTrees=" not in conf
         sandbox = tree / "mkosi.sandbox/etc/apt"
         sources = (sandbox / "sources.list.d/debian-backports.sources").read_text(encoding="utf-8")

@@ -217,7 +217,7 @@ def test_main_image_is_the_qemu_disk_with_every_reproducibility_setting() -> Non
         "Distribution=debian\n"
         "Release=trixie\n"
         "Architecture=x86-64\n"
-        "Snapshot=20251113T083151Z\n"
+        "Snapshot=20261018T082309Z\n"
         "\n"
         "[Output]\n"
         "Format=disk\n"
@@ -230,7 +230,7 @@ def test_main_image_is_the_qemu_disk_with_every_reproducibility_setting() -> Non
         "ToolsTree=default\n"
         "ToolsTreeDistribution=debian\n"
         "ToolsTreeRelease=trixie\n"
-        "ToolsTreeSnapshot=20251113T083151Z\n"
+        "ToolsTreeSnapshot=20261018T082309Z\n"
         "ToolsTreePackages=qemu-utils\n"
         "History=no\n"
         "WithNetwork=no\n"
@@ -531,7 +531,7 @@ def test_the_lock_records_the_tools_tree_mkosi_resolves() -> None:
     tree = FIXTURE / "tree-initramfs"
     resolved = ToolsTree.from_summary(mkosi_summary(tree)["Tools"])
     lowered = lower(recipe_with())
-    assert resolved == lowered.tools_tree == ToolsTree("debian", "trixie", "20251113T083151Z")
+    assert resolved == lowered.tools_tree == ToolsTree("debian", "trixie", "20261018T082309Z")
     locked = lock(recipe_with())
     assert locked.lockfile.toolchain is not None
     assert locked.lockfile.toolchain.tools_tree == resolved
@@ -550,7 +550,7 @@ def test_surge_tree_resolves_every_node() -> None:
     assert images["main"]["Dependencies"] == ["payload", "azure", "gcp"]
     for name in ("azure", "gcp"):
         assert images[name]["Dependencies"] == ["payload"]
-    assert summary["Tools"]["Snapshot"] == images["payload"]["Snapshot"] == "20251113T083151Z"
+    assert summary["Tools"]["Snapshot"] == images["payload"]["Snapshot"] == "20261018T082309Z"
 
 
 # ── what the tree refuses ───────────────────────────────────────────────

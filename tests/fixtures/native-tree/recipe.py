@@ -47,7 +47,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.utils import CargoBinary, Composite, GoBinary, Network, SshAccess
 
-SNAPSHOT = "20251113T083151Z"
+SNAPSHOT = "20261018T082309Z"
 SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
 DEV_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureFixtureFixtureFixtureFixtureFixture dev@fixture"

@@ -441,7 +441,7 @@ def _check_mirrors(recipe: Recipe) -> None:
                 f"{platform}({what}=...) {url!r} names an archive; mkosi appends "
                 f"'{distribution}' (or 'archive/{distribution}/<snapshot>') to it.",
                 hint="Pass the mirror root, e.g. 'https://deb.debian.org', and pin a "
-                f"snapshot with {platform}(snapshot='20251113T083151Z') (mirror defaults to "
+                f"snapshot with {platform}(snapshot='20261018T082309Z') (mirror defaults to "
                 "https://snapshot.debian.org then).",
                 context={"field": f"{platform}.{what}"},
             )
@@ -639,7 +639,7 @@ def _kernel_base(kernel: Kernel, platform: Platform | None) -> dict[str, Any]:
     if archive is None:
         raise ValidationError(
             f"DebianConfig {base.version}: the platform pins no snapshot to fetch it from.",
-            hint="Pass Debian(snapshot='20251113T083151Z') or DebianConfig(snapshot=...).",
+            hint="Pass Debian(snapshot='20261018T082309Z') or DebianConfig(snapshot=...).",
         )
     return {
         "base_deb": base.url(_snapshot_archive(archive)),

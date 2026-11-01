@@ -1,7 +1,7 @@
 """Shipped fragments: :class:`EfiStub`, :class:`Backports`, :class:`Tdxs` and :class:`DevTools`.
 
 Each is a :class:`Composite`: a :class:`Fragment` whose configuration is its own
-dataclass fields, so ``EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")`` reads like a
+dataclass fields, so ``EfiStub(snapshot=SNAPSHOT, version="257.13-1~deb13u1")`` reads like a
 declaration and goes wherever a ``Fragment`` does.
 
 The committed ``examples/surge-tdx-prover/mkosi`` tree pins their output.
@@ -172,7 +172,7 @@ def _snapshot_archive(snapshot: str) -> str:
 class EfiStub(Composite):
     """``systemd-boot-efi`` *version* from the Debian *snapshot*, for a pinned EFI stub.
 
-    *snapshot* is a snapshot ID (``20251113T083151Z``, read from
+    *snapshot* is a snapshot ID (``20261018T082309Z``, read from
     ``snapshot.debian.org``) or the URL of a snapshot archive. The snapshot must
     carry *version*: the pool keeps only what some suite listed at that time, so
     pick the version a suite of that snapshot ships. The
@@ -191,8 +191,8 @@ class EfiStub(Composite):
         if not self.snapshot or not self.version:
             raise ValidationError(
                 "EfiStub requires a non-empty snapshot and version.",
-                hint="Pass snapshot= a snapshot ID such as '20251113T083151Z' and version= "
-                "the systemd-boot-efi version it ships, e.g. '257.8-1~deb13u1'.",
+                hint="Pass snapshot= a snapshot ID such as '20261018T082309Z' and version= "
+                "the systemd-boot-efi version it ships, e.g. '257.13-1~deb13u1'.",
             )
         return Fragment("efi-stub", items=(Hook("efi-stub", "postinst", self.render_script()),))
 

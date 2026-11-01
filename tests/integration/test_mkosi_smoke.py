@@ -29,7 +29,7 @@ from tundravm.declarative.lifecycle import bake_image
 from tundravm.declarative.utils import Tdxs
 from tundravm.models import BakeResult
 
-SNAPSHOT = "20251113T083151Z"
+SNAPSHOT = "20261018T082309Z"
 ESP_TYPE = uuid.UUID("c12a7328-f81f-11d2-ba4b-00a0c93ec93b")
 """The GPT partition type GUID of an EFI system partition."""
 SECTOR = 512

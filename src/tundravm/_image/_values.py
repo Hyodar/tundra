@@ -46,7 +46,7 @@ __all__ = [
     "UDP",
 ]
 
-LOCKED_SNAPSHOT = "20251113T083151Z"
+LOCKED_SNAPSHOT = "20261018T082309Z"
 """The snapshot.debian.org archive ``Debian("trixie")`` reads, so two builds of the same
 image see the same packages. The lockfile records it; ``Debian(snapshot=...)`` moves it."""
 

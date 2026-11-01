@@ -270,8 +270,8 @@ image = Image(
 _CLOUD_CONSTANTS = r"""
 # Packages and the EFI stub come from this snapshot.debian.org snapshot, so rebuilds see the
 # same archive. The stub version is the systemd-boot-efi trixie ships in it.
-SNAPSHOT = "20251113T083151Z"
-EFI_STUB_VERSION = "257.8-1~deb13u1"
+SNAPSHOT = "20261018T082309Z"
+EFI_STUB_VERSION = "257.13-1~deb13u1"
 """
 
 _CLOUD_RECIPE = r"""

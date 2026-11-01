@@ -363,7 +363,7 @@ class Platform(Located):
     _: KW_ONLY
     arch: Literal["x86_64", "aarch64"] = "x86_64"
     snapshot: str | None = None
-    """A distribution snapshot ID (``20251113T083151Z`` for Debian): mkosi's ``Snapshot=``."""
+    """A distribution snapshot ID (``20261018T082309Z`` for Debian): mkosi's ``Snapshot=``."""
     mirror: str | None = None
     tools_mirror: str | None = None
     epoch: int | None = 0
@@ -390,7 +390,7 @@ class Platform(Located):
                 raise _fail(
                     self,
                     f"snapshot {self.snapshot!r} must be a snapshot ID, not a URL.",
-                    hint="Pass the ID alone, e.g. snapshot='20251113T083151Z'; the mirror "
+                    hint="Pass the ID alone, e.g. snapshot='20261018T082309Z'; the mirror "
                     "root goes in mirror= (default https://snapshot.debian.org).",
                 )
         if self.epoch is not None and (isinstance(self.epoch, bool) or self.epoch < 0):
@@ -445,7 +445,7 @@ def _check_kernel_modules(platform: Debian) -> None:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Debian(Platform):
-    """A Debian *release*: ``Debian("trixie", snapshot="20251113T083151Z")``.
+    """A Debian *release*: ``Debian("trixie", snapshot="20261018T082309Z")``.
 
     ``boot`` picks the boot set (:data:`BOOT_PACKAGES`) installed after
     ``kernel_package`` (``None``: the image declares its own ``Kernel``);
@@ -487,7 +487,7 @@ class Debian(Platform):
                 raise _fail(
                     self,
                     "efi_stub needs the archive it comes from: the platform pins no snapshot.",
-                    hint="Pass snapshot='20251113T083151Z' (a snapshot of the release that "
+                    hint="Pass snapshot='20261018T082309Z' (a snapshot of the release that "
                     "ships that systemd-boot-efi version).",
                 )
 
