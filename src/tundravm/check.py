@@ -492,6 +492,10 @@ def _rule_profile_empty(
     )
 
 
+TMPFILES_SETUP = "systemd-tmpfiles-setup.service"
+TMPFILES_DIRS = ("/etc/tmpfiles.d/", "/usr/lib/tmpfiles.d/")
+
+
 def _rule_debloat_removes_needed_unit(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
@@ -535,6 +539,24 @@ def _rule_debloat_removes_needed_unit(
                 ),
                 profile=profile_name,
                 subject=svc.name,
+            )
+    from ._image._runtime import RUNTIME_TMPFILES
+
+    if not masked(TMPFILES_SETUP):
+        return
+    for path in sorted(_declared_paths(state)):
+        if path.startswith(TMPFILES_DIRS) and path != RUNTIME_TMPFILES:
+            yield Diagnostic(
+                severity="warning",
+                code="debloat-removes-needed-unit",
+                message=f"{path} is applied at boot by {TMPFILES_SETUP}, which debloat masks",
+                hint=(
+                    "Ship the path itself: File(..., owner=) or Tree(..., owner=), whose owner "
+                    "the runtime-init step owners applies, or a service's state= or runtime= "
+                    "for a directory it writes."
+                ),
+                profile=profile_name,
+                subject=path,
             )
 
 
@@ -1604,9 +1626,11 @@ _REGISTRY: tuple[Rule, ...] = (
         "debloat-removes-needed-unit",
         "warning",
         "A Service is named like a systemd unit the image's debloat masks (systemd-*), or a "
-        "shipped unit file depends on one, so it stops or never starts.",
+        "shipped unit file depends on one, so it stops or never starts; or the image ships a "
+        "tmpfiles.d file, which nothing applies: the debloat masks boot-time tmpfiles.",
         "Rename the Service, or drop the dependency; tundravm decides which systemd units "
-        "the debloat keeps, so report one the image needs.",
+        "the debloat keeps, so report one the image needs. Ship a tmpfiles.d path itself: "
+        "File(owner=), Tree(owner=), or a service's state= or runtime=.",
         (_rule_debloat_removes_needed_unit,),
     ),
     Rule(

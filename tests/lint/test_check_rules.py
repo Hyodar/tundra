@@ -247,12 +247,14 @@ NEEDS_NETWORKD = Service("net", "/usr/bin/app", requires=("systemd-networkd.serv
 
 def test_debloat_masks_needed_units() -> None:
     resolved = Service("systemd-resolved", "/usr/lib/systemd/systemd-resolved")
-    diags = report(recipe(NEEDS_NETWORKD, resolved))
+    tmpfiles = File.text("/etc/tmpfiles.d/app.conf", "d /var/lib/app 0750 app app -\n")
+    diags = report(recipe(NEEDS_NETWORKD, resolved, tmpfiles))
     assert [(d.code, d.subject) for d in diags] == [
+        ("debloat-removes-needed-unit", "/etc/tmpfiles.d/app.conf"),
         ("debloat-removes-needed-unit", "net"),
         ("debloat-removes-needed-unit", "systemd-resolved"),
     ]
-    assert "report 'systemd-networkd.service'" in (diags[0].hint or "")
+    assert "report 'systemd-networkd.service'" in (diags[1].hint or "")
 
 
 def test_debloat_keeps_the_targets_an_enabled_service_pulls_in() -> None:

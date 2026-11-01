@@ -151,6 +151,7 @@ More limits that are not platform-specific:
 - **The kernel.** `Kernel.default()` is Debian's `linux-image-amd64` with a curated module
   set. A weekly CI workflow builds and boots one `Kernel.build` with every target's drivers
   built in; the tested kernel matrix of plan 6.7 is not published yet.
+- **No boot-time tmpfiles.** The debloat masks them: nothing unmeasured rewrites paths.
 - **The tools.** The evidence service, the endpoint and the key and disk tools build from
   `tools/` at the SDK's own commit, and the lock pins that source like any other.
 

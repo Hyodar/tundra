@@ -82,7 +82,14 @@ DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP = (
 )
 """Units of the ``systemd`` package debloat leaves unmasked. ``sockets.target`` and
 ``timers.target`` stay so ``WantedBy=sockets.target``/``timers.target`` of a generated
-socket or timer works on its own, not only through the boot target's wants link."""
+socket or timer works on its own, not only through the boot target's wants link.
+
+Boot-time tmpfiles are off: ``systemd-tmpfiles-setup.service`` is masked and the
+``systemd-tmpfiles`` binary removed, so no ``tmpfiles.d`` line runs at boot. The image ships
+its paths with their modes, the runtime-init step ``owners`` applies ``owner=``, and a
+service's ``state=``/``runtime=`` make the directories it writes; a tmpfiles.d file would
+only re-create at every boot what the measured image already says, from configuration the
+debloat otherwise strips (lint ``debloat-removes-needed-unit``)."""
 
 DEFAULT_DEBLOAT_SYSTEMD_BINS_KEEP = (
     "journalctl",

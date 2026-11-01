@@ -1512,6 +1512,11 @@ class Partition(Declared):
 
 @dataclass(frozen=True, slots=True)
 class Debloat(Declared):
+    """What the image strips at build: the paths of
+    :data:`~tundravm.models.DEFAULT_DEBLOAT_PATHS_REMOVE` and every unit of the ``systemd``
+    package but :data:`~tundravm.models.DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP` (masked), which
+    turns boot-time tmpfiles off: ``systemd-tmpfiles-setup.service`` is not kept."""
+
     enabled: bool = True
     remove: tuple[str, ...] | None = None
     extra_remove: tuple[str, ...] = ()

@@ -218,8 +218,32 @@ batches, both through the proxy. An earlier run (`41308131113`) had the uploader
 and sending nothing: the image drops systemd's tmpfiles.d and masks
 `systemd-tmpfiles-setup.service`, so the journal stayed `root:root`, unreadable to the
 `systemd-journal` group `journal-export` runs in; `journal-export` now runs
-`/usr/lib/tundravm/journal-access` as root first. The same masking means a `File(owner=)`,
-which `/etc/tmpfiles.d/50-tundravm-owned.conf` applies, is likely never applied either.
+`/usr/lib/tundravm/journal-access` as root first.
+
+The fixture's `web` then got a page of its own, `/srv/www/private.html`, mode 0600 and
+`owner="web"`, and the probe an `owner:` check. Run `41313549334` on `ci/owner-at-build`,
+while the owner was still a `z` line in `/etc/tmpfiles.d/50-tundravm-owned.conf`, failed it:
+
+```
+owner:/srv/www/private.html           fail     /srv/www/private.html is root:root 600, declared web:web 600: its owner was not applied, so web:web cannot use it
+```
+
+The mode reached the image, the owner did not: nothing runs systemd-tmpfiles at boot, and
+the build cannot chown (mkosi builds in a user namespace with one user, and its cpio and
+erofs record every file as root's). The owner is now the runtime-init step `owners`
+(`runtime-init-owners.service`, `chown web:web /srv/www/private.html`, after
+`local-fs.target`), which every service waits for. Run `41318300949` booted the verity
+production build, erofs on dm-verity under the volatile overlay, where the `chown` copies the
+file up into the tmpfs: `Finished runtime-init-owners.service`, then the fixture's
+boot-probe printed
+
+```
+boot-probe: owner /srv/www/private.html web:web 600
+```
+
+which `test_usr_bin_writes_land_in_the_volatile_overlay` asserts. Its dev build did not boot
+(the dev UKI outgrew the 128 MiB ESP, as on master), so the probe's `owner:` row stays to
+be recorded green.
 
 Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
 
