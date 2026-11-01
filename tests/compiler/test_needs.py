@@ -13,7 +13,7 @@ from tundravm.declarative import (
     Recipe,
     Unit,
 )
-from tundravm.testing import CompiledTree, compile_tree
+from tundravm.testing._model import CompiledTree, compile_tree
 
 APP_UNIT = "[Unit]\nDescription=App\nAfter=network.target\n\n[Service]\nExecStart=/usr/bin/app\n"
 KEY = Key("k")

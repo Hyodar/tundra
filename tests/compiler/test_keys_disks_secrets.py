@@ -30,7 +30,7 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.errors import ValidationError
-from tundravm.testing import CompiledTree
+from tundravm.testing._model import CompiledTree
 
 KEY_CONFIG = "mkosi.extra/etc/tdx/key-gen.yaml"
 DISK_CONFIG = "mkosi.extra/etc/tdx/disk-setup.yaml"

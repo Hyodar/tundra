@@ -6,15 +6,15 @@ Teaches:
   configuration and ``compose()`` returns what it stands for;
 - exports: ``Endpoint(..., provider=self)`` is a typed fact another component consumes
   without parsing this one's files, and holding it in a field requires this component;
-- ``requires=`` on the class names fragments the same profile must also hold (lint
-  reports ``fragment-requires-missing`` otherwise);
+- ``requires=`` on the class names components the same profile must also hold (lint
+  reports ``component-requires-missing`` otherwise);
 - ``check()`` is a lint rule that sees each resolved profile;
 - ``compose()`` may still yield an internal declaration (``Repository``, ``Unit``,
   ``Task``, ``ConfigFile``, ``Run``) while those concerns have no public spelling.
 
-    tundravm show examples/03_fragments.py
-    tundravm check examples/03_fragments.py
-    tundravm build examples/03_fragments.py --tree-only build/fragments/mkosi
+    tundravm show examples/03_components.py
+    tundravm check examples/03_components.py
+    tundravm build examples/03_components.py --tree-only build/components/mkosi
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ class Metrics(Component, requires=("node-exporter",)):
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: a cloud image must not serve metrics on a public address."""
-        if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.outputs):
+        if self.listen.startswith("127.") or not {"azure", "gcp"} & set(resolved.targets):
             return ()
         message = f"prometheus listens on {self.listen} in a cloud image"
         return (Diagnostic("metrics-exposed", "warning", message),)
@@ -119,7 +119,7 @@ class HealthCheck(Component):
 metrics = Metrics()  # Metrics(listen="0.0.0.0") makes lint warn for the cloud targets
 
 image = Image(
-    "fragments",
+    "components",
     packages=["ca-certificates"],
     components=[Hardening(), NodeExporter(), metrics, HealthCheck(target=metrics.health)],
     targets=("qemu", "gcp"),

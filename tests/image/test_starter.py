@@ -13,7 +13,8 @@ from tundravm import File, Image, Service
 from tundravm._image._values import MANAGEMENT_PORT
 from tundravm.components import Component
 from tundravm.errors import ValidationError
-from tundravm.testing import PlannedImage, assert_clean, compile_tree, plan
+from tundravm.testing import PlannedImage, assert_clean
+from tundravm.testing._model import compile_tree
 
 from .conftest import STARTER_SOURCE, starter
 
@@ -44,7 +45,7 @@ def test_load_refuses_a_file_that_only_binds_a_recipe(tmp_path: Path) -> None:
 
 
 def test_the_starter_lints_clean_apart_from_the_unpinned_evidence_service() -> None:
-    assert_clean(tundravm._image.recipe_of(starter()), allow=("source-unpinned",))
+    assert_clean(starter(), allow=("source-unpinned",))
 
 
 def test_the_starter_compiles_to_a_tree_mkosi_resolves(tmp_path: Path) -> None:
@@ -105,16 +106,6 @@ def test_the_kernel_and_its_curated_modules_are_implied(planned: PlannedImage) -
 def test_the_file_lands_where_it_was_declared(planned: PlannedImage) -> None:
     assert planned.file("/srv/www/index.html").text == "<h1>demo</h1>\n"
     assert planned.packages["busybox"] == "runtime"
-
-
-def test_plan_accepts_an_image_and_the_recipe_it_lowers_to() -> None:
-    image = starter()
-    from_image = plan(image, "production")
-    from_recipe = plan(tundravm._image.recipe_of(image), "production")
-    assert (
-        from_image.file("/srv/www/index.html").text == from_recipe.file("/srv/www/index.html").text
-    )
-    assert plan(image).profile == "production"
 
 
 def test_the_default_target_is_the_qemu_disk() -> None:

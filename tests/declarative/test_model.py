@@ -204,7 +204,7 @@ def test_packages_is_a_named_bundle_of_packages() -> None:
         "qemu",
     )
     dev = resolve(recipe, variant="dev")
-    assert dev.fragments == ("packages(curl)", "packages(strace, gdb)")
+    assert dev.components == ("packages(curl)", "packages(strace, gdb)")
     assert {item.name for item in dev.items if isinstance(item, Package)} == {
         "curl",
         "jq",

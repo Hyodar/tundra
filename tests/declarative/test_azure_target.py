@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from tundravm.declarative import Fragment, Recipe, Unit, Variant
-from tundravm.testing import compile_tree
+from tundravm.testing._model import compile_tree
 
 SERVICE = "azure-complete-provisioning.service"
 

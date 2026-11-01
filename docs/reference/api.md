@@ -666,7 +666,6 @@ Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`
 | Member | Does |
 |---|---|
 | `DevAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
-| `DevAccess.compose() -> Iterator[object]` |  |
 | `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
 | `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
 
@@ -748,7 +747,6 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 | Member | Does |
 |---|---|
 | `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`. |
-| `Firewall.compose() -> Iterator[object]` |  |
 
 ### `JournalExport`
 
@@ -784,7 +782,6 @@ Nethermind(
 | Member | Does |
 |---|---|
 | `Nethermind.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `nethermind-volatile-state`: a database on the volatile root resyncs every boot. |
-| `Nethermind.compose() -> Iterator[object]` |  |
 | `Nethermind.engine_api` | The Engine API a consensus driver calls with the shared JWT. |
 | `Nethermind.rpc` | JSON-RPC over HTTP. |
 | `Nethermind.ws` | JSON-RPC over WebSocket, on the RPC port. |
@@ -808,9 +805,7 @@ How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
 | Member | Does |
 |---|---|
 | `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
-| `Network.compose() -> Iterator[object]` |  |
 | `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
-| `Network.readiness() -> tuple[Readied, ...]` |  |
 
 ### `Observability`
 
@@ -829,7 +824,6 @@ The export path for logs and metrics: `image.observability` takes it.
 | Member | Does |
 |---|---|
 | `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear. |
-| `Observability.compose() -> Iterator[object]` |  |
 
 ### `PrometheusRemoteWrite`
 
@@ -869,7 +863,6 @@ Raiko(
 | Member | Does |
 |---|---|
 | `Raiko.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `raiko-listens-publicly`: a prover reachable around its attested ingress. |
-| `Raiko.compose() -> Iterator[object]` |  |
 | `Raiko.http` | Raiko's HTTP API. |
 
 ### `Resolved`
@@ -879,9 +872,9 @@ Raiko(
 ```python
 Resolved(
     profile: str,
-    outputs: tuple[Target, ...],
+    targets: tuple[Target, ...],
     items: tuple[Declaration, ...],
-    fragments: tuple[str, ...],
+    components: tuple[str, ...],
 )
 ```
 
@@ -956,7 +949,6 @@ Root logs in over SSH with a public key, and with nothing else.
 | Member | Does |
 |---|---|
 | `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them. |
-| `SshAccess.compose() -> Iterator[object]` |  |
 | `SshAccess.port` | The port `sshd` listens on. |
 
 ### `StaticAddress`
@@ -990,10 +982,6 @@ TaikoClient(
 
 The `taiko-client` driver: follows L1 and drives the execution client's Engine API, so the L2 chain advances.
 
-| Member | Does |
-|---|---|
-| `TaikoClient.compose() -> Iterator[object]` |  |
-
 ### `Tdxs`
 
 *dataclass*
@@ -1017,10 +1005,8 @@ The evidence service: `tdxs` from tundra-tools, socket-activated on `/var/tdxs.s
 | Member | Does |
 |---|---|
 | `Tdxs.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tdxs-validator-unchecked`: a validator with nothing to compare a quote to. |
-| `Tdxs.compose() -> Iterator[object]` |  |
 | `Tdxs.from_policy(policy: str \| Path \| Mapping[str, object], *, validator: du.TdxsType = 'tdx', allow_placeholder: bool = False, **kwargs: Any) -> Tdxs` | A verifier whose `expected_measurements` are *policy*'s registers. |
 | `Tdxs.group` | The group whose members may ask for quotes. |
-| `Tdxs.readiness() -> tuple[Readied, ...]` |  |
 | `Tdxs.socket` | Where a service asks for quotes (its `tdx` group may connect). |
 
 ### `TeeBase`
@@ -1046,7 +1032,6 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 | Member | Does |
 |---|---|
 | `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
-| `TeeBase.compose() -> Iterator[object]` |  |
 
 ## tundravm.storage
 
@@ -1217,7 +1202,6 @@ A Rust program built from *source* and installed at `executable`.
 
 | Member | Does |
 |---|---|
-| `CargoBinary.compose() -> Fragment` |  |
 | `CargoBinary.executable` | The absolute path the binary is installed at. |
 
 ### `Git`
@@ -1251,7 +1235,6 @@ A Go program built from *source* and installed at `executable`.
 
 | Member | Does |
 |---|---|
-| `GoBinary.compose() -> Fragment` |  |
 | `GoBinary.executable` | The absolute path the binary is installed at. |
 
 ### `Http`
@@ -1481,22 +1464,6 @@ assert_tree(tree: Tree, golden: str | Path, *, update: bool | None = None) -> No
 
 Fail unless *golden* holds exactly *tree*: every path, its bytes, exec bit and symlink.
 
-### `assert_tree_matches`
-
-*function*
-
-```python
-assert_tree_matches(
-    recipe: Recipe,
-    golden_dir: str | Path,
-    *,
-    profiles: Profiles = None,
-    update: bool | None = None,
-) -> TreeDiff
-```
-
-Compare the compiled tree of *recipe* (the internal model) with *golden_dir*.
-
 ### `boot`
 
 *function*
@@ -1591,46 +1558,6 @@ build_unavailable() -> str | None
 
 Why this host cannot run a real build with the Linux backend without a password prompt, or `None` when it can (x86-64 Linux, the pinned mkosi, and user namespaces or non-interactive sudo). Integration tests skip on the reason.
 
-### `compile_tree`
-
-*function*
-
-```python
-compile_tree(
-    recipe: Recipe,
-    *,
-    profiles: Profiles = None,
-    path: str | Path | None = None,
-) -> CompiledTree
-```
-
-Compile *profiles* (default: every profile) of *recipe* into *path* or a temp dir.
-
-### `CompiledTree`
-
-*class*
-
-```python
-CompiledTree(root: Path, profiles: Sequence[str], default_profile: str = 'default')
-```
-
-A compiled mkosi tree on disk, with readers for the files tests inspect.
-
-| Member | Does |
-|---|---|
-| `CompiledTree.conf(profile: str \| None = None) -> str` | The profile's payload configuration as mkosi reads it, one text: the payload's `mkosi.conf`, its `mkosi.conf.d/*.conf` and the overlay's `mkosi.conf`. |
-| `CompiledTree.exists(relpath: str, profile: str \| None = None) -> bool` |  |
-| `CompiledTree.files(profile: str \| None = None) -> list[str]` | Sorted POSIX paths of every file the profile reads, relative to its layer (the payload's own profile overlays left out). |
-| `CompiledTree.layers(name: str \| None = None) -> tuple[Path, ...]` | The configuration directories profile *name* builds from: the payload, then its overlay when it has one. |
-| `CompiledTree.main_conf() -> str` | The root `mkosi.conf`: the settings every image shares and the QEMU disk. |
-| `CompiledTree.path(relpath: str, profile: str \| None = None) -> Path` | *relpath* in the profile's overlay when it is there, else in the payload. |
-| `CompiledTree.profile(name: str \| None = None) -> Path` | The directory holding what profile *name* adds: its overlay, else the payload. |
-| `CompiledTree.read(relpath: str, profile: str \| None = None) -> str` |  |
-| `CompiledTree.runtime_init(profile: str \| None = None, *, step: str \| None = None) -> str` | The runtime-init script text: one *step*'s script, or every step in the order `runtime-init.service` lists them (`/usr/lib/runtime-init/<step>`). |
-| `CompiledTree.script(phase: str, profile: str \| None = None) -> str` | The text of the profile's *phase* scripts, in the order mkosi runs them. |
-| `CompiledTree.scripts(phase: str, profile: str \| None = None) -> list[Path]` | The profile's `mkosi.<phase>.d/` scripts in the order mkosi runs them. |
-| `CompiledTree.unit(name: str, profile: str \| None = None) -> str` | Systemd unit text; a bare name such as `"app"` means `app.service`. |
-
 ### `ConsoleScan`
 
 *dataclass*
@@ -1645,25 +1572,6 @@ ConsoleScan(
 ```
 
 What a console transcript says: units started and failed, fatal lines.
-
-### `fake_fragment`
-
-*function*
-
-```python
-fake_fragment(
-    name: str = 'fake',
-    *,
-    packages: Sequence[str] = (),
-    files: Mapping[str, str | bytes] | None = None,
-    init: str | None = None,
-    after: Sequence[Ready] = (),
-    requires: Sequence[str | Fragment] = (),
-    checks: Sequence[Check] = (),
-) -> Fragment
-```
-
-A small group of internal declarations, for testing how groups compose.
 
 ### `FakeCall`
 
@@ -1734,22 +1642,6 @@ Records source checkouts instead of fetching them.
 | `FakeSources.install(setattr: Callable[[object, str, object], None]) -> FakeSources` | Put this fake in place of the fetch boundary using *setattr* (pytest's `monkeypatch.setattr`, which undoes it after the test). |
 | `FakeSources.prefetch_deps(build: SourceBuild, pin: str, checkout: Path, root: Path, **kwargs: object) -> str \| None` |  |
 
-### `fragment_plan`
-
-*function*
-
-```python
-fragment_plan(
-    *items: Declaration | Fragment,
-    include: Sequence[Declaration | Fragment] = (),
-    base: Fragment | Recipe | None = None,
-    profile: str = 'default',
-    lock: Lock | None = None,
-) -> PlannedImage
-```
-
-Internal declarations (or one group of them) planned on a minimal bootable platform.
-
 ### `HttpResponse`
 
 *dataclass*
@@ -1763,6 +1655,16 @@ What one `wait_http` URL answered while the VM ran: `status` `None` when it neve
 | Member | Does |
 |---|---|
 | `HttpResponse.ok` |  |
+
+### `image_file`
+
+*function*
+
+```python
+image_file(tmp_path: Path, source: str, name: str = 'image.py') -> Path
+```
+
+Write dedented *source* (an image file) to `tmp_path/name` for CLI tests; return its path.
 
 ### `ImageFile`
 
@@ -1784,7 +1686,7 @@ One file of the image tree: bytes, mode, stage and the declarations that put it 
 
 | Member | Does |
 |---|---|
-| `ImageFile.fragment` | The innermost component that declared the file, `None` for a compiler file. |
+| `ImageFile.component` | The innermost component that declared the file, `None` for a compiler file. |
 | `ImageFile.text` | The content decoded as UTF-8. |
 
 ### `InitStep`
@@ -1807,7 +1709,7 @@ One runtime-init step: a declared one or a built-in (`keys`, `disks`, `secrets`)
 *value*
 
 ```python
-Lintable = tundravm.declarative.model.Recipe | tundravm.testing._image.PlannedImage | collections.abc.Sequence[tundravm.diagnostics.Diagnostic]
+Lintable = tundravm._image._image.Image | tundravm.testing._image.PlannedImage | collections.abc.Sequence[tundravm.diagnostics.Diagnostic]
 ```
 
 ### `plan`
@@ -1816,7 +1718,7 @@ Lintable = tundravm.declarative.model.Recipe | tundravm.testing._image.PlannedIm
 
 ```python
 plan(
-    subject: Recipe | PublicImage,
+    subject: PublicImage | Component,
     profile: str | None = None,
     *,
     lock: Lock | None = None,
@@ -1830,7 +1732,12 @@ plan(
 *class*
 
 ```python
-PlannedImage(recipe: Recipe, profile: str, *, lock: Lock | None = None)
+PlannedImage(
+    subject: PublicImage | Component,
+    profile: str | None = None,
+    *,
+    lock: Lock | None = None,
+)
 ```
 
 One profile of an image, planned in memory: what its compiled tree holds, as values.
@@ -1867,16 +1774,6 @@ read_lock(path: Path) -> Lock
 
 The lockfile at *path* (`build/tundravm.lock`), as `tundravm.compile(image, lock=)` and `plan(image, lock=)` take it.
 
-### `recipe_file`
-
-*function*
-
-```python
-recipe_file(tmp_path: Path, source: str, name: str = 'recipe.py') -> Path
-```
-
-Write dedented *source* (an image file) to `tmp_path/name` for CLI tests; return its path.
-
 ### `run_cli`
 
 *function*
@@ -1896,14 +1793,6 @@ scan_console(text: str) -> ConsoleScan
 ```
 
 Read systemd's status lines and the kernel's fatal messages out of *text*.
-
-### `TEST_PLATFORM`
-
-*value*
-
-```python
-TEST_PLATFORM = Fragment(name='test-platform', items=(Package(name='linux-image-amd64', role='runtime'), Network(dhcp=True, interfaces=('en*', 'eth*'), static=None, ipv6=True, wait_online=True, wait_timeout=30)), requires=(), checks=())
-```
 
 ### `UnitView`
 

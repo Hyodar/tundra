@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from tundravm import File as PublicFile
+from tundravm import Image, Profile
+from tundravm import Service as PublicService
+from tundravm.components import Component
 from tundravm.declarative import (
     BootStep,
     Diagnostic,
@@ -21,24 +26,25 @@ from tundravm.declarative import (
     User,
     Variant,
     compile,
-    lint,
 )
 from tundravm.declarative.lifecycle import read_tree
 from tundravm.errors import ValidationError
 from tundravm.testing import (
-    CompiledTree,
     FakeMkosi,
     FakeSources,
     assert_clean,
     assert_diagnostic,
     assert_tree,
+    image_file,
+    plan,
+    run_cli,
+)
+from tundravm.testing._model import (
+    CompiledTree,
     assert_tree_matches,
     compile_tree,
     fake_fragment,
     fragment_plan,
-    plan,
-    recipe_file,
-    run_cli,
 )
 
 AZURE = Variant("azure", outputs=("azure",), add=Fragment("azure", (Package("jq"),)))
@@ -70,22 +76,20 @@ def _single(*items: Package | File | User | Service) -> Recipe:
     return Recipe(name="demo", items=(NOT_BOOTABLE, *items))
 
 
-def _ghost(*, where: str = "common") -> Recipe:
-    """A recipe whose ``app`` service runs as an undeclared user, in common or in ``azure``."""
-    service = Service("app", "/usr/bin/app", user="ghost")
-    if where == "common":
-        return _single(service)
-    variant = Variant("azure", outputs=("azure",), add=Fragment("azure", (service,)))
-    return Recipe(
-        name="demo",
-        items=(KERNEL,),
-        variants=(Variant("default", outputs=("qemu",)), variant),
-    )
+GHOST = PublicService("app", ["/usr/bin/busybox", "true"], user="ghost")
+"""A service that runs as a user nothing creates: ``service-user-missing``."""
 
 
-def _warning_only() -> Recipe:
-    """One ``service-command-not-shipped`` warning: nothing ships ``/usr/bin/app``."""
-    return _single(User("app"), Service("app", "/usr/bin/app", user="app"))
+def _ghost(*, where: str = "image") -> Image:
+    """An image whose ``app`` service runs as an undeclared user, everywhere or in ``dev``."""
+    if where == "image":
+        return Image("demo", packages=["busybox"], services=[GHOST])
+    return Image("demo", packages=["busybox"], profiles={"dev": Profile(add=[GHOST])})
+
+
+def _warning_only() -> Image:
+    """One warning: the implied evidence service's source is unpinned."""
+    return Image("demo")
 
 
 # ── compile_tree / CompiledTree ──────────────────────────────────────
@@ -139,71 +143,76 @@ def test_compile_tree_writes_the_tree_compile_returns(tmp_path: Path) -> None:
 
 
 def test_assert_clean_fails_on_warnings_for_every_input() -> None:
-    recipe = _warning_only()
-    for subject in (recipe, lint(recipe), plan(recipe)):
-        with pytest.raises(AssertionError, match="warning service-command-not-shipped"):
+    image = _warning_only()
+    for subject in (image, plan(image).lint(), plan(image)):
+        with pytest.raises(AssertionError, match="warning source-unpinned"):
             assert_clean(subject)
         found = assert_clean(subject, warnings="allow")
-        assert [d.code for d in found] == ["service-command-not-shipped"]
-        assert_clean(subject, allow=("service-command-not-shipped",))
-    assert assert_clean(_recipe()) == []
+        assert [d.code for d in found] == ["source-unpinned"]
+        assert_clean(subject, allow=("source-unpinned",))
 
 
 def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
-    recipe = _ghost()
+    image = _ghost()
     with pytest.raises(AssertionError) as excinfo:
-        assert_clean(recipe, warnings="allow")
+        assert_clean(image, warnings="allow")
     message = str(excinfo.value)
-    assert "error service-user-missing [default] app" in message
+    assert "error service-user-missing [production] app.service" in message
     assert "hint:" in message
-    assert_clean(recipe, allow=["service-user-missing", "service-command-not-shipped"])
+    assert_clean(image, allow=["service-user-missing", "source-unpinned"])
 
 
 def test_assert_clean_checks_selected_profiles() -> None:
-    recipe = _ghost(where="azure")
-    assert_clean(recipe, profiles="default")
-    with pytest.raises(AssertionError, match=r"\[azure\]"):
-        assert_clean(recipe)
-    with pytest.raises(AssertionError, match=r"\[azure\]"):
-        assert_clean(recipe, profiles=["azure"])
+    image = _ghost(where="dev")
+    assert_clean(image, profiles="production", allow=["source-unpinned"])
+    with pytest.raises(AssertionError, match=r"\[dev\]"):
+        assert_clean(image, allow=["source-unpinned"])
+    with pytest.raises(AssertionError, match=r"\[dev\]"):
+        assert_clean(image, profiles=["dev"], allow=["source-unpinned"])
 
 
 def test_assert_clean_returns_lint_diagnostics_as_given() -> None:
-    found = lint(_warning_only())
+    found = plan(_warning_only()).lint()
     assert assert_clean(found, warnings="allow") is found
-    assert assert_clean(lint(_recipe())) == ()
     with pytest.raises(TypeError, match="profiles="):
-        assert_clean(found, profiles="default")
+        assert_clean(found, profiles="production")
     with pytest.raises(TypeError, match="profiles="):
-        assert_clean(plan(_recipe()), profiles="default")
+        assert_clean(plan(_warning_only()), profiles="production")
 
 
 def test_assert_diagnostic_filters_by_profile() -> None:
-    recipe = _ghost(where="azure")
-    found = assert_diagnostic(recipe, "service-user-missing", profile="azure")
-    assert found.profile == "azure"
-    assert assert_diagnostic(recipe, "service-user-missing", profile="azure") == found
-    with pytest.raises(AssertionError, match="no findings"):
-        assert_diagnostic(recipe, "service-user-missing", profiles="default")
+    image = _ghost(where="dev")
+    found = assert_diagnostic(image, "service-user-missing", profile="dev")
+    assert found.profile == "dev"
+    with pytest.raises(AssertionError, match="service-user-missing"):
+        assert_diagnostic(image, "service-user-missing", profiles="production")
 
 
 def test_assert_diagnostic_takes_lint_diagnostics() -> None:
-    found = assert_diagnostic(lint(_ghost()), "service-user-missing", profile="default")
+    found = assert_diagnostic(plan(_ghost()).lint(), "service-user-missing")
     assert isinstance(found, Diagnostic)
-    assert (found.severity, found.subject) == ("error", "app")
+    assert (found.severity, found.subject) == ("error", "app.service")
 
 
 def test_assert_diagnostic_failure_lists_every_finding() -> None:
-    recipe = _warning_only()
+    image = _warning_only()
     with pytest.raises(AssertionError) as excinfo:
-        assert_diagnostic(recipe, "service-user-missing", subject="app")
+        assert_diagnostic(image, "service-user-missing", subject="app")
     message = str(excinfo.value)
     assert "code='service-user-missing', subject='app'" in message
-    assert "warning service-command-not-shipped [default]" in message
+    assert "warning source-unpinned [production]" in message
     with pytest.raises(AssertionError, match="severity='error'"):
-        assert_diagnostic(recipe, "service-command-not-shipped", severity="error")
-    with pytest.raises(AssertionError, match="no findings"):
-        assert_diagnostic(lint(_recipe()), "service-command-not-shipped")
+        assert_diagnostic(image, "source-unpinned", severity="error")
+
+
+def test_plan_takes_a_component_alone() -> None:
+    class Site(Component):
+        def compose(self) -> Iterator[object]:
+            yield PublicFile.text("/srv/www/index.html", "hi\n")
+
+    planned = plan(Site())
+    assert planned.profile == "production"
+    assert planned.file("/srv/www/index.html").component == "site"
 
 
 # ── assert_tree / assert_tree_matches ────────────────────────────────
@@ -327,7 +336,7 @@ def test_fake_fragment_declares_packages_and_files() -> None:
     image = fragment_plan(fake)
     assert image.packages["pkg"] == "runtime"
     assert image.file("/etc/x").text == "content"
-    assert image.file("/etc/x").fragment == "x"
+    assert image.file("/etc/x").component == "x"
 
 
 def test_fake_fragment_init_scripts_compose_by_after() -> None:
@@ -347,7 +356,7 @@ def test_fake_fragment_init_scripts_compose_by_after() -> None:
     assert image.file("/usr/lib/runtime-init/late").text.endswith("echo late")
 
 
-# ── recipe_file / run_cli ────────────────────────────────────────────
+# ── image_file / run_cli ────────────────────────────────────────────
 
 
 def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:
@@ -356,7 +365,7 @@ def test_run_cli_captures_usage_errors_and_sdk_errors(tmp_path: Path) -> None:
     assert "usage:" in err
     assert out == ""
 
-    broken = recipe_file(tmp_path, "recipe = 42\n", name="sub/broken.py")
+    broken = image_file(tmp_path, "recipe = 42\n", name="sub/broken.py")
     assert broken == tmp_path / "sub" / "broken.py"
     code, _, err = run_cli("check", broken)
     assert code != 0

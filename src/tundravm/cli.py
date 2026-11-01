@@ -1201,7 +1201,7 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
     described = {}
     for name in names:
         declared = name in loaded.variants
-        fragments = resolve(loaded.recipe, variant=name).fragments if declared else ()
+        fragments = resolve(loaded.recipe, variant=name).components if declared else ()
         inherits = loaded.recipe.variant(name).inherits if declared else None
         described[name] = describe(img, profile=name, inherits=inherits, fragments=fragments)
     report = show.image_report(img, names, described, file=found.image)

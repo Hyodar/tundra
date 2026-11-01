@@ -17,7 +17,8 @@ from tundravm.declarative import (
     Variant,
 )
 from tundravm.declarative.systemd import Dynamic, Hardening
-from tundravm.testing import CompiledTree, assert_clean, compile_tree
+from tundravm.testing import assert_clean
+from tundravm.testing._model import CompiledTree, compile_tree, lint_model
 
 OFF = Hardening.none()
 
@@ -144,12 +145,14 @@ def test_needs_wait_for_steps_and_boot_tasks() -> None:
 def test_generated_units_lint_clean() -> None:
     hello = Task("hello", "/usr/bin/true")
     assert_clean(
-        _recipe(
-            hello,
-            Task("tick", "/usr/bin/true", schedule=Every("1h"), needs=[hello.ready]),
-            User("app"),
-            Service("app", "/usr/bin/app", socket=Listen("/run/app.sock", user="app")),
-            Mount("/var/cache/app", "tmpfs", type="tmpfs"),
+        lint_model(
+            _recipe(
+                hello,
+                Task("tick", "/usr/bin/true", schedule=Every("1h"), needs=[hello.ready]),
+                User("app"),
+                Service("app", "/usr/bin/app", socket=Listen("/run/app.sock", user="app")),
+                Mount("/var/cache/app", "tmpfs", type="tmpfs"),
+            )
         )
     )
 
@@ -187,7 +190,7 @@ def test_example_03_health_check_runs_only_from_its_timer() -> None:
     from tests.helpers import REPO_ROOT
     from tundravm.declarative import load
 
-    tree = compile_tree(load(REPO_ROOT / "examples" / "03_fragments.py", extra_paths=[REPO_ROOT]))
+    tree = compile_tree(load(REPO_ROOT / "examples" / "03_components.py", extra_paths=[REPO_ROOT]))
     service = tree.unit("healthcheck")
     assert "Type=oneshot\n" in service and "[Install]" not in service
     assert "User=healthcheck\n" in service and "ProtectSystem=strict\n" in service
@@ -200,10 +203,10 @@ def test_example_03_health_check_runs_only_from_its_timer() -> None:
 
 
 def test_image_queries_see_the_generated_units() -> None:
-    from tundravm.testing import PlannedImage
+    from tundravm.testing._image import planned_model
 
     hello = Task("hello", "/usr/bin/true")
-    image = PlannedImage(
+    image = planned_model(
         _recipe(
             hello,
             Task("tick", "/usr/bin/true", schedule=Every("1h")),

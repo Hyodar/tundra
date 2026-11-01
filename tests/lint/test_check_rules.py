@@ -389,7 +389,7 @@ def test_kernel_missing_is_per_variant() -> None:
     ]
 
 
-# l. recipe-arch-unsupported
+# l. image-arch-unsupported
 
 
 def _arm(*items: Declaration | Fragment, target: str = "azure") -> Recipe:
@@ -407,7 +407,7 @@ def test_aarch64_with_efi_stub_is_unsupported() -> None:
     [diag] = [
         d
         for d in report(_arm(EfiStub(snapshot="20251113T083151Z", version="257")))
-        if d.code == "recipe-arch-unsupported" and d.subject == "EfiStub"
+        if d.code == "image-arch-unsupported" and d.subject == "EfiStub"
     ]
     assert (diag.severity, diag.subject) == ("error", "EfiStub")
     assert "_amd64.deb" in (diag.hint or "")
@@ -416,9 +416,9 @@ def test_aarch64_with_efi_stub_is_unsupported() -> None:
 def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:
     efi = EfiStub(snapshot="20251113T083151Z", version="257")
     x86 = Recipe("check", items=(*CLEAN, efi), variants=(DEFAULT,))
-    assert "recipe-arch-unsupported" not in codes(x86)
+    assert "image-arch-unsupported" not in codes(x86)
     # The tree's main image is the QEMU disk, whatever the variant's outputs.
-    found = [d.subject for d in report(_arm()) if d.code == "recipe-arch-unsupported"]
+    found = [d.subject for d in report(_arm()) if d.code == "image-arch-unsupported"]
     assert found == ["qemu"]
 
 

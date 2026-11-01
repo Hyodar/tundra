@@ -21,7 +21,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
-from tundravm.testing import CompiledTree, compile_tree
+from tundravm.testing._model import CompiledTree, compile_tree
 
 TDXS_CONFIG = "mkosi.extra/etc/tdxs/config.yaml"
 

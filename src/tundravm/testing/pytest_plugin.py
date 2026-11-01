@@ -11,27 +11,14 @@ import itertools
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import pytest
 
-from tundravm.declarative.model import Package, Recipe
-from tundravm.testing import (
-    BootResult,
-    BootUnavailable,
-    CompiledTree,
-    FakeMkosi,
-    Profiles,
-    compile_tree,
-)
+from tundravm.testing import BootResult, BootUnavailable, FakeMkosi
 from tundravm.testing import boot as _boot
 from tundravm.testing import run_cli as _run_cli
 from tundravm.testing._boot import Bootable
-
-
-class CompileFactory(Protocol):
-    def __call__(self, recipe: Recipe, profiles: Profiles = None) -> CompiledTree: ...
-
 
 CliRunner = Callable[..., tuple[int, str, str]]
 BootRunner = Callable[..., BootResult]
@@ -41,26 +28,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "boot: boots a built image under QEMU (needs qemu-system-x86_64 and OVMF)"
     )
-
-
-@pytest.fixture
-def recipe() -> Recipe:
-    """A minimal lint-clean internal model named ``test``: one ``default`` profile, the
-    kernel package. For testing tundravm itself; an image test builds an ``Image``.
-    """
-    return Recipe(name="test", items=(Package("linux-image-amd64"),))
-
-
-@pytest.fixture
-def compiled(tmp_path: Path) -> CompileFactory:
-    """Factory: ``compiled(recipe, profiles=None)`` compiles the internal model's profiles
-    (:func:`~tundravm.testing.compile_tree`) into a new dir under ``tmp_path``."""
-    counter = itertools.count()
-
-    def factory(recipe: Recipe, profiles: Profiles = None) -> CompiledTree:
-        return compile_tree(recipe, profiles=profiles, path=tmp_path / f"compiled-{next(counter)}")
-
-    return factory
 
 
 @pytest.fixture
@@ -97,13 +64,4 @@ def fake_mkosi(monkeypatch: pytest.MonkeyPatch) -> FakeMkosi:
     return FakeMkosi().install(monkeypatch.setattr)
 
 
-__all__ = [
-    "BootRunner",
-    "CliRunner",
-    "CompileFactory",
-    "boot",
-    "compiled",
-    "fake_mkosi",
-    "recipe",
-    "run_cli",
-]
+__all__ = ["BootRunner", "CliRunner", "boot", "fake_mkosi", "run_cli"]

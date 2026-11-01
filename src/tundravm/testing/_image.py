@@ -1,14 +1,15 @@
-"""One profile planned in memory and read as values: plan(), fragment_plan(), PlannedImage."""
+"""One profile planned in memory and read as values: plan() and PlannedImage."""
 
 from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal
 
+from tundravm._image._component import Component
 from tundravm._image._image import Image as PublicImage
 from tundravm.declarative import lifecycle
 from tundravm.declarative.lifecycle import Entry, Lock, Tree
@@ -16,15 +17,11 @@ from tundravm.declarative.model import (
     PHASES,
     BootStep,
     Build,
-    Declaration,
-    Fragment,
     Group,
     Hook,
-    Package,
     Recipe,
     Resolved,
     User,
-    Variant,
 )
 from tundravm.declarative.resolve import (
     Identity,
@@ -35,7 +32,6 @@ from tundravm.declarative.resolve import (
     resolve,
     step_nodes,
 )
-from tundravm.declarative.utils import Network
 from tundravm.diagnostics import Diagnostic
 from tundravm.models import unit_name
 
@@ -43,11 +39,6 @@ from ._units import UnitView, parse_conf
 
 Role = Literal["runtime", "build"]
 Stage = Literal["skeleton", "extra"]
-
-TEST_PLATFORM = Fragment("test-platform", (Package("linux-image-amd64"), Network()))
-"""What :func:`fragment_plan` boots on by default: the kernel package and a DHCP
-network, so ``kernel-missing`` and ``network-missing`` stay quiet and the findings of what is
-under test stand alone."""
 
 UNIT_DIRS = ("/usr/lib/systemd/system", "/etc/systemd/system")
 _ENABLE = re.compile(r"systemctl\s+(enable|mask|disable)\s+([^\n;&|]+)")
@@ -76,7 +67,7 @@ class ImageFile:
         return self.content.decode("utf-8")
 
     @property
-    def fragment(self) -> str | None:
+    def component(self) -> str | None:
         """The innermost component that declared the file, ``None`` for a compiler file."""
         for origin in reversed(self.origin):
             if origin.fragments:
@@ -148,14 +139,30 @@ _LIST_SETTINGS = frozenset(
 class PlannedImage:
     """One profile of an image, planned in memory: what its compiled tree holds, as values.
 
-    :func:`plan` makes one. Nothing compiles until a query reads the tree, so :meth:`lint`
-    works on an image that does not compile. Declared things (users, groups, runtime-init
-    steps, hooks, builds) come from the resolved profile; shipped things (files, units,
-    packages, mkosi settings) from the compiled tree.
+    ``PlannedImage(subject, profile, lock=lock)`` is :func:`plan`. Nothing compiles until a
+    query reads the tree, so :meth:`lint` works on an image that does not compile. Declared
+    things (users, groups, runtime-init steps, hooks, builds) come from the resolved
+    profile; shipped things (files, units, packages, mkosi settings) from the compiled tree.
     """
 
-    def __init__(self, recipe: Recipe, profile: str, *, lock: Lock | None = None) -> None:
-        (self.profile,) = lifecycle.variant_names(recipe, [profile])
+    def __init__(
+        self,
+        subject: PublicImage | Component,
+        profile: str | None = None,
+        *,
+        lock: Lock | None = None,
+    ) -> None:
+        from tundravm._image import recipe_of
+
+        if isinstance(subject, Component):
+            subject = PublicImage(subject.name, components=[subject])
+        if not isinstance(subject, PublicImage):
+            raise TypeError(f"plan() takes an Image or a Component, not {subject!r}")
+        self._init(recipe_of(subject), profile, lock)
+
+    def _init(self, recipe: Recipe, profile: str | None, lock: Lock | None) -> None:
+        name = profile or recipe.variants[0].name
+        (self.profile,) = lifecycle.variant_names(recipe, [name])
         self.recipe = recipe
         self.lock = lock
 
@@ -319,45 +326,22 @@ class PlannedImage:
 
 
 def plan(
-    subject: Recipe | PublicImage, profile: str | None = None, *, lock: Lock | None = None
+    subject: PublicImage | Component, profile: str | None = None, *, lock: Lock | None = None
 ) -> PlannedImage:
     """*profile* of *subject* (default: ``production``) as a :class:`PlannedImage`.
 
-    *subject* is an :class:`~tundravm.Image` (or the internal model one lowers to).
-    The tree compiles in memory on the first query that reads it; *lock*'s source pins
-    apply to the compile and to :meth:`PlannedImage.lint`.
+    *subject* is an :class:`~tundravm.Image`, or a :class:`~tundravm.components.Component`
+    planned alone on an image named after it, with what every image implies. The tree
+    compiles in memory on the first query that reads it; *lock*'s source pins apply to the
+    compile and to :meth:`PlannedImage.lint`.
     """
-    from tundravm._image import recipe_of
-
-    recipe = recipe_of(subject) if isinstance(subject, PublicImage) else subject
-    return PlannedImage(recipe, profile or recipe.variants[0].name, lock=lock)
+    return PlannedImage(subject, profile, lock=lock)
 
 
-def fragment_plan(
-    *items: Declaration | Fragment,
-    include: Sequence[Declaration | Fragment] = (),
-    base: Fragment | Recipe | None = None,
-    profile: str = "default",
-    lock: Lock | None = None,
+def planned_model(
+    recipe: Recipe, profile: str | None = None, *, lock: Lock | None = None
 ) -> PlannedImage:
-    """Internal declarations (or one group of them) planned on a minimal bootable platform.
-
-    For testing tundravm itself; an image is planned with :func:`plan`. *include* adds what
-    the items need but are not under test (a group their ``requires`` names). *base* is the
-    platform: a group (default :data:`TEST_PLATFORM`, the kernel package) under one
-    ``qemu`` profile called *profile*, or a whole internal model whose items gain them.
-    """
-    if len(items) == 1 and isinstance(items[0], Fragment):
-        under_test = items[0]
-    else:
-        under_test = Fragment("under-test", tuple(items))
-    if isinstance(base, Recipe):
-        items = (*base.items, *include, under_test)
-        return PlannedImage(replace(base, items=items), profile, lock=lock)
-    platform = TEST_PLATFORM if base is None else base
-    recipe = Recipe(
-        name="fragment-plan",
-        items=(platform, *include, under_test),
-        variants=(Variant(profile, outputs=("qemu",)),),
-    )
-    return PlannedImage(recipe, profile, lock=lock)
+    """*profile* of the internal model *recipe* (default: its first) as a :class:`PlannedImage`."""
+    planned = PlannedImage.__new__(PlannedImage)
+    planned._init(recipe, profile, lock)
+    return planned

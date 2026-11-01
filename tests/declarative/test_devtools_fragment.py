@@ -7,7 +7,7 @@ import pytest
 from tundravm._units import v1
 from tundravm.declarative import Debloat, Package, Recipe, Unit, Variant
 from tundravm.declarative.utils import DevTools
-from tundravm.testing import CompiledTree, compile_tree
+from tundravm.testing._model import CompiledTree, compile_tree
 
 SERIAL_UNIT = "serial-console.service"
 GETTY = "serial-getty@ttyS0.service"

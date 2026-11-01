@@ -116,6 +116,17 @@ RENAMED = {
     "variant-empty, resolved.variant (profile-empty, resolved.profile)": re.compile(
         r"\bvariant-empty\b|\bresolved\.variant\b"
     ),
+    "resolved.outputs/fragments (resolved.targets/components)": re.compile(
+        r"\bresolved\.(?:outputs|fragments)\b"
+    ),
+    "fragment-*/recipe-* codes (component-conflict, component-requires-missing, "
+    "image-arch-unsupported)": re.compile(
+        r"\b(?:fragment-conflict|fragment-requires-missing|recipe-arch-unsupported)\b"
+    ),
+    "internal-model test helpers (plan, image_file)": re.compile(
+        r"\b(?:fragment_plan|fake_fragment|recipe_file|compile_tree|assert_tree_matches)\b"
+    ),
+    "Component fragment= (name=)": re.compile(r"\(Component, fragment="),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {

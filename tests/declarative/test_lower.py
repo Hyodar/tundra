@@ -579,7 +579,7 @@ def test_variant_with_several_targets() -> None:
         items=(Package("curl"),),
         variants=(Variant("default"), Variant("cloud", outputs=("azure", "gcp"))),
     )
-    assert resolve(recipe, variant="cloud").outputs == ("azure", "gcp")
+    assert resolve(recipe, variant="cloud").targets == ("azure", "gcp")
     img = lower(recipe)
     assert img.targets["cloud"] == ("azure", "gcp") and img.clouds("cloud") == ("azure", "gcp")
     assert img.overlays == ()

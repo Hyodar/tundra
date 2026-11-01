@@ -291,11 +291,15 @@ def _factories(cls: type) -> dict[str, str]:
 
 
 def _members(cls: type) -> list[tuple[str, str]]:
-    """``(signature, paragraph)`` of the public methods and properties *cls* itself defines."""
+    """``(signature, paragraph)`` of the public methods and properties *cls* itself defines.
+
+    An undocumented override of a base class's method (a shipped component's
+    ``compose()``) is the base's contract, which the base's entry lists.
+    """
     found: list[tuple[str, str]] = []
     for name, value in sorted(vars(cls).items()):
         qualified = f"{cls.__name__}.{name}"
-        if name.startswith("_"):
+        if name.startswith("_") or _undocumented_override(cls, name, value):
             continue
         if isinstance(value, property):
             found.append((qualified, _paragraph(value.fget)))
@@ -306,6 +310,11 @@ def _members(cls: type) -> list[tuple[str, str]]:
             signature = _signature(qualified, value, method=True, wrap=False)
             found.append((signature or qualified, _paragraph(value)))
     return found
+
+
+def _undocumented_override(cls: type, name: str, value: object) -> bool:
+    inherited = any(name in vars(base) for base in cls.__mro__[1:])
+    return inherited and inspect.isfunction(value) and not value.__doc__
 
 
 def _kind(obj: object) -> str:

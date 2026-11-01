@@ -611,7 +611,7 @@ def _rule_recipe_arch_unsupported(
     if _EFI_STUB_DEB.search(_command_text(state)):
         yield Diagnostic(
             severity="error",
-            code="recipe-arch-unsupported",
+            code="image-arch-unsupported",
             message=(
                 "the platform's arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
                 "package, whose x86-64 EFI stub cannot boot an arm64 UKI"
@@ -626,7 +626,7 @@ def _rule_recipe_arch_unsupported(
     if "qemu" in state.output_targets:
         yield Diagnostic(
             severity="error",
-            code="recipe-arch-unsupported",
+            code="image-arch-unsupported",
             message=(
                 "the platform's arch is aarch64 but the profile targets qemu, whose deploy adapter "
                 "boots images with qemu-system-x86_64"
@@ -1070,14 +1070,14 @@ _REGISTRY: tuple[Rule, ...] = (
         "profile's changes= instead of declaring it again.",
     ),
     Rule(
-        "fragment-conflict",
+        "component-conflict",
         "error",
         "Two different component configurations share one name, so their declarations "
         "and exports would mix.",
         "Use one configuration of the component, or give the second one its own name.",
     ),
     Rule(
-        "fragment-requires-missing",
+        "component-requires-missing",
         "error",
         "A component needs another component that the profile does not include.",
         "Add the required component to components= (or to the profile's add=).",
@@ -1362,7 +1362,7 @@ _REGISTRY: tuple[Rule, ...] = (
         (_rule_debloat_removes_modules, _rule_built_kernel_modules),
     ),
     Rule(
-        "recipe-arch-unsupported",
+        "image-arch-unsupported",
         "error",
         "An aarch64 image uses what only boots x86-64: EfiStub's amd64 stub or the qemu "
         "target. TDX guests are x86-64.",

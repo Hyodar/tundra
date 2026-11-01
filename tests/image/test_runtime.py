@@ -364,7 +364,7 @@ def test_tls_reads_its_certificate_as_a_credential() -> None:
 
 
 def test_the_prover_shape_lints_clean_apart_from_unpinned_sources(planned: PlannedImage) -> None:
-    assert_clean(recipe_of(prover()), allow=("source-unpinned",))
+    assert_clean(prover(), allow=("source-unpinned",))
 
 
 # ── The root layout ─────────────────────────────────────────────────────

@@ -19,7 +19,8 @@ from tundravm.capabilities import Host
 from tundravm.declarative import lock
 from tundravm.errors import ValidationError
 from tundravm.recipe import BACKEND_ENV, load_file
-from tundravm.testing import assert_clean, compile_tree, plan
+from tundravm.testing import assert_clean, plan
+from tundravm.testing._model import compile_tree
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
@@ -88,7 +89,7 @@ def test_the_prover_compiles_to_a_tree_mkosi_resolves(prover_file: Path, tmp_pat
 
 
 def test_the_prover_lints_clean_apart_from_unpinned_sources(prover_file: Path) -> None:
-    assert_clean(recipe_of(tundravm.load(prover_file)), allow=("source-unpinned",))
+    assert_clean(tundravm.load(prover_file), allow=("source-unpinned",))
 
 
 def test_the_prover_locks_without_the_network(prover_file: Path) -> None:

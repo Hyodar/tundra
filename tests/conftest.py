@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.testing import FakeMkosi
+from tundravm.declarative.model import Package, Recipe
+from tundravm.testing import FakeMkosi, Profiles
 from tundravm.testing._fake_sources import FakeSources
+from tundravm.testing._model import CompiledTree, compile_tree
+
+
+class CompileFactory(Protocol):
+    def __call__(self, recipe: Recipe, profiles: Profiles = None) -> CompiledTree: ...
+
+
+@pytest.fixture
+def recipe() -> Recipe:
+    """A minimal lint-clean internal model named ``test``: one ``default`` profile, the
+    kernel package."""
+    return Recipe(name="test", items=(Package("linux-image-amd64"),))
+
+
+@pytest.fixture
+def compiled(tmp_path: Path) -> CompileFactory:
+    """Factory: ``compiled(recipe, profiles=None)`` compiles the internal model's profiles
+    (``compile_tree``) into a new dir under ``tmp_path``."""
+    counter = itertools.count()
+
+    def factory(recipe: Recipe, profiles: Profiles = None) -> CompiledTree:
+        return compile_tree(recipe, profiles=profiles, path=tmp_path / f"compiled-{next(counter)}")
+
+    return factory
 
 
 @pytest.fixture(autouse=True)

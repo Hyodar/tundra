@@ -43,7 +43,8 @@ from tundravm.declarative import (
 )
 from tundravm.errors import ValidationError
 from tundravm.templates import TEMPLATES
-from tundravm.testing import UPDATE_GOLDEN_ENV, assert_tree_matches
+from tundravm.testing import UPDATE_GOLDEN_ENV
+from tundravm.testing._model import assert_tree_matches
 from tundravm.toolchain import ToolsTree
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "native-tree"

@@ -322,7 +322,7 @@ class SshAccess(Component):
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them."""
-        if not self.keys or not {"azure", "gcp"} & set(resolved.outputs):
+        if not self.keys or not {"azure", "gcp"} & set(resolved.targets):
             return ()
         return (
             _diagnostic(

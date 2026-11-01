@@ -1012,7 +1012,7 @@ def test_the_tdxs_source_is_unpinned() -> None:
 
 | Helper | Does |
 |---|---|
-| `plan(image, profile)` | one profile compiled in memory: `service()`, `unit()`, `file()`, `packages`, `users`, `settings()`, `lint()` |
+| `plan(image, profile)`, `plan(component)` | one profile compiled in memory (a component alone on an image named after it): `service()`, `unit()`, `file()`, `packages`, `users`, `settings()`, `lint()` |
 | `assert_clean(subject, allow=)` | fails on any error or warning not allowed |
 | `assert_diagnostic(subject, code)` | the first finding with that code, or a failure listing all |
 | `assert_tree(tundravm.compile(image), golden)` | every path, byte, exec bit and symlink; `TUNDRAVM_UPDATE_GOLDEN=1` rewrites |

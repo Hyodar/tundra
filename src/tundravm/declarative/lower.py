@@ -182,7 +182,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     options = _mkosi_options(
         recipe,
         [i for i in base.items if isinstance(i, Setting)],
-        sandbox_files=_backports_sources(recipe) if "backports" in base.fragments else (),
+        sandbox_files=_backports_sources(recipe) if "backports" in base.components else (),
     )
     kernel = _variant_kernel(base.items, recipe.platform)
     builder = StateBuilder(
@@ -206,20 +206,20 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     builder.targets(default.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
     glue = set(payload.packages) - declared
 
-    targets: dict[str, tuple[OutputTarget, ...]] = {default.name: tuple(base.outputs)}
+    targets: dict[str, tuple[OutputTarget, ...]] = {default.name: tuple(base.targets)}
     overlays: list[str] = []
     overlay_sandbox: dict[str, tuple[tuple[str, str], ...]] = {}
     rejected: list[tuple[str, str]] = []
     for variant in selected[1:]:
         child = resolved[variant.name]
-        targets[variant.name] = tuple(child.outputs)
+        targets[variant.name] = tuple(child.targets)
         try:
             _same_configuration(base, child)
             _same_builds(base, child)
         except _Refused as why:
             rejected.append((variant.name, str(why)))
             continue
-        if "backports" in child.fragments and "backports" not in base.fragments:
+        if "backports" in child.components and "backports" not in base.components:
             overlay_sandbox[variant.name] = _backports_sources(recipe)
         try:
             if variant.inherits not in (BASE_VARIANT, default.name):

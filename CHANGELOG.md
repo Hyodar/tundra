@@ -26,7 +26,8 @@ Breaking changes are marked **Breaking**.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
 - `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`.
-- `tundravm.testing`: `plan(image)`, `assert_clean`, `assert_diagnostic`, `assert_tree`, `read_lock`, `FakeMkosi`, `FakeSources`, `boot`, `run_cli`.
+- `tundravm.testing`: `plan(image)` or `plan(component)`, `assert_clean`, `assert_diagnostic`, `assert_tree`, `read_lock`, `FakeMkosi`, `FakeSources`, `boot`, `run_cli`, `image_file`.
+- **Breaking:** the API speaks the public model: `Resolved.targets` and `.components`, `class X(Component, name=)`, `ImageFile.component`, `image_file`; the internal-model test helpers and the `recipe` and `compiled` fixtures are gone.
 
 ### CLI
 
@@ -66,6 +67,7 @@ Breaking changes are marked **Breaking**.
 - Every code `check` reports is a registered rule with its severities, what it checks and how to fix it.
 - `check --explain CODE` prints a rule, an image's own component's included, and a text report ends with the `--explain` line for its codes.
 - **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
+- **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - A finding several profiles share prints once (`[dev, production]`), `[image]` marks an image-wide one, and a shared hint prints once.
 
 ### Docs

@@ -221,11 +221,11 @@ class _ComponentMeta(type):
 
     def __new__(
         mcls,
-        name: str,
+        cls_name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         *,
-        fragment: str | None = None,
+        name: str | None = None,
         requires: tuple[str, ...] = (),
         build_network: bool = False,
         **kwargs: Any,
@@ -233,7 +233,7 @@ class _ComponentMeta(type):
         if namespace.pop(_BUILT, False) or not any(
             isinstance(base, _ComponentMeta) for base in bases
         ):
-            return super().__new__(mcls, name, bases, namespace, **kwargs)
+            return super().__new__(mcls, cls_name, bases, namespace, **kwargs)
         inherited = any(
             "compose" in vars(klass)
             for base in bases
@@ -242,22 +242,22 @@ class _ComponentMeta(type):
         )
         if not inherited and "compose" not in namespace:
             raise ValidationError(
-                f"Component {name} has no compose() method.",
+                f"Component {cls_name} has no compose() method.",
                 hint="Define compose(self) returning the declarations it stands for.",
             )
         namespace[_BUILT] = True
-        namespace["__fragment_name__"] = fragment
-        namespace["__fragment_requires__"] = tuple(requires)
+        namespace["__component_name__"] = name
+        namespace["__component_requires__"] = tuple(requires)
         namespace["__build_network__"] = bool(build_network)
         if "rules" in namespace:
-            namespace["rules"] = _declared_rules(name, namespace["rules"])
+            namespace["rules"] = _declared_rules(cls_name, namespace["rules"])
         for attribute in namespace.get("__annotations__", {}):
             default = namespace.get(attribute)
             if isinstance(default, list):
                 namespace[attribute] = tuple(default)
             elif isinstance(default, dict):
                 namespace[attribute] = FrozenMap(default)
-        cls = super().__new__(mcls, name, bases, namespace, **kwargs)
+        cls = super().__new__(mcls, cls_name, bases, namespace, **kwargs)
         return dataclass(frozen=True, slots=True, kw_only=True)(cls)
 
 
@@ -275,7 +275,7 @@ class Component(Located, metaclass=_ComponentMeta):
 
     Its name, which ``show`` and every diagnostic about it print, comes from the class
     (``TaikoClient`` is ``taiko-client``), from an ``id`` or ``name`` field when it has
-    one, or from ``class X(Component, fragment="x")``. ``class X(Component, build_network=True)``
+    one, or from ``class X(Component, name="x")``. ``class X(Component, build_network=True)``
     says its builds fetch dependencies while the image is built (``cargo fetch``,
     ``dotnet restore``), so an image holding it builds with the network on, which the
     tree records (``WithNetwork=yes``).
@@ -296,8 +296,8 @@ class Component(Located, metaclass=_ComponentMeta):
                 yield Service("postgres", [...], readiness=TcpProbe(self.port))
     """
 
-    __fragment_name__: str | None = None
-    __fragment_requires__: tuple[str, ...] = ()
+    __component_name__: str | None = None
+    __component_requires__: tuple[str, ...] = ()
     __build_network__: bool = False
     rules: ClassVar[tuple[Rule, ...]] = ()
     """The codes :meth:`check` reports, one :class:`~tundravm.components.Rule` each:
@@ -388,9 +388,9 @@ def composed(owner: Component) -> tuple[object, ...]:
 
 
 def component_name(owner: Component) -> str:
-    """The fragment name of *owner*: ``fragment=``, else its ``id``/``name`` field, else
+    """The name of *owner*: the class's ``name=``, else its ``id``/``name`` field, else
     the class name in kebab case."""
-    declared = type(owner).__fragment_name__
+    declared = type(owner).__component_name__
     if declared is not None:
         return declared
     if is_dataclass(owner):
@@ -416,10 +416,10 @@ def builds_with_network(owner: Component) -> bool:
 
 
 def export_providers(owner: Component) -> Iterator[str]:
-    """The components whose exports *owner* holds in a field: what its fragment requires."""
+    """The components whose exports *owner* holds in a field: what it requires."""
     if not is_dataclass(owner):
         return
-    yield from type(owner).__fragment_requires__
+    yield from type(owner).__component_requires__
     for item in fields(owner):
         if not item.init:
             continue
@@ -433,7 +433,7 @@ def export_providers(owner: Component) -> Iterator[str]:
 
 
 def _provider_of(export: ComponentReady | Endpoint | ServiceRef) -> str | None:
-    """The fragment that publishes *export*, when the export names one."""
+    """The component that publishes *export*, when the export names one."""
     if isinstance(export, ComponentReady):
         return export.name
     if isinstance(export, Endpoint) and isinstance(export.provider, str):

@@ -52,7 +52,7 @@ def test_identical_named_fragments_expand_once() -> None:
     )
     resolved = resolve(recipe, variant="default")
     assert resolved.items == (Package("git", role="build"), Package("curl"))
-    assert resolved.fragments == ("shared", "app")
+    assert resolved.components == ("shared", "app")
 
 
 def test_conflicting_fragments_with_one_name_fail() -> None:
@@ -60,8 +60,8 @@ def test_conflicting_fragments_with_one_name_fail() -> None:
         "r",
         items=(Fragment("x", items=(Package("a"),)), Fragment("x", items=(Package("b"),))),
     )
-    assert codes(lint(recipe)) == ["fragment-conflict"]
-    with pytest.raises(ValidationError, match="fragment-conflict"):
+    assert codes(lint(recipe)) == ["component-conflict"]
+    with pytest.raises(ValidationError, match="component-conflict"):
         resolve(recipe, variant="default")
 
 
@@ -82,10 +82,10 @@ def test_fragment_requires_and_checks() -> None:
     )
     found = lint(recipe)
     assert {(d.code, d.profile, d.severity) for d in found} == {
-        ("fragment-requires-missing", "default", "error"),
+        ("component-requires-missing", "default", "error"),
         ("curl-missing", "default", "warning"),
     }
-    assert resolve(recipe, variant="full").fragments == ("tool", "storage")
+    assert resolve(recipe, variant="full").components == ("tool", "storage")
 
 
 # ── ancestry and overlays ────────────────────────────────────────────────
@@ -104,9 +104,9 @@ def test_ancestry_parents_resolve_first_and_targets_inherit() -> None:
     )
     dev = resolve(recipe, variant="azure-dev")
     assert names(dev) == ["base-pkg", "d", "gdb"]
-    assert dev.outputs == ("azure",)
+    assert dev.targets == ("azure",)
     rescue = resolve(recipe, variant="rescue")
-    assert names(rescue) == ["busybox"] and rescue.outputs == ("qemu",)
+    assert names(rescue) == ["busybox"] and rescue.targets == ("qemu",)
     assert [r.profile for r in resolve_all(recipe)] == ["default", "azure", "azure-dev", "rescue"]
 
 

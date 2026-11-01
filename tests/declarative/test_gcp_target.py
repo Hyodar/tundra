@@ -9,7 +9,7 @@ from tundravm._platforms.gcp import (
     GCP_RESOLV_CONF_PATH,
 )
 from tundravm.declarative import Recipe, Variant
-from tundravm.testing import CompiledTree, compile_tree
+from tundravm.testing._model import CompiledTree, compile_tree
 
 RESOLV_CONF = "mkosi.extra/etc/resolv.conf"
 SHIPPED_RESOLV_CONF = f"mkosi.extra{GCP_RESOLV_CONF_PATH}"

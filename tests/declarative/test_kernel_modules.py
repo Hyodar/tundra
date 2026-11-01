@@ -10,7 +10,7 @@ from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
     TDX_GUEST_MODULES,
 )
-from tundravm.testing import compile_tree
+from tundravm.testing._model import compile_tree
 
 RM_MODULES = 'rm -rf "$BUILDROOT/usr/lib/modules"'
 

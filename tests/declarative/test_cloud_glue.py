@@ -15,7 +15,7 @@ from tundravm.declarative import (
     lint,
 )
 from tundravm.errors import ValidationError
-from tundravm.testing import compile_tree
+from tundravm.testing._model import compile_tree
 
 UNITS = "mkosi.extra/usr/lib/systemd/system"
 CLOUDS = Recipe("cloud", variants=(Variant("default", outputs=("qemu", "azure", "gcp")),))

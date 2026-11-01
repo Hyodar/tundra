@@ -2854,19 +2854,19 @@ DECLARATION_TYPES: tuple[type, ...] = (
 class Resolved:
     """One profile of the image after expansion, profile changes and reference checks.
 
-    *profile* is the profile's name, *items* every declaration it holds, *fragments* the
+    *profile* is the profile's name, *items* every declaration it holds, *components* the
     names of the components they came from. A component's ``check(resolved)`` reads it.
     """
 
     profile: str
-    outputs: tuple[Target, ...]
+    targets: tuple[Target, ...]
     """Every target the profile builds, own or inherited (never empty)."""
     items: tuple[Declaration, ...]
-    fragments: tuple[str, ...]
+    components: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        _freeze(self, "outputs")
-        if not self.outputs:
+        _freeze(self, "targets")
+        if not self.targets:
             raise _fail(self, f"profile {self.profile!r} resolved to no targets.")
 
     def bind(self, ref: Ref) -> Declaration:

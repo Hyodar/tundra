@@ -14,7 +14,8 @@ import pytest
 
 from tests.helpers import REPO_ROOT, SURGE_EXAMPLE
 from tundravm.declarative import Recipe, compile, load
-from tundravm.testing import assert_tree, assert_tree_matches
+from tundravm.testing import assert_tree
+from tundravm.testing._model import assert_tree_matches
 
 GOLDEN = SURGE_EXAMPLE / "mkosi"
 SURGE_PROFILES = ("production", "dev")

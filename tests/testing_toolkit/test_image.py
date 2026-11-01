@@ -26,15 +26,9 @@ from tundravm.declarative import (
     compile,
 )
 from tundravm.errors import ValidationError
-from tundravm.testing import (
-    TEST_PLATFORM,
-    InitStep,
-    PlannedImage,
-    assert_clean,
-    assert_diagnostic,
-    fragment_plan,
-    plan,
-)
+from tundravm.testing import InitStep, PlannedImage, assert_clean, assert_diagnostic
+from tundravm.testing._image import planned_model
+from tundravm.testing._model import TEST_PLATFORM, fragment_plan
 
 APP_KEY = Key("app_key")
 APP = Fragment(
@@ -62,14 +56,14 @@ def test_fragment_plan_boots_on_the_test_platform() -> None:
     assert image.packages["curl"] == "runtime"
     assert image.packages["gcc"] == "build"
     assert_clean(image, allow=("source-unpinned",))
-    assert TEST_PLATFORM.name in image.resolved.fragments
+    assert TEST_PLATFORM.name in image.resolved.components
 
 
 def test_fragment_plan_wraps_bare_declarations() -> None:
     image = fragment_plan(File("/etc/motd", "hi\n"), Package("jq"))
-    assert "under-test" in image.resolved.fragments
+    assert "under-test" in image.resolved.components
     assert image.file("/etc/motd").text == "hi\n"
-    assert image.file("etc/motd").fragment == "under-test"
+    assert image.file("etc/motd").component == "under-test"
 
 
 def test_files_carry_mode_stage_and_origin() -> None:
@@ -81,7 +75,7 @@ def test_files_carry_mode_stage_and_origin() -> None:
         "extra",
         "root",
     )
-    assert app.fragment == "app"
+    assert app.component == "app"
     assert app.origin[-1].action == "declared"
     assert image.file("/usr/lib/runtime-init/app-state").origin == ()
     assert "/usr/lib/systemd/system/app.service" in image.files
@@ -191,7 +185,7 @@ def test_base_takes_a_fragment_or_a_recipe() -> None:
 
 def test_include_satisfies_requires() -> None:
     needy = Fragment("needy", (File("/etc/n", "n"),), requires=("tools",))
-    assert_diagnostic(fragment_plan(needy), "fragment-requires-missing", subject="needy")
+    assert_diagnostic(fragment_plan(needy), "component-requires-missing", subject="needy")
     assert_clean(fragment_plan(needy, include=(Fragment("tools", (Package("jq"),)),)))
 
 
@@ -204,12 +198,12 @@ def test_plan_takes_a_profile_and_matches_compile() -> None:
             Variant("azure", outputs=("azure",), add=Fragment("azure", (Package("jq"),))),
         ),
     )
-    assert plan(recipe).profile == "default"
-    azure = plan(recipe, "azure")
-    assert "jq" in azure.packages and "jq" not in plan(recipe).packages
+    assert planned_model(recipe).profile == "default"
+    azure = planned_model(recipe, "azure")
+    assert "jq" in azure.packages and "jq" not in planned_model(recipe).packages
     assert azure.tree.digest == compile(recipe, variants=["azure"]).digest
     with pytest.raises(ValidationError, match="Unknown profile"):
-        plan(recipe, "gcp")
+        planned_model(recipe, "gcp")
 
 
 def _layered() -> Recipe:
@@ -236,7 +230,7 @@ def _layered() -> Recipe:
 
 def test_image_queries_see_the_payload_under_a_profile_overlay() -> None:
     recipe = _layered()
-    default, azure = plan(recipe), plan(recipe, "azure")
+    default, azure = planned_model(recipe), planned_model(recipe, "azure")
     assert not any(e.path.startswith("payload/mkosi.profiles/") for e in default.tree.entries)
     assert any(e.path.startswith("payload/mkosi.profiles/azure/") for e in azure.tree.entries)
     assert default.file("/etc/motd").text == "hi\n" and default.file("/etc/a").text == "base\n"

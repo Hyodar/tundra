@@ -92,7 +92,7 @@ def test_compare_names_each_differing_field() -> None:
     assert {d.code for d in toolchain_drift(a, b)} == {"toolchain-drift"}
 
 
-def recipe_file(tmp_path: Path) -> Path:
+def image_file(tmp_path: Path) -> Path:
     return write_recipe_file(
         tmp_path,
         """
@@ -120,7 +120,7 @@ def _other_mkosi(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_lock_records_the_toolchain_and_check_reports_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recipe = recipe_file(tmp_path)
+    recipe = image_file(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TUNDRAVM_BACKEND")  # the file's own LocalLinuxBackend, not in-process
     lock = tmp_path / "build" / "tundravm.lock"

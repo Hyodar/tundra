@@ -30,7 +30,8 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.declarative.systemd import Hardening
-from tundravm.testing import compile_tree, plan
+from tundravm.testing import plan
+from tundravm.testing._model import compile_tree
 
 OFF = Hardening.none()
 UNIT = "[Unit]\nDescription=raw\n\n[Service]\nExecStart=/usr/bin/raw\n"

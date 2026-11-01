@@ -7,7 +7,7 @@ import pytest
 
 from tundravm._units.text import UnitText
 from tundravm.declarative import DropIn, Hardening, Service, Unit
-from tundravm.testing import fragment_plan
+from tundravm.testing._model import fragment_plan
 
 # A switch's value when no line sets it (systemd's default).
 SWITCHES = dict.fromkeys(

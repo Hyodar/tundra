@@ -89,7 +89,7 @@ def test_the_fragment_is_named_after_the_class() -> None:
 
     assert TaikoClient().name == "taiko-client"
 
-    class Named(Component, fragment="given"):
+    class Named(Component, name="given"):
         def compose(self) -> Iterator[object]:
             return iter(())
 

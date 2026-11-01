@@ -11,7 +11,8 @@ import tundravm
 from tundravm.declarative import BootStep, DropIn, Dynamic, Hardening, Service, Unit
 from tundravm.errors import ValidationError
 from tundravm.systemd import Resources, Shutdown
-from tundravm.testing import PlannedImage, fragment_plan, plan
+from tundravm.testing import PlannedImage, plan
+from tundravm.testing._model import fragment_plan
 
 DROPIN = "/usr/lib/systemd/system/nginx.service.d/20-tundravm.conf"
 

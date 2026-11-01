@@ -203,7 +203,7 @@ class _Resolution:
         if seen is not None:
             if seen != fragment:
                 self.report(
-                    "fragment-conflict",
+                    "component-conflict",
                     f"two different components are named {fragment.name!r}",
                     subject=fragment.name,
                     at=fragment,
@@ -586,15 +586,15 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
     _check_deliveries(state, items)
     resolved = Resolved(
         profile=name,
-        outputs=_targets(chain),
+        targets=_targets(chain),
         items=items,
-        fragments=tuple(state.fragments),
+        components=tuple(state.fragments),
     )
     for fragment in state.fragments.values():
         for required in fragment.requires:
             if required not in state.fragments:
                 state.report(
-                    "fragment-requires-missing",
+                    "component-requires-missing",
                     f"component {fragment.name!r} requires component {required!r}, which this "
                     "profile does not include",
                     subject=fragment.name,

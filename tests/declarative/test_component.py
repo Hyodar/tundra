@@ -20,7 +20,8 @@ from tundravm.declarative import (
 from tundravm.declarative.resolve import lint
 from tundravm.declarative.utils import Composite, ConfigFile, HttpEndpoint
 from tundravm.errors import ValidationError
-from tundravm.testing import assert_clean, assert_diagnostic, fragment_plan
+from tundravm.testing import assert_clean, assert_diagnostic
+from tundravm.testing._model import fragment_plan
 
 
 @component
@@ -208,7 +209,7 @@ def _stale() -> dict[str, Diagnostic]:
         (lambda: _findings(WEB_APP, Probe(target=WEB_APP.http), BASE_TOOLS), []),
         (
             lambda: _findings(Probe(target=WEB_APP.http), BASE_TOOLS),
-            [("default", "fragment-requires-missing", "error")],
+            [("default", "component-requires-missing", "error")],
         ),
         (
             lambda: _export(BOUND),

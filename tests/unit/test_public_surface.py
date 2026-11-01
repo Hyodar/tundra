@@ -93,6 +93,35 @@ ERRORS = [
     "ValidationError",
 ]
 
+TESTING = [
+    "UPDATE_GOLDEN_ENV",
+    "BootResult",
+    "BootUnavailable",
+    "ConsoleScan",
+    "FakeCall",
+    "FakeFetch",
+    "FakeMkosi",
+    "FakeSources",
+    "HttpResponse",
+    "ImageFile",
+    "InitStep",
+    "Lintable",
+    "PlannedImage",
+    "Profiles",
+    "UnitView",
+    "assert_clean",
+    "assert_diagnostic",
+    "assert_tree",
+    "boot",
+    "boot_unavailable",
+    "build_unavailable",
+    "image_file",
+    "plan",
+    "read_lock",
+    "run_cli",
+    "scan_console",
+]
+
 NAMESPACES = {
     "tundravm": ROOT,
     "tundravm.ports": PORTS,
@@ -102,8 +131,9 @@ NAMESPACES = {
     "tundravm.secrets": SECRETS,
     "tundravm.sources": SOURCES,
     "tundravm.errors": ERRORS,
+    "tundravm.testing": TESTING,
 }
-"""Every public namespace but ``tundravm.testing`` (frozen by its own tests) and its names."""
+"""Every public namespace and its names."""
 
 REUSED_FROM_DECLARATIVE = [
     "Build",
@@ -137,7 +167,7 @@ def _home(name: str) -> object:
 
 
 def test_the_reference_covers_every_namespace() -> None:
-    assert _reference.MODULES == (*NAMESPACES, "tundravm.testing")
+    assert _reference.MODULES == tuple(NAMESPACES)
 
 
 def test_root_all_is_frozen() -> None:
@@ -173,9 +203,13 @@ def test_errors_all_is_frozen() -> None:
     assert sorted(importlib.import_module("tundravm.errors").__all__) == sorted(ERRORS)
 
 
+def test_testing_all_is_frozen() -> None:
+    assert sorted(importlib.import_module("tundravm.testing").__all__) == sorted(TESTING)
+
+
 @pytest.mark.parametrize(
     "module",
-    [*NAMESPACES, "tundravm.testing", "tundravm.declarative", "tundravm.declarative.utils"],
+    [*NAMESPACES, "tundravm.declarative", "tundravm.declarative.utils"],
 )
 def test_every_exported_name_imports(module: str) -> None:
     imported = importlib.import_module(module)
@@ -277,4 +311,12 @@ def test_the_public_surface_says_profile() -> None:
                 text += str(inspect.signature(member))
             if re.search(r"(?<!in)variant", text, re.IGNORECASE):
                 found.append(getattr(member, "__qualname__", repr(member)))
+    assert found == []
+
+
+def test_the_api_reference_names_no_internal_model() -> None:
+    """The reference speaks the public model: no recipe, fragment or variant."""
+    found = re.findall(
+        r".{0,30}\b(?:[Rr]ecipes?|[Ff]ragments?|[Vv]ariants?)\b.{0,30}", _reference.api_markdown()
+    )
     assert found == []
