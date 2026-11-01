@@ -832,16 +832,17 @@ def _mkosi_options(
         field = _SINGLE_SETTINGS.get(key) or _BOOL_SETTINGS.get(key)
         if field is None:
             mapped = [
-                f"Setting({s!r}, {k!r}, ...)"
+                s
                 for s, k in (*_SINGLE_SETTINGS, *_BOOL_SETTINGS, *_LIST_SETTINGS)
                 if k == setting.key
             ]
             if mapped or setting.key in _COMPILER_KEYS:
-                alternative = mapped[0] if mapped else _COMPILER_KEYS[setting.key]
                 raise ValidationError(
                     f"Setting {setting.section}.{setting.key}: the compiler writes "
                     f"{setting.key}= itself.",
-                    hint=f"Declare it with {alternative}.",
+                    hint=f"Write {setting.key}= in [{mapped[0]}]."
+                    if mapped
+                    else f"Declare it with {_COMPILER_KEYS[setting.key]}.",
                     context={"setting": f"{setting.section}.{setting.key}"},
                 )
             verbatim.append((setting.section, setting.key, setting.values or ("",)))
@@ -849,7 +850,7 @@ def _mkosi_options(
         if len(setting.values) != 1:
             raise ValidationError(
                 f"Setting {setting.section}.{setting.key} takes exactly one value.",
-                hint=f"Pass one value: Setting({setting.section!r}, {setting.key!r}, (VALUE,)).",
+                hint=f"Pass one value for {setting.key}=.",
             )
         (value,) = setting.values
         changes[field] = _setting_bool(setting, value) if key in _BOOL_SETTINGS else value

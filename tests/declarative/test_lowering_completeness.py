@@ -337,7 +337,7 @@ def test_settings_mkosi_reads_in_the_main_image_only_go_to_the_root(tmp_path: Pa
         (Setting("Distribution", "Mirror", ("https://x",)), "Debian(mirror=...)"),
         (Setting("Content", "BuildScripts", ("x.sh",)), "Mkosi(scripts=[(stage, script)])"),
         (Setting("Distribution", "Distribution", ("ubuntu",)), "base=Debian(release)"),
-        (Setting("Build", "Seed", ("x",)), "Setting('Output', 'Seed', ...)"),
+        (Setting("Build", "Seed", ("x",)), "Write Seed= in [Output]"),
     ],
 )
 def test_settings_the_compiler_writes_name_their_declaration(

@@ -418,22 +418,36 @@ def test_a_network_takes_dhcp_or_a_static_address() -> None:
     assert "neither is set" in str(caught.value)
 
 
-def test_mkosi_settings_and_scripts_are_recorded() -> None:
-    image = Image(
-        "x",
-        mkosi=Mkosi(settings={"Hostname": "demo"}, scripts=[("postinst", "echo hi")]),
-    )
+@pytest.mark.parametrize(
+    ("key", "section"),
+    [("Hostname", "Content"), ("ImageVersion", "Output"), ("CacheOnly", "Build"),
+     ("Checksum", "Validation")],
+)  # fmt: skip
+def test_mkosi_settings_go_to_their_section_and_scripts_are_recorded(
+    key: str, section: str
+) -> None:
+    image = Image("x", mkosi=Mkosi(settings={key: "demo"}, scripts=[("postinst", "echo hi")]))
     planned = plan(image, "production")
-    assert planned.settings("Content")["Hostname"] == ("demo",)
+    assert planned.settings(section)[key] == ("demo",)
     assert [hook.script for hook in planned.hooks("postinst")] == ["echo hi"]
 
 
-@pytest.mark.parametrize("key", sorted(RESERVED_SETTINGS))
-def test_a_setting_that_contradicts_an_invariant_is_refused(key: str) -> None:
+@pytest.mark.parametrize(
+    ("key", "slot"),
+    [
+        ("KernelCommandLine", "Kernel(cmdline="),
+        ("Packages", "Image(packages="),
+        ("Seed", "tundravm sets"),
+        ("ExtraTrees", "Image(files="),
+        ("PostInstallationScripts", "Mkosi(scripts="),
+        ("Hostnme", "spelling"),
+    ],
+)
+def test_a_setting_tundravm_writes_names_the_public_slot(key: str, slot: str) -> None:
     with pytest.raises(ValidationError) as caught:
         Mkosi(settings={key: "x"})
-    assert key in str(caught.value)
-    assert RESERVED_SETTINGS[key].split(",")[0][:20] in str(caught.value)
+    assert key in str(caught.value) and slot in (caught.value.hint or "")
+    assert not [hint for hint in RESERVED_SETTINGS.values() if "Setting(" in hint]
 
 
 def test_an_unknown_mkosi_script_stage_is_refused() -> None:

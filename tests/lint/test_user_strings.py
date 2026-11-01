@@ -35,6 +35,7 @@ REMOVED_VERB = "removed CLI verb (new, check, lock, build, show, run, deploy, at
 
 DENYLIST = {
     "fluent method call": re.compile(r"\bimg\.[a-z_]+\("),
+    "internal Setting( (Mkosi(settings=))": re.compile(r"(?<![\w.])Setting\("),
     "fluent profile block": re.compile(r"\bwith img\b"),
     "frozen bake flag": re.compile(r"\bbake\([^)]*\bfrozen=True\b"),
     "internal source class": re.compile(r"\b(?:Http|Git|Local)Source\("),

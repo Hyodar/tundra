@@ -726,11 +726,12 @@ How to read it as an mkosi user:
 ### The escape to mkosi
 
 `mkosi=Mkosi(settings={"Locale": "C.UTF-8"}, scripts=[("postinst", "...")])` adds
-verbatim settings and scripts at an mkosi stage (`prepare`, `build`, `postinst`,
-`finalize`, `postoutput`). The manifest records them. Settings the compiler writes itself
-or that would contradict a guarantee are refused at construction, each with the slot that
-sets it: `KernelCommandLine`, `Packages`, `ExtraTrees`, `ConfigureScripts`, `Environment`,
-`Bootable`, `Format`, `Profiles`, `Dependencies`.
+verbatim settings, each in the section mkosi 27.1 reads it from, and scripts at an mkosi
+stage (`prepare`, `build`, `postinst`, `finalize`, `postoutput`). The manifest records
+them. Settings the compiler writes itself or that would contradict a guarantee are refused
+at construction, each with the slot that sets it (`KernelCommandLine` names
+`Kernel(cmdline=)`, `Packages` names `Image(packages=)`) or saying tundravm sets it
+(`Seed`, `SourceDateEpoch`).
 
 ## Testing a project
 

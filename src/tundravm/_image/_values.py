@@ -615,11 +615,12 @@ def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
 class Mkosi:
     """mkosi settings and scripts the image adds verbatim, recorded in the manifest.
 
-    *settings* maps an mkosi key to its value (``{"Packages": "strace"}``); *scripts* are
-    ``(stage, script)`` pairs run at that mkosi stage (``"prepare"``, ``"build"``,
-    ``"postinst"``, ``"finalize"``, ``"postoutput"``). Anything that would contradict an
-    invariant the image advertises is refused at construction, not silently applied:
-    :data:`RESERVED_SETTINGS` says which and why.
+    *settings* maps an mkosi 27.1 key to its value (``{"Locale": "C.UTF-8"}``), each written
+    in the section mkosi reads it from; *scripts* are ``(stage, script)`` pairs run at that
+    mkosi stage (``"prepare"``, ``"build"``, ``"postinst"``, ``"finalize"``,
+    ``"postoutput"``). A key the compiler writes itself, or one that would contradict an
+    invariant the image advertises, is refused at construction, not silently applied:
+    :data:`RESERVED_SETTINGS` names the slot that sets each, or says tundravm sets it.
     """
 
     _: KW_ONLY
@@ -633,11 +634,16 @@ class Mkosi:
         for key, value in settings.items():
             if not isinstance(key, str) or not _MKOSI_KEY.fullmatch(key):
                 raise _fail(self, f"{key!r} is not an mkosi setting name.")
-            if (reason := RESERVED_SETTINGS.get(key)) is not None:
+            name = _mkosi_setting(key)
+            if name is None:
                 raise _fail(
                     self,
-                    f"settings= sets {key}=, which the image guarantees: {reason}.",
-                    hint="Drop it, or state the guarantee through the typed slot that owns it.",
+                    f"settings= sets {key}=, which mkosi 27.1 does not know.",
+                    hint="Check the spelling against mkosi's documentation of its settings.",
+                )
+            if (hint := RESERVED_SETTINGS.get(name[1])) is not None:
+                raise _fail(
+                    self, f"settings= sets {key}=, which tundravm writes itself.", hint=hint
                 )
             if not isinstance(value, str) or "\n" in value:
                 raise _fail(self, f"settings[{key!r}] must be one line of text.")
@@ -659,20 +665,85 @@ class Mkosi:
 SCRIPT_STAGES = ("prepare", "build", "postinst", "finalize", "postoutput")
 """The mkosi stages :class:`Mkosi` scripts run at."""
 
+_SETS_IT = "Drop it: tundravm sets it, so a build reproduces."
+_SCRIPTS = "Pass Mkosi(scripts=[(stage, script)]): tundravm writes the stage directories."
+_FILES = "Pass Image(files=[File(...)]) or Image(files=[Tree(...)])."
+_RELEASE = 'Pass Image(base=Debian("trixie")).'
+_SNAPSHOT = "Pass Debian(snapshot=...)."
+_VERITY = "Pass Image(rootfs=RootFS.verity())."
+
 RESERVED_SETTINGS: dict[str, str] = {
-    "ConfigureScripts": "the tree has no configure script, and check refuses one: it would "
-    "rewrite the configuration after `mkosi summary` resolved it, so the build would not be "
-    "what the manifest records",
-    "Environment": "the build environment is passed through from the lock, so a setting "
-    "here would change what was measured without changing the lock",
-    "Bootable": "every image is a measured UKI",
-    "Format": "the payload's format follows from the root layout and the targets",
-    "Profiles": "profiles are the image's own, named by Profile(...)",
-    "Dependencies": "the subimage graph is the compiler's",
-    "KernelCommandLine": "the command line is measured and the image writes its own; "
-    "kernel=Kernel.default(cmdline=[...]) appends parameters to it",
+    "Architecture": "Drop it: tundravm builds x86-64, the one architecture TDX runs.",
+    "Bootable": "Drop it: every image is a measured UKI.",
+    "BuildPackages": "Pass packages= to the GoBinary, CargoBinary or Build that needs them.",
+    "BuildScripts": _SCRIPTS,
+    "BuildSources": "Declare the source on the GoBinary, CargoBinary or Build that reads it.",
+    "CleanPackageMetadata": _SETS_IT,
+    "CleanScripts": _SCRIPTS,
+    "CompressOutput": _SETS_IT,
+    "ConfigureScripts": "Drop it: a configure script rewrites the configuration after `mkosi "
+    "summary` resolved it, so the build would not be what the manifest records.",
+    "Dependencies": "Pass Image(targets=[...]): each target is a subimage tundravm writes.",
+    "Distribution": _RELEASE,
+    "Environment": "Drop it: the build environment comes from the lock, so a value here would "
+    "change what was measured without changing the lock.",
+    "ExtraTrees": _FILES,
+    "FinalizeScripts": _SCRIPTS,
+    "Format": "Pass Image(rootfs=...) and Image(targets=...): the format follows from them.",
+    "History": "Drop it: tundravm writes the tree afresh per build, with History=no.",
+    "ImageId": "Pass Image(name): it names the tree's images.",
+    "KernelCommandLine": "Pass Kernel(cmdline=[...]): the image writes and measures its own "
+    "command line, and appends these parameters to it.",
+    "KernelModules": "Pass Kernel(modules=[...]).",
+    "KernelModulesExclude": "Pass Kernel(modules=[...]): tundravm keeps the curated set.",
+    "KernelModulesInclude": "Pass Kernel(modules=[...]).",
+    "ManifestFormat": _SETS_IT,
+    "MinimumVersion": "Drop it: the tree requires the mkosi tundravm pins.",
+    "Mirror": "Drop it: tundravm reads snapshot.debian.org at Debian(snapshot=...).",
+    "Output": "Pass Image(name): it names the tree's images.",
+    "OutputDirectory": "Drop it: `tundravm build` publishes under build/.",
+    "PackageCacheDirectory": _SETS_IT,
+    "Packages": "Pass Image(packages=[...]).",
+    "PassEnvironment": "Drop it: the host's environment never reaches the build.",
+    "PostInstallationScripts": _SCRIPTS,
+    "PostOutputScripts": _SCRIPTS,
+    "PrepareScripts": _SCRIPTS,
+    "Profiles": "Pass Image(profiles={name: Profile(...)}).",
+    "Release": _RELEASE,
+    "RepartDirectories": _VERITY,
+    "SandboxTrees": _SETS_IT,
+    "Seed": "Drop it: tundravm sets a fixed seed, so the partition UUIDs reproduce.",
+    "SkeletonTrees": _FILES,
+    "Snapshot": _SNAPSHOT,
+    "SourceDateEpoch": _SETS_IT,
+    "SplitArtifacts": _VERITY,
+    "SyncScripts": _SCRIPTS,
+    "ToolsTree": "Drop it: tundravm always builds mkosi's default tools tree.",
+    "ToolsTreeDistribution": _RELEASE,
+    "ToolsTreeMirror": "Drop it: tundravm reads snapshot.debian.org at Debian(snapshot=...).",
+    "ToolsTreeRelease": _RELEASE,
+    "ToolsTreeSnapshot": _SNAPSHOT,
+    "WithNetwork": "Drop it: the build runs offline; declare a Git or Http source instead.",
 }
-"""mkosi keys :class:`Mkosi` refuses, with the invariant each would contradict."""
+"""mkosi keys :class:`Mkosi` refuses, each with the public slot that sets it, or what
+tundravm does instead."""
+
+
+def _mkosi_setting(key: str) -> tuple[str, str] | None:
+    """``(section, name)`` of the mkosi 27.1 setting *key* names (a compatibility name
+    included); ``None`` when mkosi has no such setting."""
+    from tundravm._mkosi import setting
+
+    found = setting(key)
+    return None if found is None else (found.section, found.name)
+
+
+def mkosi_section(key: str) -> str:
+    """The section of mkosi's ``mkosi.conf`` a :class:`Mkosi` *key* is written in."""
+    found = _mkosi_setting(key)
+    if found is None:
+        raise ValueError(f"{key!r} is not an mkosi 27.1 setting")
+    return found[0]
 
 
 # ── Grouped service options ─────────────────────────────────────────────

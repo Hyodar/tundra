@@ -52,6 +52,7 @@ from ._values import (
     Notify,
     Package,
     Tree,
+    mkosi_section,
 )
 
 __all__ = ["OWNED_FILES", "component_classes", "recipe_of"]
@@ -339,7 +340,7 @@ class _Lowering:
             return ()
         settings = mkosi.settings or {}
         found: list[dm.Declaration] = [
-            dm.Setting("Content", key, (value,)) for key, value in sorted(settings.items())
+            dm.Setting(mkosi_section(key), key, (value,)) for key, value in sorted(settings.items())
         ]
         for index, (stage, script) in enumerate(mkosi.scripts, start=1):
             found.append(dm.Hook(f"mkosi-{stage}-{index}", stage, script))  # type: ignore[arg-type]
