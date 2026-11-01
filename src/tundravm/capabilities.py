@@ -229,7 +229,7 @@ def _go_row(host: Host) -> Capability:
     words = (host.output("go", "version") or "").split()
     found = words[2] if len(words) > 2 and words[2].startswith("go1.") else None
     if found is None:
-        return Capability(name, "blocked", f"no go on PATH, which {GO_PURPOSE}: install Go 1.21+")
+        return Capability(name, "blocked", f"no go on PATH: install Go 1.21+, which {GO_PURPOSE}")
     minor = found.removeprefix("go1.").split(".", 1)[0]
     if not minor.isdigit() or int(minor) < 21:
         return Capability(

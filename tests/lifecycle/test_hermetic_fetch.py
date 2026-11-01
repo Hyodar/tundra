@@ -251,8 +251,8 @@ def test_a_go_source_needs_go_1_21_on_the_host_before_anything_runs(
         fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
     message = str(error.value)
     assert (
-        f"Go source build 'tool' needs Go 1.21 or newer on the host to fetch its toolchain "
-        f"and modules: {refused}." in message
+        f"Go source build 'tool' needs Go 1.21 or newer on the host to fetch the toolchain "
+        f"and modules each go.mod names: {refused}." in message
     )
     assert "golang" in message and "https://go.dev/dl" in message
     assert "tundravm doctor --for build" in message

@@ -78,7 +78,7 @@ from .declarative.lifecycle import (
 from .declarative.resolve import resolve
 from .diagnostics import Diagnostic
 from .diff import diff_against
-from .errors import SourceError, TdxError, ValidationError
+from .errors import SourceError, StateError, TdxError, ValidationError
 from .formats import in_github_actions, workflow_command
 from .project import RESOLUTION_HELP, Settings, settings
 from .recipe import RecipeFile, load_file
@@ -1120,7 +1120,12 @@ def _cmd_show(args: argparse.Namespace, out: TextIO) -> int:
             "--profile selects profiles of an image file, not of a build.", hint="Drop it."
         )
     found = settings(None)
-    build = _resolve_build(args.subject, found, dev=args.dev)
+    try:
+        build = _resolve_build(args.subject, found, dev=args.dev)
+    except StateError as exc:
+        if args.dev and args.subject is None and found.image is not None:
+            exc.hint = f"{exc.hint} The image's dev profile is `tundravm show --profile dev`."
+        raise
     if args.units:
         units = show.build_units(build)
         print(

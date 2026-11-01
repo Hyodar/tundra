@@ -175,7 +175,8 @@ def open_instance(root: Path, name: str) -> Instance:
             f"No instance {name!r} under {root}.",
             hint=f"Instances: {', '.join(known)}."
             if known
-            else "Start one with `tundravm run --mode simulated --dev`.",
+            else "Start one with `tundravm run --mode simulated --dev`, or deploy one with "
+            "`tundravm deploy gcp --build BUILD`.",
             context={"instances": str(root)},
         )
     data = json.loads((path / INSTANCE).read_text(encoding="utf-8"))

@@ -125,7 +125,7 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
     assert rows[8].startswith("verify:gcp       ready (built-in replay, GCP firmware table ")
 
 
-NO_GO = f"no go on PATH, which {GO_PURPOSE}: install Go 1.21+"
+NO_GO = f"no go on PATH: install Go 1.21+, which {GO_PURPOSE}"
 NO_RUSTUP = (
     f"no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
     "(https://rustup.rs, or the Debian package rustup)"

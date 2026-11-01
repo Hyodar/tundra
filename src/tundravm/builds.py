@@ -455,7 +455,7 @@ def _current_lock(
                 return locked, False, repinned
             raise LockfileError(
                 f"The lockfile {lockfile} is stale:\n{drift.render()}",
-                hint="A build never updates the lock but to re-pin a development build's "
+                hint="A build never updates the lock except to re-pin a development build's "
                 "Local sources: run `tundravm lock` (or `tundravm lock --update NAME` to move "
                 "one pin), review the change, then build.",
                 context={"path": str(lockfile)},
@@ -1055,7 +1055,7 @@ def resolve(ref: str | None, *, root: Path, image: str | None, dev: bool = False
         linked = [path for path in candidates if (path / mf.MANIFEST).is_file()]
         if len(linked) == 1:
             return Build.open(linked[0].resolve())
-        flag = " --dev" if dev else ""
+        flag = " --dev" if kind == "development" else ""
         raise StateError(
             f"No {kind} build under {root}/" + (f" for {image}" if image else "") + ".",
             hint=f"Run `tundravm build{flag}` first, or pass BUILD."
@@ -1067,7 +1067,7 @@ def resolve(ref: str | None, *, root: Path, image: str | None, dev: bool = False
     if len(matches) == 1:
         return matches[0]
     raise StateError(
-        f"{'No' if not matches else 'More than one'} build matches {ref!r} under {root}.",
+        f"{'No' if not matches else 'More than one'} build matches {ref!r} under {root}/.",
         hint="Pass the build directory, a longer id prefix, or `latest`.",
         context={"root": str(root)},
     )

@@ -1710,7 +1710,8 @@ def require_host_go(builds: Iterable[NamedSource]) -> None:
     noun = f"Go source build {names} needs" if len(go) == 1 else f"Go source builds {names} need"
     have = "there is no go on PATH" if found is None else f"the host's go is {found}"
     raise StateError(
-        f"{noun} Go 1.21 or newer on the host to fetch its toolchain and modules: {have}.",
+        f"{noun} Go 1.21 or newer on the host to fetch the toolchain and modules each "
+        f"go.mod names: {have}.",
         hint=(
             "Install Go 1.21 or newer (the Debian package golang, or https://go.dev/dl), "
             "then check the host with `tundravm doctor --for build`."
