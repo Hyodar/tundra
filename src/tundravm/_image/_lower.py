@@ -49,7 +49,7 @@ from ._values import (
     Tree,
 )
 
-__all__ = ["OWNED_FILES", "recipe_of"]
+__all__ = ["OWNED_FILES", "component_classes", "recipe_of"]
 
 OWNED_FILES = "/etc/tmpfiles.d/50-tundravm-owned.conf"
 """Where the ownership of ``File(owner=...)`` files is applied, at boot, by
@@ -629,9 +629,25 @@ def _fragment_type(cls: type) -> type[dm.Fragment]:
     """
     found = _FRAGMENT_TYPES.get(cls)
     if found is None:
-        found = type(cls.__name__, (dm.Fragment,), {"__slots__": (), "__module__": cls.__module__})
+        namespace = {"__slots__": (), "__module__": cls.__module__, "__component_class__": cls}
+        found = type(cls.__name__, (dm.Fragment,), namespace)
         _FRAGMENT_TYPES[cls] = found
     return found
+
+
+def component_classes(recipe: dm.Recipe) -> tuple[type[Component], ...]:
+    """The class of each component *recipe* holds, nested and profile-added ones included,
+    in the order they appear."""
+    found: dict[type[Component], None] = {}
+    pending: list[object] = [*recipe.items, *(variant.add for variant in recipe.variants)]
+    while pending:
+        item = pending.pop(0)
+        if isinstance(item, dm.Fragment):
+            cls = getattr(type(item), "__component_class__", None)
+            if cls is not None:
+                found[cls] = None
+            pending.extend(item.items)
+    return tuple(found)
 
 
 @contextmanager

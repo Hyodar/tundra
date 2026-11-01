@@ -88,7 +88,8 @@ drift from BUILD/tundravm.lock when it exists, the toolchain against the lock's,
 and with --tree a committed mkosi tree against what the image compiles to.
 Exit 1 on an error (or a drifted lock or tree); warnings are reported only.
 In GitHub Actions the findings are workflow annotations. --explain CODE says what
-a finding's code checks and how to fix it (docs/reference/lint.md lists them all).
+a finding's code checks and how to fix it, an image's own component code through
+the image (docs/reference/lint.md lists the rest).
 
 positional arguments:
   IMAGE             The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).

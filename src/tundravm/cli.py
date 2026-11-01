@@ -37,6 +37,7 @@ from . import manifest as mf
 from . import templates as scaffold
 from ._describe import describe
 from ._image._image import DEV_PROFILE
+from ._image._lower import component_classes
 from ._reporting import TextReporter
 from ._source import (
     SOURCES_DIRNAME,
@@ -50,12 +51,15 @@ from .attestation import render_attestation
 from .backends.base import BuildBackend
 from .capabilities import AREAS, Capability, Host, ToolchainNeeds, capabilities, failed
 from .check import (
+    RULES,
+    component_rules,
     explain,
     explain_command,
     failing,
     render,
     render_github,
     render_summary,
+    shipped_rules,
     summarize,
 )
 from .declarative._lowered import Lowered
@@ -320,7 +324,8 @@ def build_parser() -> argparse.ArgumentParser:
         "and with --tree a committed mkosi tree against what the image compiles to.\n"
         "Exit 1 on an error (or a drifted lock or tree); warnings are reported only.\n"
         "In GitHub Actions the findings are workflow annotations. --explain CODE says what\n"
-        "a finding's code checks and how to fix it (docs/reference/lint.md lists them all).",
+        "a finding's code checks and how to fix it, an image's own component code through\n"
+        "the image (docs/reference/lint.md lists the rest).",
         image,
         as_json,
     )
@@ -843,10 +848,10 @@ Review it, add the platform registers you approve from a quote of a host you tru
 
 
 def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
-    if args.explain:
-        print(explain(args.explain), file=out)
-        return EXIT_OK
     found = _settings(args)
+    if args.explain:
+        print(_explained(args, found), file=out)
+        return EXIT_OK
     loaded = _loaded(args, found)
     names = loaded.variants
     if args.profile:
@@ -912,9 +917,20 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
         print(render(diagnostics), file=out)
     if drift is not None and drift.is_clean:
         print(f"tree {args.tree} is up to date", file=out)
-    if not annotate and (explained := explain_command(diagnostics)):
+    declared = component_rules(component_classes(loaded.recipe))
+    if not annotate and (explained := explain_command(diagnostics, declared, image=args.image)):
         print(explained, file=out)
     return EXIT_FAILURE if bad else EXIT_OK
+
+
+def _explained(args: argparse.Namespace, found: Settings) -> str:
+    """``check --explain``: tundravm's codes and the shipped components' as they are; a code
+    neither has is looked up in the components of the image, given or the project's."""
+    shipped = shipped_rules()
+    if found.image is None or all(code in RULES or code in shipped for code in args.explain):
+        return explain(args.explain, shipped)
+    loaded = _loaded(args, found)
+    return explain(args.explain, {**component_rules(component_classes(loaded.recipe)), **shipped})
 
 
 _TREE_DRIFT = {

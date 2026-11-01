@@ -349,7 +349,7 @@ serves a page with busybox; the `service` template's `App` builds `app/` instead
 from collections.abc import Iterator
 
 from tundravm import File, Image, Package, Service
-from tundravm.components import Component, Diagnostic, Endpoint, Resolved
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
 from tundravm.ports import TCP
 from tundravm.systemd import TcpProbe
 
@@ -372,6 +372,8 @@ class App(Component):
             expose=[TCP(self.port)],
             readiness=TcpProbe(self.port),
         )
+
+    rules = (Rule("app-privileged-port", "error", "Ports below 1024 need root.", "Use 8080."),)
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         if self.port >= 1024:
@@ -1099,23 +1101,19 @@ A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did
 A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint, where
 `[image]` marks a finding about the whole image. A finding several profiles share is one
 line naming them, and a hint several findings share follows the last of them once. The
-report ends with the command that explains its codes:
+report ends with the command that explains its codes, a component's included:
 
 ```console
-$ tundravm check --explain source-unpinned
+$ tundravm check --explain app-privileged-port
 ```
 
 ```text
-source-unpinned (warning)
-    A source build, built kernel or downloaded package has no pin in the lockfile, so a
-    moving ref builds different bytes (the image's policy can make it an error or an
-    info).
-    fix: Run `tundravm lock IMAGE` to pin every source at once (`tundravm build` then
-    fetches each on the host), or declare an immutable source: Git(url, ref) with a
-    40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, with
-    every other source it cannot resolve, before anything is written.
+app-privileged-port (error)
+    declared by App in demo.py
+    The app runs as a regular user, so it cannot bind a port below 1024.
+    fix: Pass App(port=) 1024 or above.
 ```
 
-The [lint reference](reference/lint.md) lists every code with what it checks and how to
-fix it. `--json` and the GitHub annotations (in GitHub Actions) keep one finding per
+The [lint reference](reference/lint.md) lists tundravm's and the shipped components'
+codes, what each checks and how to fix it. `--json` and the GitHub annotations (in GitHub Actions) keep one finding per
 profile and subject.

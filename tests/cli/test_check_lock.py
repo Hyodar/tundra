@@ -11,6 +11,7 @@ import pytest
 
 from tests.cli.conftest import STARTER, Cli
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.templates import render_recipe_template
 
 BROKEN = """\
 from tundravm.declarative import Disk, Key, Recipe
@@ -58,6 +59,24 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     unknown = cli("check", "--explain", "source-unpined")
     assert unknown.code == EXIT_SDK_ERROR
     assert "Did you mean 'source-unpinned'? docs/reference/lint.md lists" in unknown.err
+
+
+def test_a_components_code_is_explained_through_the_image_that_declares_it(
+    project: Path, cli: Cli
+) -> None:
+    source = render_recipe_template(
+        title="demo", filename="demo.py", release="trixie", template="cloud"
+    )
+    (project / "demo.py").write_text(source.replace("APP_PORT = 8080", "APP_PORT = 80"))
+    report = cli("check")
+    assert report.code == EXIT_FAILURE
+    assert report.out.splitlines()[-1] == "explain: tundravm check --explain app-privileged-port"
+    explained = cli("check", "--explain", "app-privileged-port")
+    assert explained.code == EXIT_OK, explained.err
+    assert explained.out.splitlines()[:2] == [
+        "app-privileged-port (error)",
+        "    declared by App in demo.py",
+    ]
 
 
 def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:

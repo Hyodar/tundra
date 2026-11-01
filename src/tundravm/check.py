@@ -1760,7 +1760,8 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
         raise ValidationError(
             f"Unknown check code(s): {', '.join(unknown)}.",
             hint=f"{guess}docs/reference/lint.md lists every code tundravm and its shipped "
-            "components check; a code your own Component reports is declared in its rules.",
+            "components check; a code an image's own component declares is explained with "
+            "the image: tundravm check IMAGE --explain CODE.",
         )
     blocks = []
     for code in dict.fromkeys(codes):
@@ -1777,12 +1778,27 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
     return "\n\n".join(blocks)
 
 
-def explain_command(diagnostics: Sequence[Diagnostic]) -> str:
-    """``explain: tundravm check --explain CODE [--explain CODE ...]`` naming each registered
-    code of *diagnostics* once; ``""`` when none is registered."""
-    codes = [code for code in dict.fromkeys(d.code for d in diagnostics) if code in RULES]
+def explain_command(
+    diagnostics: Sequence[Diagnostic],
+    declared: Mapping[str, Declared] | None = None,
+    *,
+    image: str | Path | None = None,
+) -> str:
+    """``explain: tundravm check --explain CODE [--explain CODE ...]`` naming each code of
+    *diagnostics* once that :data:`RULES` or *declared* (default: the shipped components'
+    rules) explains; ``""`` when none is.
+
+    *image* is the image file the report was given on the command line: it is named when a
+    code is one only its own components declare, which ``--explain`` finds through it.
+    """
+    components = shipped_rules() if declared is None else declared
+    known = {*RULES, *components}
+    codes = [code for code in dict.fromkeys(d.code for d in diagnostics) if code in known]
     flags = " ".join(f"--explain {code}" for code in codes)
-    return f"explain: tundravm check {flags}" if codes else ""
+    shipped = shipped_rules()
+    own = any(code not in RULES and code not in shipped for code in codes)
+    where = f"{image} " if image is not None and own else ""
+    return f"explain: tundravm check {where}{flags}" if codes else ""
 
 
 def render_summary(diagnostics: Sequence[Diagnostic], *, lines: int | None = None) -> str:
