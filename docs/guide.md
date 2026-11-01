@@ -7,10 +7,10 @@ attests the build. The choices are made for you: Debian trixie, systemd, a measu
 Intel TDX. Each default below has one escape hatch, and the hatch is a typed value, not a
 string.
 
-This guide is task-ordered. The [command reference](reference/cli.md), the
-[API reference](reference/api.md) and the [lint reference](reference/lint.md) are
-generated from the code. The [trust page](trust.md) says what the image defends against
-and how to recover.
+This guide follows the loop: create a project, declare the image, lock, build, run, deploy.
+The [command reference](reference/cli.md), the [API reference](reference/api.md) and the
+[lint reference](reference/lint.md) are generated from the code. The [trust page](trust.md)
+says what the image defends against and how to recover.
 
 ## What is proven today
 
@@ -48,10 +48,11 @@ $ uv run tundravm build --tree-only mkosi
 $ uv run pytest
 ```
 
-`lock` pins every source, tundra-tools included, so it needs read access to that
-repository (see [the shipped library](#the-shipped-library)). The generated tests and the
-CI's `check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends
-on the lock: write the tree after locking and commit both. `new` prints this loop.
+`new` prints this loop, then `build --dev` and `run --mode simulated --dev`. `lock` pins
+every source, tundra-tools included, so it needs read access to that repository (see
+[the shipped library](#the-shipped-library)). The generated tests and the CI's
+`check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends on
+the lock: write the tree after locking and commit both.
 
 `new NAME` writes:
 
@@ -102,16 +103,12 @@ An image file names no backend. The host decides.
 `local` runs mkosi 27.1 in-process, in a child forked by mkosi's own `fork_and_wait`. It
 never looks for mkosi on `PATH`. Every other build tool comes from mkosi's tools tree,
 pinned to the same Debian snapshot. When the kernel refuses unprivileged user namespaces
-(Ubuntu 24.04 does by default), mkosi runs under `sudo`.
-
-`lima` on Apple Silicon emulates the x86-64 guest with QEMU TCG. The bytes are the same
-and the build is several times slower. A build never switches backend on failure.
+(Ubuntu 24.04 does by default), mkosi runs under `sudo`. `lima` on Apple Silicon emulates
+the x86-64 guest with QEMU TCG: the same bytes, several times slower. A build never
+switches backend on failure.
 
 `doctor` says what this host can do, one row per capability, each failure with its fix.
-`build:go` and `build:rustup` block only when the image (`IMAGE`, else the project's) has
-a Go source, or a Cargo source that pins a Rust toolchain (one not checked out yet counts);
-otherwise they say `optional: not needed by this image`, and without an image a missing
-tool is `optional`. Neither fails `doctor` then:
+The host toolchains a build needs are in [Sources and toolchains](#sources-and-toolchains):
 
 ```console
 $ tundravm doctor
@@ -154,8 +151,7 @@ image = Image(
 ```
 
 `Image` is a frozen dataclass. Every slot is optional and takes small typed values.
-`tundravm show` prints what the image resolves to, profile by profile, and where each
-declaration came from.
+`tundravm show` prints what the image resolves to, profile by profile.
 
 ### What is implied
 
@@ -210,7 +206,7 @@ entry is one parameter, `name` or `name=value`. The ones tundravm sets are refus
 with what sets it: `root=`, `roothash=`, `usrhash=`, `systemd.verity*` and
 `systemd.volatile=` follow from `rootfs=`, the image boots systemd into `minimal.target`
 (`init=`, `rdinit=`, `systemd.unit=`), and `run` passes `console=` at boot. The parameters
-are part of the image: they move the recipe digest the lockfile records, and the manifest
+are part of the image: they move the image's digest in the lockfile, and the manifest
 records the UKI's command line, which `show --diff` compares.
 
 ### Imports
@@ -223,7 +219,7 @@ uses:
 | `tundravm` | `Image`, `Profile`, `Service`, the contents (`Package`, `File`, `Tree`, `User`, `Group`), the foundation (`Debian`, `Kernel`, `RootFS`, `Mkosi`), and `load`, `lower`, `compile`, `bake`, `doctor` |
 | `tundravm.ports` | `TCP`, `UDP`, `AttestedTLS`, `TLS` |
 | `tundravm.systemd` | what `Service` keywords take: `Hardening`, `Resources`, `Shutdown`, `Notify`, `TcpProbe`, `HttpProbe`, `Every`, `Calendar`, `Listen`, `DropIn` |
-| `tundravm.components` | `Component`, its exports (`Endpoint`, `ServiceRef`, `ServiceReady`, `ComponentReady`), `Resolved` and `Diagnostic` for `check()`, and the [shipped library](#the-shipped-library) with `StaticAddress` and `Egress` |
+| `tundravm.components` | `Component`, its exports (`Endpoint`, `ServiceRef`, `ServiceReady`, `ComponentReady`), `Resolved`, `Diagnostic` and `Rule` for `check()`, and the [shipped library](#the-shipped-library) with `StaticAddress` and `Egress` |
 | `tundravm.storage` | `Volume`, `VolumeDirectory` and the unlock policies `OperatorKey`, `TpmSeal`, `BrokerKey` |
 | `tundravm.secrets` | `Secret`, `Credential` |
 | `tundravm.sources` | `GoBinary`, `CargoBinary`, `Build`, `Install`, `Local`, `Git`, `Http` |
@@ -256,7 +252,8 @@ api = Service(
 What a bare `Service(name, argv)` gets: `Type=exec`, `Restart=on-failure` with
 `RestartSec=5s`, a system user named after the service, `Hardening.preset("static")`, and
 `WantedBy=minimal.target`. Each argv element is quoted the way systemd parses it. The one
-visible exception for a shell is `["/bin/sh", "-eu", "-c", script]`.
+visible exception for a shell is `["/bin/sh", "-eu", "-c", script]`. A built binary is a
+valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
 
 ### Reaching a service
 
@@ -308,37 +305,9 @@ cannot fix.
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
-A timer runs the service as a scheduled oneshot and keeps every other keyword;
-`socket=`, `readiness=`, `expose=`, `credentials=` and a volume `state=` belong to a
-long-lived service, so a timer refuses them. These values come from `tundravm.systemd`. A built binary is a valid first argv element:
-`GoBinary`, `CargoBinary` and `Build` (from `tundravm.sources`) pull
-their build and install into the image, and `binary.executable` is the installed path. Go
-builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with
-`cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the crate
-graph from the binary.
-
-### Sources
-
-A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
-the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
-by sha256. Your own program is a `Local` source:
-
-<!-- fragment -->
-```python
-from tundravm import Image, Service
-from tundravm.ports import TCP
-from tundravm.sources import GoBinary, Local
-
-app = GoBinary("app", Local("app"), package=".")
-
-image = Image("demo", services=[Service("app", [app], expose=[TCP(8080)])])
-```
-
-The path stays inside the project (the nearest `pyproject.toml`). The digest covers each
-file's path, sha256 and exec bit, and symlink targets, of what `git ls-files --cached
---others --exclude-per-directory=.gitignore` lists (every file outside a work tree).
-`build` copies those files like a checkout. An edit is `local-changed`; `build --dev`
-re-pins it, a production build refuses until `tundravm lock`.
+These values come from `tundravm.systemd`. A timer runs the service as a scheduled oneshot
+and keeps every other keyword; `socket=`, `readiness=`, `expose=`, `credentials=` and a
+volume `state=` belong to a long-lived service, so a timer refuses them.
 
 ## Components
 
@@ -599,9 +568,9 @@ There is no `reload` rotation: systemd's credential copy is per start.
 `AttestedTLS(443, upstream=raiko.http)` is the confidential way in. It opens 443 and
 nothing else. The upstream must listen on the loopback and expose no port of its own, or
 the image is refused, so the ingress is the only path to it. Today the relay is `socat`'s
-OpenSSL listener with a key pair generated in the guest at every start, as its own user
-with only `CAP_NET_BIND_SERVICE`. The certificate is self-signed per boot. Binding its key
-into the quote's `report_data` is gate 3; until then a client pins it on first contact.
+OpenSSL listener, as its own user with only `CAP_NET_BIND_SERVICE`, with a self-signed
+certificate generated in the guest at every start. Binding its key into the quote's
+`report_data` is gate 3; until then a client pins it on first contact.
 
 `TLS(port, upstream=, certificate=secret)` is ordinary HTTPS with a certificate you deliver
 as a secret. Nothing about it is attested.
@@ -613,9 +582,10 @@ as a secret. Nothing about it is attested.
 | `RootFS.initramfs()` | the OS in the UKI's initrd: small services, one file to measure (default) |
 | `RootFS.verity()` | a read-only erofs root with a dm-verity hash partition beside the ESP, the root hash on the UKI command line, a volatile overlay on top |
 
-Choose verity when the payload is large. The ESP is a fixed 128 MiB FAT32, and a UKI over
-about 125 MiB fails the disk build. The layout is recorded in the manifest and never
-switched by a size threshold.
+Choose verity when the payload is large. Every disk boots the UKI from a fixed 128 MiB
+FAT32 ESP, which holds a UKI of up to 126 MiB; a larger one fails the build with both
+sizes and this fix. The layout is recorded in the manifest and never switched by a size
+threshold.
 
 ### Network and observability
 
@@ -630,11 +600,97 @@ declares. An `http://` sink is a lint warning: it sees what the guest logs in th
 ### The control plane today
 
 An image with a volume or a secret runs tundra-tools' `secret-delivery` on the management
-port 8745. It accepts one SSH public key per boot as an HTTP POST, and root SSH then
-accepts only that key. `attest`, `secrets deliver` and `secrets unlock` use that session.
-Nothing binds it to the quote: this is unverified first contact, and every command says
-so. The image records every volume, secret and ingress it needs in
-`/etc/tundravm/runtime.json`.
+port 8745: it accepts one SSH public key per boot, and `attest`, `secrets deliver` and
+`secrets unlock` use that SSH session, which nothing binds to the quote yet
+([trust](trust.md#the-channel-is-not-attested-yet)). The image records every volume,
+secret and ingress it needs in `/etc/tundravm/runtime.json`.
+
+## Sources and toolchains
+
+`GoBinary`, `CargoBinary` and `Build` (from `tundravm.sources`) are valid argv elements: they
+pull their build and install into the image, and `binary.executable` is the installed
+path. Go builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with
+`cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the crate
+graph from the binary.
+
+A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
+the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
+by sha256. Your own program is a `Local` source:
+
+<!-- fragment -->
+```python
+from tundravm import Image, Service
+from tundravm.ports import TCP
+from tundravm.sources import GoBinary, Local
+
+app = GoBinary("app", Local("app"), package=".")
+
+image = Image("demo", services=[Service("app", [app], expose=[TCP(8080)])])
+```
+
+The path stays inside the project (the nearest `pyproject.toml`). The digest covers each
+file's path, sha256 and exec bit, and symlink targets, of what `git ls-files --cached
+--others --exclude-per-directory=.gitignore` lists (every file outside a work tree).
+`build` copies those files like a checkout. An edit is `local-changed`: `build --dev`
+re-pins it, a production build refuses until `tundravm lock`.
+
+The build sandbox never fetches a source. `build` checks each one out on the host, as you,
+into `build/<image>/.work/`, verifies a reused checkout against its pin, and mounts the
+checkouts into the build. Go, Cargo and .NET dependencies are prefetched there too, so
+`build --offline` can run on a machine without network once a connected build filled the
+workspace. A modified checkout fails with `E_SOURCE`; `build --clean-cache` starts the
+workspace afresh. The manifest records each Go and Cargo source's toolchain, and
+`show BUILD` prints it.
+
+A Go source builds with the toolchain its `go.mod` names: the `toolchain` line, else the
+`go` line (`go 1.25.0` is `go1.25.0`, `go 1.22` is `go1.22.0`). The host's `go`, 1.21 or
+newer and of any version, fetches that release from the Go module proxy with the modules,
+and the offline build runs it from the same cache: Debian's `golang` is only the bootstrap
+that switches to it. A release the host cannot fetch fails the build with `E_SOURCE`,
+naming the release and its module. A `go.mod` older than Go 1.21, which publishes no
+toolchain, builds with Debian's `go`. Every image's `Tdxs` is a Go source, so `build`
+needs a host `go` 1.21 or newer and stops before it fetches anything without one; the
+`build:go` row of `doctor` checks it.
+
+A Cargo source builds with the toolchain its `rust-toolchain.toml` (or the legacy
+`rust-toolchain`) pins, looked up as `rustup` does from the build's directory up to the
+checkout. The host's `rustup` installs that channel, with the components and targets the
+file lists and `--profile minimal` unless it names another, into the workspace; that
+toolchain's `cargo` fetches the crates, and the offline build runs its own `cargo` and
+`rustc`, with Debian's compiler and linker underneath. The channel must be pinned: a
+release (`1.91.0`) or a dated channel (`nightly-2026-09-01`); `stable`, `1.91` or a bare
+`nightly` fail the build with `E_SOURCE`, since they move with each release. A source
+without a toolchain file builds with Debian's `cargo`. A pinned source on a host without
+`rustup` stops before any toolchain runs; `build:rustup` blocks only for an image with
+such a source (one not checked out yet counts), and is `optional` otherwise.
+
+## The lock
+
+```console
+$ tundravm lock
+$ tundravm lock --update tdxs
+$ tundravm lock --check
+```
+
+`lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a commit,
+sha256 or content digest per source, and the toolchain (mkosi and its commit, the tools
+tree's distribution, release and snapshot, tundravm, the measurement tools). Commit it.
+
+- Pins already locked stay while their source is unchanged. `--update NAME` resolves the
+  named inputs again; no name resolves all of them.
+- `--check` never writes and never touches the network. It prints the drift and exits 1;
+  a missing lockfile is drift too.
+- A profile's sections are `profiles.<name>.<key>`, and `check` reports their drift as
+  that profile's finding: `error lock-changed [dev, production] files: files changed since
+  the lock: ~/srv/www/index.html`.
+- A lockfile an older tundravm wrote is refused, never migrated: run `tundravm lock` again.
+- A production build is a locked build: it refuses a missing (`lock-missing`) or stale
+  lock, and builds every source at its pin, so a second builder gets the same bytes. A
+  development build writes a missing lock and re-pins changed `Local` sources.
+- `build --offline` builds only what the lock pins.
+
+`check` reports a `source-unpinned` warning for each source the lock does not pin yet: one
+line per source naming the profiles that build it, and the hint once after them.
 
 ## The mkosi tree
 
@@ -685,78 +741,6 @@ or that would contradict a guarantee are refused at construction, each with the 
 sets it: `KernelCommandLine`, `Packages`, `ExtraTrees`, `ConfigureScripts`, `Environment`,
 `Bootable`, `Format`, `Profiles`, `Dependencies`.
 
-### Converting an mkosi tree
-
-```console
-$ tundravm convert ./old-tree --from mkosi
-```
-
-prints an `Image` file for a tree mkosi itself resolves, with every setting it cannot carry
-listed as `# unsupported:`. Save it beside the tree: its `Tree(...)` and script paths are
-relative to the file. A tree tundravm wrote (`mkosi.images/payload/`) converts its payload;
-the QEMU disk, the cloud wrappers and the payload's trees and scripts are what tundravm
-generates, so the notes name them and nothing is copied; the wrappers become `targets=`.
-A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
-`--allow-scripts`, since parsing would run it.
-
-## The lock
-
-```console
-$ tundravm lock
-$ tundravm lock --update tdxs
-$ tundravm lock --check
-```
-
-`lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a commit,
-sha256 or content digest per source, and the toolchain (mkosi and its commit, the tools
-tree's distribution, release and snapshot, tundravm, the measurement tools). Commit it.
-
-- Pins already locked stay while their source is unchanged. `--update NAME` resolves the
-  named inputs again; no name resolves all of them.
-- `--check` never writes and never touches the network. It prints the drift and exits 1;
-  a missing lockfile is drift too.
-  A profile's sections are `profiles.<name>.<key>`, and `check` reports their drift as
-  that profile's finding: `error lock-changed [dev, production] files: files changed since
-  the lock: ~/srv/www/index.html`.
-- A lockfile an older tundravm wrote is refused, never migrated: run `tundravm lock` again.
-- A production build refuses a missing (`lock-missing`) or stale lock; a development
-  build writes a missing one and re-pins changed `Local` sources.
-- `build --offline` builds only what the lock pins.
-
-`check` reports a `source-unpinned` warning for each source the lock does not pin yet: one
-line per source naming the profiles that build it, and the hint once after them.
-
-The build sandbox never fetches a pinned source. `build` checks each one out on the host, as
-you, into `build/<image>/.work/`, verifies a reused checkout against its pin, and mounts the
-checkouts into the build. When the host has the toolchain, Go, Cargo and .NET dependencies
-are prefetched there too, so `build --offline` can run on a machine without network once a
-connected build filled the workspace. A modified checkout fails with `E_SOURCE`;
-`build --clean-cache` starts the workspace afresh.
-
-A Go source builds with the toolchain its `go.mod` names: the `toolchain` line, else the
-`go` line (`go 1.25.0` is `go1.25.0`, `go 1.22` is `go1.22.0`). The host's `go`, 1.21 or
-newer and of any version, fetches that release from the Go module proxy with the modules,
-and the offline build runs it from the same cache: Debian's `golang` is only the bootstrap
-that switches to it. A release the host cannot fetch fails the build with `E_SOURCE`,
-naming the release and its module. A `go.mod` older than Go 1.21, which publishes no
-toolchain, builds with Debian's `go`. The manifest records each Go source's toolchain with
-its checksum, and `show BUILD` prints it. Without a host `go` 1.21 or newer, `build` of an
-image with a Go source stops before it fetches anything; `doctor --for build` checks it.
-
-A Cargo source builds with the toolchain its `rust-toolchain.toml` (or the legacy
-`rust-toolchain`) pins, looked up as `rustup` does from the build's directory up to the
-checkout. The host's `rustup` installs that channel, with the components and targets the
-file lists and `--profile minimal` unless it names another, into the workspace; that
-toolchain's `cargo` fetches the crates, and the offline build runs its own `cargo` and
-`rustc`, with Debian's compiler and linker underneath. The channel must be pinned: a
-release (`1.91.0`) or a dated channel (`nightly-2026-09-01`); `stable`, `1.91` or a bare
-`nightly` fail the build with `E_SOURCE`, since they move with each release. To build
-with another Rust, build a revision that pins it. A source without a toolchain file
-builds with Debian's `cargo`. The manifest records each Cargo source's toolchain (its
-channel and what its `rustc -vV` says, or `debian`), and `show BUILD` prints it. A pinned
-source on a host without `rustup` stops before any toolchain runs; `doctor --for build`
-checks it.
-
 ## Build
 
 ```console
@@ -764,12 +748,8 @@ $ tundravm build
 $ tundravm build --target gcp --reproduce --sign ~/.ssh/release-key
 ```
 
-`build` builds one profile: `production` by default, `--profile P` or `--dev`. A
-production build is always a locked build: it builds every source at the commit or
-sha256 `build/tundravm.lock` pins, so a second builder gets the same bytes, and the
-manifest records those pins. Without the lockfile it refuses with `lock-missing`: run
-`tundravm lock` and commit the lockfile first. A development build writes a missing
-lock itself. `build` writes:
+`build` builds one profile: `production` by default, `--profile P` or `--dev`, against the
+[lock](#the-lock). It writes:
 
 ```text
 build/demo/
@@ -816,11 +796,9 @@ measured  payload.efi authenticode sha384 cd9f923dfb43ae67…
   unchecked: RTMR3: outside the policy: no event schema is defined for RTMR3
 ```
 
-Every disk boots the UKI from a fixed 128 MiB ESP, which holds a UKI of up to 126 MiB. A
-larger one fails the build with both sizes and the fix: `RootFS.verity()` keeps the OS
-out of the UKI. The `authenticode` line is the UKI's identity in RTMR1's event log, and the
-register rows are predictions. [What `build` prints](trust.md#what-build-prints) says which
-printed value is which.
+The `authenticode` line is the UKI's identity in RTMR1's event log, and the register rows
+are predictions. [What `build` prints](trust.md#what-build-prints) says which printed value
+is which.
 
 ### The manifest
 
@@ -871,12 +849,13 @@ $ tundravm show --diff OLD NEW
 ```
 
 Without a build, `show` prints the image as it resolves: its name and file on the first
-line, then the production profile and the others as declared (`--profile P` and `--dev`
-pick them). With one (a directory, an id
-prefix or `latest`), it prints the build's report (as `build` printed it; `--json` puts
-it under `report`), then the manifest's provenance and unchecked guarantees; `--units`,
-`--tree` and `--measurements` narrow it. `--diff` compares two builds:
-packages, files, units, boot payload, measurements and policy coverage.
+line, then the production profile and the others as declared; `--profile P` picks some
+(`--profile dev` is the dev profile), and `--json` adds where each declaration came from.
+With a build (a directory, an id prefix or `latest`; `--dev` is the latest development
+build), it prints the build's report (`--json` puts it under `report`), then the
+manifest's provenance and unchecked guarantees; `--units`, `--tree` and `--measurements`
+narrow it. `--diff` compares two builds: packages, files, units, boot payload,
+measurements and policy coverage.
 
 ## Run
 
@@ -903,8 +882,9 @@ still shows the boot. Run the dev build (`--dev`) to use the services without TD
 The instance is `<image>-<n>` under `.tundravm/instances/`: `instance.json` (the build,
 mode, QEMU argv and forwarded ports), `events.jsonl` (one record per action, never a
 value) and `console.log`. Each declared volume gets a fresh sparse 16 GiB disk,
-`volume-<name>.img` in the instance directory, attached under its serial. `run ssh` opens a shell only on a development
-build that runs SSH. `run mode` says what the mode means for evidence.
+`volume-<name>.img` in the instance directory, attached under its serial. `run ssh` opens
+a shell only on a development build that runs SSH. `run mode` says what the mode means for
+evidence.
 
 ## Deploy
 
@@ -934,11 +914,11 @@ $ tundravm attest prover-1 --policy policies/prover-gcp.json --output attest-1.j
 ```
 
 `attest` asks the instance's `tdxs` for a quote bound to a fresh nonce and checks MRTD and
-RTMR0 to RTMR2 against the policy. It delivers nothing. The policy is a `tundravm.policy/2`
-file, or a build's `measurements.json`. `measurements.json` holds a policy per record; the
-operator copies one into `policies/`, adds the platform registers they approve from a quote
-of a host they trust (`platform_approval`: MRTD, RTMR0) and commits it. The
-`policies/README.md` that `new --template prover` writes has the `jq` line.
+RTMR0 to RTMR2 against the policy. It delivers nothing. The policy is a build's
+`measurements.json`, or a `tundravm.policy/2` file: one of its records copied into
+`policies/` with the platform registers you approve from a quote of a host you trust
+(`platform_approval`: MRTD, RTMR0), committed. The prover template's `policies/README.md`
+has the `jq` line.
 
 | Verdict | Means |
 |---|---|
@@ -952,7 +932,7 @@ of a host they trust (`platform_approval`: MRTD, RTMR0) and commits it. The
 An Azure policy is refused: the TDX quote on Azure measures its paravisor, and the image is
 measured into the vTPM.
 
-### Secrets
+### Delivering secrets
 
 ```console
 $ tundravm secrets unlock prover-1 data
@@ -1046,7 +1026,9 @@ The pytest fixtures load automatically once tundravm is installed. `boot` needs 
 OVMF; `boot_unavailable()` and `build_unavailable()` say why a host cannot, so a test can
 skip on the reason.
 
-## Converting systemd units
+## Converting
+
+### Systemd units
 
 ```console
 $ tundravm convert ./units --from systemd > image.py
@@ -1062,6 +1044,20 @@ the image implies (`Type=exec`, `Restart=on-failure`, the generated user, the `s
 sandbox in place of the unit's own, enabled at boot); a `# unsupported:` line names each
 unit or directive no `Image` slot holds (a mount, a path unit, a second `ExecStart=`).
 
+### An mkosi tree
+
+```console
+$ tundravm convert ./old-tree --from mkosi
+```
+
+prints an `Image` file for a tree mkosi itself resolves, with every setting it cannot carry
+listed as `# unsupported:`. Save it beside the tree: its `Tree(...)` and script paths are
+relative to the file. A tree tundravm wrote (`mkosi.images/payload/`) converts its payload;
+the QEMU disk, the cloud wrappers and the payload's trees and scripts are what tundravm
+generates, so the notes name them and nothing is copied; the wrappers become `targets=`.
+A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
+`--allow-scripts`, since parsing would run it.
+
 ## CI
 
 `new --ci` writes `.github/workflows/tundravm.yml` with two jobs:
@@ -1072,21 +1068,22 @@ unit or directive no `Image` slot holds (a mount, a path unit, a second `ExecSta
 | `build` | `build --reproduce`, `verify latest`, uploads `build/*/production/` | after `check`, when the repository variable `TUNDRAVM_BACKEND` names a backend |
 
 Commit `uv.lock`; both jobs install exactly what it locks. Findings show as annotations on
-the pull request. `lock --check` exits 1 on drift, and on a project that has no lockfile
-yet, naming `tundravm lock`: lock, commit `build/tundravm.lock` and push again. The `build`
-job builds production, so it needs that lock and read access to tundra-tools.
+the pull request. A project without a committed `build/tundravm.lock` fails `lock --check`:
+lock, commit it and push again. The `build` job builds production, so it reads tundra-tools
+with the repository secret `TUNDRA_TOOLS_TOKEN`: a fine-grained personal access token with
+read-only Contents on `Hyodar/tundra-tools`, added with
+`gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`.
 
-tundravm's own CI bakes the `Image` templates, so it needs the same access. It reads
-tundra-tools with the repository secret `TUNDRA_TOOLS_TOKEN` when it exists: a fine-grained
-personal access token with read-only Contents on `Hyodar/tundra-tools`, added with
-`gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra`. Making tundra-tools public does
+tundravm's own CI bakes the `Image` templates and reads tundra-tools the same way
+(`gh secret set TUNDRA_TOOLS_TOKEN --repo Hyodar/tundra`). Making tundra-tools public does
 the same without a secret. Without either, the template tests skip and name the repository.
 
 ## When something fails
 
 Every error prints `error [CODE]: message`, an optional `Hint:` and context, and exits 2.
-A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did you mean". With `--json`, stderr gets one JSON line instead
-(`tundravm.error/1`). `--traceback` raises with the Python traceback.
+A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did you mean".
+With `--json`, stderr gets one JSON line instead (`tundravm.error/1`). `--traceback` raises
+with the Python traceback.
 
 | Code | Usually | Do |
 |---|---|---|
@@ -1096,7 +1093,7 @@ A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did
 | `E_SOURCE` | a source did not resolve, or a checkout changed | `tundravm build --clean-cache` |
 | `E_POLICY` | `build --offline` met a source the workspace never fetched, or a tree that builds with the network | build once online, then `--offline` |
 | `E_BACKEND_EXECUTION` | mkosi failed | the error names mkosi's log; `build -v` echoes it; `doctor --for build` |
-| `E_STATE` | no build or instance where one was expected | `tundravm build` first, or name the build |
+| `E_STATE` | no build, instance or host tool where one was expected | the hint names the command: `build`, `build --dev`, `run`, `deploy` or what to install |
 | `E_ARTIFACT_CHANGED` | an artifact's bytes changed | `tundravm verify BUILD` names the file |
 | `E_REPRODUCIBILITY` | two builds that should match did not | compare `observations.json` |
 | `E_MEASUREMENT` | an artifact that is not a UKI or a disk booting one | rebuild it with `tundravm build` |
@@ -1120,5 +1117,5 @@ app-privileged-port: error
 ```
 
 The [lint reference](reference/lint.md) lists tundravm's and the shipped components'
-codes, what each checks and how to fix it. `--json` and the GitHub annotations (in GitHub Actions) keep one finding per
-profile and subject.
+codes, what each checks and how to fix it. `--json` and the GitHub annotations (in GitHub
+Actions) keep one finding per profile and subject.

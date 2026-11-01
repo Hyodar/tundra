@@ -51,19 +51,19 @@ $ uv run tundravm run --mode simulated --dev    # instance my-image-1, ports for
 $ uv run tundravm verify latest-development     # every artifact against the manifest, offline
 ```
 
-That file is the whole image; `new` writes the same page served by a small `App` component,
-plus the `dev` profile these commands build, since production starts no service without TDX.
-Implied with no further words: Debian trixie from a locked snapshot; the TEE baseline (NTS
-time, a volatile journal, sysctl hardening, no apt timers); a measured UKI with the TDX,
-virtio, NVMe, Hyper-V and gVNIC drivers; an nftables firewall that opens only `8080` and the
-management port `8745`; `app.service` as its own system user under a tested sandbox,
-restarting on failure; and the `tdxs` evidence service that produces the quote an
-attestation checks. Each default has a typed escape hatch.
+That file is the whole image. `new` writes one that builds your Go program from `app/`, plus
+the `dev` profile these commands build, since production starts no service without TDX.
+Implied: Debian trixie from a locked snapshot; the TEE baseline (NTS time, a volatile
+journal, sysctl hardening, no apt timers); a measured UKI with the TDX, virtio, NVMe,
+Hyper-V and gVNIC drivers; an nftables firewall that opens only `8080` and the management
+port `8745`; `app.service` as its own system user under a tested sandbox, restarting on
+failure; and the `tdxs` evidence service that produces the quote an attestation checks.
+Each default has a typed escape hatch.
 
 ## Documentation
 
-- [The guide](docs/guide.md): projects, images, services, components, profiles, volumes
-  and secrets, the mkosi tree, the lock, builds, run, deploy, attest, testing.
+- [The guide](docs/guide.md): projects, images, services, components, profiles, sources,
+  the lock, builds, run, deploy and attest, testing, converting, CI.
 - [Trust, limits and recovery](docs/trust.md): what the image defends against, what is not
   built yet, and how to recover an instance.
 - Reference, generated from the code: [commands](docs/reference/cli.md),
