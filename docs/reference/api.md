@@ -762,7 +762,7 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 
 | Member | Does |
 |---|---|
-| `JournalExport.service() -> Service` | The `journal-export` service. |
+| `JournalExport.service(proxy: str \| None = None) -> Service` | The `journal-export` service, through *proxy* (`IP:PORT`) when given. |
 
 ### `Nethermind`
 
@@ -819,6 +819,7 @@ Observability(
     *,
     logs: JournalExport | None = None,
     metrics: PrometheusRemoteWrite | None = None,
+    proxy: str | None = None,
 )
 ```
 
@@ -827,7 +828,7 @@ The export path for logs and metrics: `image.observability` takes it.
 | Member | Does |
 |---|---|
 | `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear. |
-| `Observability.outbound() -> Egress` | Each sink's `HOST:PORT`. |
+| `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one. |
 
 ### `PrometheusRemoteWrite`
 
@@ -846,7 +847,7 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 
 | Member | Does |
 |---|---|
-| `PrometheusRemoteWrite.config() -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*. |
+| `PrometheusRemoteWrite.config(proxy: str \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*, through *proxy* (`IP:PORT`) when given. |
 | `PrometheusRemoteWrite.service() -> Service` | The `metrics-export` service: Prometheus in agent mode. |
 
 ### `Raiko`

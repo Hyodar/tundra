@@ -6,7 +6,8 @@ url, credential=...))`` ships the journal with ``systemd-journal-upload`` and no
 with Prometheus in agent mode (remote write only, no query API). Both run as their own
 users in the preset sandbox, read their credentials as systemd credentials, keep bounded
 buffers, retry on their own, and are required by nothing, so an exporter that cannot
-reach its sink never holds an application back.
+reach its sink never holds an application back. ``proxy="IP:PORT"`` sends both through
+one fixed-address proxy, the only destination a filtered egress then needs.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from urllib.parse import urlsplit
 from tundravm._image._component import Component
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
-from tundravm._image._values import Egress, Package
+from tundravm._image._values import Egress, Package, egress_host
 from tundravm.declarative import model as dm
 from tundravm.declarative.config import ConfigFile
 from tundravm.diagnostics import Rule
@@ -63,6 +64,25 @@ def _destination(url: str) -> str:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
+def _proxy_url(proxy: str | None) -> str | None:
+    """The ``http://`` URL the exporters reach *proxy* (``IP:PORT``) at."""
+    return None if proxy is None else f"http://{proxy}"
+
+
+def _check_proxy(owner: object, proxy: object) -> None:
+    hint = "Pass proxy='10.0.0.9:3128', the proxy's address and port: '[fd00::9]:3128' for IPv6."
+    try:
+        _, port, named = egress_host(owner, proxy)
+    except ValidationError:
+        port, named = None, True
+    if port is None or named:
+        raise ValidationError(
+            f"Observability: proxy {proxy!r} is not IP:PORT; the firewall matches the "
+            "proxy by its address.",
+            hint=hint,
+        )
+
+
 def _check_credential(owner: object, credential: object) -> None:
     if credential is not None and not isinstance(credential, Secret):
         raise ValidationError(
@@ -88,8 +108,8 @@ class JournalExport:
         _check_url(self, self.url)
         _check_credential(self, self.credential)
 
-    def service(self) -> Service:
-        """The ``journal-export`` service."""
+    def service(self, proxy: str | None = None) -> Service:
+        """The ``journal-export`` service, through *proxy* (``IP:PORT``) when given."""
         argv = [
             "/usr/lib/systemd/systemd-journal-upload",
             f"--url={self.url}",
@@ -97,12 +117,14 @@ class JournalExport:
         ]
         if self.credential is not None:
             argv += [f"--key={self.credential.path}", f"--cert={self.credential.path}"]
+        url = _proxy_url(proxy)
         return Service(
             "journal-export",
             argv,
             credentials=[] if self.credential is None else [self.credential],
             state="journal-export",
             groups=["systemd-journal"],
+            environment={} if url is None else {"https_proxy": url, "http_proxy": url},
         )
 
 
@@ -112,7 +134,8 @@ class PrometheusRemoteWrite:
 
     *credential* is a :class:`~tundravm.secrets.Secret` holding a bearer token. The agent
     scrapes the node exporter on the loopback every *interval* and keeps at most *buffer*
-    of samples it could not send.
+    of samples it could not send; in memory, at most four shards of 10000 samples wait,
+    retried from one second to one minute apart, a 429 included.
     """
 
     url: str
@@ -131,15 +154,26 @@ class PrometheusRemoteWrite:
                     hint="Use a number with s, m or h: '30s', '1h'.",
                 )
 
-    def config(self) -> dict[str, object]:
-        """The agent's configuration: scrape the node exporter, write to *url*."""
+    def config(self, proxy: str | None = None) -> dict[str, object]:
+        """The agent's configuration: scrape the node exporter, write to *url*, through
+        *proxy* (``IP:PORT``) when given."""
         remote: dict[str, object] = {"url": self.url}
+        url = _proxy_url(proxy)
+        if url is not None:
+            remote["proxy_url"] = url
         if self.credential is not None:
             remote["authorization"] = {
                 "type": "Bearer",
                 "credentials_file": f"/run/credentials/metrics-export.service/"
                 f"{self.credential.name}",
             }
+        remote["queue_config"] = {
+            "capacity": 10000,
+            "max_shards": 4,
+            "min_backoff": "1s",
+            "max_backoff": "1m",
+            "retry_on_http_429": True,
+        }
         return {
             "global": {"scrape_interval": self.interval},
             "scrape_configs": [
@@ -171,14 +205,29 @@ class Observability(Component):
     *logs* is a :class:`JournalExport`, *metrics* a :class:`PrometheusRemoteWrite`; each
     is optional. Their credentials are secrets the image declares in ``secrets=``.
     :meth:`outbound` is each sink's host and port (a host name stands for its port).
+
+    *proxy* (``"IP:PORT"``, ``"[IPv6]:PORT"``) is an HTTP CONNECT proxy at a fixed address
+    through which both reach their sinks: :meth:`outbound` is then the proxy alone, so a
+    filtered egress opens one address instead of a port to any. The TLS session to each
+    sink runs end to end inside the tunnel, with the sink's name as its SNI and its
+    certificate checked, so the proxy can allow by name what the firewall can only allow by
+    address, and the guest resolves no sink. ``systemd-journal-upload`` reads it from
+    ``https_proxy``, Prometheus from ``proxy_url``. A proxy that itself speaks TLS is not
+    supported: neither exporter can be given its name apart from its URL, which would then
+    have to resolve to the fixed address through an ``/etc/hosts`` entry the image does
+    not write.
+
     Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Component name:
     ``observability``.
     """
 
     logs: JournalExport | None = None
     metrics: PrometheusRemoteWrite | None = None
+    proxy: str | None = None
 
     def __post_init__(self) -> None:
+        if self.proxy is not None:
+            _check_proxy(self, self.proxy)
         if self.logs is not None and not isinstance(self.logs, JournalExport):
             raise ValidationError(
                 f"Observability: logs= holds {self.logs!r}, not JournalExport.",
@@ -196,7 +245,9 @@ class Observability(Component):
             )
 
     def outbound(self) -> Egress:
-        """Each sink's ``HOST:PORT``."""
+        """*proxy*, or each sink's ``HOST:PORT`` without one."""
+        if self.proxy is not None:
+            return Egress(hosts=[self.proxy])
         sinks = (sink for sink in (self.logs, self.metrics) if sink is not None)
         return Egress(hosts=list(dict.fromkeys(_destination(sink.url) for sink in sinks)))
 
@@ -205,13 +256,14 @@ class Observability(Component):
             yield Package("systemd-journal-remote")
             # The packaged uploader reads /etc; ours runs from its own unit and arguments.
             yield dm.Unit("systemd-journal-upload.service", masked=True)
-            yield self.logs.service()
+            yield self.logs.service(self.proxy)
         if self.metrics is not None:
             yield Package("prometheus")
             yield Package("prometheus-node-exporter")
             # Debian's prometheus.service would serve a query API on every interface.
             yield dm.Unit("prometheus.service", masked=True)
-            yield ConfigFile.yaml(METRICS_CONFIG, self.metrics.config(), sort_keys=False)
+            config = self.metrics.config(self.proxy)
+            yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
             yield ConfigFile.env(
                 _NODE_EXPORTER_DEFAULTS, {"ARGS": "--web.listen-address=127.0.0.1:9100"}
             )

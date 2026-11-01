@@ -3,6 +3,7 @@ workloads whose exports wire into each other."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -151,6 +152,10 @@ TAIKO: dict[str, Any] = {
             ),
             Egress(hosts=["logs.example:19532", "[fd00::9]:443"]),
         ),
+        (
+            Observability(logs=JournalExport("https://logs.example"), proxy="10.0.0.9:3128"),
+            Egress(hosts=["10.0.0.9:3128"]),
+        ),
         (execution, Egress([TCP(30303), UDP(30303)])),
         (driver, Egress([TCP(443)])),
         (
@@ -202,6 +207,10 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
         (lambda: Raiko(config=config, listen="8080"), "HOST:PORT"),
         (lambda: TaikoClient(**TAIKO, l1="l1.example:8546"), "a list of HOST:PORT"),
         (lambda: Raiko(config=config, l1=["l1.example"]), "'l1.example' is not HOST:PORT"),
+        (
+            lambda: Observability(logs=JournalExport("https://l.example"), proxy="p.example:80"),
+            "proxy 'p.example:80' is not IP:PORT",
+        ),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
         (lambda: stack(secrets=[jwt, config]), "taiko-chain"),
     ],
@@ -289,6 +298,12 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     for unit in ("journal-export.service", "metrics-export.service"):
         dependents = [path for path in units if unit in planned.file(path).text]
         assert dependents == [f"/usr/lib/systemd/system/{unit}"], unit
+    proxied = replace(observability, proxy="[fd00::9]:3128")
+    planned = plan(Image("x", observability=proxied, secrets=[logs_key, token]), "production")
+    environment = planned.service("journal-export").values("Service", "Environment")
+    assert "https_proxy=http://[fd00::9]:3128" in environment
+    config_text = planned.file("/etc/tundravm/metrics-export.yml").text
+    assert 'proxy_url: "http://[fd00::9]:3128"' in config_text and "max_shards: 4" in config_text
     plaintext = Image("x", observability=Observability(logs=JournalExport("http://logs:19532")))
     assert "observability-plaintext" in {d.code for d in plan(plaintext).lint()}
     with pytest.raises(ValidationError, match="exports nothing"):
