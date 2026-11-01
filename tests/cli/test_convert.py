@@ -16,7 +16,7 @@ import pytest
 import tundravm
 from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
-from tundravm import _mkosi
+from tundravm import _mkosi, convert
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.compiler.emit_mkosi import MAIN_IMAGE_SETTINGS
 from tundravm.convert import (
@@ -218,6 +218,23 @@ def test_a_real_tree_converts_and_its_report_is_the_whole_difference(
         elif verdict.kind != "mapped" and verdict.value:
             kept = same or (key, str(value)) in BUILT_ELSEWHERE
             assert kept == (verdict.kind == "kept"), verdict.line
+
+
+@pytest.mark.parametrize("name", sorted(ROWS))
+def test_without_ruff_a_converted_tree_reads_as_ruff_formats_it(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``uv tool install`` has no ruff: the fallback breaks long lines as ruff does."""
+    raw: list[str] = []
+    formatted = convert._formatted
+
+    def capture(source: str) -> str:
+        raw.append(source)
+        return formatted(source)
+
+    monkeypatch.setattr(convert, "_formatted", capture)
+    ruff = convert.from_mkosi(FIXTURES / name).source
+    assert convert._wrapped(raw[0]) == ruff
 
 
 def test_every_mkosi_setting_has_a_verdict() -> None:

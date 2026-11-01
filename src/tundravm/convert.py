@@ -229,8 +229,78 @@ def _formatted(source: str) -> str:
             timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return source
-    return done.stdout if done.returncode == 0 and done.stdout else source
+        return _wrapped(source)
+    return done.stdout if done.returncode == 0 and done.stdout else _wrapped(source)
+
+
+WIDTH = 100
+"""The line length ``new`` sets for ruff, which a converted file keeps without ruff too."""
+
+
+def _wrapped(source: str) -> str:
+    """*source* with each code line over :data:`WIDTH` broken at its outer brackets, as
+    ``ruff format`` would: where ruff is not installed (a ``uv tool install``)."""
+    lines: list[str] = []
+    for line in source.splitlines():
+        stripped = line.lstrip()
+        if len(line) <= WIDTH or stripped.startswith("#"):
+            lines.append(line)
+            continue
+        tail = "," if stripped.endswith(",") else ""
+        broken = _broken(stripped.removesuffix(tail), len(line) - len(stripped))
+        broken[-1] += tail
+        lines.extend(broken)
+    return "\n".join(lines) + "\n"
+
+
+def _broken(expr: str, indent: int) -> list[str]:
+    """*expr* at *indent*: one line when it fits, else its outer call, list or dict with its
+    items on one line inside the brackets, or one per line (a trailing comma after each when
+    there are several) when they do not fit either."""
+    pad = " " * indent
+    split = None if indent + len(expr) <= WIDTH else _outer_brackets(expr)
+    if split is None:
+        return [pad + expr]
+    head, items, close = split
+    inner = ", ".join(items)
+    if indent + 4 + len(inner) <= WIDTH:
+        return [pad + head, f"{pad}    {inner}", pad + close]
+    lines = [pad + head]
+    for item in items:
+        lines.extend(_broken(item, indent + 4))
+        lines[-1] += "," if len(items) > 1 else ""
+    return [*lines, pad + close]
+
+
+def _outer_brackets(expr: str) -> tuple[str, list[str], str] | None:
+    """``(head through the first outer bracket, the items, the closing bracket)`` when that
+    bracket closes at the end of *expr*, else ``None``."""
+    import io
+    import tokenize
+
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(expr).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    depth, start, cuts = 0, -1, list[int]()
+    for token in tokens:
+        col = token.start[1]
+        if token.type != tokenize.OP or token.start[0] != 1:
+            continue
+        if token.string in "([{":
+            start = col if depth == 0 and start < 0 else start
+            depth += 1
+        elif token.string in ")]}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                if col != len(expr) - 1:
+                    return None
+                bounds = zip([start, *cuts], [*cuts, col], strict=True)
+                items = [expr[a + 1 : b].strip() for a, b in bounds]
+                return expr[: start + 1], [item for item in items if item], expr[col]
+        elif token.string == "," and depth == 1 and start >= 0:
+            cuts.append(col)
+    return None
 
 
 def _imports(names: Iterable[str]) -> str:
