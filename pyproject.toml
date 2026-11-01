@@ -11,7 +11,8 @@ requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "tundravm contributors" }]
 dependencies = [
-    "mkosi",
+    # mkosi is not on PyPI: the wheel names the commit of v27.1, so no index can supply another
+    "mkosi @ git+https://github.com/systemd/mkosi@ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b",
 ]
 
 [project.scripts]
@@ -70,6 +71,9 @@ strict = true
 source = "vcs"
 raw-options = { version_scheme = "no-guess-dev" }
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.hooks.custom]
 # hatch_build.py writes src/tundravm/_version.py: the version and the commit it was built from.
 
@@ -84,9 +88,6 @@ exclude = ["/tools"]
 [tool.uv]
 # A commit or a tag changes the version, so uv reinstalls the editable checkout on either.
 cache-keys = [{ file = "pyproject.toml" }, { file = "hatch_build.py" }, { git = { commit = true, tags = true } }]
-
-[tool.uv.sources]
-mkosi = { git = "https://github.com/systemd/mkosi", rev = "v27.1" }
 
 [[tool.mypy.overrides]]
 # mkosi ships no py.typed; follow its annotated source so the adapter is checked against it

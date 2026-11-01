@@ -1,0 +1,162 @@
+# A v2.0.0 tag releases tundravm 2.0.0 (docs/release.md): ci.yml's test job, then the sdist
+# and wheel (their version is the tag's, from hatch-vcs), installed in a clean venv where
+# --version, doctor and the default tools source must work, then a GitHub release whose
+# body is the tag's CHANGELOG.md section (scripts/release.py refuses a tag without one) with
+# both files attached, then PyPI by trusted publishing.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    # ci.yml's test job, copied: a workflow cannot call one job of another.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up
+        uses: ./.github/actions/setup
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check src tests examples
+
+      - name: Typecheck
+        run: uv run mypy .
+
+      - name: Unit tests
+        run: uv run pytest -m "not integration"
+
+      - name: Set up Go for the tools
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Go tests of the tools
+        working-directory: tools
+        run: go test ./...
+
+      - name: Check the surge image and its committed tree
+        run: uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      pypi: ${{ steps.pypi.outputs.exists }}
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Release notes from CHANGELOG.md
+        run: uv run --no-project --python 3.12 scripts/release.py notes "${TAG#v}" > release-notes.md
+
+      - name: Build the sdist and the wheel
+        run: |
+          uv build --python 3.12
+          ls -l dist
+          test -f "dist/tundravm-${TAG#v}.tar.gz"
+          test -f "dist/tundravm-${TAG#v}-py3-none-any.whl"
+
+      - name: Install the wheel in a clean venv
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 clean
+          uv pip install --python clean/bin/python "$GITHUB_WORKSPACE/dist/tundravm-${TAG#v}-py3-none-any.whl"
+          clean/bin/tundravm --version | tee version.txt
+          test "$(cat version.txt)" = "tundravm ${TAG#v}"
+          clean/bin/tundravm doctor --json > doctor.json || test $? -eq 1
+          clean/bin/python -c 'import json, sys; [print(r["verdict"], r["name"]) for r in json.load(open(sys.argv[1]))["rows"]]' doctor.json
+          clean/bin/python -c 'import sys; from tundravm.declarative.utils import tools_source; s = tools_source(); print(s); sys.exit(s.ref != sys.argv[1])' "$GITHUB_SHA"
+
+      - name: Find the pypi environment
+        id: pypi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/environments/pypi" --silent; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the distributions
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist
+          path: |
+            dist/
+            release-notes.md
+          if-no-files-found: error
+
+  github:
+    name: GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: >-
+          gh release create "$TAG" dist/*.tar.gz dist/*.whl
+          --repo "$GITHUB_REPOSITORY" --verify-tag
+          --title "tundravm ${TAG#v}" --notes-file release-notes.md
+
+  pypi:
+    name: PyPI (runs once the pypi environment and its trusted publisher exist)
+    needs: [build, github]
+    if: needs.build.outputs.pypi == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tundravm/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@v1.14.3
+        with:
+          packages-dir: dist/

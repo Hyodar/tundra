@@ -85,9 +85,9 @@ def test_every_private_mkosi_symbol_the_adapter_uses_exists_in_the_pin() -> None
 
 def test_the_pin_matches_pyproject_and_uv_lock() -> None:
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert f'mkosi = {{ git = "{MKOSI_PIN.repository}", rev = "{MKOSI_PIN.tag}" }}' in pyproject
+    assert f'"{MKOSI_PIN.requirement}"' in pyproject
     lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
-    source = f"{MKOSI_PIN.repository}?rev={MKOSI_PIN.tag}#{MKOSI_PIN.commit}"
+    source = f"{MKOSI_PIN.repository}?rev={MKOSI_PIN.commit}#{MKOSI_PIN.commit}"
     assert f'name = "mkosi"\nversion = "{MKOSI_PIN.version}"\nsource = {{ git = "{source}" }}' in (
         lock
     )

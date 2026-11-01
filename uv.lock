@@ -99,7 +99,7 @@ wheels = [
 [[package]]
 name = "mkosi"
 version = "27.1"
-source = { git = "https://github.com/systemd/mkosi?rev=v27.1#ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b" }
+source = { git = "https://github.com/systemd/mkosi?rev=ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b#ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b" }
 
 [[package]]
 name = "mypy"
@@ -254,7 +254,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mkosi", git = "https://github.com/systemd/mkosi?rev=v27.1" }]
+requires-dist = [{ name = "mkosi", git = "https://github.com/systemd/mkosi?rev=ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b" }]
 
 [package.metadata.requires-dev]
 dev = [
