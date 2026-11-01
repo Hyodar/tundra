@@ -65,6 +65,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `run --mode simulated|tdx` is explicit, and a production build boots fail-closed without TDX; `run --probe` and `run probe INSTANCE` read the boot probe every development profile carries, write `probe.json` and exit 1 on a failed check.
 - With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded.
 - `run` forwards, and `deploy`'s firewall line names, 8745 only where the image's firewall opens it.
+- A local instance's QEMU monitor listens in `$XDG_RUNTIME_DIR/tundravm` (else `/tmp/tundravm-<uid>`, refused unless only you can enter it), named in the receipt, not under the project, so a deeply nested project can start one.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
 - **Breaking:** `attest`, `secrets deliver` and `secrets unlock` speak TLS to the attested endpoint instead of relaying over SSH: a fresh nonce, evidence for another nonce or TLS key refused, a simulator's quote checked by its tag (`simulated`, registers never compared), `known_hosts` from the bound host keys, the instance key printed as bound to the quote; `secrets` verifies again on its own session and writes on it alone, and loses `--identity`.
 - `tundravm.testing.FakeEndpoint` plays the endpoint, with `relay`, `replay` and `wrong-key` misbehaviours.

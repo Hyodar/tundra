@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import time
 from pathlib import Path
@@ -220,6 +221,28 @@ def test_run_probe_reads_the_probe_off_the_console_and_refuses_production(
     assert "is a production build: it carries no boot probe" in refused.err
     assert "tundravm run --mode simulated --dev --probe" in refused.err
     assert not (project / ".tundravm/instances/demo-2").exists()
+
+
+def test_a_deeply_nested_project_runs_with_its_monitor_outside_it(
+    dev_built: Build, tmp_path: Path, qemu: Path
+) -> None:
+    root = tmp_path.joinpath(*["a-nested-directory"] * 6, ".tundravm", "instances")
+    instance = instances.launch(root, dev_built, mode="simulated", detach=True, out=io.StringIO())
+    monitor = Path(str(instance.data["monitor"]))
+    assert len(str(root)) > 108 and monitor.parent == tmp_path / "run" / "tundravm"
+    assert instances.stop(instance) and not monitor.exists()
+
+
+def test_the_probe_reads_its_timeout_when_it_is_called(
+    dev_built: Build, tmp_path: Path, qemu: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = instances.launch(
+        tmp_path, dev_built, mode="simulated", detach=True, out=io.StringIO()
+    )
+    monkeypatch.setattr(instances, "PROBE_TIMEOUT", 0.05)
+    assert instances.probe(instance).done is None
+    assert json.loads((instance.path / instances.PROBE).read_text())["timeout_s"] == 0.05
+    instances.stop(instance)
 
 
 def test_run_forwards_what_the_input_chain_accepts_not_where_the_output_chain_sends(

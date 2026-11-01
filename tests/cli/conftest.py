@@ -189,6 +189,8 @@ def qemu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     script.write_text(FAKE_QEMU.format(python=sys.executable))
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    (tmp_path / "run").mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     fake_ovmf(tmp_path, monkeypatch)
     started: list[int] = []
     real = instances.launch
@@ -199,7 +201,7 @@ def qemu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
         # the fake writes its console, then binds the monitor: a test that appends to the
         # console must not race the fake's truncating open on a loaded host
         deadline = time.monotonic() + 30
-        while not (found.path / instances.MONITOR).exists() and time.monotonic() < deadline:
+        while not Path(str(found.data["monitor"])).exists() and time.monotonic() < deadline:
             time.sleep(0.005)
         return found
 

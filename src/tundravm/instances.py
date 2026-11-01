@@ -5,7 +5,9 @@
 once read and, for a local VM, the QEMU process; ``events.jsonl`` appends one record per
 thing done to it (launched, attested, delivered, unlocked, stopped, upgraded), never a
 secret value; ``console.log`` is the serial console of a local VM. An instance id is
-``<image>-<n>``.
+``<image>-<n>``. A local VM's QEMU monitor is a socket outside the project, which the
+receipt names (:func:`monitor_socket`), so a deeply nested project still fits a socket
+path's 108 bytes.
 
 :func:`launch` is ``run``: the build's ``qemu.raw`` through OVMF from its ESP (the disk
 path), on a snapshot so the build directory is never written, with every TCP port the
@@ -23,11 +25,13 @@ no TDX and none of its services start, which :func:`status` says (:data:`FAIL_CL
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -47,7 +51,6 @@ SCHEMA = "tundravm.instance/1"
 INSTANCE = "instance.json"
 EVENTS = "events.jsonl"
 CONSOLE = "console.log"
-MONITOR = "monitor.sock"
 PIDFILE = "qemu.pid"
 KNOWN_HOSTS = "known_hosts"
 PROBE = "probe.json"
@@ -276,9 +279,38 @@ def qemu_command(
     hostfwd = "".join(f",hostfwd=tcp:127.0.0.1:{h}-:{g}" for g, h in sorted(ports.items()))
     cmd += ["-nic", f"user,model=virtio-net-pci{hostfwd}"]
     cmd += ["-display", "none", "-serial", f"file:{instance.path / CONSOLE}"]
-    cmd += ["-monitor", f"unix:{instance.path / MONITOR},server,nowait"]
+    cmd += ["-monitor", f"unix:{monitor_socket(instance)},server,nowait"]
     cmd += ["-pidfile", str(instance.path / PIDFILE)]
     return cmd
+
+
+def monitor_socket(instance: Instance) -> Path:
+    """Where *instance*'s QEMU monitor listens: a socket named by a digest of the instance
+    directory, in :func:`runtime_directory`, never under the project, whose path may not fit
+    the 108 bytes a Unix socket's may hold."""
+    key = hashlib.sha256(str(instance.path.resolve()).encode()).hexdigest()[:16]
+    return runtime_directory() / f"{key}.sock"
+
+
+def runtime_directory() -> Path:
+    """``$XDG_RUNTIME_DIR/tundravm``, else ``/tmp/tundravm-<uid>``: a short directory only
+    this user can enter, made on first use and refused when someone else could."""
+    base = os.environ.get("XDG_RUNTIME_DIR", "")
+    path = (
+        Path(base, "tundravm")
+        if base and Path(base).is_dir()
+        else Path(f"/tmp/tundravm-{os.getuid()}")
+    )
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=0o700)
+    found = path.lstat()
+    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid() or found.st_mode & 0o077:
+        raise StateError(
+            f"{path} holds the instances' monitor sockets, but it is not a directory only "
+            "this user can enter.",
+            hint=f"Remove {path} and run again, or set XDG_RUNTIME_DIR to a directory of your own.",
+        )
+    return path
 
 
 def tdx_refusal() -> str | None:
@@ -368,6 +400,7 @@ def launch(
             "ports": {str(guest): host for guest, host in ports.items()},
             "volumes": {serial: str(path) for serial, path in volumes},
             "console": CONSOLE,
+            "monitor": str(monitor_socket(instance)),
         }
     )
     instance.save()
@@ -536,10 +569,10 @@ def stop(instance: Instance, timeout: float = 10.0) -> bool:
         instance.data["state"] = "stopped"
         instance.save()
         return False
-    monitor = instance.path / MONITOR
+    monitor = str(instance.data.get("monitor", ""))
     with contextlib.suppress(OSError), socket.socket(socket.AF_UNIX) as conn:
         conn.settimeout(2)
-        conn.connect(str(monitor))
+        conn.connect(monitor)
         conn.sendall(b"quit\n")
     deadline = time.monotonic() + timeout
     while alive(instance) and time.monotonic() < deadline:
@@ -548,6 +581,9 @@ def stop(instance: Instance, timeout: float = 10.0) -> bool:
     if alive(instance) and isinstance(pid, int):
         with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGTERM)
+    if monitor:
+        with contextlib.suppress(OSError):
+            os.unlink(monitor)
     instance.data["state"] = "stopped"
     instance.save()
     instance.event("stopped")
@@ -592,10 +628,11 @@ def probe_checks(build: Mapping[str, Any], subject: str) -> tuple[str, ...]:
     return found
 
 
-def probe(instance: Instance, *, timeout: float = PROBE_TIMEOUT) -> probe_module.Report:
-    """``run --probe`` / ``run probe``: wait up to *timeout* seconds for
-    ``tundravm-probe: done`` on *instance*'s console, then write :data:`PROBE` into its
-    directory and return what the probe printed."""
+def probe(instance: Instance, *, timeout: float | None = None) -> probe_module.Report:
+    """``run --probe`` / ``run probe``: wait up to *timeout* seconds (:data:`PROBE_TIMEOUT`
+    when ``None``, read at the call) for ``tundravm-probe: done`` on *instance*'s console,
+    then write :data:`PROBE` into its directory and return what the probe printed."""
+    timeout = PROBE_TIMEOUT if timeout is None else timeout
     from .testing._boot import console_lines
 
     build = instance.build
@@ -644,10 +681,12 @@ __all__ = [
     "instance_key",
     "launch",
     "logs",
+    "monitor_socket",
     "open_instance",
     "probe",
     "probe_checks",
     "qemu_command",
+    "runtime_directory",
     "readiness",
     "reachable",
     "require_host",
