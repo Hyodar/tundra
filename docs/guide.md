@@ -406,7 +406,7 @@ same payload.
 
 An image file binds an `Image` to the name `image`, as each stage does.
 `Image` is a frozen dataclass. Every slot is optional and takes small typed values.
-`tundravm show` prints what the image resolves to, profile by profile.
+`tundravm show` prints the image as written, then what each profile builds.
 
 ### What is implied
 
@@ -973,13 +973,13 @@ $ tundravm show latest --measurements
 $ tundravm show --diff OLD NEW
 ```
 
-Without a build, `show` prints the image as it resolves, the production profile first;
-`--profile P` picks some (`--profile dev` the dev
-profile), and `--json` adds where each declaration came from.
-With a build (a directory, an id prefix, `latest`; `--dev` the latest development one, as
-`latest-development`),
-it prints the build's report, provenance, unchecked guarantees and boot probe;
-`--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds.
+Without a build, `show` prints the image as written, then what each profile builds beyond
+the one it extends.
+`--profile P` picks profiles, `--dev` the dev profile; `--json` adds each declaration's origin.
+With a build (a directory, an id prefix, `latest`, `latest-development`), it prints its
+report, provenance, unchecked guarantees and probe checks, or `--units`, `--tree`,
+`--measurements`.
+`--diff` prints the lines two image files, or two builds, differ in.
 
 ## Run
 

@@ -12,7 +12,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 - **Breaking:** `Image`, `Service`, `Component` and `Profile` replace `Recipe`, `Variant` and `Fragment`.
 - **Breaking:** every public name has one home (`tundravm`, `.ports`, `.systemd`, `.components`, `.storage`, `.secrets`, `.sources`, `.errors`, `.testing`); flat imports are gone.
-- **Breaking:** `profile` replaces `variant` everywhere, `--json` and `tundravm.testing` included; `show --json` says `image`, `components` and `extends`.
+- **Breaking:** `profile` replaces `variant` everywhere, `--json` and `tundravm.testing` included; `show --json` says `image`, `components` and `profiles`.
 - **Breaking:** the API speaks the public model (`Resolved.targets`, `.components`, `.production`, `class X(Component, name=)`, `ImageFile.component`); the internal-model test helpers and fixtures are gone.
 - **Breaking:** `Image(volumes=, secrets=)` are gone: the image collects each volume and secret from what binds it.
 - **Breaking:** a profile edit sets any `Service` keyword but `name=` (`readiness=`, `credentials=`, `unit=`, `timer=` and `quotes=` included) and builds what it implies, its probe, credential waits, drop-in, timer and firewall rule and its dependents' ordering; a credential bound through argv or `environment=`, another built binary, another `user=` for a directory on a volume and dropping a readiness another service requires are refused.
@@ -49,9 +49,10 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `new NAME [--template node|service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; `node`, the default, is the example's first stage, the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
 - **Breaking:** thirteen commands: `new`, `check`, `lock`, `build`, `show`, `run`, `dev`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds when `TUNDRAVM_BACKEND` is set.
-- **Breaking:** `show IMAGE` lists the components the image file wrote, each with what it composed (`--json`: `{"name", "components"}`), and a source build only under sources.
-- **Breaking:** `show --dev` is always the latest development build; an image file's dev profile is `--profile dev`, and `show IMAGE --dev` is refused.
-- `show` leads with the image, then production; with a build, its report and boot probe checks; `--diff` compares two builds.
+- **Breaking:** `show IMAGE` reads like the image file: components by class and keyword, services with their program, source, ports, hardening, volume, credentials and probe, profiles with what each changes, then what each profile builds (build and boot steps said by what they do), a profile beyond the one it extends; no internal fragment, probe unit or shell.
+- **Breaking:** `show --dev` is the image's dev profile, as `build --dev`; the latest development build is `show latest-development`, and `show BUILD --dev` is refused.
+- **Breaking:** `show IMAGE --json` mirrors the text: `image`, `file`, `digest`, `base`, `components`, `services`, `ingress`, `content`, `profiles`, `resolved` and `provenance`.
+- `show --diff OLD NEW` compares two image files too, and prints only the lines that differ, section by section; with a build, `show` prints its report and boot probe checks.
 - `dev [IMAGE]` is the inner loop as one verb: `build --dev` when the image, the lock or a `Local` source's content changed since the latest development build (it says which, else reuses that build), then `run --mode simulated --probe` on it and the console until Ctrl-C stops the instance; `--no-follow` returns after the probe; `new`, the quickstart and the README print it.
 - `run --mode simulated|tdx` is explicit, and a production build boots fail-closed without TDX; `run --probe` and `run probe INSTANCE` read the boot probe every development profile carries, write `probe.json` and exit 1 on a failed check.
 - With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded.
