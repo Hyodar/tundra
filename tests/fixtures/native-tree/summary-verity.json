@@ -15,8 +15,10 @@
         "Bootable": "enabled",
         "Bootloader": "uki",
         "BuildPackages": [
+          "build-essential",
           "cargo",
           "cargo-auditable",
+          "git",
           "golang"
         ],
         "BuildScripts": [
@@ -227,12 +229,15 @@
         "Bootable": "enabled",
         "Bootloader": "uki",
         "BuildPackages": [
+          "build-essential",
           "cargo",
           "cargo-auditable",
+          "git",
           "golang"
         ],
         "BuildScripts": [
-          "<tree>/payload/mkosi.build.d/50-build.sh"
+          "<tree>/payload/mkosi.build.d/50-build.sh",
+          "<tree>/payload/mkosi.profiles/dev/mkosi.build.d/50-build.sh"
         ],
         "BuildSources": [
           {

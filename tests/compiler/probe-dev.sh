@@ -29,6 +29,24 @@ probe_service() {
         fail "$state ($result): journalctl -u $1 says why"
     fi
 }
+probe_endpoint() {
+    if ! command -v curl >/dev/null 2>&1; then
+        skip "no curl in the image to ask the endpoint"
+        return
+    fi
+    nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+    waited=0
+    while :; do
+        said=$(curl -ksS --max-time 10 "https://127.0.0.1:$1/evidence?nonce=$nonce" 2>&1) || true
+        case $said in
+            *""nonce":"$nonce""*) ok "listening, evidence answers nonce $nonce"; return ;;
+        esac
+        [ "$waited" -ge 30 ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    fail "no evidence for nonce $nonce on :$1: journalctl -u $2 -u tdxs; ${said:-no answer}"
+}
 probe_active() {
     state=$(systemctl show -P ActiveState "$1")
     if [ "$state" = active ]; then ok active; else fail "$state: $2"; fi
@@ -331,6 +349,8 @@ check=volume:/persistent
 probe_volume /persistent yes
 check=egress:198.51.100.1:7
 probe_egress 198.51.100.1 7
+check=endpoint:8745
+probe_endpoint 8745 tundravm-endpoint.service
 check=observability:journal-export.service
 probe_upload journal-export.service 'https://logs.example:19532' /var/lib/journal-export/state 19532
 check=observability:metrics-export.service

@@ -46,12 +46,22 @@ from tundravm.declarative import (
     Package,
     Recipe,
     Root,
+    Secret,
+    SecretFile,
+    Secrets,
     Service,
     Task,
     Variant,
     component,
 )
-from tundravm.declarative.utils import CargoBinary, Composite, GoBinary, Network, SshAccess
+from tundravm.declarative.utils import (
+    CargoBinary,
+    Composite,
+    GoBinary,
+    Network,
+    SshAccess,
+    Tdxs,
+)
 
 SNAPSHOT = "20261018T082309Z"
 SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
@@ -194,6 +204,15 @@ class Web(Composite):
         )
 
 
+MANAGEMENT_PORT = 8745
+DEV_SECRET = Secret(
+    "greeting-token",
+    (SecretFile("/run/tundravm/credentials/greeting-token"),),
+    required=False,
+)
+"""The secret CI delivers to the dev boot over the attested endpoint; optional, so nothing
+waits for it and ``run --probe`` finishes before it arrives."""
+
 DEV = Fragment(
     "dev",
     items=(
@@ -214,15 +233,20 @@ DEV = Fragment(
             user=Root(),
             hardening=Hardening.none(),
         ),
+        Tdxs(issuer="simulator"),
+        Secrets(entries=(DEV_SECRET,), port=MANAGEMENT_PORT),
     ),
 )
 """What the ``dev`` variant adds: SSH by public key, a firewall whose output chain allows
 nothing beyond DHCP and what :data:`OBSERVABILITY`'s proxy asks for (the fixture fetches
 nothing once built), a scheduled job, and the export path with its proxy and receivers, so
 the derived probe boots its ``egress:``, ``timer:`` and ``observability:`` checks, and the
-console shows the ``sink:`` lines of what arrived. :data:`SINK` runs as root, unsandboxed,
-to write to ``/dev/console``. No ``Volume``: ``run`` attaches disks only for an ``Image``'s
-runtime manifest, which this plain ``Recipe`` has none of."""
+console shows the ``sink:`` lines of what arrived. The evidence service with the simulator
+issuer and the attested endpoint on :data:`MANAGEMENT_PORT` taking :data:`DEV_SECRET` give
+the probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``.
+:data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No ``Volume``: ``run``
+attaches disks only for an ``Image``'s runtime manifest, which this plain ``Recipe`` has
+none of."""
 
 
 def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
@@ -241,6 +265,9 @@ def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
             RUST_PROBE,
             SINK,
             BootProbe(),
+            # what the dev profile's tools/ builds need, declared where every profile builds
+            Package("git", role="build"),
+            Package("build-essential", role="build"),
         ),
         variants=(
             Variant("default", outputs=("qemu",)),

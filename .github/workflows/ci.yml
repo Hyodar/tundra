@@ -140,7 +140,8 @@ jobs:
     # where the gate records simulated and the boot probe its declarations compile in must
     # pass every check (the observability exporters' among them), until the host fetches the
     # fixture's page through the forward and the in-guest sink has printed a journal upload
-    # and a remote-write batch, each carried through it as the proxy.
+    # and a remote-write batch, each carried through it as the proxy. Then `attest` (simulated)
+    # and `secrets deliver` speak plan 6.3's protocol to its attested endpoint.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 120
@@ -221,6 +222,24 @@ jobs:
           jq -e '.results[] | select(.check == "key:instance") | .verdict == "ok"' \
             .tundravm/instances/fixture-1/probe.json
           curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
+
+      - name: Attest the dev instance and deliver a secret over its attested endpoint
+        # Plan 6.3 under QEMU: the simulator issuer's quote binds the nonce, the endpoint's
+        # TLS key, the SSH host keys and the instance key; deliver verifies on its own session.
+        run: |
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/operator"
+          policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
+          uv run tundravm attest fixture-1 --policy "$policy" --identity "$RUNNER_TEMP/operator"
+          jq -e '.attested.verdict == "simulated"' .tundravm/instances/fixture-1/instance.json
+          test -s .tundravm/instances/fixture-1/known_hosts
+          printf 'fixture-token\n' > "$RUNNER_TEMP/greeting-token"
+          uv run tundravm secrets deliver fixture-1 --policy "$policy" \
+            "greeting-token=@$RUNNER_TEMP/greeting-token"
+          for attempt in $(seq 1 30); do
+            grep -qF 'name=greeting-token' .tundravm/instances/fixture-1/console.log && break
+            sleep 2
+          done
+          grep -F 'name=greeting-token' .tundravm/instances/fixture-1/console.log
 
       - name: Stop the instance
         if: always()
