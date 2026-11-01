@@ -23,6 +23,7 @@ from tundravm.backends.base import BOOT_PAYLOAD_NAME, MountSpec, Requirement
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Repository, lower
 from tundravm.declarative.lifecycle import bake_image
+from tundravm.declarative.utils import Backports
 from tundravm.errors import BackendExecutionError
 from tundravm.measure import pe
 from tundravm.models import BakeRequest, BakeResult
@@ -327,7 +328,8 @@ SNAPSHOT_ARCHIVE = "https://snapshot.debian.org/archive/{}/20261018T082309Z"
 
 @requires_mkosi
 def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) -> None:
-    """The cloud template bakes unpatched: snapshot, pinned backports, EFI stub, repositories."""
+    """The cloud template bakes with pinned backports and extra repositories added: snapshot,
+    sandbox apt sources, EFI stub, repositories."""
     recipe_path = tmp_path / "node.py"
     recipe_path.write_text(
         render_recipe_template(
@@ -353,8 +355,9 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
+    # The template declares no backports; Backports() puts them and sid in the build sandbox.
     # The checks read the payload; the production variant declares all three disks.
-    lowered = lower(replace(recipe, items=(*recipe.items, *repositories)))
+    lowered = lower(replace(recipe, items=(*recipe.items, *repositories, Backports())))
     backend = _Capturing(LocalLinuxBackend())
     out = tmp_path / "build"
     try:
