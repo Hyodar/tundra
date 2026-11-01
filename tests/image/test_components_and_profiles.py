@@ -294,6 +294,7 @@ def test_a_profile_edits_a_service_by_its_public_keywords(
         ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
         ("db", {"readiness": None}, "requires 'db.service', which declares no readiness"),
         ("db", None, "requires 'db.service', which the profile removes"),
+        ("ghost", {"user": "www"}, "edits Service(ghost.service), which it does not inherit"),
     ],
 )
 def test_what_a_service_edit_still_refuses(
@@ -306,13 +307,15 @@ def test_what_a_service_edit_still_refuses(
     )
     app = Service("app", ["/usr/bin/app"])
     built = Service("bin", [GoBinary("bin", Local("."))])
-    ref = {"app": app.ref, "bin": built.ref, "db": db.ref, "vol": vol.ref}[target]
-    with pytest.raises(ValidationError) as caught:
-        change = ref.remove() if fields is None else ref.edit(**fields)
-        recipe_of(
-            Image("x", services=[db, api, vol, app], profiles={"s": Profile(changes=[change])})
-        )
-    assert expected in str(caught.value)
+    ghost = Service("ghost", ["/usr/bin/ghost"])
+    refs = {"app": app.ref, "bin": built.ref, "db": db.ref, "vol": vol.ref, "ghost": ghost.ref}
+    try:
+        change = refs[target].remove() if fields is None else refs[target].edit(**fields)
+        image = Image("x", services=[db, api, vol, app], profiles={"s": Profile(changes=[change])})
+        found = [d.message for d in plan(image, "s").lint() if d.severity == "error"]
+    except ValidationError as caught:
+        found = [str(caught)]
+    assert any(expected in message for message in found), found
 
 
 def test_a_profile_that_is_not_production_is_marked() -> None:

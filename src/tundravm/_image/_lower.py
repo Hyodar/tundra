@@ -450,6 +450,9 @@ class _Lowering:
                 unit = _removed_unit(change, units) if isinstance(change, Remove) else None
                 if isinstance(change, Edit) and isinstance(change.ref.value, Service):
                     unit = change.ref.value.unit_name
+                    if unit not in units:
+                        found.append(self.missing_edit(change))
+                        continue
                 if unit is not None:
                     if unit in gone or (isinstance(change, Remove) and unit in causes):
                         raise ValidationError(
@@ -503,6 +506,20 @@ class _Lowering:
                 hint="Drop it, or set a keyword whose value differs.",
             )
         world[value.unit_name] = after
+
+    def missing_edit(self, change: Edit) -> dm.Edit:
+        """The internal edit of a service *change*'s profile does not inherit, which the
+        resolver reports as ``edit-missing``, as it does for a file or a package."""
+        value = change.ref.value
+        assert isinstance(value, Service)
+        before, after = (next(self.units(item)) for item in (value, change.edited))
+        keys = dm.key_fields(type(after).__name__)
+        fields = _differing(before, after) or {
+            item.name: getattr(after, item.name)
+            for item in dataclass_fields(after)
+            if item.init and item.name not in keys
+        }
+        return dm.Edit(change.ref.target, fields)
 
     def regenerate(
         self,
