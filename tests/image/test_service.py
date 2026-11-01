@@ -63,6 +63,31 @@ def test_an_http_probe_polls_the_url_and_brings_curl_in() -> None:
     assert planned.packages["curl"] == "runtime"
 
 
+@pytest.mark.parametrize(
+    ("spans", "sleeps"),
+    [
+        ({}, "sleep 0.5;"),
+        ({"interval": "2s", "timeout": "10min"}, "sleep 2;"),
+        ({"interval": "1min 30s"}, "sleep 90;"),
+        ({"interval": "250ms"}, "sleep 0.25;"),
+        ({"interval": "0"}, "interval="),
+        ({"interval": "0.5x"}, "interval="),
+        ({"timeout": "potato"}, "timeout="),
+        ({"timeout": "infinity"}, "timeout="),
+    ],
+)
+def test_a_probe_polls_every_interval_until_its_timeout_both_systemd_spans(
+    spans: dict[str, str], sleeps: str
+) -> None:
+    for probe in (lambda: TcpProbe(8080, **spans), lambda: HttpProbe("http://127.0.0.1", **spans)):
+        try:
+            loop = probe().command()[-1]
+        except ValidationError as exc:
+            assert sleeps in str(exc) and "\nfix: " in str(exc), exc
+        else:
+            assert sleeps in loop, loop
+
+
 def test_notify_needs_no_probe_and_the_dependent_waits_for_the_unit() -> None:
     worker = Service("worker", ["/usr/bin/worker"], readiness=Notify())
     planned = _plan(worker, Service("app", ["/usr/bin/app"], requires=[worker.ready]))

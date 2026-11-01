@@ -541,10 +541,10 @@ The sandbox a generated unit runs in: one field per knob, and reviewed presets.
 *dataclass*
 
 ```python
-HttpProbe(url: str, *, timeout: str = '90s', interval: str = '0.5')
+HttpProbe(url: str, *, timeout: str = '90s', interval: str = '500ms')
 ```
 
-Readiness: the service answers *url* with a 2xx, polled until *timeout*.
+Readiness: the service answers *url* with a 2xx, polled every *interval* until *timeout*, both systemd time spans.
 
 | Member | Does |
 |---|---|
@@ -635,11 +635,11 @@ TcpProbe(
     *,
     host: str = '127.0.0.1',
     timeout: str = '90s',
-    interval: str = '0.5',
+    interval: str = '500ms',
 )
 ```
 
-Readiness: *host* accepts a TCP connection on *port*, polled until *timeout*.
+Readiness: *host* accepts a TCP connection on *port*, polled every *interval* until *timeout*, both systemd time spans.
 
 | Member | Does |
 |---|---|

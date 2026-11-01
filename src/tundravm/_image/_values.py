@@ -997,7 +997,8 @@ class Shutdown(Keywords):
 
 @dataclass(frozen=True, slots=True)
 class HttpProbe(Keywords):
-    """Readiness: the service answers *url* with a 2xx, polled until *timeout*.
+    """Readiness: the service answers *url* with a 2xx, polled every *interval* until
+    *timeout*, both systemd time spans.
 
     The probe is a bounded unit of its own, so ``requires=[other.ready]`` means the
     dependency answered, not that its binary was exec'd. It needs ``curl``, which an
@@ -1007,7 +1008,7 @@ class HttpProbe(Keywords):
     url: str
     _: KW_ONLY
     timeout: str = "90s"
-    interval: str = "0.5"
+    interval: str = "500ms"
 
     def __post_init__(self) -> None:
         if not isinstance(self.url, str) or not self.url.startswith(("http://", "https://")):
@@ -1028,14 +1029,15 @@ class HttpProbe(Keywords):
         """The argv of the probe unit."""
         loop = (
             f"until curl -fsS --max-time 5 '{self.url}' >/dev/null 2>&1; "
-            f"do sleep {self.interval}; done"
+            f"do sleep {_sleep(self.interval)}; done"
         )
         return ("/bin/bash", "-c", loop)
 
 
 @dataclass(frozen=True, slots=True)
 class TcpProbe(Keywords):
-    """Readiness: *host* accepts a TCP connection on *port*, polled until *timeout*.
+    """Readiness: *host* accepts a TCP connection on *port*, polled every *interval* until
+    *timeout*, both systemd time spans.
 
     The probe is a bounded unit of its own and uses bash's ``/dev/tcp``, which Debian
     always has: it installs nothing.
@@ -1045,7 +1047,7 @@ class TcpProbe(Keywords):
     _: KW_ONLY
     host: str = "127.0.0.1"
     timeout: str = "90s"
-    interval: str = "0.5"
+    interval: str = "500ms"
 
     def __post_init__(self) -> None:
         _check_port(self, self.port)
@@ -1061,7 +1063,7 @@ class TcpProbe(Keywords):
         """The argv of the probe unit."""
         loop = (
             f"until (exec 3<>/dev/tcp/{self.host}/{self.port}) 2>/dev/null; "
-            f"do sleep {self.interval}; done"
+            f"do sleep {_sleep(self.interval)}; done"
         )
         return ("/bin/bash", "-c", loop)
 
@@ -1079,19 +1081,49 @@ class Notify(Keywords):
 type Readiness = HttpProbe | TcpProbe | Notify
 
 
+_SPAN = re.compile(r"(?:\s*\d+(?:\.\d*)?\s*[A-Za-z\u00b5\u03bc]*)+\s*")
+_SPAN_PART = re.compile(r"(\d+(?:\.\d*)?)\s*([A-Za-z\u00b5\u03bc]*)")
+_SPAN_UNITS = {
+    **dict.fromkeys(("ns", "nsec"), 1e-9),
+    **dict.fromkeys(("us", "usec", "\u00b5s", "\u03bcs"), 1e-6),
+    **dict.fromkeys(("ms", "msec"), 1e-3),
+    **dict.fromkeys(("", "s", "sec", "second", "seconds"), 1.0),
+    **dict.fromkeys(("m", "min", "minute", "minutes"), 60.0),
+    **dict.fromkeys(("h", "hr", "hour", "hours"), 3600.0),
+    **dict.fromkeys(("d", "day", "days"), 86400.0),
+    **dict.fromkeys(("w", "week", "weeks"), 604800.0),
+    **dict.fromkeys(("M", "month", "months"), 2629800.0),
+    **dict.fromkeys(("y", "year", "years"), 31557600.0),
+}
+
+
+def _seconds(span: object) -> float | None:
+    """*span*, a systemd time span (``"500ms"``, ``"1min 30s"``), in seconds, or ``None``."""
+    if not isinstance(span, str) or not _SPAN.fullmatch(span):
+        return None
+    total = 0.0
+    for number, unit in _SPAN_PART.findall(span):
+        if unit not in _SPAN_UNITS:
+            return None
+        total += float(number) * _SPAN_UNITS[unit]
+    return total
+
+
+def _sleep(span: str) -> str:
+    """*span* as the seconds ``sleep`` takes."""
+    return f"{_seconds(span):.6f}".rstrip("0").rstrip(".")
+
+
 def _check_span(owner: object, timeout: object, interval: object) -> None:
-    if not isinstance(timeout, str) or not timeout:
-        raise _fail(
-            owner,
-            f"timeout= {timeout!r} is not a systemd time span.",
-            hint=f'{type(owner).__name__}(..., timeout="90s")',
-        )
-    if not isinstance(interval, str) or not re.fullmatch(r"\d+(\.\d+)?", interval):
-        raise _fail(
-            owner,
-            f"interval= {interval!r} is not a number of seconds.",
-            hint=f'{type(owner).__name__}(..., interval="0.5")',
-        )
+    for keyword, value, example in (("timeout", timeout, "90s"), ("interval", interval, "500ms")):
+        seconds = _seconds(value)
+        if seconds is None or seconds <= 0:
+            raise _fail(
+                owner,
+                f"{keyword}= {value!r} is not a positive systemd time span.",
+                hint=f'{type(owner).__name__}(..., {keyword}="{example}"): a span such as '
+                "500ms, 30s, 10min or 1h.",
+            )
 
 
 @dataclass(frozen=True, slots=True)
