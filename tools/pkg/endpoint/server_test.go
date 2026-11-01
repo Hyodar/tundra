@@ -1,0 +1,258 @@
+package endpoint
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+type fakeQuoter struct {
+	userData []byte
+	nonce    []byte
+}
+
+func (q *fakeQuoter) Issue(_ context.Context, userData, nonce []byte) (string, error) {
+	q.userData, q.nonce = userData, nonce
+	doc, _ := json.Marshal(map[string]any{"platform": "simulator", "user_data": userData, "nonce": nonce})
+	return hex.EncodeToString(doc), nil
+}
+
+func (q *fakeQuoter) Metadata(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"issuerType":"simulator"}`), nil
+}
+
+type fixture struct {
+	t      *testing.T
+	dir    string
+	addr   string
+	quoter *fakeQuoter
+	server *Server
+}
+
+func start(t *testing.T) *fixture {
+	t.Helper()
+	dir := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(dir, "ssh_host_ed25519_key.pub"), []byte("ssh-ed25519 AAAAhost root@guest\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(dir, "instance-key.pub"), []byte("02"+strings.Repeat("ab", 32)+"\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(dir, "mode"), []byte("simulated\n"), 0o644))
+	must(t, syscall.Mkfifo(filepath.Join(dir, "data.fifo"), 0o600))
+	cfg := &Config{
+		Listen:      "127.0.0.1:0",
+		QuoteSocket: "/nonexistent",
+		SSHHostKeys: filepath.Join(dir, "ssh_host_*_key.pub"),
+		InstanceKey: filepath.Join(dir, "instance-key.pub"),
+		ModeFile:    filepath.Join(dir, "mode"),
+		Credentials: []Credential{{Name: "jwt", Path: filepath.Join(dir, "jwt")}},
+		Volumes:     []Volume{{Name: "data", Pipe: filepath.Join(dir, "data.fifo")}},
+		SSH:         &SSHConfig{Dir: filepath.Join(dir, "ssh")},
+	}
+	must(t, cfg.Validate())
+	quoter := &fakeQuoter{}
+	server, err := New(cfg, quoter, nil)
+	must(t, err)
+	listener, err := net.Listen("tcp", cfg.Listen)
+	must(t, err)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { listener.Close() })
+	return &fixture{t: t, dir: dir, addr: listener.Addr().String(), quoter: quoter, server: server}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// session is one client TLS connection, kept alive across requests.
+func (f *fixture) session() *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConnsPerHost: 1,
+		MaxConnsPerHost:     1,
+	}, Timeout: 5 * time.Second}
+}
+
+func (f *fixture) evidence(client *http.Client, nonce string) (Evidence, *tls.ConnectionState) {
+	resp, err := client.Get(fmt.Sprintf("https://%s/evidence?nonce=%s", f.addr, nonce))
+	must(f.t, err)
+	defer resp.Body.Close()
+	var found Evidence
+	must(f.t, json.NewDecoder(resp.Body).Decode(&found))
+	return found, resp.TLS
+}
+
+func (f *fixture) post(client *http.Client, path string, body any) (int, string) {
+	data, _ := json.Marshal(body)
+	resp, err := client.Post(fmt.Sprintf("https://%s%s", f.addr, path), "application/json", bytes.NewReader(data))
+	must(f.t, err)
+	defer resp.Body.Close()
+	text, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(text)
+}
+
+func nonce(n byte) string { return hex.EncodeToString(bytes.Repeat([]byte{n}, 32)) }
+
+func credentials(n string, values map[string]string) map[string]any {
+	encoded := map[string]string{}
+	for name, value := range values {
+		encoded[name] = base64.StdEncoding.EncodeToString([]byte(value))
+	}
+	return map[string]any{"nonce": n, "credentials": encoded}
+}
+
+func TestBindingSeparatesItsParts(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []byte
+	}{
+		{"nonce against key", Binding([]byte("ab"), []byte("c"), nil, nil), Binding([]byte("a"), []byte("bc"), nil, nil)},
+		{"host keys", Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 A"}, nil), Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 B"}, nil)},
+		{"instance key", Binding([]byte("n"), []byte("k"), nil, []byte{2}), Binding([]byte("n"), []byte("k"), nil, []byte{3})},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if len(c.a) != 64 || bytes.Equal(c.a, c.b) {
+				t.Fatalf("binding %x does not separate from %x", c.a, c.b)
+			}
+		})
+	}
+}
+
+func TestEvidenceBindsTheSessionKey(t *testing.T) {
+	f := start(t)
+	found, state := f.evidence(f.session(), nonce(1))
+	peer, err := x509.MarshalPKIXPublicKey(state.PeerCertificates[0].PublicKey)
+	must(t, err)
+	instance, _ := hex.DecodeString("02" + strings.Repeat("ab", 32))
+	want := Binding(bytes.Repeat([]byte{1}, 32), peer, []string{"ssh-ed25519 AAAAhost"}, instance)
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"user data is the binding", found.UserData == hex.EncodeToString(want)},
+		{"the issuer was asked for it", bytes.Equal(f.quoter.userData, want)},
+		{"the nonce comes back", found.Nonce == nonce(1)},
+		{"the key is the session's", found.TLSPublicKey == base64.StdEncoding.EncodeToString(peer)},
+		{"the mode is the gate's", found.Mode == "simulated"},
+		{"simulator metadata is attached", string(found.Metadata) != ""},
+		{"accepts names the credentials", len(found.Accepts.Credentials) == 1 && found.Accepts.SSHKey},
+	}
+	for _, c := range checks {
+		if !c.ok {
+			t.Errorf("%s: %+v", c.name, found)
+		}
+	}
+}
+
+func TestWritesAreBoundToTheSession(t *testing.T) {
+	cases := []struct {
+		name   string
+		run    func(f *fixture) (int, string)
+		status int
+	}{
+		{"delivery on the attested session", func(f *fixture) (int, string) {
+			c := f.session()
+			f.evidence(c, nonce(2))
+			return f.post(c, "/credentials", credentials(nonce(2), map[string]string{"jwt": "v"}))
+		}, http.StatusOK},
+		{"relay: evidence on one session, delivery on another", func(f *fixture) (int, string) {
+			f.evidence(f.session(), nonce(3))
+			return f.post(f.session(), "/credentials", credentials(nonce(3), map[string]string{"jwt": "v"}))
+		}, http.StatusForbidden},
+		{"replay: a nonce used once already", func(f *fixture) (int, string) {
+			c := f.session()
+			f.evidence(c, nonce(4))
+			f.post(c, "/ssh-key", map[string]string{"nonce": nonce(4), "key": "ssh-ed25519 AAAAop"})
+			return f.post(c, "/credentials", credentials(nonce(4), map[string]string{"jwt": "v"}))
+		}, http.StatusForbidden},
+		{"a name the image does not declare", func(f *fixture) (int, string) {
+			c := f.session()
+			f.evidence(c, nonce(5))
+			return f.post(c, "/credentials", credentials(nonce(5), map[string]string{"other": "v"}))
+		}, http.StatusNotFound},
+		{"one delivery per name per boot", func(f *fixture) (int, string) {
+			c := f.session()
+			f.evidence(c, nonce(6))
+			f.post(c, "/credentials", credentials(nonce(6), map[string]string{"jwt": "v"}))
+			f.evidence(c, nonce(7))
+			return f.post(c, "/credentials", credentials(nonce(7), map[string]string{"jwt": "w"}))
+		}, http.StatusConflict},
+		{"unlock with nothing reading the FIFO", func(f *fixture) (int, string) {
+			c := f.session()
+			f.evidence(c, nonce(8))
+			return f.post(c, "/unlock", map[string]string{"nonce": nonce(8), "volume": "data", "passphrase": "cA=="})
+		}, http.StatusConflict},
+		{"a second operator SSH key", func(f *fixture) (int, string) {
+			c := f.session()
+			f.evidence(c, nonce(9))
+			f.post(c, "/ssh-key", map[string]string{"nonce": nonce(9), "key": "ssh-ed25519 AAAAop"})
+			f.evidence(c, nonce(10))
+			return f.post(c, "/ssh-key", map[string]string{"nonce": nonce(10), "key": "ssh-ed25519 AAAAother"})
+		}, http.StatusConflict},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := start(t)
+			if status, body := c.run(f); status != c.status {
+				t.Fatalf("status %d, want %d: %s", status, c.status, body)
+			}
+		})
+	}
+}
+
+func TestDeliveredValuesLandWhereTheConfigSays(t *testing.T) {
+	f := start(t)
+	c := f.session()
+	f.evidence(c, nonce(11))
+	if status, body := f.post(c, "/credentials", credentials(nonce(11), map[string]string{"jwt": "token"})); status != http.StatusOK {
+		t.Fatalf("delivery: %d %s", status, body)
+	}
+	info, err := os.Stat(filepath.Join(f.dir, "jwt"))
+	must(t, err)
+	data, _ := os.ReadFile(filepath.Join(f.dir, "jwt"))
+	if string(data) != "token" || info.Mode().Perm() != 0o600 {
+		t.Fatalf("jwt is %q mode %v", data, info.Mode())
+	}
+	read := make(chan []byte, 1)
+	go func() {
+		got, _ := os.ReadFile(filepath.Join(f.dir, "data.fifo"))
+		read <- got
+	}()
+	f.evidence(c, nonce(12))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		status, body := f.post(c, "/unlock", map[string]string{"nonce": nonce(12), "volume": "data", "passphrase": base64.StdEncoding.EncodeToString([]byte("pass"))})
+		if status == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("unlock: %d %s", status, body)
+		}
+		f.evidence(c, nonce(12))
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := <-read; string(got) != "pass" {
+		t.Fatalf("the FIFO read %q", got)
+	}
+	f.evidence(c, nonce(13))
+	f.post(c, "/ssh-key", map[string]string{"nonce": nonce(13), "key": "ssh-ed25519 AAAAop op@host"})
+	keys, _ := os.ReadFile(filepath.Join(f.dir, "ssh", "authorized_keys"))
+	if string(keys) != keyRestrictions+" ssh-ed25519 AAAAop\n" {
+		t.Fatalf("authorized_keys is %q", keys)
+	}
+}
