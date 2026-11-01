@@ -121,6 +121,7 @@ class FakeMkosi:
             printed = json.dumps(self.summary if self.summary is not None else _summary(call))
         elif call.verb == "build":
             self._build(call)
+            self._cache(call)
         return MkosiResult(argv=tuple(argv), stdout=printed, log=log)
 
     def needs_sudo(self) -> bool:
@@ -139,6 +140,29 @@ class FakeMkosi:
             (directory / name).write_bytes(_output(name, call.options("--profile")))
             if name.endswith(".efi") and self.uki_size is not None:
                 os.truncate(directory / name, self.uki_size)
+
+    def _cache(self, call: FakeCall) -> None:
+        """What a build with ``--incremental=yes`` leaves in its ``--cache-directory``: per
+        image of the summary a ``<key>.cache`` tree and a ``<key>.manifest``, written on the
+        first build under a key (``--cache-key``, its ``&d``, ``&r``, ``&a`` and ``&I``
+        expanded) and left alone after, as mkosi reuses what the manifest records."""
+        cache = call.option("--cache-directory")
+        if call.option("--incremental") != "yes" or cache is None:
+            return
+        key = call.option("--cache-key") or "&d~&r~&a~&I"
+        summary = self.summary if self.summary is not None else _summary(call)
+        for image in summary.get("Images", ()):
+            name = (
+                key.replace("&d", str(image.get("Distribution") or ""))
+                .replace("&r", str(image.get("Release") or ""))
+                .replace("&a", str(image.get("Architecture") or ""))
+                .replace("&I", str(image.get("Image") or "main"))
+            )
+            manifest = Path(cache) / f"{name}.manifest"
+            if manifest.is_file():
+                continue
+            (Path(cache) / f"{name}.cache").mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({"packages": image.get("Packages", [])}, indent=4))
 
     def install(self, setattr: Callable[[object, str, object], None]) -> FakeMkosi:
         """Put this fake in place of the adapter's ``invoke`` and ``needs_sudo`` using
@@ -246,6 +270,7 @@ def _summary(call: FakeCall) -> dict[str, Any]:
             "Profiles": profiles,
             "Distribution": "debian",
             "Release": "trixie",
+            "Architecture": "x86-64",
             "OutputDirectory": output,
         }
 

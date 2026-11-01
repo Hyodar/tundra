@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,57 @@ def test_local_arguments_are_absolute_paths_only(
         f"--output-directory={build / 'default' / 'output'}",
         f"--workspace-directory={build / '.mkosi' / 'workspace'}",
         f"--cache-directory={build / '.mkosi' / 'cache'}",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("cache_key", "incremental"),
+    [(None, False), ("dev-0123456789abcdef", True)],
+    ids=["production", "development"],
+)
+def test_only_a_keyed_request_builds_incrementally_and_from_its_own_cache_directory(
+    tmp_path: Path, cache_key: str | None, incremental: bool
+) -> None:
+    """A production request names no key: mkosi's cache directory is ``.mkosi/cache``
+    (repository metadata) and ``Incremental=`` stays off; a development request builds
+    with ``--incremental=yes`` under ``.mkosi/incremental`` and mkosi's cache key suffixed
+    with tundravm's."""
+    request = replace(_request(tmp_path), cache_key=cache_key)
+
+    argv = LocalLinuxBackend().arguments(request)
+
+    state = tmp_path / "build" / ".mkosi"
+    assert f"--cache-directory={state / ('incremental' if incremental else 'cache')}" in argv
+    assert ("--incremental=yes" in argv) is incremental
+    assert (f"--cache-key=&d~&r~&a~&I~{cache_key}" in argv) is incremental
+    assert not any(arg.startswith("--cache-key") for arg in argv) or incremental
+
+
+@linux_only
+def test_a_keyed_build_records_whether_the_cache_was_stored_or_reused(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first build under a key stores every image's base tree (mkosi writes the cache
+    manifests), the next reuses them (the manifests stay as they were); a request without
+    a key records nothing."""
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
+    keyed = replace(_request(tmp_path), cache_key="dev-0123456789abcdef")
+    backend = LocalLinuxBackend()
+
+    first = backend.execute(keyed).profiles["default"].cache
+    second = backend.execute(keyed).profiles["default"].cache
+    plain = backend.execute(replace(keyed, cache_key=None)).profiles["default"].cache
+
+    directory = tmp_path / "build" / ".mkosi" / "incremental"
+    assert first is not None and second is not None and plain is None
+    assert (first.directory, first.key) == (directory, "dev-0123456789abcdef")
+    assert first.images == {"payload": "saved", "main": "saved"}
+    assert second.images == {"payload": "hit", "main": "hit"}
+    assert sorted(path.name for path in directory.iterdir()) == [
+        "debian~trixie~x86-64~main~dev-0123456789abcdef.cache",
+        "debian~trixie~x86-64~main~dev-0123456789abcdef.manifest",
+        "debian~trixie~x86-64~payload~dev-0123456789abcdef.cache",
+        "debian~trixie~x86-64~payload~dev-0123456789abcdef.manifest",
     ]
 
 
@@ -250,7 +302,12 @@ def test_local_execute_uses_sudo_without_user_namespaces_and_reclaims_the_output
     assert tuple(command[separator + 1 :]) == fake_mkosi.calls[-1].argv
     assert fake_mkosi.verbs() == ["summary", "build"]
     assert result.profiles["default"].artifacts["qemu"].path.name == "qemu.raw"
-    owned = [build / "default" / "output", build / ".mkosi", build / "default" / "mkosi.log"]
+    owned = [
+        build / "default" / "output",
+        build / ".mkosi" / "workspace",
+        build / ".mkosi" / "cache",
+        build / "default" / "mkosi.log",
+    ]
     assert chowned == [["sudo", "chown", "-R", "1000:1001", *map(str, owned)]]
     assert any("sudo" in text for _, text in notices)
 

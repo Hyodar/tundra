@@ -36,10 +36,15 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._reporting import format_size
 from tundravm.backends.base import (
     BOOT_PAYLOAD_NAME,
+    INCREMENTAL_DIRNAME,
     MountSpec,
     Requirement,
     build_sources_args,
+    cache_manifests,
+    cache_stamp,
+    cache_use,
     collect_artifacts,
+    incremental_args,
     mkosi_project,
     run_streaming,
 )
@@ -53,6 +58,10 @@ if TYPE_CHECKING:
 
 STATE_DIRNAME = ".mkosi"
 """Build-directory subdirectory mkosi runs in: its workspace, cache and tools tree."""
+
+CACHE_DIRNAME = "cache"
+"""``<build>/.mkosi/cache``: a production build's mkosi cache directory, repository metadata
+only; a development build's is the sibling :data:`~tundravm.backends.base.INCREMENTAL_DIRNAME`."""
 
 LOG_FILENAME = "mkosi.log"
 """What mkosi logged for a variant's build, beside its ``output/``."""
@@ -131,11 +140,14 @@ class LocalLinuxBackend:
         profile_dir = build_dir / request.profile
         output_dir = profile_dir / "output"
         state_dir = build_dir / STATE_DIRNAME
-        for path in (output_dir, state_dir / "workspace", state_dir / "cache"):
+        cache_dir = self.cache_dir(request)
+        for path in (output_dir, state_dir / "workspace", cache_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         argv = self.arguments(request)
         sudo = self.uses_sudo()
+        manifests: dict[str, Path] = {}
+        before: dict[str, tuple[int, int] | None] = {}
         try:
             resolved = self.summarize(request, argv)
             self.tools_tree = ToolsTree.from_summary(resolved.tools)
@@ -144,6 +156,9 @@ class LocalLinuxBackend:
                 + "\n",
                 encoding="utf-8",
             )
+            if request.cache_key is not None:
+                manifests = cache_manifests(cache_dir, resolved.images, request.cache_key)
+                before = {name: cache_stamp(path) for name, path in manifests.items()}
             if sudo:
                 request.notice(
                     "info",
@@ -166,19 +181,37 @@ class LocalLinuxBackend:
                 raise overflow from exc
         finally:
             if sudo:
-                self._reclaim((output_dir, state_dir, profile_dir / LOG_FILENAME), request)
+                reclaimed = (
+                    output_dir,
+                    state_dir / "workspace",
+                    state_dir / CACHE_DIRNAME,
+                    profile_dir / LOG_FILENAME,
+                )
+                self._reclaim(reclaimed, request)
 
         profile_result = ProfileBuildResult(profile=request.profile)
         profile_result.artifacts = collect_artifacts(output_dir, request.output_targets)
+        if request.cache_key is not None:
+            profile_result.cache = cache_use(cache_dir, request.cache_key, manifests, before)
         return BakeResult(profiles={request.profile: profile_result})
+
+    def cache_dir(self, request: BakeRequest) -> Path:
+        """mkosi's cache directory for *request*: ``<build_dir>/.mkosi/cache`` (repository
+        metadata) for a build from scratch, ``<build_dir>/.mkosi/incremental`` (the cached
+        base trees too) for an incremental one. A production build's request names no
+        ``cache_key``, so the incremental directory is never on its command line; under sudo
+        it also stays root-owned, as mkosi reuses a cached tree only from its own uid."""
+        state_dir = request.build_dir.resolve() / STATE_DIRNAME
+        return state_dir / (CACHE_DIRNAME if request.cache_key is None else INCREMENTAL_DIRNAME)
 
     def arguments(self, request: BakeRequest) -> list[str]:
         """mkosi's arguments for *request*, before the verb; every path in them is absolute.
 
         Only paths and the selection: the tree carries every mkosi setting. mkosi runs in
         ``<build_dir>/.mkosi`` (where ``ToolsTree=default`` puts the tools tree, so later
-        bakes reuse it), with its workspace and cache there too; the output goes to
-        ``<build_dir>/<variant>/output``. Host-fetched sources (``request.sources_dir``)
+        bakes reuse it), with its workspace and cache (:meth:`cache_dir`) there too; the
+        output goes to ``<build_dir>/<variant>/output``. A request with a ``cache_key`` adds
+        :func:`incremental_args`. Host-fetched sources (``request.sources_dir``)
         are mounted with :func:`build_sources_args`; ``request.mkosi_args`` selects the
         variant, then the backend's own ``mkosi_args`` follow.
         """
@@ -190,8 +223,10 @@ class LocalLinuxBackend:
             "--force",
             f"--output-directory={build_dir / request.profile / 'output'}",
             f"--workspace-directory={state_dir / 'workspace'}",
-            f"--cache-directory={state_dir / 'cache'}",
+            f"--cache-directory={self.cache_dir(request)}",
         ]
+        if request.cache_key is not None:
+            argv.extend(incremental_args(request.cache_key))
         if request.sources_dir is not None:
             argv.extend(
                 build_sources_args(

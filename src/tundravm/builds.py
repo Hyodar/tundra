@@ -61,7 +61,7 @@ from ._source import (
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
 from .compiler.emit_mkosi import KERNEL_RECORDS as emitted_kernel_records
-from .compiler.emit_mkosi import esp_bytes
+from .compiler.emit_mkosi import PAYLOAD, esp_bytes
 from .declarative._compile import emit, mkosi_argv
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
@@ -83,7 +83,7 @@ from .errors import (
     TdxError,
     ValidationError,
 )
-from .models import OutputTarget
+from .models import CacheUse, OutputTarget
 from .project import lock_command
 
 Kind = Literal["production", "development"]
@@ -209,6 +209,9 @@ class Outcome:
     lock_written: bool
     reproduction: Mapping[str, Any] | None = None
     repinned: tuple[str, ...] = ()
+    cache: Mapping[str, Any] | None = None
+    """What an incremental build did with mkosi's cache, as ``observations.json`` records
+    it (:func:`cache_record`); ``None`` for a build from scratch."""
 
     @property
     def reproducible(self) -> bool | None:
@@ -317,6 +320,7 @@ def build(
     locked, written, repinned = _current_lock(img, scoped, profile, lockfile, offline=offline)
     project_sha256 = mf.sha256_file(lockfile)
     kind = kind_of(scoped, profile)
+    incremental = kind == "development"
     image_root = root / scoped.image_id
     work = image_root / WORK
     started = time.monotonic()
@@ -328,7 +332,7 @@ def build(
         if clean_cache and work.exists():
             _remove(work)
         _reset(work)
-        _, artifacts = bake_image(
+        baked, artifacts = bake_image(
             scoped,
             [profile],
             locked=locked,
@@ -337,6 +341,7 @@ def build(
             reporter=recorder,
             lock_source=frozen,
             offline=offline,
+            incremental=incremental,
         )
         measuring = time.monotonic()
         measurements = _measurements(artifacts)
@@ -344,7 +349,15 @@ def build(
         reproduction = None
         if reproduce:
             reproduction = _reproduce(
-                scoped, profile, locked, frozen, image_root, artifacts, offline, reporter
+                scoped,
+                profile,
+                locked,
+                frozen,
+                image_root,
+                artifacts,
+                offline,
+                reporter,
+                incremental=incremental,
             )
         incoming = Path(tempfile.mkdtemp(prefix=".incoming-", dir=_mkdir(image_root / kind)))
         try:
@@ -360,11 +373,13 @@ def build(
                 measurements,
                 incoming,
                 ports,
+                incremental=incremental,
             )
             if sign_key is not None:
                 (incoming / mf.SIGNATURE).write_bytes(
                     mf.sign(incoming, sign_key, runner=sign_runner)
                 )
+            cache = cache_record(baked.profiles[profile].cache, scoped, payload["packages"])
             observations = {
                 "schema": mf.OBSERVATIONS_SCHEMA,
                 "id": payload["id"],
@@ -376,6 +391,7 @@ def build(
                 "reproduction": reproduction,
                 "phases": recorder.durations(),
                 "sources": recorder.sources,
+                "cache": cache,
             }
             mf.write_canonical(incoming / mf.OBSERVATIONS, observations)
             _freeze(incoming)
@@ -385,7 +401,45 @@ def build(
             if incoming.exists():
                 _remove(incoming)
         _point(image_root / LATEST[kind], final)
-    return Outcome(Build.open(final), created, written, reproduction, repinned)
+    return Outcome(Build.open(final), created, written, reproduction, repinned, cache)
+
+
+def cache_record(
+    cache: CacheUse | None, img: Lowered, packages: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """What ``observations.json`` records of an incremental build's cache use: the
+    directory, tundravm's key, each image's state, the payload's as ``packages`` (``hit``,
+    ``saved`` or ``none``) and the base it stands for (``Debian 20261018T082309Z, 212
+    packages``); ``None`` for a build from scratch, or one whose backend cannot see the
+    cache (Lima)."""
+    if cache is None:
+        return None
+    distribution, _, release = img.base.partition("/")
+    base = f"{distribution.capitalize()} {img.snapshot or release}"
+    count = packages.get("count")
+    if isinstance(count, int):
+        base += f", {count} packages"
+    return {
+        "directory": str(cache.directory),
+        "key": cache.key,
+        "images": dict(cache.images),
+        "packages": cache.images.get(PAYLOAD, "none"),
+        "base": base,
+    }
+
+
+def cache_summary(record: Mapping[str, Any]) -> tuple[str, str] | None:
+    """``(verb, what)`` of a cache *record* (:func:`cache_record`): ``("cached", "packages
+    (Debian …, 212 packages)")`` when the build reused the payload's cached base tree,
+    ``("caching", "packages (…) for the next build")`` when it built and stored it, ``None``
+    when mkosi kept none."""
+    state = record.get("packages")
+    what = f"packages ({record.get('base')})"
+    if state == "hit":
+        return "cached", what
+    if state == "saved":
+        return "caching", f"{what} for the next build"
+    return None
 
 
 PHASES = {"fetch": "checkouts", "prefetch": "prefetch", "build": "mkosi"}
@@ -552,8 +606,11 @@ def _reproduce(
     first: Sequence[Artifact],
     offline: bool,
     reporter: Reporter | None,
+    *,
+    incremental: bool = False,
 ) -> dict[str, Any]:
-    """Build again in ``.reproduce/`` (its own sources, state and tree) and compare."""
+    """Build again in ``.reproduce/`` (its own sources, state and tree, so an incremental
+    build's second run starts from an empty cache) and compare."""
     second_root = image_root / REPRODUCE
     if second_root.exists():
         _remove(second_root)
@@ -568,6 +625,7 @@ def _reproduce(
             reporter=reporter,
             lock_source=lockfile,
             offline=offline,
+            incremental=incremental,
         )
     except KeyboardInterrupt:
         raise
@@ -625,8 +683,12 @@ def _assemble(
     measurements: Mapping[str, Any],
     out: Path,
     ports: Sequence[int] = (),
+    *,
+    incremental: bool = False,
 ) -> dict[str, Any]:
-    """Fill *out* from the workspace *work*; return the manifest it wrote."""
+    """Fill *out* from the workspace *work*; return the manifest it wrote. *incremental*
+    is recorded as the manifest's ``incremental``: whether mkosi could build it from a
+    cached base tree (a development build) or built it from the snapshot (production)."""
     unchecked: list[str] = []
     by_target = {artifact.target: artifact for artifact in artifacts}
     missing_targets = [t for t in targets if t not in by_target]
@@ -701,6 +763,7 @@ def _assemble(
         "image": img.image_id,
         "profile": profile,
         "kind": kind,
+        "incremental": incremental,
         "targets": list(targets),
         "ports": sorted(set(ports)),
         "rootfs": img.mkosi.root,
@@ -1135,6 +1198,8 @@ __all__ = [
     "Outcome",
     "build",
     "builds_of",
+    "cache_record",
+    "cache_summary",
     "choose_profile",
     "choose_targets",
     "export_tree",

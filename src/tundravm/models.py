@@ -741,6 +741,10 @@ class BakeRequest:
     (``emit_mkosi.esp_bytes``)."""
     uki_max_size: str | None = None
     """``Mkosi(uki_max_size=)``: the initramfs UKI's ceiling."""
+    cache_key: str | None = None
+    """What makes the build incremental: the key tundravm appends to mkosi's ``CacheKey=``
+    (:func:`~tundravm.declarative._bake.incremental_key`), under which mkosi keeps the base
+    tree after package install; ``None`` builds from scratch, as every production build does."""
 
     def notice(self, level: str, message: str) -> None:
         """Pass *message* to ``on_notice``, if set."""
@@ -763,11 +767,31 @@ class ArtifactRef:
     """The sha256 of ``boot_payload`` at bake time."""
 
 
+CacheState = Literal["hit", "saved", "none"]
+"""What one image of the tree did with mkosi's incremental cache: reused its cached base
+tree (``hit``), built and stored it (``saved``), or neither (``none``: mkosi wrote no cache
+entry, as a stand-in does)."""
+
+
+@dataclass(frozen=True, slots=True)
+class CacheUse:
+    """How an incremental build used mkosi's cache: the *directory* it lives in, the *key*
+    tundravm appended to mkosi's ``CacheKey=`` and, per image of the tree (``payload``,
+    ``main``, a cloud wrapper), its :data:`CacheState`."""
+
+    directory: Path
+    key: str
+    images: Mapping[str, CacheState]
+
+
 @dataclass(slots=True)
 class ProfileBuildResult:
     profile: str
     artifacts: dict[OutputTarget, ArtifactRef] = field(default_factory=dict)
     duration_s: float | None = field(default=None, compare=False)
+    cache: CacheUse | None = field(default=None, compare=False)
+    """The incremental cache's use, when the request carried a ``cache_key`` and the backend
+    can see mkosi's cache directory; ``None`` otherwise."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -1119,6 +1119,7 @@ def bake_image(
     fetch: bool = True,
     resolver: Resolver | None = None,
     offline: bool = False,
+    incremental: bool = False,
 ) -> tuple[BakeResult, tuple[Artifact, ...]]:
     """Bake *img* into *build*, frozen against *locked*; the result and its artifacts.
 
@@ -1137,6 +1138,12 @@ def bake_image(
     complete checkouts and downloads nothing, every Go, Cargo and .NET build must
     find its prefetched dependencies (else ``E_STATE`` before mkosi runs), and
     mkosi runs the build scripts with ``--with-network=no``.
+
+    *incremental* (a development build) lets mkosi keep the base tree after package
+    install under the backend's incremental cache directory, keyed on what mkosi's own
+    cache manifest leaves out (:func:`~tundravm.declarative._bake.incremental_key`), and
+    reuse it while that key and mkosi's manifest hold; each result records what the
+    cache did (``ProfileBuildResult.cache``). A production build never passes it.
     """
     if offline and img.policy.network_mode != "offline":
         img = replace(img, policy=replace(img.policy, network_mode="offline"))
@@ -1162,7 +1169,13 @@ def bake_image(
                 reporter=reporter,
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
-        result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
+        result = _bake.bake(
+            baking,
+            destination,
+            frozen=locked is not None,
+            reporter=reporter,
+            incremental=incremental,
+        )
         digest = (
             locked.image_digest
             if locked is not None

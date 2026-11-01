@@ -29,12 +29,14 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
 from tundravm.backends.base import (
+    INCREMENTAL_DIRNAME,
     MountSpec,
     Requirement,
     StreamResult,
     build_sources_args,
     collect_artifacts,
     failure_message,
+    incremental_args,
     mkosi_project,
     run_streaming,
 )
@@ -185,7 +187,7 @@ class LimaMkosiBackend:
             "instance": instance,
         }
 
-        dirs = " ".join((MKOSI_STATE_DIR, MKOSI_CACHE_DIR, MKOSI_OUTPUT_DIR))
+        dirs = " ".join((MKOSI_STATE_DIR, self.cache_dir(request), MKOSI_OUTPUT_DIR))
         setup = self._lima_exec(instance, f"mkdir -p {dirs} && {INSTALL_MKOSI}")
         if setup.returncode != 0:
             raise BackendExecutionError(
@@ -269,9 +271,11 @@ class LimaMkosiBackend:
         args = [
             f"--directory={self._vm_path(request, mkosi_dir)}",
             "--force",
-            f"--cache-directory={MKOSI_CACHE_DIR}",
+            f"--cache-directory={self.cache_dir(request)}",
             f"--output-directory={MKOSI_OUTPUT_DIR}",
         ]
+        if request.cache_key is not None:
+            args.extend(incremental_args(request.cache_key))
         if request.sources_dir is not None:
             # under the build directory, so the VM sees it through the same mount
             args.extend(
@@ -285,6 +289,15 @@ class LimaMkosiBackend:
         args.extend(request.mkosi_args)
         args.extend(self.mkosi_args)
         return args
+
+    @staticmethod
+    def cache_dir(request: BakeRequest) -> str:
+        """mkosi's cache directory in the guest: :data:`MKOSI_CACHE_DIR`, or its
+        ``incremental`` subdirectory for a request with a ``cache_key``. The guest's disk is
+        not read from the host, so a Lima build records no cache use."""
+        if request.cache_key is None:
+            return MKOSI_CACHE_DIR
+        return f"{MKOSI_CACHE_DIR}/{INCREMENTAL_DIRNAME}"
 
     @staticmethod
     def _in_state(args: list[str]) -> str:

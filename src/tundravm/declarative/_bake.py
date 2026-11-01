@@ -28,6 +28,7 @@ from tundravm._source import (
     LanguageBuild,
     SourceBuild,
     deps_problem,
+    fingerprint,
     is_fetched,
 )
 from tundravm.backends.base import BuildBackend, drop_intermediates
@@ -43,7 +44,7 @@ from tundravm.models import (
 )
 from tundravm.policy import ensure_bake_policy
 from tundravm.project import lock_command
-from tundravm.toolchain import Toolchain
+from tundravm.toolchain import MKOSI_PIN, Toolchain
 
 from ._apt import locked_releases
 from ._compile import emit, mkosi_argv
@@ -58,7 +59,12 @@ _ARTIFACT_FILENAMES: dict[OutputTarget, str] = {
 
 
 def bake(
-    lowered: Lowered, destination: Path, *, frozen: bool, reporter: Reporter | None
+    lowered: Lowered,
+    destination: Path,
+    *,
+    frozen: bool,
+    reporter: Reporter | None,
+    incremental: bool = False,
 ) -> BakeResult:
     """Compile, build and package *lowered*'s active profiles into *destination*.
 
@@ -66,6 +72,8 @@ def bake(
     prepare and build phases with durations, every backend output line,
     artifacts with sizes, and a final ``done``. Without a
     reporter, backend output only surfaces in a failing backend's error.
+    *incremental* hands each profile's request the :func:`incremental_key` mkosi's cache
+    is kept under; without it the backend builds from scratch.
     """
     progress = Progress(reporter)
     logger = StructuredLogger()
@@ -128,6 +136,7 @@ def bake(
                 toolchain=locked_toolchain,
                 root=lowered.mkosi.root,
                 uki_max_size=lowered.mkosi.uki_max_size,
+                cache_key=incremental_key(lowered, name, locked_toolchain) if incremental else None,
             )
             logger.log(
                 operation="bake_profile_start",
@@ -169,6 +178,44 @@ def bake(
             duration_s=f"{total:.3f}",
         )
     return baked
+
+
+def incremental_key(lowered: Lowered, profile: str, toolchain: Toolchain | None) -> str:
+    """``<profile>-<16 hex>``: what an incremental build of *profile* keys mkosi's cache on
+    beyond mkosi's own cache manifest.
+
+    mkosi 27.1 reuses a cached base tree while its manifest holds: the distribution,
+    release, mirror, snapshot, architecture, package manager, packages, build packages,
+    package directories, repositories, overlay and the prepare scripts' bytes. It leaves
+    out what also shapes that tree: the skeleton files (copied in before apt runs), the
+    sandbox trees and files (apt's sources and keyrings), the verbatim ``Mkosi(settings=)``,
+    the tools tree and its own version. Those, with :meth:`Lowered.build_distribution`
+    (base, architecture, mirror, snapshot, repositories, build packages, build settings) and
+    the profile's name, make the key, so a change to any of them is a new cache entry, and
+    a change to a file, a unit, a service or a ``Local`` source is not.
+    """
+    effective = lowered.state.effective_profile(profile)
+    spec: dict[str, object] = {
+        "profile": profile,
+        "distribution": lowered.build_distribution(profile),
+        "skeleton": [
+            {
+                "path": entry.path,
+                "kind": entry.kind,
+                "mode": entry.mode,
+                "sha256": hashlib.sha256(entry.data).hexdigest(),
+            }
+            for entry in sorted(effective.skeleton_files, key=lambda item: item.path)
+        ],
+        "settings": [
+            [section, key, list(values)] for section, key, values in lowered.mkosi.settings
+        ],
+        "tools_tree": None
+        if toolchain is None or toolchain.tools_tree is None
+        else toolchain.tools_tree.label(),
+        "mkosi": MKOSI_PIN.version,
+    }
+    return f"{profile}-{fingerprint(spec)}"
 
 
 def _lint(lowered: Lowered, progress: Progress) -> None:
@@ -418,4 +465,4 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
     )
 
 
-__all__ = ["bake", "package_manifest"]
+__all__ = ["bake", "incremental_key", "package_manifest"]

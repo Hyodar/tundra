@@ -9,9 +9,16 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
-from tundravm.models import ArtifactRef, BakeRequest, BakeResult, OutputTarget
+from tundravm.models import (
+    ArtifactRef,
+    BakeRequest,
+    BakeResult,
+    CacheState,
+    CacheUse,
+    OutputTarget,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +134,79 @@ def _terminate(process: subprocess.Popen[str]) -> None:
 # ---------------------------------------------------------------------------
 # Shared utilities for backends that use mkosi
 # ---------------------------------------------------------------------------
+
+INCREMENTAL_DIRNAME = "incremental"
+"""Where a development build keeps mkosi's incremental cache, under the backend's mkosi
+state directory (``<build>/.mkosi/incremental`` on Linux): ``<key>.cache``, the base tree
+after package install, ``<key>.build.cache``, its build overlay, and ``<key>.manifest``,
+mkosi's record of what they were built from. A production build never gets this directory:
+its cache directory is the sibling ``cache``, which holds repository metadata only."""
+
+CACHE_KEY = "&d~&r~&a~&I~{key}"
+"""``CacheKey=``: mkosi's default (distribution, release, architecture, image) and the
+key tundravm appends (``BakeRequest.cache_key``), so what mkosi's cache manifest leaves out
+(the skeleton and sandbox trees, the tools tree, mkosi's version, the profile) still
+separates cache entries."""
+
+CACHE_MANIFEST_SUFFIX = ".manifest"
+
+
+def incremental_args(key: str) -> list[str]:
+    """The mkosi options that make a build incremental under *key* (``BakeRequest.cache_key``);
+    the cache directory itself is the backend's."""
+    return ["--incremental=yes", f"--cache-key={CACHE_KEY.format(key=key)}"]
+
+
+def cache_manifests(
+    cache_dir: Path, images: Sequence[Mapping[str, Any]], key: str
+) -> dict[str, Path]:
+    """Where mkosi writes each image's cache manifest for *key*: the image's name to
+    ``<cache_dir>/<CacheKey expanded>.manifest``, with ``&d``, ``&r``, ``&a`` and ``&I``
+    expanded from *images* (``mkosi summary --json``'s, the resolved configuration)."""
+    found: dict[str, Path] = {}
+    for image in images:
+        name = str(image.get("Image") or "main")
+        expanded = (
+            CACHE_KEY.replace("&d", str(image.get("Distribution") or ""))
+            .replace("&r", str(image.get("Release") or ""))
+            .replace("&a", str(image.get("Architecture") or ""))
+            .replace("&I", name)
+            .format(key=key)
+        )
+        found[name] = cache_dir / f"{expanded}{CACHE_MANIFEST_SUFFIX}"
+    return found
+
+
+def cache_stamp(manifest: Path) -> tuple[int, int] | None:
+    """The cache manifest *manifest* as it is now (mtime and size), ``None`` when absent:
+    mkosi writes it only when it builds and stores an image's base tree, so a stamp that is
+    the same after a build means the tree was reused."""
+    try:
+        found = manifest.stat()
+    except OSError:
+        return None
+    return found.st_mtime_ns, found.st_size
+
+
+def cache_use(
+    cache_dir: Path,
+    key: str,
+    manifests: Mapping[str, Path],
+    before: Mapping[str, tuple[int, int] | None],
+) -> CacheUse:
+    """What the build just run did with the cache, from each image's manifest stamp
+    *before* it and now (:func:`cache_stamp`)."""
+    images: dict[str, CacheState] = {}
+    for name, manifest in manifests.items():
+        after = cache_stamp(manifest)
+        if after is None:
+            images[name] = "none"
+        elif after == before.get(name):
+            images[name] = "hit"
+        else:
+            images[name] = "saved"
+    return CacheUse(directory=cache_dir, key=key, images=images)
+
 
 MKOSI_STATE_NAMES: frozenset[str] = frozenset(
     {

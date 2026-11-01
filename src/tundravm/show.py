@@ -39,7 +39,7 @@ from ._describe import declared as declared_view
 from ._location import display_location
 from ._reporting import format_duration, format_size
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME
-from .builds import Build
+from .builds import Build, cache_summary
 from .compiler.emit_mkosi import ESP_BYTES, uki_capacity
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
@@ -540,6 +540,10 @@ def render_build(build: Build) -> str:
         reproduction = observed.get("reproduction")
         state = reproduction.get("state") if isinstance(reproduction, dict) else "not attempted"
         lines.append(f"  reproduction  {state}")
+        cache = observed.get("cache")
+        reused = cache_summary(cache) if isinstance(cache, dict) else None
+        if reused is not None:
+            lines.append(f"  incremental   {reused[0]} {reused[1]}")
     signed = (build.path / mf.SIGNATURE).is_file()
     shown = "yes (manifest.sig; `tundravm verify` checks it)" if signed else "no"
     lines.append(f"  signed        {shown}")
