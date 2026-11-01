@@ -27,7 +27,7 @@ concurrency:
 jobs:
   test:
     # Lint, format, types and the unit suite: a fake mkosi and fake checkouts, no sudo, no
-    # build host, no network resolution (tests/conftest.py).
+    # build host, no network resolution (tests/conftest.py); then the Go tests of tools/.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 20
@@ -50,6 +50,18 @@ jobs:
 
       - name: Unit tests
         run: uv run pytest -m "not integration"
+
+      - name: Set up Go for the tools
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Go tests of the tools
+        # tools/ is its own module, so its packages are ./... from there (go test ./tools/...
+        # from the root has no module to resolve them in).
+        working-directory: tools
+        run: go test ./...
 
       - name: Check the surge image and its committed tree
         # The surge image tracks upstream branches on purpose and ships no lockfile, so
