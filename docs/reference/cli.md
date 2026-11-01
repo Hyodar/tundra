@@ -210,7 +210,7 @@ options:
   --measurements  The measurement records (a build).
   --diff OLD NEW  Compare two builds.
   --profile P     Profiles of an image (repeatable; default: all).
-  --dev           The latest development build (the image's dev profile is --profile dev).
+  --dev           The latest development build; with an image file, its dev profile.
   --attr NAME     The image's name in its file.
 ```
 

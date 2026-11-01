@@ -155,6 +155,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   payload (`Verity=hash` as `RootFS.verity()`), and notes the QEMU disk, the cloud wrappers and
   the payload's generated trees and scripts instead of copying them or converting mkosi's
   `default-initrd`; the converted surge tree passes `check`.
+- `show IMAGE` leads with the image: its name and file on the first line (`file` in
+  `--json`), then the production profile and the others in declaration order, each block
+  headed `profile=NAME  debian/trixie (x86_64)`; `--dev` picks the image's dev profile (it was
+  ignored).
 - Evidence: `docs/design/evidence/gate4-sdk.md`.
 
 ### Profiles and the ESP

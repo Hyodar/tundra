@@ -813,7 +813,9 @@ $ tundravm show latest --measurements
 $ tundravm show --diff OLD NEW
 ```
 
-Without a build, `show` prints the image as it resolves. With one (a directory, an id
+Without a build, `show` prints the image as it resolves: its name and file on the first
+line, then the production profile and the others as declared (`--profile P` and `--dev`
+pick them). With one (a directory, an id
 prefix or `latest`), it prints the manifest, provenance and unchecked guarantees;
 `--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds:
 packages, files, units, boot payload, measurements and policy coverage.

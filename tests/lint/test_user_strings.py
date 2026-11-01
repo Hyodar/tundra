@@ -285,7 +285,7 @@ def test_removed_docs_are_caught() -> None:
         "Run `tundravm lock IMAGE` to pin them.",
         "Deliver it at boot instead of baking it into the image",
         "Unknown profile(s): staging.",
-        "Image: debian/trixie (x86_64)  profile=dev  reproducible=yes",
+        "profile=dev  debian/trixie (x86_64)  reproducible=yes",
     ],
 )
 def test_the_twelve_commands_pass(text: str) -> None:

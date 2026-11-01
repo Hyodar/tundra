@@ -36,6 +36,7 @@ from . import __version__, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
 from ._describe import describe
+from ._image._image import DEV_PROFILE
 from ._reporting import TextReporter
 from ._source import SOURCES_DIRNAME, CargoBuild, GoBuild, SourceBuild, checkout_rust_toolchain
 from .attestation import render_attestation
@@ -444,7 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     show_cmd.add_argument(
         "--dev",
         action="store_true",
-        help="The latest development build (the image's dev profile is --profile dev).",
+        help="The latest development build; with an image file, its dev profile.",
     )
     show_cmd.add_argument(
         "--attr", default=None, metavar="NAME", help="The image's name in its file."
@@ -1144,7 +1145,8 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
     found = _settings(args)
     loaded = _loaded(args, found)
     img = _lowered(loaded, found)
-    names = _profiles(img, args.profile)
+    given = [*(args.profile or ()), *([DEV_PROFILE] if args.dev else [])]
+    names = show.ordered_profiles(loaded.variants, _profiles(img, given))
     locked = _locked(found)
     if args.units:
         units = show.image_units(img, names, locked)
@@ -1165,7 +1167,7 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
         fragments = resolve(loaded.recipe, variant=name).fragments if declared else ()
         inherits = loaded.recipe.variant(name).inherits if declared else None
         described[name] = describe(img, profile=name, inherits=inherits, fragments=fragments)
-    report = show.image_report(img, names, described)
+    report = show.image_report(img, names, described, file=found.image)
     if args.json:
         report["provenance"] = show.provenance(loaded.recipe, names)
     print(json_report("show", report) if args.json else show.render_image(report), file=out)

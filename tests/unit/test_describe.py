@@ -206,7 +206,7 @@ def test_summary_contains_key_strings() -> None:
     image = lower(_recipe())
     text = render(describe(image, profile="default"))
 
-    assert text.startswith("Image: debian/trixie (x86_64)  profile=default  reproducible=yes\n")
+    assert text.startswith("profile=default  debian/trixie (x86_64)  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
     assert "Packages (5): curl dmidecode jq systemd udev" in text
     assert "Build packages (1): gcc" in text

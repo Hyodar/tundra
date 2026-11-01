@@ -18,14 +18,18 @@ def test_show_an_image_file(project: Path, cli: Cli) -> None:
     result = cli("show", "demo.py")
     assert result.code == EXIT_OK, result.err
     assert "/srv/www/index.html" in result.out and "busybox" in result.out
-    profiles = [line for line in result.out.splitlines() if line.startswith("Image: ")]
-    assert {line.split()[3] for line in profiles} == {"profile=production", "profile=dev"}
+    lines = result.out.splitlines()
+    assert lines[0] == "demo  demo.py"
+    profiles = [line.split()[0] for line in lines if line.startswith("profile=")]
+    assert profiles == ["profile=production", "profile=dev"]
+    dev = cli("show", "demo.py", "--dev").out.splitlines()
+    assert [line for line in dev if line.startswith("profile=")][0].startswith("profile=dev ")
     assert "Extends: production\n" in result.out and "Components (" in result.out
     for internal in ("variant=", "Inherits", "Fragments", "Policy:", "Extends: base"):
         assert internal not in result.out, internal
     payload = json.loads(cli("show", "demo.py", "--json").out)
     assert payload["schema"] == "tundravm.show/1" and payload["image"] == "demo"
-    assert set(payload["profiles"]) == {"production", "dev"}
+    assert (payload["file"], set(payload["profiles"])) == ("demo.py", {"production", "dev"})
     assert len(payload["digest"]) == 64
     only = json.loads(cli("show", "demo.py", "--json", "--profile", "dev").out)
     assert set(only["profiles"]) == {"dev"}

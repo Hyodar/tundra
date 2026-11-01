@@ -1,7 +1,8 @@
 """``show``: the resolved image or an existing build, and ``show --diff`` between two builds.
 
-For an image file :func:`image_report` is the dry run (every profile's packages, files,
-units, sources, kernel, what each declaration came from), :func:`image_units` the unit
+For an image file :func:`image_report` is the dry run (the image and its file, then each
+profile's packages, files, units, sources, kernel, what each declaration came from, the
+default profile first and the others as declared), :func:`image_units` the unit
 files its tree holds and :func:`image_tree` the tree's files. For a build directory
 :func:`build_report` is its manifest read back with its provenance (inputs, toolchain,
 observations) and every guarantee the build does not give; ``--units``, ``--tree`` and
@@ -39,13 +40,19 @@ UNIT_DIRS = ("usr/lib/systemd/system/", "etc/systemd/system/")
 
 
 def image_report(
-    img: Lowered, profiles: Sequence[str], described: Mapping[str, dict[str, object]] | None = None
+    img: Lowered,
+    profiles: Sequence[str],
+    described: Mapping[str, dict[str, object]] | None = None,
+    *,
+    file: Path | None = None,
 ) -> dict[str, object]:
     """The dry-run description of *profiles* (*described* holds the ones already made): the
-    image digest the lockfile records and one entry per profile."""
+    image, the *file* it is declared in, the digest the lockfile records and one entry per
+    profile, in the order given."""
     given = described or {}
     return {
         "image": img.image_id,
+        "file": None if file is None else _shown(file),
         "digest": img.select(profiles).digest(),
         "profiles": {name: given.get(name) or describe(img, profile=name) for name in profiles},
     }
@@ -82,7 +89,23 @@ def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[s
 
 
 def render_image(report: Mapping[str, Any]) -> str:
-    return "\n\n".join(render(d).rstrip() for d in report["profiles"].values())
+    """The image and its file on the first line, then one block per profile."""
+    head = "  ".join(str(part) for part in (report["image"], report.get("file")) if part)
+    blocks = "\n\n".join(render(d).rstrip() for d in report["profiles"].values())
+    return f"{head}\n{blocks}"
+
+
+def ordered_profiles(declared: Sequence[str], given: Sequence[str]) -> tuple[str, ...]:
+    """*given* (every profile when empty), the default one first and the rest as declared."""
+    return tuple(name for name in declared if not given or name in given)
+
+
+def _shown(path: Path) -> str:
+    """*path* relative to the working directory when it is under it."""
+    try:
+        return path.resolve().relative_to(Path.cwd()).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def image_units(img: Lowered, profiles: Sequence[str], locked: Lock | None) -> dict[str, str]:
@@ -397,6 +420,7 @@ __all__ = [
     "image_report",
     "image_tree",
     "image_units",
+    "ordered_profiles",
     "render_build",
     "render_diff",
     "render_files",

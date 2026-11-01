@@ -163,8 +163,8 @@ def render(description: dict[str, object]) -> str:
     from .declarative.model import BASE_VARIANT
 
     lines: list[str] = [
-        f"Image: {description['base']} ({description['arch']})"
-        f"  profile={description['profile']}"
+        f"profile={description['profile']}"
+        f"  {description['base']} ({description['arch']})"
         f"  reproducible={_yes_no(description['reproducible'])}"
     ]
     if description.get("mirror"):
