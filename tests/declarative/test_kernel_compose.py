@@ -12,7 +12,6 @@ from tundravm.compiler.emit_mkosi import KERNEL_RECORDS, drivers_check
 from tundravm.declarative import (
     Debian,
     DebianConfig,
-    Debloat,
     Git,
     Http,
     Kernel,
@@ -22,7 +21,6 @@ from tundravm.declarative import (
     Recipe,
     Variant,
     compile,
-    lint,
     lock,
     lower,
 )
@@ -206,12 +204,6 @@ def test_the_cache_key_follows_fragments_and_patches(base: Path, tmp_path: Path)
     assert key() != key(KernelConfig({"CONFIG_XFS_FS": "y"}))
 
 
-def test_lint_flags_kernel_modules_a_monolithic_kernel_cannot_have(base: Path) -> None:
-    kernel = Kernel("6.12.48", SOURCE, base=base)
-    found = lint(_recipe(kernel, kernel_modules=("vfat",)))
-    assert "kernel-modules-ignored" in {d.code for d in found}
-    clean = lint(_recipe(Kernel("6.12.48", SOURCE, base=base, modules=True)))
-    assert "kernel-modules-ignored" not in {d.code for d in clean}
 
 
 def test_a_composed_kernel_brings_its_build_packages(base: Path, tmp_path: Path) -> None:
@@ -238,14 +230,9 @@ def test_a_composed_kernel_brings_its_build_packages(base: Path, tmp_path: Path)
 
 def test_loadable_modules_survive_the_default_debloat(base: Path, tmp_path: Path) -> None:
     recipe = _recipe(Kernel("6.12.48", SOURCE, base=base, modules=True))
-    assert "debloat-removes-modules" not in {d.code for d in lint(recipe)}
     compile(recipe).write(tmp_path / "tree")
     finalize = "".join(
         path.read_text(encoding="utf-8")
         for path in (tmp_path / "tree" / "payload" / "mkosi.finalize.d").glob("*")
     )
     assert "/usr/lib/modules" not in finalize
-    declared = _recipe(
-        Kernel("6.12.48", SOURCE, base=base, modules=True), Debloat(remove=("/usr/lib/modules",))
-    )
-    assert "debloat-removes-modules" in {d.code for d in lint(declared)}

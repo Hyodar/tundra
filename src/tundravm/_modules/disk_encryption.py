@@ -3,21 +3,15 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from tundravm._modules.base import Module, tools_source
-from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
+from tundravm._modules.key_generation import KeySpec, validate_entry_name
 from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
-from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
 from tundravm.models import ServiceSpec
-
-if TYPE_CHECKING:
-    from tundravm.declarative._lowered import Lowered
 
 DISK_ENCRYPTION_BUILD_PACKAGES = (
     "golang",
@@ -47,8 +41,6 @@ _OWNER_HARDENING: tuple[tuple[str, str], ...] = (
 )
 """Root with the volumes' devices (it reads and writes their headers) and no network; no
 ``ProtectClock``, which would limit the devices to the clock's."""
-_KERNEL_NAME = re.compile(r"/dev/sd[a-z]+[0-9]*")
-"""A SCSI/SATA kernel disk name: assigned in probe order, so not stable across boots."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,75 +180,6 @@ class DiskEncryption(Module):
                     "per aggregate setup run."
                 ),
             )
-
-    def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
-        yield from self._check_auto_format(image, profile)
-        keys: dict[str, KeySpec] = {}
-        for module in image.applied_modules(profile, inherited=True):
-            if isinstance(module, KeyGeneration):
-                keys.update((spec.name, spec) for spec in module.keys)
-        for disk in self.disks:
-            key_ref = disk.key_name or (disk.key.name if disk.key is not None else None)
-            if key_ref is None:
-                continue
-            key = keys.get(key_ref)
-            if key is None:
-                yield Diagnostic(
-                    severity="error",
-                    code="disk-key-undefined",
-                    message=(
-                        f"disk {disk.name!r} uses key {key_ref!r}, which no "
-                        "Key in this profile declares"
-                    ),
-                    hint=tundravm_sets("a volume's key"),
-                    profile=profile,
-                    subject=disk.name,
-                )
-            elif disk.key_path is not None and key.output != disk.key_path:
-                written = key.output or "no file (output is unset)"
-                yield Diagnostic(
-                    severity="warning",
-                    code="disk-key-path-mismatch",
-                    message=(
-                        f"disk {disk.name!r} reads its key from {disk.key_path}, but key "
-                        f"{key.name!r} is written to {written}"
-                    ),
-                    hint=tundravm_sets("where a volume's key is written"),
-                    profile=profile,
-                    subject=disk.name,
-                )
-
-    def _check_auto_format(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
-        """``disk-device-guessed`` for each disk formatted without a device, and
-        ``disk-device-unstable`` for one formatted through a kernel name (``/dev/sdb``)."""
-        lenient = image.policy.storage_safety == "warn"
-        for disk in self.disks:
-            if disk.format_policy == "never":
-                continue
-            if disk.device is None:
-                yield Diagnostic(
-                    severity="warning" if lenient else "error",
-                    code="disk-device-guessed",
-                    message=(
-                        f"disk {disk.name!r} sets no device and format={disk.format_policy!r}: "
-                        "automatic device selection can pick the boot disk and format it"
-                    ),
-                    hint=tundravm_sets("each volume's device"),
-                    profile=profile,
-                    subject=disk.name,
-                )
-            elif _KERNEL_NAME.fullmatch(disk.device):
-                yield Diagnostic(
-                    severity="warning",
-                    code="disk-device-unstable",
-                    message=(
-                        f"disk {disk.name!r} formats {disk.device}, a kernel name that can "
-                        "point at another disk on the next boot"
-                    ),
-                    hint=tundravm_sets("each volume's device"),
-                    profile=profile,
-                    subject=disk.name,
-                )
 
     def source_spec(self) -> SourceBuild:
         """The ``disk-setup`` source build from ``source``."""

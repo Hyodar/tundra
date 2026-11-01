@@ -6,7 +6,6 @@ import pytest
 
 from tundravm._location import display_location
 from tundravm.declarative import (
-    RUNTIME_INIT,
     BootStep,
     Diagnostic,
     Disk,
@@ -141,7 +140,7 @@ def test_changes_edit_and_remove_by_identity() -> None:
     assert resolved.items == (File("/etc/motd", "changed\n", mode=0o600),)
 
 
-def test_changes_need_an_inherited_identity_and_valid_values() -> None:
+def test_changes_need_an_inherited_identity() -> None:
     recipe = Recipe(
         "r",
         items=(Package("curl"), Key("k")),
@@ -151,17 +150,15 @@ def test_changes_need_an_inherited_identity_and_valid_values() -> None:
                 changes=(
                     Unit.ref("jq").edit(enabled=True),
                     Package.ref("curl", role="build").remove(),
-                    Key.ref("k").edit(size=0),
                 ),
             ),
         ),
     )
     found = lint(recipe)
-    assert codes(found) == ["edit-missing", "remove-missing", "edit-invalid"]
+    assert codes(found) == ["edit-missing", "remove-missing"]
     assert found[0].message == (
         "profile 'default' edits Service.packaged('jq.service'), which it does not inherit"
     )
-    assert "size 0 must be positive" in found[2].message
 
 
 def test_edits_reject_unknown_identity_and_repeated_fields() -> None:
@@ -273,16 +270,6 @@ def test_disk_and_secret_store_references() -> None:
     key = Key("k", output="/run/k")
     disk = Disk("d", "/data", key=key)
     assert disk.key == key.ref == Disk("d", "/data", key=Key.ref("k")).key
-    recipe = Recipe(
-        "r",
-        items=(disk, Secrets(store=Disk("other", "/other"))),
-    )
-    found = tuple(d for d in lint(recipe) if d.code != "network-missing")  # the SSH key step
-    assert codes(found) == ["disk-key-undefined", "secret-store-undefined"]
-    assert (
-        found[0].message
-        == "Volume('d') references key 'k', which profile 'default' does not declare"
-    )
     # A ref names the identity: another Key("k") value is the one the disk uses.
     other = Recipe("r", items=(Key("k", output="/run/other"), disk, Secrets(store=disk)))
     resolved = resolve(other, variant="default")
@@ -309,19 +296,17 @@ def test_editing_an_inherited_key_needs_no_rebuilt_disk() -> None:
     assert disk in small.items
 
 
-def test_boot_step_references_and_cycles() -> None:
-    recipe = Recipe(
-        "r",
-        items=(
-            BootStep("a", "echo a\n", after=(Ready("ghost"),), before=("b",)),  # type: ignore[arg-type]
-            BootStep("b", "echo b\n", before=(Ready("a"), Ready("phantom"))),
-        ),
-    )
-    found = lint(recipe)
-    assert codes(found) == ["step-undefined", "step-undefined", "step-cycle"]
-    assert "runs after 'ghost'" in found[0].message
-    assert "runs before 'phantom'" in found[1].message
-    assert "'a' -> 'b' -> 'a'" in found[2].message
+def test_a_boot_step_ordered_against_an_undeclared_one_is_a_lowering_bug() -> None:
+    recipe = Recipe("r", items=(BootStep("a", "echo a\n", after=(Ready("ghost"),)),))
+    with pytest.raises(AssertionError, match="runs after 'ghost', which the lowering"):
+        lint(recipe)
+
+
+def test_a_boot_step_cycle_is_refused_where_the_steps_are_ordered() -> None:
+    a = BootStep("a", "echo a\n", before=("b",))  # type: ignore[arg-type]
+    b = BootStep("b", "echo b\n", before=(Ready("a"),))
+    with pytest.raises(ValidationError, match="'a' -> 'b' -> 'a'"):
+        order_boot_steps((a, b))
 
 
 DATA_DISK = Disk("d", "/data")
@@ -363,21 +348,18 @@ def test_order_boot_steps_follows_after_and_before(
         assert order_boot_steps(items) == expected
 
 
-def test_needs_names_declared_steps() -> None:
+@pytest.mark.parametrize(
+    ("item", "message"),
+    [
+        (Service("app", "/usr/bin/app", needs=(Ready("ghost"),)), "needs step 'ghost'"),
+        (Unit("w.service", "[Unit]\n", needs=(Key("k").ready,)), "needs step 'keys'"),
+    ],
+    ids=["step", "task"],
+)
+def test_a_unit_needing_an_undeclared_step_is_a_lowering_bug(item: object, message: str) -> None:
     disk = Disk("d", "/data")
-    recipe = Recipe(
-        "r",
-        items=(
-            disk,
-            Service("app", "/usr/bin/app", needs=(disk.ready, Ready("ghost"))),
-            Unit("w.service", "[Unit]\n", needs=(Key("k").ready,)),
-            Service("all", "/usr/bin/all", needs=(RUNTIME_INIT,)),
-        ),
-    )
-    found = lint(recipe)
-    assert codes(found) == ["needs-undefined", "needs-undefined"]
-    assert [d.subject for d in found] == ["app", "w.service"]
-    assert "needs step 'ghost'" in found[0].message
+    with pytest.raises(AssertionError, match=message):
+        lint(Recipe("r", items=(disk, item)))  # type: ignore[arg-type]
 
 
 def test_order_hooks_within_phase_keeps_slots() -> None:
@@ -392,22 +374,7 @@ def test_order_hooks_within_phase_keeps_slots() -> None:
         order_hooks((Hook("early", "sync", "x", after=("late",)), Hook("late", "build", "y")))
 
 
-def test_hook_unit_and_target_checks() -> None:
-    recipe = Recipe(
-        "r",
-        items=(
-            Hook("h", "build", "make", after=("ghost",)),
-            Unit("app.service", "[Unit]\n", enabled=True, needs=(RUNTIME_INIT,)),
-        ),
-        variants=(
-            Variant("default", outputs=("azure",)),
-            Variant("local", inherits="default", outputs=("qemu",)),
-        ),
-    )
-    found = lint(recipe, variants=("local",))
-    assert codes(found) == [
-        "target-inconsistent",
-        "hook-after-undefined",
-        "needs-without-init",
-    ]
-    assert {d.profile for d in found} == {"local"}
+def test_a_hook_after_an_undeclared_one_is_a_lowering_bug() -> None:
+    recipe = Recipe("r", items=(Hook("h", "build", "make", after=("ghost",)),))
+    with pytest.raises(AssertionError, match="runs after 'ghost', which the lowering"):
+        lint(recipe)

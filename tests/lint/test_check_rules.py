@@ -16,19 +16,15 @@ from tundravm.check import Diagnostic, check, render, render_github
 from tundravm.cli import main
 from tundravm.declarative import (
     BootStep,
-    Debian,
     Debloat,
     Declaration,
     ExternalDelivery,
     File,
     Fragment,
-    Git,
     Hook,
-    Kernel,
     Package,
     Recipe,
     Secret,
-    SecretEnv,
     SecretFile,
     Secrets,
     Service,
@@ -42,9 +38,6 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.declarative.lifecycle import check_report
-from tundravm.declarative.utils import EfiStub
-from tundravm.diagnostics import tundravm_sets
-from tundravm.errors import ValidationError
 
 DEFAULT = Variant("default", outputs=("qemu",))
 KERNEL = Package("linux-image-amd64")
@@ -131,18 +124,6 @@ def test_identical_redeclaration_and_skeleton_override_are_fine() -> None:
 
 
 # c. file-path-relative
-
-
-def test_file_path_relative() -> None:
-    with pytest.raises(ValidationError, match="must be an absolute path"):
-        File("etc/relative", "x")
-    subject = recipe(File("/etc/../../escape", "x", stage="skeleton"), File("/opt/../../up", "y"))
-    diags = report(subject)
-    assert [(d.code, d.subject) for d in diags] == [
-        ("file-path-relative", "/etc/../../escape"),
-        ("file-path-relative", "/opt/../../up"),
-    ]
-    assert all(d.severity == "error" for d in diags)
 
 
 # d. service-program-missing
@@ -315,19 +296,6 @@ def test_implicit_debloat_keeps_declared_files_and_enabled_systemd_units() -> No
     assert '"systemd-networkd.service"' in postinst.split("systemd_svc_whitelist=")[1]
 
 
-def test_declared_debloat_removing_modules_of_a_modular_kernel_is_an_error() -> None:
-    [diag] = report(recipe(Debloat()))
-    assert (diag.code, diag.severity, diag.subject) == (
-        "debloat-removes-modules",
-        "error",
-        "/usr/lib/modules",
-    )
-    assert diag.hint == tundravm_sets("whether the debloat keeps the kernel's modules")
-    # A parent path or a glob removes them too.
-    custom = Debloat(remove=("/usr/lib/mod*",))
-    assert codes(recipe(custom)) == ["debloat-removes-modules"]
-
-
 def test_keep_modules_keeps_the_path_out_of_finalize() -> None:
     from tundravm.declarative import lower
 
@@ -355,104 +323,14 @@ def test_keep_modules_keeps_the_path_out_of_finalize() -> None:
     ids=["ssh-key-only", "external"],
 )
 def test_secret_delivery_applied_is_fine(secrets: Secrets) -> None:
-    # no Disk store: store=None, otherwise secret-store-undefined
     # The delivery tool builds from an unpinned branch; that is source-unpinned's concern.
-    # The recipe brings up no interface for the SSH key POST: network-missing's concern.
-    ignored = ("source-unpinned", "network-missing")
-    assert [d for d in report(recipe(secrets)) if d.code not in ignored] == []
-
-
-def test_secret_target_unsupported_by_the_builtin_provider() -> None:
-    token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN")))
-    found = [
-        d
-        for d in report(recipe(Secrets(entries=(token,))))
-        if d.code not in ("source-unpinned", "network-missing")
-    ]
-    assert [(d.severity, d.code, d.subject) for d in found] == [
-        ("error", "secret-target-unsupported", "token"),
-    ]
-    [env] = found
-    assert "environment variable TOKEN" in env.message and "never the environment" in env.message
-    assert env.hint == tundravm_sets("where each secret is delivered")
-
-
-def test_secret_target_unsupported_by_an_external_provider() -> None:
-    token = Secret("token", (SecretFile("/run/token"), SecretEnv("TOKEN", "app")))
-    secrets = Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent", ("file",)))
-    [found] = [d for d in report(recipe(secrets)) if d.code == "secret-target-unsupported"]
-    assert "environment variable TOKEN" in found.message
-    assert found.hint == tundravm_sets("where each secret is delivered")
+    assert [d for d in report(recipe(secrets)) if d.code != "source-unpinned"] == []
 
 
 # k. kernel-missing
 
 
-def test_kernel_missing() -> None:
-    subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT,))
-    [diag] = report(subject)
-    assert (diag.severity, diag.code, diag.profile) == ("error", "kernel-missing", "default")
-    assert "A kernel must be installed" in diag.message
-    assert diag.hint == tundravm_sets("the kernel package")
-
-
-@pytest.mark.parametrize(
-    "boot",
-    [
-        Package("linux-image-amd64"),
-        Package("linux-image-cloud-amd64"),
-        Package("linux-image-6.12.48+deb13-amd64"),
-        Package("linux-image-arm64/trixie-backports"),
-        Package("linux-generic"),
-        Kernel("6.12.1", Git("https://example.com/linux", "a" * 40)),
-        NOT_BOOTABLE,
-    ],
-    ids=lambda item: getattr(item, "name", None) or type(item).__name__,
-)
-def test_kernel_package_kernel_or_not_bootable_is_fine(boot: Declaration) -> None:
-    subject = Recipe("check", items=(*CLEAN[1:], boot), variants=(DEFAULT,))
-    assert "kernel-missing" not in codes(subject)
-
-
-def test_kernel_missing_is_per_variant() -> None:
-    booted = Variant("booted", add=Fragment("booted", items=(KERNEL,)))
-    subject = Recipe("check", items=CLEAN[1:], variants=(DEFAULT, booted))
-    assert [(d.profile, d.code) for d in report(subject, "default", "booted")] == [
-        ("default", "kernel-missing")
-    ]
-
-
 # l. image-arch-unsupported
-
-
-def _arm(*items: Declaration | Fragment, target: str = "azure") -> Recipe:
-    variant = Variant("default", outputs=(target,))  # type: ignore[arg-type]
-    common = Fragment("common", items=(*CLEAN, *items))
-    return Recipe(
-        "check",
-        items=(common,),
-        variants=(variant,),
-        platform=Debian("trixie", arch="aarch64", boot=None),
-    )
-
-
-def test_aarch64_with_efi_stub_is_unsupported() -> None:
-    [diag] = [
-        d
-        for d in report(_arm(EfiStub(snapshot="20251113T083151Z", version="257")))
-        if d.code == "image-arch-unsupported" and d.subject == "EfiStub"
-    ]
-    assert (diag.severity, diag.subject) == ("error", "EfiStub")
-    assert diag.hint == tundravm_sets("the architecture")
-
-
-def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:
-    efi = EfiStub(snapshot="20251113T083151Z", version="257")
-    x86 = Recipe("check", items=(*CLEAN, efi), variants=(DEFAULT,))
-    assert "image-arch-unsupported" not in codes(x86)
-    # The tree's main image is the QEMU disk, whatever the variant's outputs.
-    found = [d.subject for d in report(_arm()) if d.code == "image-arch-unsupported"]
-    assert found == ["qemu"]
 
 
 # rendering + ordering
@@ -461,7 +339,7 @@ def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:
 def test_ordering_is_deterministic() -> None:
     variants = (
         DEFAULT,
-        Variant("b", add=Fragment("b", items=(File("/etc/../../escape", "x"),))),
+        Variant("b", add=Fragment("b", items=(Service("ghost", "/usr/bin/g", user="ghost"),))),
         Variant("a"),
     )
     subject = recipe(
@@ -475,8 +353,9 @@ def test_ordering_is_deterministic() -> None:
     assert keys == [
         ("a", "error", "service-program-missing"),
         ("a", "info", "profile-empty"),
-        ("b", "error", "file-path-relative"),
         ("b", "error", "service-program-missing"),
+        ("b", "error", "service-program-missing"),
+        ("b", "error", "service-user-missing"),
         ("default", "error", "service-program-missing"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
@@ -550,39 +429,25 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
 
 # CLI
 
-RECIPE = """
-from tundravm.declarative import (
-    File,
-    Fragment,
-    Package,
-    RUNTIME_INIT,
-    Recipe,
-    Service,
-    Unit,
-    User,
-    Variant,
-)
+IMAGE = """
+from tundravm import File, Image, Profile, Service
 from tundravm.backends.local_linux import LocalLinuxBackend
 
 backend = LocalLinuxBackend()
-items = [
-    Package("linux-image-amd64"),
-    Package("curl"),
-    User("app", system=True),
-    Service("app", "/usr/bin/app", user="app"),
-    File("/usr/bin/app", "#!/bin/sh\\n", mode=0o755),
-]
-variants = [Variant("default", outputs=("qemu",))]
-"""
-
-BIND = """
-recipe = Recipe("cli", items=tuple(items), variants=tuple(variants))
+profiles = {}
+image = Image(
+    "cli",
+    packages=["curl"],
+    files=[File.text("/usr/bin/app", "#!/bin/sh\\n", mode=0o755)],
+    services=[Service("app", ["/usr/bin/app"])],
+    profiles=profiles,
+)
 """
 
 
-def write_recipe(tmp_path: Path, extra: str = "") -> Path:
-    path = tmp_path / "recipe.py"
-    path.write_text(f"{RECIPE}{extra}{BIND}", encoding="utf-8")
+def write_image(tmp_path: Path, extra: str = "") -> Path:
+    path = tmp_path / "image.py"
+    path.write_text(IMAGE.replace("profiles = {}\n", f"profiles = {{{extra}}}\n"), encoding="utf-8")
     return path
 
 
@@ -591,12 +456,12 @@ def run(*argv: str) -> tuple[int, str]:
     return main(["check", *argv], stdout=out), out.getvalue()
 
 
-def test_cli_variant_selection(tmp_path: Path) -> None:
-    recipe_path = write_recipe(tmp_path, 'variants.append(Variant("bare"))\n')
-    code, out = run(str(recipe_path), "--profile", "default", "--profile", "bare")
+def test_cli_profile_selection(tmp_path: Path) -> None:
+    image_path = write_image(tmp_path, '"bare": Profile()')
+    code, out = run(str(image_path), "--profile", "production", "--profile", "bare")
     assert code == 0
     assert "info profile-empty [bare]" in out
-    assert run(str(recipe_path), "--profile", "default")[1] == "no findings\n"
+    assert "profile-empty" not in run(str(image_path), "--profile", "production")[1]
 
 
 # bake pre-flight

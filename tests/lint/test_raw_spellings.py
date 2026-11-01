@@ -1,10 +1,8 @@
-"""``Run`` renders build commands; ``setting-raw`` and ``hook-covered`` name the typed spelling."""
+"""``Run`` renders build commands; ``hook-covered`` names the typed spelling."""
 
 import pytest
 
 from tests.helpers import REPO_ROOT
-from tundravm._image._values import RESERVED_SETTINGS
-from tundravm.check import TYPED_SETTINGS, declaration_check
 from tundravm.declarative import (
     BootStep,
     Debian,
@@ -45,11 +43,7 @@ def _findings(
         variants=variants,
         mkosi=mkosi,
     )
-    return [
-        d
-        for d in check_report(recipe, None, variants=None)
-        if d.code in ("setting-raw", "hook-covered")
-    ]
+    return [d for d in check_report(recipe, None, variants=None) if d.code == "hook-covered"]
 
 
 @pytest.mark.parametrize(
@@ -82,28 +76,6 @@ def test_run_rejects_what_it_cannot_run(bad: dict[str, object]) -> None:
         Run(**fields)  # type: ignore[arg-type]
 
 
-def test_setting_raw_says_what_the_public_mkosi_refuses() -> None:
-    [clean, seed] = _findings(
-        Setting("Output", "Seed", ("630b5f72-a36a-4e83-b23d-6ef47c82fd9c",)),
-        Setting("Content", "CleanPackageMetadata", ("no",)),
-    )
-    assert (seed.code, seed.severity, seed.profile, seed.subject) == (
-        "setting-raw",
-        "info",
-        "",
-        "Output.Seed",
-    )
-    assert "sets what tundravm writes itself" in seed.message and seed.location
-    assert seed.hint == RESERVED_SETTINGS["Seed"]
-    assert clean.subject == "Content.CleanPackageMetadata"
-    assert clean.hint == RESERVED_SETTINGS["CleanPackageMetadata"]
-
-
-@pytest.mark.parametrize(("section", "key"), sorted(TYPED_SETTINGS))
-def test_every_typed_setting_hint_is_the_reserved_keys_sentence(section: str, key: str) -> None:
-    assert TYPED_SETTINGS[(section, key)] == RESERVED_SETTINGS[key]
-
-
 def test_settings_the_tree_writes_itself_are_refused() -> None:
     with pytest.raises(ValidationError, match="sets ToolsTree=, which tundravm writes itself"):
         lower(Recipe("r", items=(Setting("Build", "ToolsTree", ("default",)),)))
@@ -129,33 +101,6 @@ def test_host_commands_and_shipped_fragments_report_nothing() -> None:
     assert (
         _findings(Hook("host", "postinst", "systemctl enable foo.service"), add=(DevTools(),)) == []
     )
-
-
-@pytest.mark.parametrize(
-    ("setting", "code"),
-    [
-        (Setting("Config", "ConfigureScripts", ("configure.sh",)), "mkosi-configure-script"),
-        (Setting("Build", "Environment", ("HOME",)), "mkosi-environment-passthrough"),
-        (Setting("Config", "PassEnvironment", ("TERM",)), "mkosi-environment-passthrough"),
-    ],
-)
-def test_settings_that_lie_to_summary_or_leak_the_host_are_errors(
-    setting: Setting, code: str
-) -> None:
-    recipe = Recipe("r", items=(Package("jq"), setting), platform=Debian("trixie"))
-    findings = [d for d in declaration_check(recipe) if d.code == code]
-    assert [d.severity for d in findings] == ["error"]
-    with pytest.raises(ValidationError, match=code):
-        lower(recipe)
-
-
-def test_environment_with_values_passes() -> None:
-    recipe = Recipe(
-        "r", items=(Setting("Build", "Environment", ("A=1",)),), platform=Debian("trixie")
-    )
-    codes = {"mkosi-environment-passthrough", "mkosi-configure-script"}
-    assert [d for d in declaration_check(recipe) if d.code in codes] == []
-    assert lower(recipe).mkosi.environment == {"A": "1"}
 
 
 def test_examples_and_templates_never_spell_the_chroot_prefix() -> None:

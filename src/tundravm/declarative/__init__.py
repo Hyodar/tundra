@@ -10,7 +10,6 @@ results.
 """
 
 from tundravm.policy import Policy
-from tundravm.recipe import load
 
 from ._compile import mkosi_argv
 from ._component import component
@@ -197,7 +196,6 @@ __all__ = [
     "doctor",
     "identity",
     "lint",
-    "load",
     "lock",
     "lock_status",
     "lower",

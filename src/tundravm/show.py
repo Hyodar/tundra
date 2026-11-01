@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any
 from . import manifest as mf
 from ._describe import (
     Section,
-    declared_recipe,
     declared_sections,
     describe,
     diff_sections,
@@ -64,7 +63,7 @@ def image_report(
     profiles: Sequence[str],
     *,
     recipe: Recipe,
-    declared: Image | None = None,
+    declared: Image,
     file: Path | None = None,
 ) -> dict[str, object]:
     """The dry run of *profiles*, in the order given: the image and the *file* it is
@@ -72,10 +71,8 @@ def image_report(
     (*declared*, the ``Image`` *recipe* lowers: its components, services, ingress, content
     and profiles) and what each profile builds."""
     variants = {variant.name for variant in recipe.variants}
-    probes: frozenset[str] = frozenset() if declared is None else probe_units(declared)
-    written = (
-        declared_recipe(recipe, profiles) if declared is None else declared_view(declared, profiles)
-    )
+    probes = probe_units(declared)
+    written = declared_view(declared, profiles)
     return {
         "image": img.image_id,
         "file": None if file is None else _shown(file),

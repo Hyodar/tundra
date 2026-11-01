@@ -26,7 +26,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.utils import Tdxs
 from tundravm.errors import ValidationError
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
@@ -58,7 +58,7 @@ def _source_builds(recipe: Recipe) -> dict[str, dict[str, object]]:
 
 def test_the_attested_node_builds_copy_the_fetched_checkout() -> None:
     name, cache_namespace = "nethermind", "nethermind-1.32.3"
-    recipe = load_recipe(ATTESTED_NODE / "image.py", extra_paths=[REPO_ROOT])
+    recipe = load_file(ATTESTED_NODE / "image.py", extra_paths=[REPO_ROOT]).recipe
     pinned = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all)))
     assert "git clone" not in pinned and "fetch -q" not in pinned
     (hook,) = (line for line in pinned.splitlines() if f'"$BUILDROOT/build/{name}"' in line)

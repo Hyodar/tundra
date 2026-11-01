@@ -4,17 +4,12 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from tundravm._modules.base import Module, tools_source
 from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
-from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
-
-if TYPE_CHECKING:
-    from tundravm.declarative._lowered import Lowered
 
 KEY_GENERATION_BUILD_PACKAGES = (
     "golang",
@@ -119,19 +114,6 @@ class KeyGeneration(Module):
                         context={"key": spec.name, "path": spec.output},
                     )
                 output_paths.add(spec.output)
-
-    def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
-        for spec in self.keys:
-            if spec.pipe_path is None or spec.pipe_path.startswith("/run/"):
-                continue
-            yield Diagnostic(
-                severity="info",
-                code="key-pipe-outside-run",
-                message=f"key {spec.name!r} reads its pipe from {spec.pipe_path}, outside /run",
-                hint=tundravm_sets("where a volume's key pipe is"),
-                profile=profile,
-                subject=spec.name,
-            )
 
     def source_spec(self) -> SourceBuild:
         """The ``key-gen`` source build from ``source``."""

@@ -23,9 +23,7 @@ from tundravm.declarative import (
     SecretFile,
     Secrets,
     Service,
-    Unit,
     compile,
-    lint,
     lock,
     lower,
 )
@@ -426,19 +424,6 @@ def test_global_secret_env_writes_no_dropin(tmp_path: Path) -> None:
     secrets = Secrets(entries=(Secret("t", targets=(SecretEnv("T"),)),))
     tree = _compile(tmp_path, secrets)
     assert not [path for path in tree.files() if ".service.d/" in path]
-
-
-def test_secret_env_rejects_an_unknown_service() -> None:
-    recipe = _recipe(*_service_secrets(service="ap"))
-    found = [d for d in lint(recipe) if d.code == "secret-env-service-unknown"]
-    assert [(d.severity, d.subject) for d in found] == [("error", "ap.service")]
-    assert "'ap.service'" in found[0].message
-
-
-def test_secret_env_accepts_a_packaged_unit_the_variant_enables() -> None:
-    packaged = Unit("nginx.service", enabled=True)
-    recipe = _recipe(*_service_secrets(packaged, service="nginx"))
-    assert [d for d in lint(recipe) if d.code == "secret-env-service-unknown"] == []
 
 
 @pytest.mark.parametrize("service", ["app.socket", "bad name"])

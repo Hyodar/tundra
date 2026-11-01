@@ -91,17 +91,17 @@ def write_new_image(path: Path, *, title: str = "node", backend: str | None = No
     return path
 
 
-def write_recipe_file(
+def write_image_file(
     tmp_path: Path, source: str, monkeypatch: pytest.MonkeyPatch | None = None
 ) -> Path:
-    """Write *source* to ``tmp_path / "recipe.py"``.
+    """Write *source* to ``tmp_path / "image.py"``.
 
     With *monkeypatch*, the test also runs from *tmp_path*, so the CLI's ``build/`` is
     ``tmp_path / "build"``.
     """
     if monkeypatch is not None:
         monkeypatch.chdir(tmp_path)
-    path = tmp_path / "recipe.py"
+    path = tmp_path / "image.py"
     path.write_text(source, encoding="utf-8")
     return path
 

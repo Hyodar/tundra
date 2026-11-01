@@ -60,41 +60,6 @@ Every code an `Image` file can hit, and what to change in it. `tundravm check --
 | `user-group-undefined` | error | A User(groups=[...]) names a group that nothing creates, so useradd fails during the build. | Add Group(NAME) to groups= of the image or the same profile, or drop it from the User's groups=. |
 | `volume-tpm-on-cloud` | info | A Volume(unlock=TpmSeal(...)) seals its key to a cloud's vTPM (Azure's paravisor, Google's hypervisor), so the platform, not an attested release, decides who opens it; today's key-gen binds no PCR. | Unlock it with OperatorKey() (an operator sends the key after attesting the instance) or BrokerKey(url, audience=...) (a key broker does); keep TpmSeal(...) when that platform's vTPM is a boundary you accept. |
 
-## Internal model
-
-These codes check what only the internal model declares: an `Image` file cannot write it, and tundravm's own lowering keeps it clean. One reported for an image file is a bug: report it with the file. `--explain` marks them `internal`.
-
-| Code | Severity | What it checks | How to fix |
-|---|---|---|---|
-| `debloat-removes-modules` | error | The debloat removes /usr/lib/modules while the kernel loads its drivers (virtio, tdx_guest, cloud NICs) from there, so they never load. | tundravm sets this itself (whether the debloat keeps the kernel's modules); report it. |
-| `disk-device-guessed` | error (warning under Policy(storage_safety='warn')) | A disk that is formatted names no device, and automatic selection can pick the boot disk and format it. | tundravm sets this itself (each volume's device); report it. |
-| `disk-device-unstable` | warning | A disk is formatted through a kernel name (/dev/sdb), which follows probe order and can point at another disk on the next boot. | tundravm sets this itself (each volume's device); report it. |
-| `disk-key-path-mismatch` | warning | A disk reads its key from a path other than the one its key is written to, so the unlock finds no key. | tundravm sets this itself (where a volume's key is written); report it. |
-| `disk-key-undefined` | error | A volume is encrypted with a key the profile does not declare, so it cannot be unlocked at boot. | tundravm sets this itself (a volume's key); report it. |
-| `edit-invalid` | error | A profile's edit sets a field to a value the declaration refuses. | Fix the field values in the profile's changes=; the message carries the declaration's own error. |
-| `external-delivery-unwired` | warning | Nothing in the image can tell when the secret delivery has written the secrets, so services start without them. | tundravm sets this itself (the secret delivery); report it. |
-| `file-path-relative` | error | A file path contains '..' and may escape the image root. | Write the normalized absolute path instead. |
-| `hook-after-undefined` | error | A build hook runs after a hook the profile does not declare. | tundravm sets this itself (the build hooks and their order); report it. |
-| `hook-order` | error | A build hook is ordered after a hook of a later phase, which only runs after it. | tundravm sets this itself (the build hooks and their order); report it. |
-| `image-arch-unsupported` | error | An aarch64 image uses what only boots x86-64: the amd64 EFI stub or the qemu target. TDX guests are x86-64. | tundravm sets this itself (the architecture); report it. |
-| `kernel-missing` | error | A bootable image installs no kernel, so mkosi cannot build its UKI. | tundravm sets this itself (the kernel package); report it. |
-| `kernel-modules-ignored` | warning | Kernel modules are selected, but the built kernel has no loadable modules, so the selection does nothing. | tundravm sets this itself (a built kernel's modules); report it. |
-| `key-pipe-outside-run` | info | A key reads its pipe outside /run, where a FIFO survives reboots and can be replaced by a regular file. | tundravm sets this itself (where a volume's key pipe is); report it. |
-| `mkosi-configure-script` | error | An mkosi setting adds ConfigureScripts, which rewrite the configuration after `mkosi summary` resolved it, so the summary would not describe the build. | Drop it: set what the script would set through the Image keywords or Mkosi(settings=). |
-| `mkosi-environment-passthrough` | error | An mkosi setting passes the host's environment into the build, so the build depends on the machine it runs on. | Drop it from Mkosi(settings=): the build sees no host variable. |
-| `needs-undefined` | error | A unit waits for a boot step or boot task the profile does not declare, so it would wait forever. | tundravm sets this itself (what a unit waits for: a service's requires=); report it. |
-| `needs-without-init` | warning | A unit waits for runtime-init, but the profile declares no runtime-init step, so it waits for nothing. | tundravm sets this itself (what a unit waits for: a service's requires=); report it. |
-| `network-missing` | warning | The profile serves ports or syncs time but brings up no network interface. | tundravm sets this itself (the network: every image implies Network()); report it. |
-| `port-unreachable` | warning | A service listens on a port the firewall drops, so nothing outside reaches it. | tundravm sets this itself (the ports the firewall opens: each service's expose=); report it. |
-| `secret-env-service-unknown` | error | A secret is delivered into the environment of a service the profile neither generates, ships nor enables. | tundravm sets this itself (which service a secret is delivered to); report it. |
-| `secret-store-undefined` | error (warning when the compiled profile, not its declarations, lacks the disk) | The secrets are stored on a disk the profile does not declare. | tundravm sets this itself (where the secrets are stored); report it. |
-| `secret-target-unsupported` | error | A secret goes to a target its delivery does not write at boot, so it never arrives. | tundravm sets this itself (where each secret is delivered); report it. |
-| `setting-raw` | info | An mkosi setting sets a key tundravm already sets itself. | Drop it from Mkosi(settings=); it is for keys tundravm does not set. |
-| `step-cycle` | error | The boot steps' after= and before= form a cycle, so runtime-init has no order to run them in. | tundravm sets this itself (the boot steps and their order); report it. |
-| `step-undefined` | error | A boot step orders itself after or before a step the profile does not declare. | tundravm sets this itself (the boot steps and their order); report it. |
-| `target-inconsistent` | error | A profile targets outputs that drop the cloud platform integration it inherits, so its UKI carries glue for a cloud it never boots on. | tundravm sets this itself (each profile's targets); report it. |
-| `unit-raw` | info | A service is hand-written unit text instead of a typed Service. | Declare Service(NAME, argv, ...): the compiler renders the unit, its ordering after requires= and its enablement. |
-
 ## Shipped components
 
 The codes each component of `tundravm.components` reports, as its class declares them (`rules`). A project's own components declare theirs the same way and are not listed here: `tundravm check IMAGE --explain CODE` prints one.

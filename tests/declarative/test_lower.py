@@ -165,8 +165,6 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(
         ("warning", "source-unpinned", "", "sources.attested-endpoint"),
         ("warning", "source-unpinned", "", "sources.disk-encryption"),
         ("warning", "source-unpinned", "", "sources.key-generation"),
-        ("error", "disk-device-guessed", "default", "disk_persistent"),
-        ("error", "kernel-missing", "default", ""),
     ]
 
     emit(lowered.select(PROFILES), tmp_path / "lowered")
@@ -518,8 +516,7 @@ def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> N
             Service("app", "/usr/bin/app", needs=(delivery.ready,)),
             Service("ssh-user", "/usr/bin/u", needs=(Secrets().ready,)),
         )
-        # The SSH key step listens with no interface up: network-missing, not this test's.
-        assert [d.code for d in resolution_lint(recipe)] == ["network-missing"]
+        assert [d.code for d in resolution_lint(recipe)] == []
         out = tmp_path / delivery.step
         emit(lower(recipe), out)
         root = out / "payload" / "mkosi.extra"
@@ -531,9 +528,6 @@ def test_external_delivery_ready_waits_for_its_unit_or_path(tmp_path: Path) -> N
         user = (units / "ssh-user.service").read_text()
         assert f"After=runtime-init-secrets.service {gate}\n" in user
     assert agent.step == "delivery-vault-agent"
-    unwired = _one(Secrets(entries=(Secret("token", (entry,)),), delivery=ExternalDelivery("x")))
-    (finding,) = [d for d in resolution_lint(unwired) if d.code != "network-missing"]
-    assert (finding.code, finding.severity) == ("external-delivery-unwired", "warning")
     with pytest.raises(ValidationError, match="not both"):
         ExternalDelivery("x", unit="a.service", ready_path="/run/x")
 

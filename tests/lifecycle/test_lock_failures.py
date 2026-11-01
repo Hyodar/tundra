@@ -13,7 +13,7 @@ from tundravm._source import GitSource, Source
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, main
 from tundravm.declarative import Lock, lock, lock_status, read_lock, write_lock
 from tundravm.errors import ErrorCode, LockfileError, SourceError
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file
 
 PROVER = "https://github.com/example/prover"
 NODE = "https://github.com/example/node"
@@ -21,21 +21,23 @@ TOOL = "https://example.com/tool-1.0.tar.gz"
 SHA = "c" * 40
 DIGEST = "d" * 64
 
-RECIPE = f"""
-from tundravm.declarative import Build, Fragment, Git, Http, Install, Recipe
+IMAGE = f"""
+from tundravm import Image
+from tundravm.sources import Build, Git, Http, Install
 
-recipe = Recipe(
+image = Image(
     "prover",
-    items=(
+    files=[
         Build("prover", Git({PROVER!r}, "feat/tdx"), script="make",
-              install=(Install("prover", "/usr/bin/prover"),)),
+              install=[Install("prover", "/usr/bin/prover")]),
         Build("node", Git({NODE!r}, "master"), script="make",
-              install=(Install("node", "/usr/bin/node"),)),
+              install=[Install("node", "/usr/bin/node")]),
         Build("tool", Http({TOOL!r}), script="make",
-              install=(Install("tool", "/usr/bin/tool"),)),
-    ),
+              install=[Install("tool", "/usr/bin/tool")]),
+    ],
 )
 """
+"""Three source builds beside the evidence service's, a local source every image has."""
 
 PROVER_LINE = f"  prover: git {PROVER} @ feat/tdx: ref 'feat/tdx' not found"
 TOOL_LINE = f"  tool: http {TOOL}: HTTP 404"
@@ -67,7 +69,7 @@ class _Upstream:
 def image_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "image.py"
-    path.write_text(RECIPE, encoding="utf-8")
+    path.write_text(IMAGE, encoding="utf-8")
     return path
 
 
@@ -80,15 +82,15 @@ def _cli(monkeypatch: pytest.MonkeyPatch, upstream: _Upstream, *argv: str) -> tu
 def test_lock_attempts_every_source_and_reports_each_failure(image_file: Path) -> None:
     upstream = _Upstream()
     with pytest.raises(LockfileError) as caught:
-        lock(load_recipe(image_file), resolver=upstream)
+        lock(load_file(image_file).recipe, resolver=upstream)
     error = caught.value
-    assert sorted(upstream.calls) == sorted([PROVER, NODE, TOOL])
+    assert sorted(upstream.calls)[-3:] == sorted([PROVER, NODE, TOOL])
     assert error.code == ErrorCode.LOCKFILE
     assert error.args[0].splitlines() == [
         "Cannot lock: 2 sources could not be resolved:",
         PROVER_LINE,
         TOOL_LINE,
-        "1 of 3 sources resolved; nothing written.",
+        "2 of 4 sources resolved; nothing written.",
     ]
     assert error.hint == HINT
     assert {name: e.reason for name, e in error.failures.items()} == {
@@ -105,9 +107,9 @@ def test_other_resolver_errors_are_collected_too(image_file: Path) -> None:
         return SHA if isinstance(source, GitSource) else DIGEST
 
     with pytest.raises(LockfileError) as caught:
-        lock(load_recipe(image_file), resolver=flaky)
+        lock(load_file(image_file).recipe, resolver=flaky)
     assert f"  node: git {NODE} @ master: timed out" in str(caught.value)
-    assert "2 of 3 sources resolved; nothing written." in str(caught.value)
+    assert "3 of 4 sources resolved; nothing written." in str(caught.value)
 
 
 @pytest.mark.parametrize(
@@ -117,13 +119,13 @@ def test_other_resolver_errors_are_collected_too(image_file: Path) -> None:
             False,
             (),
             "Cannot lock: 2 sources could not be resolved:\n"
-            f"{PROVER_LINE}\n{TOOL_LINE}\n1 of 3 sources resolved; nothing written.",
+            f"{PROVER_LINE}\n{TOOL_LINE}\n2 of 4 sources resolved; nothing written.",
         ),
         (
             True,
             ("--update", "prover"),
             "Cannot lock: 1 source could not be resolved:\n"
-            f"{PROVER_LINE}\n2 of 3 sources resolved; nothing written.",
+            f"{PROVER_LINE}\n3 of 4 sources resolved; nothing written.",
         ),
     ],
     ids=["no-lock", "existing-lock-update-prover"],
@@ -140,7 +142,7 @@ def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
     writes nothing: no lockfile appears, and an existing one keeps its bytes."""
     target = image_file.parent / "build" / "tundravm.lock"
     if existing:
-        write_lock(lock(load_recipe(image_file), resolver=_Upstream(broken=False)), target)
+        write_lock(lock(load_file(image_file).recipe, resolver=_Upstream(broken=False)), target)
     before = target.read_bytes() if existing else None
     code, out = _cli(monkeypatch, _Upstream(), str(image_file), *update)
     assert (code, out) == (EXIT_ERROR, "")
@@ -149,7 +151,7 @@ def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
 
 
 def test_offline_lock_reports_every_unpinned_source_at_once(image_file: Path) -> None:
-    recipe = load_recipe(image_file)
+    recipe = load_file(image_file).recipe
     full = lock(recipe, resolver=_Upstream(broken=False))
     partial = read_lock_without(full, "prover", "tool", tmp=image_file.parent)
     with pytest.raises(LockfileError) as caught:
@@ -158,7 +160,7 @@ def test_offline_lock_reports_every_unpinned_source_at_once(image_file: Path) ->
         "Cannot lock offline: 2 sources need the network to resolve:",
         f"  prover: git {PROVER} @ feat/tdx: not pinned in the lockfile",
         f"  tool: http {TOOL}: not pinned in the lockfile",
-        "1 of 3 sources resolved; nothing written.",
+        "2 of 4 sources resolved; nothing written.",
     ]
     assert sorted(caught.value.failures) == ["prover", "tool"]
 
@@ -166,7 +168,7 @@ def test_offline_lock_reports_every_unpinned_source_at_once(image_file: Path) ->
 def test_lock_check_names_unpinned_sources_without_the_network(
     image_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recipe = load_recipe(image_file)
+    recipe = load_file(image_file).recipe
     target = image_file.parent / "build" / "tundravm.lock"
     full = lock(recipe, resolver=_Upstream(broken=False))
     write_lock(read_lock_without(full, "prover", tmp=image_file.parent), target)

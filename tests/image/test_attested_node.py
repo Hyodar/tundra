@@ -14,7 +14,7 @@ import tundravm
 from tests.compiler.test_native_tree import by_image, mkosi_summary
 from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES
 from tundravm.declarative import lint
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
 from tundravm.testing import plan
 
@@ -34,7 +34,7 @@ def _names(path: Path) -> tuple[set[str], set[str]]:
 )
 def test_each_stage_lints_clean_and_keeps_what_the_last_one_declared(index: int) -> None:
     stage = EXAMPLE_RECIPES[index]
-    found = lint(load_recipe(stage))
+    found = lint(load_file(stage).recipe)
     assert [d.code for d in found if d.severity == "error"] == []
     assert {d.code for d in found if d.severity == "warning"} <= ALLOWED
     if index:

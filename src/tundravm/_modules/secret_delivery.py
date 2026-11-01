@@ -11,27 +11,21 @@ from __future__ import annotations
 import json
 import posixpath
 import shlex
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from tundravm._modules import attested_tls
 from tundravm._modules.base import Module, tools_source
 from tundravm._modules.disk_encryption import (
     OWNER_DIRECTORY,
     OWNER_UNIT,
-    DiskEncryption,
     DiskSpec,
 )
 from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm._units.render import render
-from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
-from tundravm.models import SecretSpec, ServiceSpec, ships_unit
-
-if TYPE_CHECKING:
-    from tundravm.declarative._lowered import Lowered
+from tundravm.models import SecretSpec, ServiceSpec
 
 SECRET_DELIVERY_BUILD_PACKAGES = (
     "golang",
@@ -48,18 +42,6 @@ _UNIT_DIRECTORY = "/usr/lib/systemd/system"
 BUILTIN_SECRET_PROVIDER = "tundravm"
 """The provider of a ``Secrets`` without ``delivery=``: the attested endpoint from ``tools/``."""
 
-BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
-    {"ssh-key": True, "file": True, "env": False}
-)
-"""What the built-in provider (``attested-endpoint``) writes, by target kind, each only on
-the TLS session whose key a fresh quote bound.
-
-``ssh-key``: the operator's OpenSSH public key (``POST /ssh-key``), written to
-``<ssh_dir>/authorized_keys`` and ``key_path``. ``file``: a ``SecretFile`` target, written
-atomically with its mode and owner (``POST /credentials``), once per name per boot. ``env``
-(``SecretEnv``) targets are not written.
-"""
-
 ENDPOINT_UNIT = "tundravm-endpoint.service"
 """The attested endpoint's unit: the control plane, which no runtime-init step holds up."""
 QUOTE_SOCKET = "/var/tdxs.sock"
@@ -71,8 +53,6 @@ INSTANCE_PUBLIC_KEY = "/run/tundravm/instance-key.pub"
 RUNTIME = "/run/tundravm"
 MODE_FILE = "/run/tundravm/mode"
 """What the execution gate recorded, which the evidence carries."""
-
-_TARGET_NOUNS = {"file": "file", "env": "environment variable"}
 
 _HARDENING: tuple[tuple[str, str], ...] = (
     ("ProtectSystem", "strict"),
@@ -105,18 +85,15 @@ class SecretDelivery(Module):
 
     *secrets* are the expected secrets, each with at least one delivery target.
     *store_at* names the ``DiskEncryption`` disk (a name or the ``DiskSpec``) that
-    received secrets are stored on; ``check()`` warns when no disk applied to the
-    profile has that name (``secret-store-undefined``).
+    received secrets are stored on.
 
     An env target with a ``service`` goes to that service's environment file
     (:meth:`env_file`), which a drop-in makes the unit read
-    (:meth:`service_dropins`); ``check()`` rejects a service the profile neither
-    generates, ships nor enables (``secret-env-service-unknown``). *env_suffix*
-    tells apart the files of several deliveries in one profile.
+    (:meth:`service_dropins`). *env_suffix* tells apart the files of several deliveries
+    in one profile.
 
-    *provider* writes the targets: the built-in one (:data:`BUILTIN_SECRET_CAPABILITIES`)
-    or an external one writing the kinds in *provider_supports*; ``check()``
-    rejects a target it does not write (``secret-target-unsupported``). The SSH
+    *provider* writes the targets: the built-in one, which writes files and never the
+    environment, or an external one writing the kinds in *provider_supports*. The SSH
     key flow always runs through the built-in one.
 
     *volumes* are ``(name, pipe)`` pairs: the volumes whose passphrase ``POST /unlock``
@@ -159,13 +136,6 @@ class SecretDelivery(Module):
                     "credentials=.",
                 )
 
-    @property
-    def store_disk(self) -> str | None:
-        """Name of the disk secrets are stored on (``store_at`` as a name)."""
-        if isinstance(self.store_at, DiskSpec):
-            return self.store_at.name
-        return self.store_at or None
-
     def env_file(self, service: str) -> str:
         """The file *service*'s (``app.service``) env targets are delivered to."""
         stem = service.removesuffix(".service")
@@ -204,72 +174,6 @@ class SecretDelivery(Module):
     def external(self) -> bool:
         """Whether something other than the attested endpoint writes the targets."""
         return self.provider != BUILTIN_SECRET_PROVIDER
-
-    def delivers(self, kind: str) -> bool:
-        """Whether *provider* writes a target of *kind* (``file``, ``env``) at boot."""
-        if self.external:
-            return kind in self.provider_supports
-        return BUILTIN_SECRET_CAPABILITIES.get(kind, False)
-
-    def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
-        yield from self._check_targets(profile)
-        yield from self._check_services(image, profile)
-        store = self.store_disk
-        if store is None:
-            return
-        disks = {
-            disk.name
-            for module in image.applied_modules(profile, inherited=True)
-            if isinstance(module, DiskEncryption)
-            for disk in module.disks
-        }
-        if store in disks:
-            return
-        yield Diagnostic(
-            severity="warning",
-            code="secret-store-undefined",
-            message=(f"secrets are stored on disk {store!r}, which this profile does not declare"),
-            hint=tundravm_sets("where the secrets are stored"),
-            profile=profile,
-            subject=store,
-        )
-
-    def _check_targets(self, profile: str) -> Iterator[Diagnostic]:
-        for spec in self.secrets:
-            for target in spec.targets:
-                if self.delivers(target.kind):
-                    continue
-                noun = _TARGET_NOUNS[target.kind]
-                only = "" if self.external else " (it writes files, never the environment)"
-                yield Diagnostic(
-                    severity="error",
-                    code="secret-target-unsupported",
-                    message=(
-                        f"secret {spec.name!r} goes to {noun} {target.location}, which the "
-                        f"{self.provider!r} provider does not write at boot{only}"
-                    ),
-                    hint=tundravm_sets("where each secret is delivered"),
-                    profile=profile,
-                    subject=spec.name,
-                )
-
-    def _check_services(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
-        state = image.state.effective_profile(profile)
-        controlled = {spec.unit for spec in state.unit_states}
-        for service in self.env_services():
-            if service in controlled or ships_unit(state, service):
-                continue
-            yield Diagnostic(
-                severity="error",
-                code="secret-env-service-unknown",
-                message=(
-                    f"a secret is delivered into the environment of service {service!r}, "
-                    "which this profile neither generates, ships nor enables"
-                ),
-                hint=tundravm_sets("which service a secret is delivered to"),
-                profile=profile,
-                subject=service,
-            )
 
     def files(self) -> list[tuple[str, str, str, str | None]]:
         """``(name, location, mode, owner)`` of each ``file`` target the endpoint writes."""

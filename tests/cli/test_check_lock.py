@@ -13,10 +13,11 @@ from tests.cli.conftest import STARTER, Cli
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 
 BROKEN = """\
-from tundravm.declarative import Disk, Key, Recipe
+from tundravm import Image, Service
 
-recipe = Recipe("b", items=(Disk("d", "/data", key=Key("k")),))
+image = Image("b", services=[Service("app", ["/usr/bin/app"], user="ghost")])
 """
+"""An image whose service runs as a user nothing declares: ``service-user-missing``."""
 
 
 MIRRORED = STARTER.replace(
@@ -57,24 +58,23 @@ def test_errors_exit_1_in_text_and_json(
     (tmp_path / "broken.py").write_text(BROKEN, encoding="utf-8")
     result = cli("check", "broken.py")
     assert result.code == EXIT_FAILURE
-    assert "error disk-key-undefined [default]" in result.out
-    assert result.out.splitlines()[-1] == "explain: tundravm check --explain disk-key-undefined"
+    assert "error service-user-missing [production]" in result.out
+    assert "--explain service-user-missing" in result.out.splitlines()[-1]
     result = cli("check", "broken.py", "--json")
     assert result.code == EXIT_FAILURE
     payload = json.loads(result.out)
     assert payload["schema"] == "tundravm.check/1" and payload["passed"] is False
     assert payload["summary"]["errors"] >= 1 and payload["tree"] is None
-    assert [d["code"] for d in payload["diagnostics"]][0] == "disk-key-undefined"
+    assert "service-user-missing" in [d["code"] for d in payload["diagnostics"]]
 
 
 def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
-    codes = ("source-unpinned", "tree-drift", "step-cycle")
+    codes = ("source-unpinned", "tree-drift")
     result = cli("check", *(f"--explain={code}" for code in codes), "demo.py")
     assert result.code == EXIT_OK, result.err
     assert result.out.startswith("source-unpinned: warning (error when the policy refuses")
     assert "\n    fix: Run `tundravm lock` to pin every source" in result.out
     assert "\n\ntree-drift: error\n" in result.out
-    assert "\n\nstep-cycle: error\n    internal: an image file cannot reach it" in result.out
     unknown = cli("check", "--explain", "source-unpined")
     assert unknown.code == EXIT_ERROR
     assert "Did you mean 'source-unpinned'? docs/reference/lint.md lists" in unknown.err

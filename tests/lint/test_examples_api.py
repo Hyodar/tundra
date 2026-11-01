@@ -12,7 +12,7 @@ from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, run_main
 from tundravm._reference import MODULES
 from tundravm.backends import LimaMkosiBackend
 from tundravm.declarative import Recipe, compile, lock, write_lock
-from tundravm.recipe import load_file, load_recipe
+from tundravm.recipe import load_file
 
 INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
 
@@ -22,7 +22,7 @@ EXAMPLES = pytest.mark.parametrize(
 
 
 def _recipe(path: Path) -> Recipe:
-    return load_recipe(path, extra_paths=[REPO_ROOT])
+    return load_file(path, extra_paths=[REPO_ROOT]).recipe
 
 
 def test_examples_are_syntax_valid() -> None:
