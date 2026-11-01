@@ -1481,6 +1481,8 @@ class Repository(Declared):
     priority: int = 100
     in_image: bool = True
     """Also list the repository in the image's ``/etc/apt``, not only for the build's apt."""
+    sha256: str | None = None
+    """The sha256 of its ``dists/<suite>/InRelease``, which ``lock`` records."""
 
     def __post_init__(self) -> None:
         _freeze(self, "components")

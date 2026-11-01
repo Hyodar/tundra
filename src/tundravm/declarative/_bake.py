@@ -45,6 +45,7 @@ from tundravm.policy import ensure_bake_policy
 from tundravm.project import lock_command
 from tundravm.toolchain import Toolchain
 
+from ._apt import locked_releases
 from ._compile import emit, mkosi_argv
 from ._lowered import Lowered
 
@@ -106,6 +107,7 @@ def bake(
                 context={"operation": "bake"},
             )
         sources_dir = _fetched_sources(lowered, destination, backend, offline=offline)
+        releases = locked_releases(lowered) if offline else ()
         profiles: dict[str, ProfileBuildResult] = {}
         for name in sorted(active):
             started = progress.elapsed()
@@ -122,7 +124,7 @@ def bake(
                 or lowered.kernel_source(name)
                 or lowered.deb_file(name)
                 else None,
-                mkosi_args=tuple(mkosi_argv(lowered, name)),
+                mkosi_args=(*mkosi_argv(lowered, name), *releases),
                 toolchain=locked_toolchain,
             )
             logger.log(

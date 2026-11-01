@@ -19,7 +19,8 @@ profiles once per profile (``<profile>/<name>``). Version 5 records the build
 release and snapshot, measurement tools; see :class:`~tundravm.toolchain.Toolchain`).
 Version 6 names the per-profile sections ``profiles.<name>.<key>``, as the public
 API says. Version 7 names the payload and its digest ``image`` and ``image_digest``,
-as the build manifest does. Older lockfiles do not load:
+as the build manifest does, and records each digest-pinned apt archive's ``InRelease``
+(``repositories``). Older lockfiles do not load:
 :func:`~tundravm.lockfile.parse_lockfile` asks to lock again.
 """
 
@@ -41,6 +42,18 @@ class LockedFetch:
 
 
 @dataclass(frozen=True, slots=True)
+class LockedRepository:
+    """An ``AptRepository(sha256=)`` as ``lock`` found it: its ``InRelease``'s ``sha256``
+    and ``Date:``, which an offline build checks instead of fetching the file."""
+
+    name: str
+    url: str
+    suite: str
+    sha256: str
+    date: str
+
+
+@dataclass(frozen=True, slots=True)
 class Lockfile:
     """Parsed ``tundravm.lock``.
 
@@ -58,3 +71,4 @@ class Lockfile:
     fetches: list[LockedFetch] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)
     toolchain: Toolchain | None = None
+    repositories: list[LockedRepository] = field(default_factory=list)

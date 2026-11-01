@@ -25,6 +25,7 @@ from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
 from tundravm.errors import ValidationError
+from tundravm.models import inrelease_variable
 
 from ._change import Edit, Remove
 from ._component import (
@@ -309,7 +310,8 @@ class _Lowering:
     def repositories(self) -> Iterator[dm.Declaration]:
         """``Debian(repositories=)``: each archive for the build's apt only (an image never
         runs apt), its keyring, and for a digest pin the ``sync`` step that fails the build
-        when the archive's ``InRelease`` moved."""
+        when the archive's ``InRelease`` moved: it fetches the file, unless an offline build
+        passes the digest the lock recorded (:func:`~tundravm.models.inrelease_variable`)."""
         base = self.image.base
         for repository in base.repositories:
             yield dm.Repository(
@@ -319,6 +321,7 @@ class _Lowering:
                 components=tuple(repository.components),
                 keyring=repository.keyring,
                 in_image=False,
+                sha256=repository.sha256,
             )
             if isinstance(repository.key, Path):
                 yield dm.File.copy(repository.keyring, repository.key, mode=0o644)
@@ -328,10 +331,11 @@ class _Lowering:
                     f"AptRepository {repository.url} {repository.suite} moved: its InRelease "
                     f"is no longer sha256 {repository.sha256}"
                 )
+                fetched = f'$(curl -fsSL --proto =https {url} | sha256sum | cut -d " " -f 1)'
                 yield dm.Hook(
                     f"apt-{repository.name}",
                     "sync",
-                    f'test "$(curl -fsSL --proto =https {url} | sha256sum | cut -d " " -f 1)" '
+                    f'test "${{{inrelease_variable(repository.name)}:-{fetched}}}" '
                     f"= {repository.sha256} || {{ echo {message} >&2; exit 1; }}",
                 )
 

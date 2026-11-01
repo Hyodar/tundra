@@ -127,7 +127,7 @@ UMask=0022
 #!/usr/bin/env bash
 set -euo pipefail
 
-test "$(curl -fsSL --proto =https https://apt.example.com/debian/dists/stable/InRelease | sha256sum | cut -d " " -f 1)" = 0000000000000000000000000000000000000000000000000000000000000000 || { echo 'AptRepository https://apt.example.com/debian stable moved: its InRelease is no longer sha256 0000000000000000000000000000000000000000000000000000000000000000' >&2; exit 1; }
+test "${TUNDRAVM_INRELEASE_APT_EXAMPLE_COM_DEBIAN_STABLE:-$(curl -fsSL --proto =https https://apt.example.com/debian/dists/stable/InRelease | sha256sum | cut -d " " -f 1)}" = 0000000000000000000000000000000000000000000000000000000000000000 || { echo 'AptRepository https://apt.example.com/debian stable moved: its InRelease is no longer sha256 0000000000000000000000000000000000000000000000000000000000000000' >&2; exit 1; }
 == mkosi.postinst.d/50-postinst.sh: the lines naming them
 mkosi-chroot useradd --system --shell /usr/sbin/nologin prometheus-node-exporter-ready
 mkosi-chroot systemctl enable prometheus-node-exporter.service

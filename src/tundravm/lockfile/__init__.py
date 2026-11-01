@@ -9,13 +9,14 @@ from .drift import (
     unselected_sources,
 )
 from .io import parse_lockfile, read_lockfile, serialize_lockfile
-from .model import LOCKFILE_VERSION, LockedFetch, Lockfile
+from .model import LOCKFILE_VERSION, LockedFetch, LockedRepository, Lockfile
 from .resolve import build_lockfile, image_digest, section_digests, section_values
 
 __all__ = [
     "LOCKFILE_VERSION",
     "LockDrift",
     "LockedFetch",
+    "LockedRepository",
     "Lockfile",
     "build_lockfile",
     "compare_lock",

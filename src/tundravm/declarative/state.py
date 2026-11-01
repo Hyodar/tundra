@@ -631,6 +631,7 @@ def _repository(item: Repository) -> RepositorySpec:
         keyring=item.keyring,
         priority=item.priority,
         in_image=item.in_image,
+        sha256=item.sha256,
     )
 
 

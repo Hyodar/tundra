@@ -47,6 +47,7 @@ from tundravm.models import (
     OutputTarget,
     ProfileState,
     RecipeState,
+    RepositorySpec,
 )
 from tundravm.policy import Policy
 from tundravm.toolchain import ToolsTree
@@ -386,6 +387,16 @@ class Lowered:
                 sources[spec.name] = spec
         return dict(sorted(sources.items()))
 
+    def pinned_repositories(self) -> dict[str, RepositorySpec]:
+        """The digest-pinned apt repositories of the active profiles, by name: what ``lock``
+        records the ``InRelease`` of."""
+        return {
+            repository.name: repository
+            for profile in self.active
+            for repository in self.state.effective_profile(profile).repositories
+            if repository.sha256 is not None
+        }
+
     @property
     def lock_path(self) -> Path:
         """The lockfile this recipe reads: :attr:`lock_file`, else ``<build_dir>/tundravm.lock``."""
@@ -536,6 +547,19 @@ class Lowered:
         if partial:
             elsewhere = {source_section(key) for key in unselected_sources(lock, payload)}
             removed = [s for s in removed if s not in elsewhere]
+        declared = self.pinned_repositories()
+        recorded = {item.name: item for item in lock.repositories}
+        for name in sorted(declared.keys() | recorded.keys()):
+            section, spec, item = f"repositories.{name}", declared.get(name), recorded.get(name)
+            if item is None:
+                added.append(section)
+                details[section] = f"repository {name}'s InRelease is not locked"
+            elif spec is None:
+                if not partial:
+                    removed.append(section)
+            elif (spec.url, spec.suite, spec.sha256) != (item.url, item.suite, item.sha256):
+                changed.append(section)
+                details[section] = f"InRelease {item.sha256[:7]} -> {(spec.sha256 or '')[:7]}"
         return replace(
             drift,
             added=(*drift.added, *added),

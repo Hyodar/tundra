@@ -178,7 +178,8 @@ Passing a baseline component in `components=` replaces the implied one.
 `AptRepository(url, suite, components, key=)` adds an archive for the build's apt, signed
 by `key=` (a host keyring `Path`, or one under `/usr/share/keyrings/`) and pinned: a
 `https://snapshot.debian.org/archive/NAME` URL by the image's snapshot (or `snapshot=`),
-any other by `sha256=` of its `dists/SUITE/InRelease`, which the build checks first.
+any other by `sha256=` of its `dists/SUITE/InRelease`, which `lock` records with its
+date and the build checks first.
 
 `File.copy` and `Tree` read host files when the image lowers: build their paths from
 `Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise;
@@ -675,7 +676,8 @@ snapshot this release pins; `Debian(snapshot=)` overrides it.
 - An older tundravm's lockfile is refused, never migrated: lock again.
 - A production build refuses a missing (`lock-missing`) or stale lock and builds every
   source at its pin. A development build writes a missing lock and re-pins `Local` sources.
-- `build --offline` builds only what the lock pins.
+- `build --offline` builds only what the lock pins, and checks an `InRelease` against
+  the lock's digest instead of fetching it.
 
 `check` warns `source-unpinned` once per source the lock does not pin yet, naming the
 profiles that build it, then the hint once.

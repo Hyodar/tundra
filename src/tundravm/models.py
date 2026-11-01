@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import posixpath
+import re
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -122,6 +123,24 @@ class RepositorySpec:
     keyring: str | None = None
     priority: int = 100
     in_image: bool = True
+    sha256: str | None = None
+
+    @property
+    def release_url(self) -> str:
+        """The signed ``InRelease`` file *sha256* pins."""
+        return f"{self.url.rstrip('/')}/dists/{self.suite}/InRelease"
+
+    @property
+    def locked_variable(self) -> str:
+        """:func:`inrelease_variable` of this repository."""
+        return inrelease_variable(self.name)
+
+
+def inrelease_variable(name: str) -> str:
+    """The mkosi ``Environment=`` variable an offline build sets to the ``InRelease`` digest
+    the lock recorded for repository *name*: its ``sync`` step compares that instead of
+    fetching the file."""
+    return "TUNDRAVM_INRELEASE_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
 
 
 @dataclass(frozen=True, slots=True)

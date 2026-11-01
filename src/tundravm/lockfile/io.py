@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from tundravm.errors import LockfileError
-from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
+from tundravm.lockfile.model import (
+    LOCKFILE_VERSION,
+    LockedFetch,
+    LockedRepository,
+    Lockfile,
+)
 from tundravm.project import lock_command
 from tundravm.toolchain import Toolchain
 
@@ -26,6 +31,17 @@ def serialize_lockfile(lockfile: Lockfile) -> str:
         "sections": lockfile.sections,
         "toolchain": None if lockfile.toolchain is None else lockfile.toolchain.payload(),
     }
+    if lockfile.repositories:
+        payload["repositories"] = [
+            {
+                "name": item.name,
+                "url": item.url,
+                "suite": item.suite,
+                "sha256": item.sha256,
+                "date": item.date,
+            }
+            for item in lockfile.repositories
+        ]
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
@@ -58,6 +74,9 @@ def parse_lockfile(raw: str) -> Lockfile:
         raise LockfileError("Lockfile has no `toolchain` section.", hint=_regenerate())
     raw_toolchain = payload["toolchain"]
     toolchain = None if raw_toolchain is None else Toolchain.from_payload(raw_toolchain)
+    repositories_raw = payload.get("repositories", [])
+    if not isinstance(repositories_raw, list):
+        raise LockfileError("Invalid lockfile `repositories` value.", hint=_regenerate())
     return Lockfile(
         version=version,
         image_digest=image_digest,
@@ -66,6 +85,7 @@ def parse_lockfile(raw: str) -> Lockfile:
         fetches=fetches,
         sections=sections,
         toolchain=toolchain,
+        repositories=[_parse_locked_repository(item) for item in repositories_raw],
     )
 
 
@@ -100,6 +120,14 @@ def _parse_locked_fetch(item: Any) -> LockedFetch:
         digest=_required_str(item, "digest"),
         name=_optional_str(item, "name"),
         ref=_optional_str(item, "ref"),
+    )
+
+
+def _parse_locked_repository(item: Any) -> LockedRepository:
+    if not isinstance(item, dict):
+        raise LockfileError("Invalid repository entry in lockfile.", hint=_regenerate())
+    return LockedRepository(
+        **{key: _required_str(item, key) for key in ("name", "url", "suite", "sha256", "date")}
     )
 
 

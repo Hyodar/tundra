@@ -69,6 +69,7 @@ from tundravm.project import lock_command
 from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 
 from . import _bake, _compile
+from ._apt import ReleaseFetcher, lock_repositories
 from ._lowered import LOCK_FILENAME, Lowered
 from .lower import lower
 from .model import Diagnostic, Git, Http, Local, Pairs, Recipe, Target, recorded_local
@@ -597,6 +598,7 @@ def lock_image(
     update: Sequence[str] = (),
     offline: bool = False,
     resolver: Resolver | None = None,
+    release: ReleaseFetcher | None = None,
 ) -> Lock:
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
@@ -604,6 +606,8 @@ def lock_image(
     ``Lowered.lock_sources``). A local source is digested again whatever *previous* pins.
     The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`);
     naming ``toolchain`` in *update* records it again instead of keeping *previous*'s.
+    Each ``AptRepository(sha256=)`` records its ``InRelease`` (:func:`lock_repositories`,
+    read through *release*).
     """
     offline = offline or img.policy.network_mode == "offline"
     scoped = img.select(profiles)
@@ -639,7 +643,14 @@ def lock_image(
             kept.append(build.locked(pin))
     fetches = resolve_pins(pending, prior, resolver=resolver, offline=offline, kept=kept)
     fetches.sort(key=lambda fetch: fetch.name or fetch.source)
-    return Lock.of(build_lockfile(image=payload, fetches=fetches, toolchain=toolchain))
+    repositories = lock_repositories(
+        scoped.pinned_repositories(), previous, offline=offline, release=release
+    )
+    return Lock.of(
+        build_lockfile(
+            image=payload, fetches=fetches, toolchain=toolchain, repositories=repositories
+        )
+    )
 
 
 def _named_pins(locked: Lock) -> dict[str, LockedFetch]:

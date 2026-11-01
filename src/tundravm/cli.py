@@ -1036,6 +1036,10 @@ def _pinned(locked: Lock) -> list[str]:
         for fetch in lockfile.fetches
     ]
     lines.extend(f"  {line}" for line in show.sources_table(sources, ("kind", "ref", "pin")))
+    lines.extend(
+        f"  repository: {item.name} InRelease {item.sha256[:12]} {item.date}"
+        for item in lockfile.repositories
+    )
     recorded = lockfile.toolchain
     if recorded is not None and recorded.mkosi is not None:
         lines.append(f"  toolchain: {recorded.summary()}")
