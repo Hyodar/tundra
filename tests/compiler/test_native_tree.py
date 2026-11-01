@@ -20,7 +20,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -30,6 +30,7 @@ from tundravm.compiler.emit_mkosi import (
     ESP_MKFS_ENVIRONMENT,
     MAIN_IMAGE_SETTINGS,
     MKOSI_VERSION,
+    UKI_MAX_SIZE,
     esp_bytes,
     uki_capacity,
     verity_uuids,
@@ -285,30 +286,67 @@ def test_cloud_glue_is_in_the_payload_and_gated_at_boot() -> None:
         assert "[Match]" not in conf.read_text(encoding="utf-8"), conf
 
 
-def test_the_esp_is_a_fat32_by_cluster_count(tmp_path: Path) -> None:
-    """Every disk's ESP, formatted as repart does offline (``mkfs.vfat -F 32 -S 4096`` then
-    the tree's options, the last ``-S`` winning): 512-byte sectors and clusters, 65525
-    clusters or more (UEFI's FAT32), room for the UKI."""
+DEV_UKI = 138881024
+"""The fixture's dev UKI (132.4 MiB) when the fixed 128 MiB ESP stopped holding it."""
+
+
+def _bytes(size: str) -> int:
+    return int(size[:-1]) << (20 if size[-1] == "M" else 30)
+
+
+@pytest.mark.parametrize(
+    ("root", "uki_max_size", "esp"),
+    [
+        ("verity", None, 128),
+        ("initramfs", "64M", 128),
+        ("initramfs", "126M", 128),
+        ("initramfs", "127M", 144),
+        ("initramfs", None, 272),
+        ("initramfs", "1G", 1056),
+    ],
+)
+def test_the_esp_holds_the_declared_uki_as_a_fat32_by_cluster_count(
+    tmp_path: Path, root: Literal["initramfs", "verity"], uki_max_size: str | None, esp: int
+) -> None:
+    """The ESP is the verity size, or the smallest 16 MiB step from it holding the declared
+    UKI, formatted as repart does offline (``mkfs.vfat -F 32 -S 4096`` then the tree's
+    options, the last ``-S`` winning): 512-byte sectors and clusters, 65525 clusters or more
+    (UEFI's FAT32), and every cluster but three free for the UKI."""
+    assert esp_bytes(root, uki_max_size) == esp << 20
     mkfs = shutil.which("mkfs.vfat") or shutil.which("mkfs.fat")
     if mkfs is None:
         pytest.skip("mkfs.vfat is not installed")
-    for esp in (esp_bytes("initramfs"), esp_bytes("verity")):
-        image = tmp_path / "esp.img"
-        image.write_bytes(b"")
-        os.truncate(image, esp)
-        options = ESP_MKFS_ENVIRONMENT.partition("=")[2].partition("=")[2].strip('"').split()
-        subprocess.run(
-            [mkfs, "-i", "12345678", "-n", "ESP", "-F", "32", "-S", "4096", *options, str(image)],
-            check=True,
-            capture_output=True,
-        )
-        boot = image.read_bytes()[:512]
-        sector, per_cluster, reserved, fats = struct.unpack_from("<HBHB", boot, 11)
-        total, fat_sectors = struct.unpack_from("<II", boot, 32)
-        clusters = (total - reserved - fats * fat_sectors) // per_cluster
-        assert (sector, per_cluster) == (512, 1)
-        assert clusters >= 65525
-        assert (clusters - 3) * sector == uki_capacity(esp)
+    image = tmp_path / "esp.img"
+    image.write_bytes(b"")
+    os.truncate(image, esp << 20)
+    options = ESP_MKFS_ENVIRONMENT.partition("=")[2].partition("=")[2].strip('"').split()
+    subprocess.run(
+        [mkfs, "-i", "12345678", "-n", "ESP", "-F", "32", "-S", "4096", *options, str(image)],
+        check=True,
+        capture_output=True,
+    )
+    boot = image.read_bytes()[:512]
+    sector, per_cluster, reserved, fats = struct.unpack_from("<HBHB", boot, 11)
+    total, fat_sectors = struct.unpack_from("<II", boot, 32)
+    clusters = (total - reserved - fats * fat_sectors) // per_cluster
+    assert (sector, per_cluster) == (512, 1)
+    assert clusters >= 65525
+    assert (clusters - 3) * sector == uki_capacity(esp << 20)
+    if root == "initramfs":
+        assert uki_capacity(esp << 20) >= _bytes(uki_max_size or UKI_MAX_SIZE)
+
+
+def test_the_fixture_dev_esp_is_larger_than_the_uki_ceiling_it_declares() -> None:
+    """Lowered, the fixture's dev profile (the whole OS in its UKI) gets an ESP whose FAT32
+    holds the UKI ceiling it declares, which is above the dev UKI that outgrew 128 MiB."""
+    recipe = recipe_with()
+    tree = compile(recipe, variants=("dev",))
+    conf = next(e.content for e in tree.entries if e.path == "mkosi.repart/00-esp.conf")
+    found = re.search(rb"SizeMaxBytes=([0-9]+)M", conf or b"")
+    assert found is not None
+    esp = int(found.group(1)) << 20
+    ceiling = _bytes(recipe.mkosi.uki_max_size or UKI_MAX_SIZE)
+    assert DEV_UKI < ceiling <= uki_capacity(esp) < esp
 
 
 def test_wrappers_depend_on_the_payload_and_convert_it() -> None:

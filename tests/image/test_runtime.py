@@ -449,6 +449,25 @@ def test_the_initramfs_root_tmpfs_cap(layout: str, size: str, refused: str | Non
     assert lower(image).digest() != lower(prover()).digest()
 
 
+@pytest.mark.parametrize(
+    ("layout", "size", "refused"),
+    [
+        ("initramfs", "384M", None),
+        ("initramfs", "50%", "not a size"),
+        ("verity", "384M", "fixed ESP"),
+    ],
+)
+def test_the_initramfs_uki_ceiling(layout: str, size: str, refused: str | None) -> None:
+    """Lowered to the recipe's ``Mkosi(uki_max_size=)``, which sizes the ESP; refused where
+    the UKI carries no OS."""
+    filesystem = "erofs" if layout == "verity" else None
+    if refused is not None:
+        with pytest.raises(ValidationError, match=refused):
+            RootFS(layout, filesystem, uki_max_size=size)  # type: ignore[arg-type]
+        return
+    assert recipe_of(prover(rootfs=RootFS.initramfs(uki_max_size=size))).mkosi.uki_max_size == size
+
+
 # ── The kernel command line ─────────────────────────────────────────────
 
 
