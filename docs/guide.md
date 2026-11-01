@@ -166,8 +166,7 @@ image = Image(
 | for each cloud in `targets=`, its provisioning glue, inert elsewhere through `ConditionVirtualization=`, so one payload boots on every target | `targets=` |
 | a raw bootable disk for QEMU | `targets=("qemu", "azure", "gcp")` adds the cloud disks |
 
-The four baseline components (`TeeBase`, `Network`, `Firewall`, `Tdxs`) are in every image.
-Passing one of them in `components=` replaces the default one.
+Passing a baseline component in `components=` replaces the implied one.
 
 ### The slots
 
@@ -199,13 +198,11 @@ boot. Build dependencies are not image packages: they belong to the `GoBinary`,
 
 `cmdline=` on either `Kernel` appends parameters to the UKI's measured command line, after
 the ones the image writes itself: `kernel=Kernel.default(cmdline=["nospectre_v2"])`. None is
-added by default (flashbots' `nospectre_v2` is a choice to make, not one to copy). Each
-entry is one parameter, `name` or `name=value`. The ones tundravm sets are refused, each
-with what sets it: `root=`, `roothash=`, `usrhash=`, `systemd.verity*` and
+added by default. Each entry is one parameter, `name` or `name=value`. The ones tundravm
+sets are refused, each with what sets it: `root=`, `roothash=`, `usrhash=`, `systemd.verity*` and
 `systemd.volatile=` follow from `rootfs=`, the image boots systemd into `minimal.target`
-(`init=`, `rdinit=`, `systemd.unit=`), and `run` passes `console=` at boot. The parameters
-are part of the image: they move the image's digest in the lockfile, and the manifest
-records the UKI's command line, which `show --diff` compares.
+(`init=`, `rdinit=`, `systemd.unit=`), and `run` passes `console=` at boot. They are part
+of the image and move its digest in the lockfile.
 
 ### Imports
 
@@ -366,6 +363,8 @@ The rules:
   profile's.
 - `class X(Component, build_network=True)` says its builds fetch dependencies, so the
   tree builds with `WithNetwork=yes`.
+- `outbound()` returns the `Egress` its fields imply; a filtered image accepts it, and
+  the rule's comment names the component.
 
 Each code `check()` reports is declared in `rules`, as `App` declares
 `app-privileged-port`: `--explain` prints it, and an undeclared code is a
@@ -392,16 +391,16 @@ a `when=` phrase per other.
 A service that asks for quotes joins the `tdx` group and requires `EVIDENCE`. The evidence
 service depends on nothing on a volume or a secret: the evidence is what unlocks them.
 
-`tundravm.components.Tdxs` builds from `https://github.com/Hyodar/tundra-tools.git`, which
-is private. Every image implies it, so `lock` and `build` need read access to that
-repository. `Tdxs(source=Git(mirror, ref))` points every tundra-tools build at a mirror.
+`Tdxs` builds from the private `https://github.com/Hyodar/tundra-tools.git`, so `lock` and
+`build` need read access to it. `Tdxs(source=Git(mirror, ref))` points every tundra-tools
+build at a mirror.
 
 The surge prover in `examples/surge-tdx-prover/image.py` is the three workloads wired
 through their exports:
 
 ```python
 from tundravm import Image, RootFS
-from tundravm.components import DevAccess, Nethermind, Raiko, TaikoClient
+from tundravm.components import DevAccess, Egress, Nethermind, Network, Raiko, TaikoClient
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
@@ -421,6 +420,7 @@ image = Image(
     volumes=[data],
     secrets=[jwt, chain, config],
     ingress=[AttestedTLS(443, upstream=prover.http)],
+    network=Network(egress=Egress()),
     rootfs=RootFS.verity(),
     targets=("qemu", "azure", "gcp"),
     dev=DevAccess(password="tdx"),
@@ -589,8 +589,10 @@ threshold.
 ### Network and observability
 
 `network=Network(egress=Egress(ports=[TCP(443)], hosts=["10.0.0.0/8"]))` filters outbound
-traffic, accepting what the baseline sends (NTS time, resolvers, cloud metadata). A
-production profile without it is an `egress-unfiltered` warning.
+traffic, accepting what the baseline (NTS time, resolvers, cloud metadata) and each
+component's `outbound()` send. A host may be `HOST:PORT`, and since nftables matches no
+names, `"logs.example:443"` opens 443 to any address. A production profile without it is
+an `egress-unfiltered` warning.
 
 `observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
 exports the volatile journal and node metrics with secret credentials. An `http://` sink

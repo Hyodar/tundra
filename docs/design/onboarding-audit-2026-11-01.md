@@ -159,6 +159,9 @@ and `show`. The generated workflow was parsed as YAML.
 - The API reference speaks the public model: `Resolved.components`, `plan(component)`.
 - `new` writes `[tool.ruff] line-length = 100`, at which the project formats clean.
 - `doctor` without an image blocks on a missing `go`: every image's `Tdxs` is Go.
+- Components contribute their own egress (`Component.outbound()`): Nethermind's peers,
+  the driver's L1 port, raiko's collateral and the Observability sinks, so the surge
+  prover declares `Egress()` and no longer reports `egress-unfiltered`.
 
 ### Not fixed, ranked
 
@@ -170,9 +173,5 @@ and `show`. The generated workflow was parsed as YAML.
    as the image's own (S; `convert.py`).
 10. The guide is at 7875 of its 8000 words: the next paragraph needs a cut first; the
     doctor sample and the Imports table (the API reference has both) are the candidates.
-11. Components contribute their own egress (Nethermind peers, raiko collateral,
-    Observability sinks) so a derived `Egress` covers them; today each image lists them by
-    hand, and the surge prover declares none (`egress-unfiltered`) (M; `_image/_lower.py`,
-    `components/`).
 12. The default snapshot (`LOCKED_SNAPSHOT`, 20251113T083151Z) is a year old; bumping it is
     its own deliberate change, not a date-dependent lint (S; needs a CI run).
