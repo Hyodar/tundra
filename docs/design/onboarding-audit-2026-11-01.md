@@ -153,24 +153,15 @@ and `show`. The generated workflow was parsed as YAML.
   `build:go` rules said once, `show --dev` corrected, "recipe digest" gone.
 - README: the starter is a Go program in `app/`, not a busybox page.
 - CHANGELOG: one release note, grouped, every break marked.
+- A converted python unit fails `check` until `python3` ships: `service-program-missing`.
+- Lock hints name the command that runs here; `local-changed` says `build --dev` re-pins.
+- `source-unpinned` is image-wide, `[image] sources.NAME`, as lock drift reports a source.
+- The API reference speaks the public model: `Resolved.components`, `plan(component)`.
+- `new` writes `[tool.ruff] line-length = 100`, at which the project formats clean.
+- `doctor` without an image blocks on a missing `go`: every image's `Tdxs` is Go.
 
 ### Not fixed, ranked
 
-1. `convert --from systemd` of a python unit passes `check` with no `python3` package and
-   the `static` preset: no rule checks that argv[0] exists in the image (M; `check.py`,
-   `convert.py`).
-2. Hints say `tundravm lock IMAGE`, a literal placeholder, where the drift hints say
-   `tundravm lock`; `local-changed` names only `lock`, not that `build --dev` re-pins (S;
-   `check.py`, `declarative/_bake.py`).
-3. One source, two subjects: `source-unpinned [dev, production] server` but
-   `local-changed [image] sources.server` (S; `check.py`, lock drift).
-4. The public API still shows the internal model: `Resolved.fragments` and `.outputs`,
-   `GoBinary.compose() -> Fragment`, and in `tundravm.testing` `Recipe`, `fragment_plan`,
-   `fake_fragment`, `recipe_file`, `ImageFile.fragment` (L; components, testing).
-5. A new project is `ruff format` clean only at line length 100, which its `pyproject.toml`
-   does not set: ruff's default 88 reformats the image and its test (S; `templates.py`).
-6. `doctor` without an image calls a missing `go` optional, yet every image's `Tdxs` is a Go
-   source (S; `capabilities.py`).
 7. `show` names the probe unit `app-ready` beside `app.service`, and its Hooks lines are
    shell internals (S; `_describe.py`).
 8. `lock` prints the toolchain but not what it pinned; `build --tree-only` before `lock`
