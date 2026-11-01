@@ -69,6 +69,10 @@ RTMR3 is outside every policy: no event schema is defined for it, and each build
 under `unchecked`. MRTD and RTMR0 values carry the firmware they belong to, and an MRTD and
 an RTMR0 from different firmware never match together.
 
+Every package in the UKI comes from one pinned Debian snapshot, so the snapshot is part
+of the measured identity: an unpinned archive would give a rebuild other bytes and other
+registers, and a moved snapshot is a new image whose measurements need approving again.
+
 `attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
 quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
 value. For a production build, a TD with the `DEBUG` attribute is `untrusted` and simulated

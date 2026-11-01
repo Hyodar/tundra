@@ -53,6 +53,7 @@ Breaking changes are marked **Breaking**.
 - `build` publishes `build/<image>/production/<id>/` once, read-only, with a canonical `manifest.json` whose digest is `<id>`.
 - **Breaking:** a production build needs `build/tundravm.lock` (`lock-missing`); a development build writes a missing one and re-pins `Local` sources.
 - **Breaking:** lockfile version 6 names a profile's sections `profiles.<name>`; an older lock is refused: run `tundravm lock`.
+- **Breaking:** the default Debian snapshot moves from `20251113T083151Z` to `20261018T082309Z`, a year of trixie updates; a lock at the old one is `lock-changed`, and `Debian(snapshot=)` keeps it.
 - `lock --check` never writes or fetches, and exits 1 on drift, a missing lockfile included; `--json` lists no drift when clean.
 - `build` ends with a report: artifacts, sources and toolchains, time per phase, the UKI's Authenticode digest, predicted registers.
 - Every build carries `measurements.json` with a `tundravm.policy/2` policy per record, an SPDX SBOM, and `observations.json`.

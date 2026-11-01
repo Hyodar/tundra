@@ -122,9 +122,7 @@ build:rustup     optional: not needed by this image
 run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
 run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled
 deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI
-deploy:azure     blocked: az not found: install the Azure CLI
 verify:qemu      ready (built-in TDX replay 1.0+attest-12f1e29.dstack-mr-gcp-b16e08b)
-verify:gcp       ready (built-in replay, GCP firmware table dstack-mr-gcp@b16e08b)
 verify:azure     unsupported: Azure evidence is vTPM-bound: no TDX register can be predicted
 ```
 
@@ -676,6 +674,8 @@ $ tundravm lock --check
 `lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a commit,
 sha256 or content digest per source, and the toolchain (mkosi and its commit, the tools
 tree's distribution, release and snapshot, tundravm, the measurement tools). Commit it.
+The snapshot, for packages and tools tree alike, is the one this release of tundravm pins;
+`Debian(snapshot=)` overrides it.
 
 - Pins already locked stay while their source is unchanged. `--update NAME` resolves the
   named inputs again; no name resolves all of them.

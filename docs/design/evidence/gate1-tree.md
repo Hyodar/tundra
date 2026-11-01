@@ -973,6 +973,32 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
   (`784caec0...`), but no job compares the digests.
 - **The surge tree** is not built by any job.
 
+## Bumping the snapshot
+
+`LOCKED_SNAPSHOT` (`src/tundravm/_image/_values.py`) is the archive every `Debian()` without
+`snapshot=` reads, for the packages and the tools tree alike. It moves in a tundravm
+release, at least once per Debian point release, never by date in `check`:
+
+1. Pick the newest `debian` timestamp at least two weeks old.
+   `curl -sI https://snapshot.debian.org/archive/debian/<ts>/` answers 200 and
+   `.../archive/debian-security/<ts>/` 200 or a 302 to an earlier one (mkosi reads both at
+   the same ID); each `dists/trixie{,-security}/main/binary-amd64/Packages.xz` has the
+   sha256 its `InRelease` lists.
+2. Set it in `LOCKED_SNAPSHOT`, the cloud template's `SNAPSHOT` (`templates.py`), the
+   fixture recipe, `test_mkosi_smoke.py`, `test_templates_bake.py` and the hint examples.
+   Move the template's `EFI_STUB_VERSION` to the `systemd-boot-efi` that snapshot ships:
+   the pool keeps only what a suite lists, so the old `.deb` is usually gone.
+3. Check that each package the curated sets name (`BOOT_PACKAGES`, `KERNEL_BUILD_PACKAGES`,
+   the shipped components, the templates) is in the new `Packages`; fix a renamed one.
+4. Regenerate the goldens (`TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest
+   tests/compiler/test_native_tree.py`), the surge tree (`tundravm build
+   examples/surge-tdx-prover/image.py --tree-only examples/surge-tdx-prover/mkosi`) and this
+   page's INI and summary excerpts; run the gate.
+5. Push a scratch branch: all seven jobs green, `reproduce` matching for both cloud
+   profiles, the finalize check finding every curated module. Note fixture-boot's
+   `payload.efi` sizes beside master's in the commit, then delete the branch.
+6. Name the old and the new snapshot in the changelog: every lock reports `lock-changed`.
+
 ## Acceptance
 
 Gate 1 was accepted on master `eebdcfa` (2026-10-30) with CI run 41126669505 green on all
