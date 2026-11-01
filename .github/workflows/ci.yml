@@ -196,7 +196,7 @@ jobs:
       - name: Run the dev build as an instance, probe it and fetch its page
         run: |
           uv run tundravm show latest-development
-          uv run tundravm run latest-development --mode simulated --probe
+          uv run tundravm dev tests/fixtures/native-tree/recipe.py --no-follow
           jq -e '.ok' .tundravm/instances/fixture-1/probe.json
           receipt=.tundravm/instances/fixture-1/instance.json
           port=$(jq -r '.ports["8080"]' "$receipt")
@@ -240,6 +240,25 @@ jobs:
             sleep 2
           done
           grep -F 'name=greeting-token' .tundravm/instances/fixture-1/console.log
+
+      - name: Follow a second dev instance through dev and stop it with Ctrl-C
+        run: |
+          setsid .venv/bin/tundravm dev tests/fixtures/native-tree/recipe.py \
+            > "$RUNNER_TEMP/dev-follow.txt" 2>&1 &
+          pid=$!
+          for attempt in $(seq 1 180); do
+            test -f .tundravm/instances/fixture-2/probe.json && break
+            sleep 10
+          done
+          sleep 15
+          kill -INT -- "-$pid"
+          wait "$pid" && status=0 || status=$?
+          cat "$RUNNER_TEMP/dev-follow.txt"
+          echo "dev exited $status"
+          test "$status" -eq 0
+          grep -F 'reusing ' "$RUNNER_TEMP/dev-follow.txt"
+          grep -F 'stopped fixture-2' "$RUNNER_TEMP/dev-follow.txt"
+          jq -e '.state == "stopped"' .tundravm/instances/fixture-2/instance.json
 
       - name: Stop the instance
         if: always()
