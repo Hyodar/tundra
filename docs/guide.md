@@ -21,14 +21,14 @@ is gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 | Area | State |
 |---|---|
 | The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds give identical digests, both layouts' `azure.vhd` included |
-| Building an `Image` in CI | needs the `TUNDRA_TOOLS_TOKEN` secret: see [CI](#ci) |
+| Building an `Image` in CI | the `templates` and `boot` jobs build and boot the templates |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
 | `run --mode simulated --probe` | CI runs the fixture's dev build: every probe check passes and its page is fetched |
 | The fail-closed production profile | CI boots the production fixture without TDX: `tdx-evidence.service` refuses and its services never start |
 | `Kernel.build` | a weekly CI workflow compiles Debian's 6.12 with every target's drivers built in and boots it |
 | A real TDX quote, raw-disk measurements matched against it (gate 2) | not done |
-| The attested endpoint, channel-bound delivery, `OperatorKey` unlock over it, `BrokerKey` (gate 3) | not done in tundra-tools |
+| The attested endpoint, channel-bound delivery, `OperatorKey` unlock over it, `BrokerKey` (gate 3) | not done in `tools/` |
 | `deploy` to GCP or Azure, `attest` against a real quote | unit-tested against fake `gcloud`, `az` and SSH only |
 
 Until gate 3, `attest` and `secrets` reach an instance over an SSH session that is not bound
@@ -51,8 +51,7 @@ $ uv run pytest
 ```
 
 `new` prints this loop, then `build --dev` and `run --mode simulated --dev`. `lock` pins
-every source, so it needs read access to tundra-tools (see
-[the shipped library](#the-shipped-library)). The generated tests and the CI's
+every source (see [the shipped library](#the-shipped-library)). The generated tests and the CI's
 `check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends on
 the lock: write the tree after locking and commit both.
 
@@ -152,7 +151,7 @@ image = Image(
 | DHCP on `en*` and `eth*` (`Network`) | `network=Network(dhcp=False, static=StaticAddress(...))` |
 | an nftables firewall that drops inbound traffic except exposed ports, and 8745 when a volume or secret needs the SSH key delivery (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
 | one generated system user per service, the `static` sandbox, `Restart=on-failure` | `Service(user=, hardening=, unit=DropIn(...))` |
-| the evidence service `tdxs` from tundra-tools, socket-activated on `/var/tdxs.sock` (`Tdxs`) | `components=[Tdxs(source=Git(url, ref))]` for a mirror |
+| the evidence service `tdxs` from `tools/`, socket-activated on `/var/tdxs.sock` (`Tdxs`) | `components=[Tdxs(source=Git(url, commit, subdir="tools"))]` for a mirror |
 | `tdx-evidence.service`, which every service requires: without TDX a production profile starts none, a development one runs simulated ([trust](trust.md#threat-model)) | none: a dev profile is the way to run without TDX |
 | for each cloud in `targets=`, its provisioning glue, inert elsewhere through `ConditionVirtualization=`, so one payload boots on every target | `targets=` |
 | a raw bootable disk for QEMU | `targets=("qemu", "azure", "gcp")` adds the cloud disks |
@@ -373,9 +372,9 @@ A service that asks for quotes (`quotes=True`) joins the `tdx` group and require
 `EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
 them.
 
-`Tdxs` builds from the private `https://github.com/Hyodar/tundra-tools.git`, so `lock` and
-`build` need read access to it. `Tdxs(source=Git(mirror, ref))` points every tundra-tools
-build at a mirror.
+`Tdxs` and the volume and delivery tools build from `tools/` of tundravm's repository at
+the installed commit (from a checkout of it, its `tools/` directory, pinned by digest).
+`Tdxs(source=Git(mirror, commit, subdir="tools"))` points every one of them at a mirror.
 
 The surge prover in `examples/surge-tdx-prover/image.py` is the three workloads wired
 through their exports:
@@ -578,7 +577,7 @@ is a lint warning: it carries the logs in the clear.
 
 ### The control plane today
 
-An image with a volume or a secret runs tundra-tools' `secret-delivery` on the management
+An image with a volume or a secret runs `secret-delivery` (from `tools/`) on the management
 port 8745: it takes one SSH public key once per boot, then the firewall drops the port.
 `attest` and `secrets` use that SSH session, which nothing binds to the quote
 yet ([trust](trust.md#the-channel-is-not-attested-yet)).
@@ -1054,10 +1053,7 @@ A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
 
 Both jobs install what `uv.lock` locks. Findings show as annotations on
 the pull request. A project without a committed `build/tundravm.lock` fails `lock --check`:
-lock, commit it and push again. The `build` job builds production, so it reads tundra-tools
-with the secret `TUNDRA_TOOLS_TOKEN`, a fine-grained token with read-only Contents on
-`Hyodar/tundra-tools`: `gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`. Without it the
-job warns and builds only through a `Tdxs(source=Git(mirror, ref))` mirror.
+lock, commit it and push again.
 
 ## When something fails
 

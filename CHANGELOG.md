@@ -34,7 +34,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 
 - **Breaking:** twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - `new NAME [--template service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
-- The `--ci` workflow checks the image, the lock and the committed tree, and builds with `TUNDRA_TOOLS_TOKEN`, or warns without it.
+- The `--ci` workflow checks the image, the lock and the committed tree, and builds when `TUNDRAVM_BACKEND` is set.
 - **Breaking:** `show IMAGE` lists the components the image file wrote, each with what it composed (`--json`: `{"name", "components"}`), and a source build only under sources.
 - **Breaking:** `show --dev` is always the latest development build; an image file's dev profile is `--profile dev`, and `show IMAGE --dev` is refused.
 - `show` leads with the image, then production; with a build, its report and boot probe checks; `--diff` compares two builds.
@@ -59,6 +59,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `examples/nethermind_base.py`'s kernel config builds in every driver a target needs; a weekly workflow builds it and Debian's 6.12.111.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
 - `GoBinary` builds the module root unless `package=` names a sub-command.
+- **Breaking:** `Tdxs` and the volume and delivery tools build from `tools/` of this repository (`Git(url, sdk_commit, subdir="tools")`, or the checkout's `tools/` as a `Local`), not `Hyodar/tundra-tools` master; `Git(subdir=)` must name a directory of the commit.
 - Go builds with the toolchain `go.mod` names, fetched by the host's `go` 1.21+, which every image needs (`Tdxs` is Go); Cargo with the one `rust-toolchain.toml` pins, installed by the host's `rustup`, and an unpinned channel is refused.
 
 ### Lint

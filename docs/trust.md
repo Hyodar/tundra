@@ -104,7 +104,7 @@ in place of a value.
 
 ### The channel is not attested yet
 
-This is the largest gap, and it is gate 3 work in tundra-tools.
+This is the largest gap, and it is gate 3 work in `tools/`.
 
 An image with a volume or a secret runs `secret-delivery` on port 8745. It accepts one SSH
 public key per boot, from whoever POSTs first, and root SSH then accepts only that key; the
@@ -152,8 +152,9 @@ More limits that are not platform-specific:
 - **The kernel.** `Kernel.default()` is Debian's `linux-image-amd64` with a curated module
   set. A weekly CI workflow builds and boots one `Kernel.build` with every target's drivers
   built in; the tested kernel matrix of plan 6.7 is not published yet.
-- **tundra-tools.** Every image builds the evidence service from a private repository.
-  Without read access, `lock` and `build` fail.
+- **The tools.** The evidence service and the key, secret and disk tools are built from
+  `tools/` in this repository at the SDK's own commit, and the lock pins that source like
+  any other (from a checkout of the repository, by the digest of its `tools/`).
 
 ## Recovery
 
