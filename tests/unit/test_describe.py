@@ -1,14 +1,12 @@
 import json
-import re
 from copy import deepcopy
 
 import pytest
 
-from tundravm._describe import describe, render
+from tundravm._describe import Row, Section, describe, diff_rows, render_sections, resolved_rows
 from tundravm.declarative import (
     BootStep,
     Debian,
-    Debloat,
     File,
     Fragment,
     Git,
@@ -23,6 +21,7 @@ from tundravm.declarative import (
     User,
     Variant,
     lower,
+    resolve,
 )
 from tundravm.errors import ValidationError
 
@@ -74,18 +73,13 @@ def _recipe() -> Recipe:
     )
 
 
-def test_describe_structure() -> None:
-    image = lower(_recipe())
-    info = describe(image, profile="default")
+def test_describe_says_what_a_profile_builds_in_public_terms() -> None:
+    """Contents become digests, a hook what it does, and a service its unit: the shell and
+    the internal policy are not in it."""
+    recipe = _recipe()
+    image = lower(recipe)
+    info = describe(image, profile="default", resolved=resolve(recipe, variant="default"))
 
-    assert info["base"] == "debian/trixie"
-    assert info["arch"] == "x86_64"
-    assert info["profile"] == "default"
-    assert info["extends"] is None and info["components"] == []
-    assert info["reproducible"] is True
-    assert info["mirror"] == "https://deb.example"
-    assert info["kernel"] is None
-    # The payload carries the glue of every cloud target the recipe names.
     assert info["packages"] == [
         "curl",
         "dmidecode",
@@ -97,60 +91,25 @@ def test_describe_structure() -> None:
         "udev",
     ]
     assert info["build_packages"] == ["gcc"]
-    assert info["targets"] == ["qemu"]
-    assert info["policy"] == {
-        "require_frozen_lock": False,
-        "mutable_ref_policy": "warn",
-        "network_mode": "online",
-        "storage_safety": "error",
-    }
-
-    repositories = info["repositories"]
-    assert isinstance(repositories, list)
-    assert repositories[0]["name"] == "debian-security"
-    assert repositories[0]["priority"] == 10
-
     files = info["files"]
     assert isinstance(files, list)
     assert {"bytes": 12, "mode": "0644", "path": "/etc/motd", "sha256": "a948904f2f0f"} in files
-    # the payload carries the recipe's cloud glue (azure and gcp targets), inert on qemu
-    assert {f["path"] for f in files} >= {"/etc/hosts", "/usr/bin/azure-complete-provisioning"}
-    assert "content" not in files[0]
-
-    templates = info["templates"]
-    assert isinstance(templates, list)
-    assert templates[0]["path"] == "/etc/app/env"
-    assert templates[0]["variables"] == ["a", "b"]
-
-    users = info["users"]
-    assert isinstance(users, list)
-    assert users[0]["name"] == "app"
-    assert users[0]["uid"] == 1000
-    assert users[0]["groups"] == ["video"]
-
-    services = info["services"]
-    assert isinstance(services, list)
-    assert services[0]["name"] == "app"
-    assert services[0]["command"] == ["/usr/bin/app", "--flag"]
-    assert services[0]["restart"] == "always"
-    assert services[0]["after"] == ["network-online.target", "tdx-evidence.service"]
-
-    partitions = info["partitions"]
-    assert isinstance(partitions, list)
-    assert partitions[0] == {"fs": "ext4", "mount_at": "/data", "name": "data", "size": "4G"}
-
-    hooks = info["hooks"]
-    assert isinstance(hooks, dict)
-    assert "finalize" in hooks  # strip_image_version hook from Recipe.epoch
-    assert hooks["postinst"][0] == "echo first"
-    assert hooks["postinst"][1].endswith("...")
-    assert len(hooks["postinst"][1]) == 80
-
-    assert info["runtime_init"] == {"count": 1, "steps": ["init"]}
-
-    debloat = info["debloat"]
-    assert isinstance(debloat, dict)
-    assert debloat == image.explain_debloat(profile="default")
+    assert info["build_steps"] == [
+        "runs first (postinst)",
+        "runs long (postinst)",
+        "drops the NVMe host ids, which GCP sets per instance",
+        "removes IMAGE_VERSION from os-release, so a rebuild matches",
+    ]
+    units = info["units"]
+    assert isinstance(units, dict)
+    assert "app.service" in units["enabled"]
+    for internal in ("policy", "services", "hooks", "runtime_init"):
+        assert internal not in info
+    text = render_sections([Section("x", tuple(resolved_rows(info)))])
+    assert "Partitions (1):\n    data  4G  /data  ext4\n" in text
+    assert "Templates (1):\n    /etc/app/env  0644  vars=a,b\n" in text
+    assert "debian-security  https://deb.example/security  trixie-security  main  prio=10" in text
+    assert "hello world" not in text
 
 
 @pytest.mark.parametrize("profile", ["default", "azure", "cloud"])
@@ -168,7 +127,6 @@ def test_describe_is_pure_and_serializable(profile: str) -> None:
     assert image.digest() == digest_before
     payload = json.dumps(first, sort_keys=True)
     assert json.loads(payload)["profile"] == profile
-    assert payload == json.dumps(second, sort_keys=True)
     assert payload == json.dumps(describe(lower(_recipe()), profile=profile), sort_keys=True)
 
 
@@ -176,27 +134,10 @@ def test_describe_per_variant() -> None:
     image = lower(_recipe())
     azure = describe(image, profile="azure")
 
-    assert azure["profile"] == "azure"
-    assert azure["extends"] == "default"
-    assert azure["packages"] == [
-        "curl",
-        "dmidecode",
-        "iproute2",
-        "jq",
-        "nvme-cli",
-        "openssl",
-        "systemd",
-        "udev",
-        "waagent",
-    ]
-    assert "modules" not in azure
-    rows = [{"components": [], "name": "common"}]
-    lineage = describe(image, profile="azure", inherits="base", components=rows)
-    assert (lineage["extends"], lineage["components"]) == ("base", rows)
-    assert azure["targets"] == ["azure"]
+    assert (azure["profile"], azure["extends"], azure["targets"]) == ("azure", "default", ["azure"])
+    assert "waagent" in azure["packages"]  # type: ignore[operator]
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
-
     assert describe(image.select(("azure",))) == azure
     with pytest.raises(ValidationError):
         describe(image.select(("default", "azure")))
@@ -219,63 +160,29 @@ def test_describe_includes_kernel() -> None:
         "tdx": True,
         "version": "6.12.1",
     }
-    assert "Kernel: 6.12.1  tdx=yes  cmdline=quiet" in render(info)
+    text = render_sections([Section("x", tuple(resolved_rows(info)))])
+    assert "Kernel: 6.12.1  tdx=yes  cmdline=quiet" in text
 
 
-def test_summary_contains_key_strings() -> None:
-    image = lower(_recipe())
-    text = render(describe(image, profile="default"))
-
-    assert text.startswith("profile=default  debian/trixie (x86_64)  reproducible=yes\n")
-    assert "Mirror: https://deb.example" in text
-    assert "Packages (8): curl dmidecode iproute2 jq nvme-cli openssl systemd udev" in text
-    assert "Build packages (1): gcc" in text
-    assert "debian-security  https://deb.example/security  trixie-security  main  prio=10" in text
-    assert re.search(r"\n  /etc/motd +0644  12B  sha256:a948904f2f0f\n", text)
-    assert "/etc/app/env  0644  vars=a,b" in text
-    assert "app  uid=1000  gid=1000  shell=/bin/bash  groups=video" in text
-    assert re.search(
-        r"\n  app +/usr/bin/app --flag  restart=always  type=exec  user=app  "
-        r"after=network-online\.target,tdx-evidence\.service  requires=tdx-evidence\.service\n",
-        text,
-    )
-    assert "data  4G  /data  ext4" in text
-    assert "Hooks:\n" in text
-    assert "  postinst (3):\n    echo first\n" in text
-    assert "Runtime init: 1 (steps: init)" in text
-    assert "Debloat: enabled," in text
-    assert text.endswith("Targets: qemu\n")
-    assert "hello world" not in text
-
-    azure_text = render(describe(image, profile="azure"))
-    assert "profile=azure" in azure_text
-    assert "Extends: default\n" in azure_text
-    assert (
-        "Packages (9): curl dmidecode iproute2 jq nvme-cli openssl systemd udev waagent"
-        in azure_text
-    )
-    assert "Extends" not in text
-    for internal in ("variant=", "Inherits", "Fragments", "Policy:"):
-        assert internal not in text and internal not in azure_text
-    assert azure_text.endswith("Targets: azure\n")
-    assert render(describe(image, profile="cloud")).endswith("Targets: qemu gcp\n")
-
-
-def test_summary_omits_empty_sections() -> None:
-    bare = Variant("bare", add=Fragment("bare", items=(Debloat(enabled=False),)))
-    recipe = Recipe(
-        "bare",
-        variants=(Variant("default", outputs=("qemu",)), bare),
-        platform=Debian("trixie", epoch=None, boot=None),
-    )
-    text = render(describe(lower(recipe), profile="bare"))
-
-    # what every profile ships: the execution gate and the instance key, each a script, a
-    # unit and (the instance key) openssl
-    assert "Packages (1): openssl\n" in text
-    assert "Files (2):\n  /usr/lib/tundravm/instance-key  0755" in text
-    assert re.search(r"\n  /usr/lib/tundravm/tdx-evidence +0755", text)
-    assert "Services (2):\n  tdx-evidence.service  " in text
-    assert "\n  tundravm-instance-key.service  /bin/sh /usr/lib/tundravm/instance-key" in text
-    assert "Hooks" not in text
-    assert "Debloat: disabled" in text
+@pytest.mark.parametrize(
+    ("old", "new", "changed"),
+    [
+        (
+            (Row("Packages", ("a", "b"), inline=True),),
+            (Row("Packages", ("b", "c"), inline=True),),
+            [Row("Packages: -a +c")],
+        ),
+        ((Row("Files", ("x", "y")),), (Row("Files", ("y", "z")),), [Row("Files", ("- x", "+ z"))]),
+        (
+            (Row("Kernel: 6.1"),),
+            (Row("Kernel: 6.2"),),
+            [Row("- Kernel: 6.1"), Row("+ Kernel: 6.2")],
+        ),
+        ((Row("Files", ("x",)),), (Row("Files", ("x",)),), []),
+    ],
+    ids=["inline", "block", "line", "same"],
+)
+def test_diff_rows_keeps_only_what_differs(
+    old: tuple[Row, ...], new: tuple[Row, ...], changed: list[Row]
+) -> None:
+    assert diff_rows(old, new) == changed

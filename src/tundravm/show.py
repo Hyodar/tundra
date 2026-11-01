@@ -21,10 +21,19 @@ import json
 import stat
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import manifest as mf
-from ._describe import describe, render
+from ._describe import (
+    Section,
+    declared_recipe,
+    declared_sections,
+    describe,
+    probe_units,
+    render_sections,
+    resolved_sections,
+)
+from ._describe import declared as declared_view
 from ._location import display_location
 from ._reporting import format_duration, format_size
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME
@@ -34,10 +43,13 @@ from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
 from .declarative.lower import declared_firewall
 from .declarative.model import Recipe
-from .declarative.resolve import COMMON_LEVEL
+from .declarative.resolve import COMMON_LEVEL, resolve
 from .declarative.resolve import describe as describe_identity
 from .declarative.resolve import provenance as resolved_provenance
 from .diff import diff_trees
+
+if TYPE_CHECKING:
+    from ._image import Image
 
 UNIT_DIRS = ("usr/lib/systemd/system/", "etc/systemd/system/")
 
@@ -48,20 +60,59 @@ UNIT_DIRS = ("usr/lib/systemd/system/", "etc/systemd/system/")
 def image_report(
     img: Lowered,
     profiles: Sequence[str],
-    described: Mapping[str, dict[str, object]] | None = None,
     *,
+    recipe: Recipe,
+    declared: Image | None = None,
     file: Path | None = None,
 ) -> dict[str, object]:
-    """The dry-run description of *profiles* (*described* holds the ones already made): the
-    image, the *file* it is declared in, the digest the lockfile records and one entry per
-    profile, in the order given."""
-    given = described or {}
+    """The dry run of *profiles*, in the order given: the image and the *file* it is
+    declared in, the digest the lockfile records, its base, what the image file wrote
+    (*declared*, the ``Image`` *recipe* lowers: its components, services, ingress, content
+    and profiles) and what each profile builds."""
+    variants = {variant.name for variant in recipe.variants}
+    probes: frozenset[str] = frozenset() if declared is None else probe_units(declared)
+    written = (
+        declared_recipe(recipe, profiles) if declared is None else declared_view(declared, profiles)
+    )
     return {
         "image": img.image_id,
         "file": None if file is None else _shown(file),
         "digest": img.select(profiles).digest(),
-        "profiles": {name: given.get(name) or describe(img, profile=name) for name in profiles},
+        "base": {
+            "distribution": img.state.base,
+            "arch": img.state.arch,
+            "snapshot": img.snapshot,
+            "mirror": img.mirror,
+            "reproducible": img.reproducible,
+        },
+        **written,
+        "resolved": {
+            name: describe(
+                img,
+                profile=name,
+                resolved=resolve(recipe, variant=name) if name in variants else None,
+                probes=probes,
+            )
+            for name in profiles
+        },
     }
+
+
+IMAGE_KEYS = (
+    "schema",
+    "image",
+    "file",
+    "digest",
+    "base",
+    "components",
+    "services",
+    "ingress",
+    "content",
+    "profiles",
+    "resolved",
+    "provenance",
+)
+"""The top-level keys of ``show IMAGE --json``, in order."""
 
 
 def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[str, object]]]:
@@ -96,10 +147,28 @@ def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[s
 
 
 def render_image(report: Mapping[str, Any]) -> str:
-    """The image and its file on the first line, then one block per profile."""
+    """The image and its file, its base, then :func:`image_sections`."""
     head = "  ".join(str(part) for part in (report["image"], report.get("file")) if part)
-    blocks = "\n\n".join(render(d).rstrip() for d in report["profiles"].values())
-    return f"{head}\n{blocks}"
+    return f"{head}\n{_base_line(report['base'])}\n\n{render_sections(image_sections(report))}"
+
+
+def image_sections(report: Mapping[str, Any]) -> list[Section]:
+    """What the image file wrote (components, services, ingress, content, profiles), then
+    what each profile builds, a profile beyond the one it extends when both are shown."""
+    extends = {name: row.get("extends") for name, row in report["resolved"].items()}
+    return [*declared_sections(report), *resolved_sections(report["resolved"], extends)]
+
+
+def _base_line(base: Mapping[str, Any]) -> str:
+    distribution, _, release = str(base["distribution"]).partition("/")
+    parts = [f"{distribution.capitalize()} {release}".strip()]
+    if base.get("snapshot"):
+        parts.append(f"snapshot {base['snapshot']}")
+    if base.get("mirror"):
+        parts.append(f"mirror {base['mirror']}")
+    parts.append(str(base["arch"]))
+    parts.append("reproducible" if base.get("reproducible") else "not reproducible")
+    return ", ".join(parts)
 
 
 def ordered_profiles(declared: Sequence[str], given: Sequence[str]) -> tuple[str, ...]:
@@ -608,8 +677,10 @@ __all__ = [
     "build_tree",
     "build_units",
     "diff_builds",
+    "IMAGE_KEYS",
     "image_egress",
     "image_report",
+    "image_sections",
     "image_tree",
     "image_units",
     "ordered_profiles",

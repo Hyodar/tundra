@@ -37,7 +37,6 @@ from typing import TextIO, cast
 from . import __version__, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
-from ._describe import declared_components, describe
 from ._image._lower import component_classes
 from ._reporting import TextReporter
 from ._source import (
@@ -435,14 +434,16 @@ def build_parser() -> argparse.ArgumentParser:
     show_cmd = command(
         "show",
         _cmd_show,
-        "Show the resolved image or a build; --diff two builds.",
-        "Without BUILD: the image as it resolves, its name and file first, then each\n"
-        "profile's packages, files, units, sources and kernel (--json adds where each\n"
-        "declaration came from). With BUILD (a build directory, an id prefix, or `latest`):\n"
-        "the report `build` printed, then the manifest's provenance, unchecked guarantees\n"
-        "and boot probe checks. --units, --tree and --measurements narrow it. --diff OLD\n"
-        "NEW compares two builds: packages, files, units, boot payload, measurements,\n"
-        "policy coverage.",
+        "Show the image as written and what it builds, or a build; --diff two builds.",
+        "Without BUILD: the image as its file wrote it (components with their keywords,\n"
+        "services with their program, source, ports, hardening, volume, credentials and\n"
+        "probe, profiles with what each changes), then what each profile builds: packages,\n"
+        "sources, files, units, firewall, build steps; a profile beyond the one it extends.\n"
+        "--json has the same sections and where each declaration came from. With BUILD (a\n"
+        "build directory, an id prefix, or `latest`): the report `build` printed, the\n"
+        "manifest's provenance, unchecked guarantees and boot probe checks. --units, --tree\n"
+        "and --measurements narrow it. --diff OLD NEW compares two builds: packages, files,\n"
+        "units, boot payload, measurements, policy coverage.",
         as_json,
     )
     show_cmd.add_argument(
@@ -1286,6 +1287,22 @@ def _project_image() -> bool:
     return settings(None).image is not None
 
 
+def _image_report(
+    args: argparse.Namespace, path: Path | None
+) -> tuple[dict[str, object], RecipeFile, Lowered, tuple[str, ...]]:
+    """The dry run of the image file at *path* (``None``: the project's) for the profiles
+    ``--profile`` selects, with what it was made from."""
+    args.image = path
+    found = _settings(args)
+    loaded = _loaded(args, found)
+    img = _lowered(loaded, found)
+    names = show.ordered_profiles(loaded.variants, _profiles(img, args.profile or ()))
+    report = show.image_report(
+        img, names, file=found.image, declared=loaded.declared, recipe=loaded.recipe
+    )
+    return report, loaded, img, names
+
+
 def _show_image(args: argparse.Namespace, out: TextIO) -> int:
     if args.measurements:
         raise ValidationError(
@@ -1297,15 +1314,11 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
             "--dev picks the latest development build, not a profile of an image file.",
             hint=f"Use `tundravm show {args.subject} --profile dev` for its dev profile.",
         )
-    args.image = Path(args.subject) if args.subject else None
-    found = _settings(args)
-    loaded = _loaded(args, found)
-    img = _lowered(loaded, found)
-    names = show.ordered_profiles(loaded.variants, _profiles(img, args.profile or ()))
-    locked = _locked(found)
-    egress = show.image_egress(loaded.recipe, names[0])
+    report, loaded, img, names = _image_report(args, Path(args.subject) if args.subject else None)
+    locked = _locked(_settings(args))
     if args.units:
         units = show.image_units(img, names, locked)
+        egress = show.image_egress(loaded.recipe, names[0])
         text = f"{show.render_units(units)}\n\n{show.render_egress(egress)}"
         print(
             json_report("show", {"units": units, "egress": egress}) if args.json else text, file=out
@@ -1317,21 +1330,8 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
             json_report("show", {"tree": rows}) if args.json else show.render_files(rows), file=out
         )
         return EXIT_OK
-    described = {}
-    for name in names:
-        declared = name in loaded.variants
-        resolved = resolve(loaded.recipe, variant=name).components if declared else ()
-        components = (
-            [{"components": [], "name": n} for n in resolved]
-            if loaded.declared is None
-            else declared_components(loaded.declared, name, resolved)
-        )
-        inherits = loaded.recipe.variant(name).inherits if declared else None
-        described[name] = describe(img, profile=name, inherits=inherits, components=components)
-    report = show.image_report(img, names, described, file=found.image)
     if args.json:
         report["provenance"] = show.provenance(loaded.recipe, names)
-        report["egress"] = egress
     print(json_report("show", report) if args.json else show.render_image(report), file=out)
     return EXIT_OK
 

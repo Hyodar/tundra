@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import warnings
 from dataclasses import replace
 from pathlib import Path
@@ -428,16 +427,12 @@ def _inspect(recipe: Path, *flags: str) -> str:
     return out.getvalue()
 
 
-PINNED_HOOK = r"build\}/tool-[0-9a-f]{16}"
-"""A hook rendered at a pin copies the checkout keyed by it."""
-
-
 @pytest.mark.parametrize(
     ("locked", "pinned", "column"),
     [(False, None, "-"), (True, SHA_A[:7], SHA_A[:7])],
     ids=["unlocked", "locked"],
 )
-def test_show_lists_sources_and_hooks_at_their_pins(
+def test_show_lists_sources_at_their_pins(
     tmp_path: Path, locked: bool, pinned: str | None, column: str
 ) -> None:
     path = tmp_path / "recipe.py"
@@ -445,7 +440,7 @@ def test_show_lists_sources_and_hooks_at_their_pins(
     if locked:
         pins = lock(load_recipe(path), resolver=_Fixed(SHA_A))
         write_lock(pins, tmp_path / "build" / "tundravm.lock")  # the one lockfile the CLI reads
-    info = json.loads(_inspect(path, "--json"))["profiles"]["default"]
+    info = json.loads(_inspect(path, "--json"))["resolved"]["default"]
     assert info["sources"] == [
         {
             "build": "script",
@@ -457,13 +452,9 @@ def test_show_lists_sources_and_hooks_at_their_pins(
             "url": REPO,
         }
     ]
-    hook = info["hooks"]["build"][0]
-    assert ("not pinned" in hook) is (pinned is None)
-    assert bool(re.search(PINNED_HOOK, hook)) is locked
+    assert info["build_steps"][0] == "builds tool from source"
     text = _inspect(path)
-    assert "Sources (1):" in text
-    assert f"tool  git {REPO}  ref=main  pinned={column}" in text
-    assert bool(re.search(PINNED_HOOK, text)) is locked
+    assert f"Sources (1):\n    tool  git {REPO}  ref=main  pinned={column}\n" in text
 
 
 def test_check_rule_source_unpinned() -> None:

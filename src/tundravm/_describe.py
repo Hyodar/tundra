@@ -1,51 +1,316 @@
-"""What ``show IMAGE`` describes for one profile, without compiling or building.
+"""What ``show IMAGE`` describes, without compiling or building.
 
-``describe()`` returns a JSON-serializable, deterministically ordered dict for one
-profile; ``render()`` turns it into the compact plain-text summary ``show`` prints.
+:func:`declared` reads a public :class:`~tundravm.Image` back as it was written: its
+components by class and keyword, its services with what each one runs, opens and takes,
+and its profiles with what each one changes. :func:`describe` is what one profile builds:
+packages, sources, files, units, firewall and build steps, each in public terms (a
+service's probe is its service's, a build step is what it does). Both are
+JSON-serializable and deterministically ordered.
+
+``show`` prints them as :class:`Section` rows; a profile beyond the one it extends prints
+the rows the two do not share (:func:`diff_rows`).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
-from collections.abc import Mapping, Sequence
-from dataclasses import fields
-from typing import TYPE_CHECKING, Any, cast, get_args
+import json
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 from ._modules import instance_key
-from ._modules.init import runtime_init_order
+from ._modules.devtools import NETWORK_LOGIN_SCRIPT
+from ._modules.init import OWNERS_STEP, runtime_init_order
 from ._options import MkosiOptions
-from .compiler import PHASE_ORDER
+from .errors import TdxError
 from .lockfile import LockedFetch
-from .models import InitScriptEntry, Kernel, ProfileState, UnitAction, unit_name
+from .models import Kernel, ProfileState, unit_name
 
 if TYPE_CHECKING:
-    from ._image import Component, Image
+    from ._image import Component, Image, Service
     from .declarative._lowered import Lowered
+    from .declarative.model import Recipe, Resolved
 
-PREVIEW_WIDTH = 80
 SHORT_DIGEST_LEN = 12
+PROGRAM_WIDTH = 100
+MASKED = '"***"'
+"""How a component keyword that holds a password prints."""
+
+_MASKED_FIELDS = frozenset({"password"})
+_FIREWALL = "/etc/nftables.conf"
 
 
-_IMAGE_PARENT: Any = object()
-"""``describe(inherits=...)`` default: the profile the lowered image builds *profile* on."""
+# ── the image as written ─────────────────────────────────────────────────
+
+
+def declared(image: Image, profiles: Sequence[str]) -> dict[str, object]:
+    """*image*'s components, services and *profiles*, as the image file wrote them.
+
+    Components are the ones the file named (``components=``, ``network=``,
+    ``observability=``), never the implied baseline; services are the image's and those its
+    components compose, each with the component that holds it; content is what the image
+    names itself (``packages=``, ``files=``, ``users=``, ``groups=``).
+    """
+    return {
+        "components": [_component(c) for c in _written_components(image)],
+        "services": [_service(s, owner) for s, owner in _written_services(image)],
+        "ingress": [call(way) for way in image.ingress],
+        "content": [
+            _content(item) for item in (*image.packages, *image.files, *image.users, *image.groups)
+        ],
+        "profiles": [row for row in _profiles(image) if row["name"] in profiles],
+    }
+
+
+def declared_recipe(recipe: Recipe, profiles: Sequence[str]) -> dict[str, object]:
+    """What :func:`declared` says of a file that binds an internal ``Recipe``: its profiles,
+    and no components or services, which only an ``Image`` declares."""
+    from .declarative.model import BASE_VARIANT
+
+    rows: list[dict[str, object]] = [
+        {
+            "name": variant.name,
+            "extends": None if variant.inherits in (None, BASE_VARIANT) else variant.inherits,
+            "production": variant.release,
+            "adds": [],
+            "changes": [],
+        }
+        for variant in recipe.variants
+        if variant.name in profiles
+    ]
+    return {"components": [], "services": [], "ingress": [], "content": [], "profiles": rows}
+
+
+def probe_units(image: Image) -> frozenset[str]:
+    """The probe unit of every service *image* (or a profile of it) declares: what proves
+    the service ready, which ``show`` prints as the service's ``probe``."""
+    from ._image._runtime import _image_services
+
+    return frozenset(
+        unit for unit in (s.probe_unit for s in _image_services(image)) if unit is not None
+    )
+
+
+def _written_components(image: Image) -> list[Component]:
+    found: list[Component] = [*image.components]
+    found += [c for c in (image.network, image.observability) if c is not None]
+    return found
+
+
+def _written_services(image: Image) -> list[tuple[Service, str | None]]:
+    from ._image import Component, Service
+    from ._image._component import composed
+
+    found: list[tuple[Service, str | None]] = [(s, None) for s in image.services]
+
+    def walk(component: Component) -> None:
+        for item in composed(component):
+            if isinstance(item, Service):
+                found.append((item, type(component).__name__))
+            elif isinstance(item, Component):
+                walk(item)
+
+    for component in _written_components(image):
+        walk(component)
+    return found
+
+
+def _component(component: Component) -> dict[str, object]:
+    from ._image import Component
+    from ._image._component import composed
+
+    given = {id(v) for v in _field_values(component)}
+    nested = [c for c in composed(component) if isinstance(c, Component) and id(c) not in given]
+    return {
+        "class": type(component).__name__,
+        "name": component.name,
+        "call": call(component),
+        "components": [_component(c) for c in nested],
+    }
+
+
+def _field_values(value: object) -> list[object]:
+    found: list[object] = []
+    for item in dataclasses.fields(cast(Any, value)):
+        held = getattr(value, item.name)
+        found.extend(held if isinstance(held, tuple) else (held,))
+    return found
+
+
+def _service(service: Service, owner: str | None) -> dict[str, object]:
+    from ._image._storage import VolumeDirectory
+    from .declarative.systemd import Hardening, ceiling
+
+    state = service.state
+    sandbox = service.hardening
+    assert isinstance(sandbox, Hardening)
+    preset = ceiling(sandbox)
+    hardening = preset[0] if preset else "none" if sandbox == Hardening.none() else "custom"
+    return {
+        "name": service.name,
+        "component": owner,
+        "program": list(service.command()),
+        "package": service.package,
+        "sources": [call(binary) for binary in service.binaries()],
+        "ports": [call(port) for port in service.expose],
+        "hardening": hardening,
+        "state": service.state_directory,
+        "volume": call(state.volume) if isinstance(state, VolumeDirectory) else None,
+        "credentials": [call(binding) for binding in service.bindings],
+        "probe": service.probe_unit is not None,
+        "readiness": None if service.readiness is None else call(service.readiness),
+        "timer": None if service.timer is None else call(service.timer),
+    }
+
+
+def _profiles(image: Image) -> list[dict[str, object]]:
+    from ._image._image import BASE_PROFILE, DEV_PROFILE
+
+    rows: list[dict[str, object]] = [
+        {"name": BASE_PROFILE, "extends": None, "production": True, "adds": [], "changes": []}
+    ]
+    for name, profile in image.profiles.items():
+        rows.append(
+            {
+                "name": name,
+                "extends": profile.extends or BASE_PROFILE,
+                "production": profile.production,
+                "adds": [_content(item) for item in profile.add],
+                "changes": [_change(change) for change in profile.changes],
+            }
+        )
+    if image.dev is not None:
+        rows.append(
+            {
+                "name": DEV_PROFILE,
+                "extends": BASE_PROFILE,
+                "production": False,
+                "adds": [call(image.dev)],
+                "changes": [],
+            }
+        )
+    return rows
+
+
+def _content(item: object) -> str:
+    from ._image import Component, Package
+
+    if isinstance(item, str):
+        return f"Package({json.dumps(item)})"
+    if isinstance(item, (Component, Package)):
+        return call(item)
+    return _named(item)
+
+
+def _named(value: object) -> str:
+    """``Service("app")``: a value by its kind and key, as a change names it."""
+    key = next((getattr(value, k) for k in ("name", "path", "dst") if hasattr(value, k)), None)
+    return f"{type(value).__name__}({json.dumps(key)})" if key is not None else call(value)
+
+
+def _change(change: object) -> str:
+    from ._image._change import Edit, Remove
+    from .declarative import model as dm
+
+    if isinstance(change, (Edit, Remove)):
+        ref = change.ref
+        target = (
+            f"Service({json.dumps(ref.target.identity[0])})"
+            if ref.value is None
+            else _named(ref.value)
+        )
+    elif isinstance(change, (dm.Edit, dm.Remove)):
+        identity = change.target.identity
+        target = f"{change.target.kind}({json.dumps(identity[0] if identity else '')})"
+    else:
+        return call(change)
+    if isinstance(change, (Edit, dm.Edit)):
+        edits = ", ".join(f"{key}={call(value)}" for key, value in change.fields.items())
+        return f"edits {target}: {edits}"
+    return f"removes {target}"
+
+
+def call(value: object) -> str:
+    """*value* as the call that makes it, keywords at their defaults left out:
+    ``App(version="0.1.0", port=8080)``. A ``password`` keyword prints as ``"***"``."""
+    from ._image._component import Endpoint
+    from ._image._storage import VolumeDirectory
+
+    if isinstance(value, str):
+        return json.dumps(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return repr(value)
+    if isinstance(value, Path):
+        return json.dumps(str(value))
+    if isinstance(value, VolumeDirectory):
+        return f"{call(value.volume)}.directory({json.dumps(value.name)})"
+    if isinstance(value, Endpoint):
+        return f"Endpoint({json.dumps(value.url)})"
+    if isinstance(value, Mapping):
+        return "{" + ", ".join(f"{call(k)}: {call(v)}" for k, v in value.items()) + "}"
+    if isinstance(value, (tuple, list, set, frozenset)):
+        items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
+        return "[" + ", ".join(call(item) for item in items) + "]"
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        if not cast(Any, value).__dataclass_params__.repr:
+            text = repr(value)
+            return text if '"' in text else text.replace("'", '"')
+        words: list[str] = []
+        for item in dataclasses.fields(value):
+            if not item.init or item.name.startswith("_"):
+                continue
+            held = getattr(value, item.name)
+            if _at_default(item, held) or _derived(value, item, held):
+                continue
+            text = MASKED if item.name in _MASKED_FIELDS else call(held)
+            required = (
+                item.default is dataclasses.MISSING and item.default_factory is dataclasses.MISSING
+            )
+            words.append(text if required and not item.kw_only else f"{item.name}={text}")
+        return f"{type(value).__name__}({', '.join(words)})"
+    return repr(value)
+
+
+def _derived(owner: object, item: dataclasses.Field[Any], value: object) -> bool:
+    """Whether *value* is what *owner* derives from the keyword's default (``Volume("data")``'s
+    mount): the call then says nothing by passing it."""
+    if item.default is dataclasses.MISSING:
+        return False
+    try:
+        return bool(dataclasses.replace(cast(Any, owner), **{item.name: item.default}) == owner)
+    except (TdxError, TypeError, ValueError):
+        return False
+
+
+def _at_default(item: dataclasses.Field[Any], value: object) -> bool:
+    if item.default is not dataclasses.MISSING:
+        return bool(value == item.default)
+    if item.default_factory is not dataclasses.MISSING:
+        return bool(value == item.default_factory())
+    return False
+
+
+# ── what one profile builds ──────────────────────────────────────────────
 
 
 def describe(
     image: Lowered,
     *,
     profile: str | None = None,
-    inherits: str | None = _IMAGE_PARENT,
-    components: Sequence[Mapping[str, object]] = (),
+    resolved: Resolved | None = None,
+    probes: Collection[str] = (),
 ) -> dict[str, object]:
-    """Describe what *image* will produce for *profile* (default: the active one).
+    """What *image* builds for *profile* (default: the active one), merged over the profile
+    it extends.
 
-    Keys are sorted; lists are sorted by their natural identity (path, name,
-    ...) except hooks, which keep registration order within each phase.
-    File and init-script contents are summarized as short sha256 digests.
-    A profile built on another is described as built: merged over it. Hooks and
-    sources show the pins of the lockfile *image* reads, as compile renders them.
-    *inherits* and *components* (the keys ``extends`` and ``components``) are the recipe's
-    ``Variant.inherits`` and :func:`declared_components` of the profile.
+    Lists are sorted by their natural identity (path, name, ...). File contents are
+    summarized as short sha256 digests; sources show the pins of the lockfile *image*
+    reads. *probes* are the probe units of the image's services (:func:`probe_units`),
+    which are their service's ``probe``, not units or users of their own. *resolved* (the
+    profile resolved) names each build step, which is then said by what it does.
     """
     selected = image.profile(profile)
     pins = image.build_pins()
@@ -54,23 +319,11 @@ def describe(
     kernel = image.kernel
     kernel_source = image.kernel_source(selected)
     kernel_pin = None if kernel_source is None else kernel_source.pin_from(pins)
+    probe_users = {unit.removesuffix(".service") for unit in probes}
     return {
-        "arch": state.arch,
-        "base": state.base,
-        "build_options": _describe_build_options(image.mkosi),
-        "build_packages": sorted(profile_state.build_packages),
-        "build_source_mounts": [
-            {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
-        ],
-        "components": [dict(row) for row in components],
-        "debloat": image.explain_debloat(profile=selected),
-        "extends": profile_state.extends if inherits is _IMAGE_PARENT else inherits,
-        "files": _describe_files(profile_state.files),
-        "groups": [
-            {"gid": g.gid, "name": g.name, "system": g.system}
-            for g in sorted(profile_state.groups, key=lambda item: item.name)
-        ],
-        "hooks": _describe_hooks(profile_state),
+        "profile": selected,
+        "extends": profile_state.extends,
+        "targets": list(image.targets.get(selected, profile_state.output_targets)),
         "kernel": None
         if kernel is None
         else {
@@ -81,13 +334,10 @@ def describe(
             "tdx": kernel.tdx,
             "version": kernel.version,
         },
-        "mirror": image.mirror,
+        "build_options": _describe_build_options(image.mkosi),
         "packages": sorted(profile_state.packages),
-        "partitions": [
-            {"fs": p.fs, "mount_at": p.mount_at, "name": p.name, "size": p.size}
-            for p in sorted(profile_state.partitions, key=lambda item: item.name)
-        ],
-        "policy": {f.name: getattr(image.policy, f.name) for f in fields(image.policy)},
+        "build_packages": sorted(profile_state.build_packages),
+        "sources": _describe_sources(image, selected, profile_state, pins),
         "repositories": [
             {
                 "components": list(repo.components),
@@ -103,47 +353,15 @@ def describe(
                 key=lambda item: (item.priority, item.name, item.url),
             )
         ],
-        "reproducible": image.reproducible,
-        "runtime_init": _describe_init_scripts(profile_state.init_scripts),
-        "secrets": [
-            {
-                "name": secret.name,
-                "required": secret.required,
-                "targets": [{"kind": t.kind, "location": t.location} for t in secret.targets],
-            }
-            for secret in sorted(profile_state.secrets, key=lambda item: item.name)
-        ],
-        "services": [
-            {
-                "after": list(svc.after),
-                "command": list(svc.command),
-                "enabled": svc.enabled,
-                "name": svc.name,
-                "requires": list(svc.requires),
-                "restart": svc.restart,
-                "security_profile": svc.security_profile,
-                "user": svc.user,
-                "wants": list(svc.wants),
-                **svc.extras(),
-            }
-            for svc in sorted(profile_state.services, key=lambda item: item.name)
-        ],
-        "instance_key": sorted(
-            unit_name(svc.name)
-            for svc in profile_state.services
-            if svc.credentials.get(instance_key.CREDENTIAL) == instance_key.KEY
-        ),
+        "files": _describe_files(profile_state.files),
         "skeleton_files": _describe_files(profile_state.skeleton_files),
-        "sources": _describe_sources(image, selected, profile_state, pins),
-        "targets": list(image.targets.get(selected, profile_state.output_targets)),
-        "units": _describe_units(profile_state),
         "templates": [
-            {
-                "mode": tmpl.mode,
-                "path": tmpl.path,
-                "variables": sorted(tmpl.variables),
-            }
+            {"mode": tmpl.mode, "path": tmpl.path, "variables": sorted(tmpl.variables)}
             for tmpl in sorted(profile_state.templates, key=lambda item: item.path)
+        ],
+        "partitions": [
+            {"fs": p.fs, "mount_at": p.mount_at, "name": p.name, "size": p.size}
+            for p in sorted(profile_state.partitions, key=lambda item: item.name)
         ],
         "users": [
             {
@@ -156,229 +374,25 @@ def describe(
                 "uid": u.uid,
             }
             for u in sorted(profile_state.users, key=lambda item: item.name)
+            if u.name not in probe_users
         ],
-        "profile": selected,
+        "groups": [
+            {"gid": g.gid, "name": g.name, "system": g.system}
+            for g in sorted(profile_state.groups, key=lambda item: item.name)
+        ],
+        "units": _describe_units(profile_state, frozenset(probes)),
+        "firewall": _describe_firewall(profile_state),
+        "build_steps": _describe_build_steps(profile_state, resolved),
+        "boot_steps": [
+            _boot_step(entry.name) for entry in runtime_init_order(profile_state.init_scripts)
+        ],
+        "instance_key": sorted(
+            unit_name(svc.name)
+            for svc in profile_state.services
+            if svc.credentials.get(instance_key.CREDENTIAL) == instance_key.KEY
+        ),
+        "debloat": image.explain_debloat(profile=selected),
     }
-
-
-def render(description: dict[str, object]) -> str:
-    """Render a ``describe()`` result as a compact plain-text summary, one profile.
-
-    It speaks of profiles and components; the internal policy, which an image cannot set,
-    stays in the JSON form only.
-    """
-    from .declarative.model import BASE_VARIANT
-
-    lines: list[str] = [
-        f"profile={description['profile']}"
-        f"  {description['base']} ({description['arch']})"
-        f"  reproducible={_yes_no(description['reproducible'])}"
-    ]
-    if description.get("mirror"):
-        lines.append(f"Mirror: {description['mirror']}")
-    kernel = description.get("kernel")
-    if isinstance(kernel, dict):
-        lines.append(_render_kernel(cast(dict[str, Any], kernel)))
-    build_options = _as_dict(description.get("build_options"))
-    if build_options:
-        lines.append(
-            "Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in build_options.items())
-        )
-    if description.get("extends") not in (None, "", BASE_VARIANT):
-        lines.append(f"Extends: {description['extends']}")
-    components = _as_list(description.get("components"))
-    _append_inline_list(lines, "Components", [_component_text(row) for row in components])
-
-    _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
-    _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))
-
-    sources = _as_list(description.get("sources"))
-    if sources:
-        lines.append(f"Sources ({len(sources)}):")
-        width = _column_width(sources, "name")
-        for source in sources:
-            ref = f"  ref={source['ref']}" if source.get("ref") else ""
-            lines.append(
-                f"  {source['name']:<{width}}  {source['kind']} {source['url']}{ref}"
-                f"  pinned={source['pinned'] or '-'}"
-            )
-
-    repositories = _as_list(description.get("repositories"))
-    if repositories:
-        lines.append(f"Repositories ({len(repositories)}):")
-        for repo in repositories:
-            parts = [str(repo["name"]), str(repo["url"])]
-            if repo.get("suite"):
-                parts.append(str(repo["suite"]))
-            if repo.get("components"):
-                parts.append(",".join(repo["components"]))
-            parts.append(f"prio={repo['priority']}")
-            if repo.get("in_image") is False:
-                parts.append("build only")
-            lines.append("  " + "  ".join(parts))
-
-    _append_files(lines, "Files", _as_list(description.get("files")))
-    _append_files(lines, "Skeleton files", _as_list(description.get("skeleton_files")))
-
-    templates = _as_list(description.get("templates"))
-    if templates:
-        lines.append(f"Templates ({len(templates)}):")
-        width = _column_width(templates, "path")
-        for tmpl in templates:
-            variables = ",".join(tmpl["variables"]) or "-"
-            lines.append(f"  {tmpl['path']:<{width}}  {tmpl['mode']}  vars={variables}")
-
-    groups = _as_list(description.get("groups"))
-    if groups:
-        lines.append(f"Groups ({len(groups)}):")
-        for group in groups:
-            parts = [str(group["name"])]
-            if group.get("system"):
-                parts.append("system")
-            if group.get("gid") is not None:
-                parts.append(f"gid={group['gid']}")
-            lines.append("  " + "  ".join(parts))
-
-    users = _as_list(description.get("users"))
-    if users:
-        lines.append(f"Users ({len(users)}):")
-        for user in users:
-            parts = [str(user["name"])]
-            if user.get("system"):
-                parts.append("system")
-            for key in ("uid", "gid", "home", "shell"):
-                if user.get(key) is not None:
-                    parts.append(f"{key}={user[key]}")
-            if user.get("groups"):
-                parts.append("groups=" + ",".join(user["groups"]))
-            lines.append("  " + "  ".join(parts))
-
-    units = _as_dict(description.get("units"))
-    states = [f"{action} {', '.join(names)}" for action, names in units.items() if names]
-    if states:
-        lines.append("Units: " + "; ".join(states))
-
-    # Command-less services only enable a shipped unit; "Units:" lists them.
-    services = [s for s in _as_list(description.get("services")) if s.get("command")]
-    if services:
-        lines.append(f"Services ({len(services)}):")
-        width = _column_width(services, "name")
-        for svc in services:
-            parts = [f"{svc['name']:<{width}}"]
-            if svc.get("command"):
-                parts.append(_truncate(" ".join(svc["command"])))
-            parts.append(f"restart={svc['restart']}")
-            if svc.get("type"):
-                parts.append(f"type={svc['type']}")
-            if svc.get("user"):
-                parts.append(f"user={svc['user']}")
-            if svc.get("group"):
-                parts.append(f"group={svc['group']}")
-            if svc.get("working_dir"):
-                parts.append(f"cwd={svc['working_dir']}")
-            if svc.get("env"):
-                parts.append("env=" + ",".join(svc["env"]))
-            if svc.get("env_file"):
-                parts.append(f"env_file={svc['env_file']}")
-            for key in ("after", "requires", "wants"):
-                if svc.get(key):
-                    parts.append(f"{key}=" + ",".join(svc[key]))
-            if svc.get("limits"):
-                parts.append(
-                    "limits=" + ",".join(f"{k}={v}" for k, v in sorted(svc["limits"].items()))
-                )
-            if svc.get("wanted_by"):
-                parts.append(f"wanted_by={svc['wanted_by']}")
-            if not svc.get("enabled", True):
-                parts.append("disabled")
-            if svc.get("security_profile", "default") != "default":
-                parts.append(f"security={svc['security_profile']}")
-            lines.append("  " + "  ".join(parts))
-
-    if "instance_key" in description:
-        takers = ", ".join(_as_list(description["instance_key"])) or "no service"
-        lines.append(f"Instance key: {instance_key.CURVE}, fresh each boot; taken by {takers}")
-
-    partitions = _as_list(description.get("partitions"))
-    if partitions:
-        lines.append(f"Partitions ({len(partitions)}):")
-        for part in partitions:
-            lines.append(f"  {part['name']}  {part['size']}  {part['mount_at']}  {part['fs']}")
-
-    secrets = _as_list(description.get("secrets"))
-    if secrets:
-        lines.append(f"Secrets ({len(secrets)}):")
-        for secret in secrets:
-            targets = " ".join(f"{t['kind']}:{t['location']}" for t in secret["targets"])
-            flag = "required" if secret["required"] else "optional"
-            lines.append("  " + "  ".join(p for p in (secret["name"], flag, targets) if p))
-
-    hooks = _as_dict(description.get("hooks"))
-    if hooks:
-        lines.append("Hooks:")
-        for phase, previews in hooks.items():
-            lines.append(f"  {phase} ({len(previews)}):")
-            lines.extend(f"    {preview}" for preview in previews)
-
-    runtime_init = _as_dict(description.get("runtime_init"))
-    if runtime_init.get("count"):
-        steps = ", ".join(str(step) for step in runtime_init["steps"])
-        lines.append(f"Runtime init: {runtime_init['count']} (steps: {steps})")
-
-    debloat = _as_dict(description.get("debloat"))
-    if debloat:
-        if debloat.get("enabled"):
-            lines.append(
-                f"Debloat: enabled, {len(debloat.get('paths_remove', []))} paths removed,"
-                f" systemd minimize={_yes_no(debloat.get('systemd_minimize'))}"
-            )
-        else:
-            lines.append("Debloat: disabled")
-
-    output = _as_list(description.get("targets"))
-    if output:
-        lines.append("Targets: " + " ".join(str(t) for t in output))
-    return "\n".join(lines) + "\n"
-
-
-def declared_components(
-    image: Image, profile: str, resolved: Sequence[str]
-) -> list[dict[str, object]]:
-    """The components *image*'s *profile* holds that the image file wrote (``components=``,
-    ``network=``, ``observability=``, a profile's ``add=``, ``dev=``), each with the components
-    it composed nested under ``components``. The implied baseline, the internal pieces and
-    the source builds are not components here; a component a profile change removed (not in
-    *resolved*, the names the profile resolved to) is left out."""
-    from ._image import Component
-    from ._image._image import BASE_PROFILE, DEV_PROFILE
-
-    written: list[Component] = [*image.components]
-    written += [c for c in (image.network, image.observability) if c is not None]
-    chain: list[str] = []
-    name: str | None = profile
-    while name is not None and name in image.profiles and name not in chain:
-        chain.append(name)
-        name = image.profiles[name].extends or BASE_PROFILE
-    for ancestor in reversed(chain):
-        written += [c for c in image.profiles[ancestor].add if isinstance(c, Component)]
-    kept = [c for c in written if c.name in resolved]
-    if profile == DEV_PROFILE and image.dev is not None:
-        kept.append(image.dev)
-    return [_component_row(c) for c in dict.fromkeys(kept)]
-
-
-def _component_row(component: Component) -> dict[str, object]:
-    from ._image import Component
-    from ._image._component import composed
-
-    nested = [c for c in composed(component) if isinstance(c, Component)]
-    return {"components": [_component_row(c) for c in nested], "name": component.name}
-
-
-def _component_text(row: Mapping[str, Any]) -> str:
-    """``name``, then what it composed in parentheses: ``observability (journal-export)``."""
-    nested = [_component_text(child) for child in row.get("components", ())]
-    return f"{row['name']} ({' '.join(nested)})" if nested else str(row["name"])
 
 
 def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:
@@ -418,42 +432,148 @@ def _describe_sources(
     return described
 
 
-def _describe_hooks(profile_state: ProfileState) -> dict[str, list[str]]:
-    grouped: dict[str, list[str]] = {}
+def _describe_units(profile_state: ProfileState, probes: frozenset[str]) -> dict[str, list[str]]:
+    """Every unit by what boot does with it: ``enabled``, ``not_enabled`` (started by a
+    socket, a timer or another unit), ``disabled`` and ``masked``. Probe units are their
+    service's and left out."""
+    names = [
+        (unit_name(s.name), s.enabled)
+        for s in profile_state.services
+        if unit_name(s.name) not in probes
+    ]
+    states = profile_state.unit_states
+    return {
+        "enabled": list(dict.fromkeys(name for name, on in names if on)),
+        "not_enabled": list(dict.fromkeys(name for name, on in names if not on)),
+        "disabled": list(dict.fromkeys(s.unit for s in states if s.action == "disable")),
+        "masked": list(dict.fromkeys(s.unit for s in states if s.action == "mask")),
+    }
+
+
+def _describe_firewall(profile_state: ProfileState) -> dict[str, object] | None:
+    """What ``/etc/nftables.conf`` accepts: inbound, and outbound when its output chain
+    drops what no rule accepts (``None`` there: unfiltered). Each rule names who asked."""
+    conf = next((f for f in profile_state.files if f.path == _FIREWALL), None)
+    if conf is None:
+        return None
+    chains: dict[str, list[dict[str, str]]] = {"input": [], "output": []}
+    filtered = False
+    chain = None
+    for line in conf.data.decode("utf-8", errors="replace").splitlines():
+        words = line.split()
+        if words[:1] == ["chain"] and len(words) > 1:
+            chain = words[1]
+            continue
+        if chain == "output" and "policy" in words and "drop;" in words:
+            filtered = True
+        if chain not in chains or "accept" not in words or "comment" not in words:
+            continue
+        who = line.split("comment", 1)[1].strip().strip('"')
+        if who.startswith("DHCP"):
+            continue
+        chains[chain].append({"rule": _rule(words[: words.index("accept")]), "for": who})
+    return {"inbound": chains["input"], "outbound": chains["output"] if filtered else None}
+
+
+def _rule(words: list[str]) -> str:
+    """``tcp dport 8080`` as ``8080/tcp``, ``ip daddr 1.1.1.1 tcp dport 443`` as
+    ``1.1.1.1:443/tcp``; anything else as written."""
+    found: dict[str, str] = {}
+    for key in ("daddr", "dport"):
+        if key in words and words.index(key) + 1 < len(words):
+            found[key] = words[words.index(key) + 1]
+    protocol = next((w for w in words if w in ("tcp", "udp")), None)
+    if not found:
+        return " ".join(words)
+    port = f"{found['dport']}/{protocol}" if "dport" in found else ""
+    if "daddr" in found:
+        return f"{found['daddr']}:{port}" if port else found["daddr"]
+    return port
+
+
+_STEPS = {
+    "devtools-root-login": "sets the dev root password",
+    "devtools-serial-console": "enables the serial console",
+    "efi-stub": "installs the pinned EFI stub",
+}
+
+
+def _describe_build_steps(profile_state: ProfileState, resolved: Resolved | None) -> list[str]:
+    """Each build step by what it does, in the order the build runs them."""
+    from ._platforms import gcp
+    from .compiler import PHASE_ORDER
+    from .declarative import model as dm
+    from .declarative.state import STRIP_IMAGE_VERSION
+
+    names = {
+        item.script: item.name
+        for item in (resolved.items if resolved is not None else ())
+        if isinstance(item, dm.Hook)
+    }
+    sources = {spec.marker(): name for name, spec in profile_state.source_builds.items()}
+    steps: list[str] = []
+    built: list[str] = []
     for phase in PHASE_ORDER:
-        previews = [
-            _truncate(_first_command_line(" ".join(hook.command.argv)))
-            for hook in profile_state.hooks
-            if hook.phase == phase
-        ]
-        if previews:
-            grouped[phase] = previews
-    return grouped
+        for hook in profile_state.hooks:
+            if hook.phase != phase:
+                continue
+            script = hook.command.argv[0]
+            marker = script.split("\n", 1)[0]
+            if marker in sources:
+                built.append(sources[marker])
+                continue
+            if built:
+                steps.append(_built(built))
+                built = []
+            steps.append(_step(names.get(script), script, phase, STRIP_IMAGE_VERSION, gcp))
+        if built:
+            steps.append(_built(built))
+            built = []
+    return steps
 
 
-def _describe_units(profile_state: ProfileState) -> dict[str, list[str]]:
-    """Unit state by action: ``enable`` lists command-less enabled services."""
-    enabled = [unit_name(s.name) for s in profile_state.services if s.enabled and not s.command]
-    units: dict[str, list[str]] = {"enable": list(dict.fromkeys(enabled))}
-    for action in get_args(UnitAction):
-        units[action] = list(
-            dict.fromkeys(s.unit for s in profile_state.unit_states if s.action == action)
-        )
-    return units
+def _built(names: list[str]) -> str:
+    *rest, last = sorted(names)
+    listed = f"{', '.join(rest)} and {last}" if rest else last
+    return f"builds {listed} from source"
 
 
-def _first_command_line(script: str) -> str:
-    """First line of *script* that is not blank or a comment (falls back to the first)."""
-    lines = [line.strip() for line in script.splitlines()]
-    for line in lines:
-        if line and not line.startswith("#"):
-            return line
-    return next((line for line in lines if line), "")
+def _step(name: str | None, script: str, phase: str, strip: str, gcp: Any) -> str:
+    if script == strip:
+        return "removes IMAGE_VERSION from os-release, so a rebuild matches"
+    if script == gcp.NVME_HOST_IDS:
+        return "drops the NVMe host ids, which GCP sets per instance"
+    if name is None:
+        return f"runs a {phase} script"
+    if name in _STEPS:
+        step = _STEPS[name]
+        return f"{step}, which logs in over SSH too" if NETWORK_LOGIN_SCRIPT in script else step
+    if name.startswith("apt-"):
+        return f"checks the InRelease of {name.removeprefix('apt-')}"
+    if name.startswith("mkosi-"):
+        return f"runs Mkosi(scripts=) {phase} script {name.rsplit('-', 1)[-1]}"
+    return f"runs {name} ({phase})"
 
 
-def _describe_init_scripts(entries: Sequence[InitScriptEntry]) -> dict[str, object]:
-    ordered = runtime_init_order(entries)
-    return {"count": len(ordered), "steps": [entry.name for entry in ordered]}
+_BOOT_STEPS = {
+    "keys": "generates the keys the volumes are opened with",
+    "disks": "opens and mounts the volumes",
+    "secrets": "waits for the delivered secrets",
+    OWNERS_STEP: "gives each File(owner=) and Tree(owner=) its owner",
+}
+
+
+def _boot_step(name: str) -> str:
+    """A runtime-init step by what it does, before any service starts."""
+    if name in _BOOT_STEPS:
+        return _BOOT_STEPS[name]
+    if name.startswith(f"{OWNERS_STEP}-"):
+        return f"{_BOOT_STEPS[OWNERS_STEP]} in {name.removeprefix(f'{OWNERS_STEP}-')}"
+    if name.startswith("volume-"):
+        return f"prepares the directories on volume {name.removeprefix('volume-')}"
+    if name.startswith("delivery-"):
+        return f"waits for {name.removeprefix('delivery-')} to be delivered"
+    return f"runs {name}"
 
 
 def _describe_build_options(options: MkosiOptions) -> dict[str, object]:
@@ -483,7 +603,223 @@ def _describe_kernel_source(kernel: Kernel) -> dict[str, object]:
     }
 
 
-def _render_kernel(kernel: dict[str, Any]) -> str:
+# ── rows: what show prints, and what --diff compares ─────────────────────
+
+
+type Item = str | tuple[str, ...]
+"""One line of a row: text, or columns ``show`` aligns."""
+
+
+@dataclass(frozen=True, slots=True)
+class Row:
+    """A line of a section, keyed by *head*: alone, with its *items* inline
+    (``Packages (3): a b c``), or with them as the indented lines under it (*counted*:
+    ``Files (2):``)."""
+
+    head: str
+    items: tuple[Item, ...] = ()
+    inline: bool = False
+    counted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    """A titled group of rows; *counted* puts the number of rows in the title."""
+
+    title: str
+    rows: tuple[Row, ...]
+    counted: bool = False
+
+
+def declared_sections(report: Mapping[str, Any]) -> list[Section]:
+    """The image as written: components, services, profiles."""
+    sections = [
+        Section("Components", tuple(_component_row(c) for c in report["components"]), True),
+        Section("Services", tuple(_service_row(s) for s in report["services"]), True),
+        Section("Ingress", tuple(Row(way) for way in report.get("ingress", ())), True),
+        Section("Content", tuple(Row(item) for item in report.get("content", ())), True),
+        Section("Profiles", tuple(_profile_rows(report["profiles"])), True),
+    ]
+    return [section for section in sections if section.rows]
+
+
+def _component_row(row: Mapping[str, Any]) -> Row:
+    return Row(row["call"], tuple(f"composes {c['call']}" for c in row["components"]))
+
+
+def _service_row(row: Mapping[str, Any]) -> Row:
+    items: list[Item] = []
+    if row["package"]:
+        items.append(("program", f"the unit Debian package {row['package']} ships"))
+    else:
+        items.append(("program", _truncate(" ".join(row["program"]), PROGRAM_WIDTH)))
+    items += [("source", source) for source in row["sources"]]
+    if row["ports"]:
+        items.append(("ports", ", ".join(row["ports"])))
+    items.append(("hardening", row["hardening"]))
+    if row["volume"]:
+        items.append(("volume", f"{row['state']} on {row['volume']}"))
+    elif row["state"]:
+        items.append(("state", f"{row['state']}, volatile"))
+    if row["credentials"]:
+        items.append(("credentials", ", ".join(row["credentials"])))
+    if row["timer"]:
+        items.append(("timer", row["timer"]))
+    probe = "yes, " + str(row["readiness"]) if row["probe"] else "no"
+    if row["readiness"] and not row["probe"]:
+        probe = f"no, {row['readiness']} says when it is ready"
+    items.append(("probe", probe))
+    head = row["name"] + (f"  {row['component']}" if row["component"] else "")
+    return Row(head, tuple(items))
+
+
+def _profile_rows(profiles: Sequence[Mapping[str, Any]]) -> list[Row]:
+    width = max((len(row["name"]) for row in profiles), default=0)
+    rows: list[Row] = []
+    for row in profiles:
+        kind = "production" if row["production"] else "non-production"
+        what = "the image" if row["extends"] is None else f"extends {row['extends']}"
+        what += "" if row["production"] and row["extends"] is None else f", {kind}"
+        items = [f"adds {item}" for item in row["adds"]] + list(row["changes"])
+        rows.append(Row(f"{row['name']:<{width}}  {what}", tuple(items)))
+    return rows
+
+
+def resolved_sections(
+    resolved: Mapping[str, Mapping[str, Any]], extends: Mapping[str, str | None]
+) -> list[Section]:
+    """What each profile builds; a profile that extends one shown too lists only what
+    differs from it."""
+    sections: list[Section] = []
+    for name, description in resolved.items():
+        rows = tuple(resolved_rows(description))
+        parent = extends.get(name)
+        if parent is not None and parent in resolved and parent != name:
+            parent_rows = tuple(resolved_rows(resolved[parent]))
+            changed = diff_rows(parent_rows, rows) or [Row("nothing")]
+            sections.append(Section(f"Built into {name}, beyond {parent}", tuple(changed)))
+        else:
+            sections.append(Section(f"Built into {name}", rows))
+    return sections
+
+
+def resolved_rows(description: Mapping[str, Any]) -> list[Row]:
+    """One profile's derived facts as rows (:func:`describe`); an empty list is left out."""
+    rows: list[Row] = []
+
+    def listing(head: str, items: Sequence[Item], *, inline: bool = False) -> None:
+        if items:
+            rows.append(Row(head, tuple(items), inline, counted=True))
+
+    get = description.get
+    listing("Targets", get("targets", ()), inline=True)
+    kernel = get("kernel")
+    if isinstance(kernel, Mapping):
+        rows.append(Row(_render_kernel(kernel)))
+    options = get("build_options") or {}
+    if options:
+        rows.append(Row("Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in options.items())))
+    listing("Packages", get("packages", ()), inline=True)
+    listing("Build packages", get("build_packages", ()), inline=True)
+    listing("Sources", [_source_item(s) for s in get("sources", ())])
+    listing("Repositories", [_repository_item(r) for r in get("repositories", ())])
+    listing("Files", [_file_item(f) for f in get("files", ())])
+    listing("Skeleton files", [_file_item(f) for f in get("skeleton_files", ())])
+    listing(
+        "Templates",
+        [
+            (t["path"], t["mode"], "vars=" + (",".join(t["variables"]) or "-"))
+            for t in get("templates", ())
+        ],
+    )
+    listing(
+        "Partitions",
+        [(p["name"], p["size"], p["mount_at"], p["fs"]) for p in get("partitions", ())],
+    )
+    listing("Users", [u["name"] for u in get("users", ())], inline=True)
+    listing("Groups", [g["name"] for g in get("groups", ())], inline=True)
+    units = get("units") or {}
+    for key, label in UNIT_ROWS:
+        listing(label, units.get(key, ()), inline=True)
+    firewall = get("firewall")
+    if isinstance(firewall, Mapping):
+        listing("Firewall", _firewall_items(firewall))
+    if "instance_key" in description:
+        takers = ", ".join(description["instance_key"]) or "no service"
+        rows.append(Row(f"Instance key: {instance_key.CURVE}, fresh each boot; taken by {takers}"))
+    listing("Build steps", get("build_steps", ()))
+    listing("Boot steps", get("boot_steps", ()))
+    debloat = get("debloat") or {}
+    if debloat.get("enabled"):
+        rows.append(
+            Row(
+                f"Debloat: enabled, {len(debloat.get('paths_remove', []))} paths removed,"
+                f" systemd minimize={_yes_no(debloat.get('systemd_minimize'))}"
+            )
+        )
+    elif debloat:
+        rows.append(Row("Debloat: disabled"))
+    return rows
+
+
+UNIT_ROWS = (
+    ("enabled", "Enabled units"),
+    ("not_enabled", "Units started on demand"),
+    ("disabled", "Disabled units"),
+    ("masked", "Masked units"),
+)
+"""The units rows, by :func:`describe`'s ``units`` key."""
+
+
+def _source_item(source: Mapping[str, Any]) -> Item:
+    return (
+        str(source["name"]),
+        f"{source['kind']} {source['url']}",
+        f"ref={source['ref']}" if source.get("ref") else "",
+        f"pinned={source['pinned'] or '-'}",
+    )
+
+
+def _repository_item(repo: Mapping[str, Any]) -> Item:
+    parts = [str(repo["name"]), str(repo["url"])]
+    if repo.get("suite"):
+        parts.append(str(repo["suite"]))
+    if repo.get("components"):
+        parts.append(",".join(repo["components"]))
+    parts.append(f"prio={repo['priority']}")
+    if repo.get("in_image") is False:
+        parts.append("build only")
+    return tuple(parts)
+
+
+def _file_item(entry: Mapping[str, Any]) -> Item:
+    if "symlink" in entry:
+        what = f"-> {entry['symlink']}"
+    elif entry.get("directory"):
+        what = "directory"
+    else:
+        what = f"{entry['bytes']}B  sha256:{entry['sha256']}"
+    return (str(entry["path"]), str(entry["mode"]), what)
+
+
+def _firewall_items(firewall: Mapping[str, Any]) -> list[Item]:
+    items: list[Item] = [("in", rule["rule"], rule["for"]) for rule in firewall["inbound"]]
+    if not firewall["inbound"]:
+        items.append(("in", "nothing beyond replies and DHCP"))
+    outbound = firewall.get("outbound")
+    if outbound is None:
+        items.append(("out", "unfiltered"))
+        return items
+    grouped: dict[str, list[str]] = {}
+    for rule in outbound:
+        grouped.setdefault(rule["for"], []).append(rule["rule"])
+    items += [("out", ", ".join(rules), who) for who, rules in grouped.items()]
+    if not outbound:
+        items.append(("out", "nothing beyond replies and DHCP"))
+    return items
+
+
+def _render_kernel(kernel: Mapping[str, Any]) -> str:
     parts = [f"Kernel: {kernel.get('version') or kernel.get('config_file') or 'custom'}"]
     if kernel.get("tdx"):
         parts.append("tdx=yes")
@@ -494,31 +830,87 @@ def _render_kernel(kernel: dict[str, Any]) -> str:
     return "  ".join(parts)
 
 
-def _append_inline_list(lines: list[str], label: str, items: list[Any]) -> None:
-    if items:
-        lines.append(f"{label} ({len(items)}): " + " ".join(str(item) for item in items))
+# ── rendering and diffing rows ───────────────────────────────────────────
 
 
-def _append_files(lines: list[str], label: str, files: list[Any]) -> None:
-    if not files:
-        return
-    lines.append(f"{label} ({len(files)}):")
-    width = _column_width(files, "path")
-    for entry in files:
-        if "symlink" in entry:
-            what = f"-> {entry['symlink']}"
-        elif entry.get("directory"):
-            what = "directory"
+def render_sections(sections: Sequence[Section]) -> str:
+    """The sections as ``show`` prints them, a blank line between two."""
+    blocks: list[str] = []
+    for section in sections:
+        title = (
+            f"{section.title} ({len(section.rows)}):" if section.counted else f"{section.title}:"
+        )
+        lines = [title]
+        for row in section.rows:
+            lines.extend(_row_lines(row))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _row_lines(row: Row, prefix: str = "") -> list[str]:
+    if row.inline:
+        return [f"  {prefix}{row.head} ({len(row.items)}): " + " ".join(map(_text, row.items))]
+    if not row.items:
+        return [f"  {prefix}{row.head}"]
+    head = f"{row.head} ({len(row.items)}):" if row.counted else row.head
+    return [f"  {prefix}{head}", *(f"    {prefix}{line}" for line in _aligned(row.items))]
+
+
+def _aligned(items: Sequence[Item]) -> list[str]:
+    widths: dict[int, int] = {}
+    for item in items:
+        if isinstance(item, str):
+            continue
+        for index, cell in enumerate(item[:-1]):
+            widths[index] = max(widths.get(index, 0), len(cell))
+    lines: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            lines.append(item)
+            continue
+        cells = [f"{cell:<{widths[i]}}" for i, cell in enumerate(item[:-1])] + list(item[-1:])
+        lines.append("  ".join(cells).rstrip())
+    return lines
+
+
+def _text(item: Item) -> str:
+    return item if isinstance(item, str) else "  ".join(item)
+
+
+def diff_rows(old: Sequence[Row], new: Sequence[Row]) -> list[Row]:
+    """The rows of *new* that *old* does not hold as they are, each with only the items that
+    differ: ``+ x`` added, ``- x`` removed; a row only one side holds is ``+``/``-`` whole."""
+    before = {row.head: row for row in old}
+    after = {row.head: row for row in new}
+    changed: list[Row] = []
+    for row in old:
+        if row.head not in after:
+            changed.append(_whole(row, "-"))
+    for row in new:
+        known = before.get(row.head)
+        if known is None:
+            changed.append(_whole(row, "+"))
+            continue
+        if known == row:
+            continue
+        removed = [f"- {_text(i)}" for i in known.items if i not in row.items]
+        added = [f"+ {_text(i)}" for i in row.items if i not in known.items]
+        if row.inline:
+            words = [f"-{_text(i)}" for i in known.items if i not in row.items]
+            words += [f"+{_text(i)}" for i in row.items if i not in known.items]
+            changed.append(Row(f"{row.head}: {' '.join(words)}"))
         else:
-            what = f"{entry['bytes']}B  sha256:{entry['sha256']}"
-        lines.append(f"  {entry['path']:<{width}}  {entry['mode']}  {what}")
+            changed.append(Row(row.head, tuple(removed + added)))
+    return changed
 
 
-def _column_width(rows: list[Any], key: str) -> int:
-    return max((len(str(row[key])) for row in rows), default=0)
+def _whole(row: Row, sign: str) -> Row:
+    if row.inline:
+        return Row(f"{sign} {row.head} ({len(row.items)}): " + " ".join(map(_text, row.items)))
+    return Row(f"{sign} {row.head}", tuple(f"{sign} {_text(i)}" for i in row.items))
 
 
-def _truncate(text: str, width: int = PREVIEW_WIDTH) -> str:
+def _truncate(text: str, width: int) -> str:
     if len(text) <= width:
         return text
     return text[: width - 3].rstrip() + "..."
@@ -536,13 +928,3 @@ def _fmt(value: object) -> str:
     if isinstance(value, list):
         return ",".join(str(item) for item in value)
     return str(value)
-
-
-def _as_list(value: object) -> list[Any]:
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        return list(value)
-    return []
-
-
-def _as_dict(value: object) -> dict[str, Any]:
-    return dict(cast(Mapping[str, Any], value)) if isinstance(value, Mapping) else {}

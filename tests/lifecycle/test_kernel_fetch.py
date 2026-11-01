@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import fetch, on_platform, source_dir
-from tundravm._describe import describe, render
+from tundravm._describe import describe
 from tundravm._source import GitSource
 from tundravm.backends.base import MountSpec, Requirement
 from tundravm.declarative import (
@@ -400,7 +400,6 @@ def test_inspect_and_lint_report_the_kernel_pin(tmp_path: Path, config: Path) ->
     recipe = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config))
     info = describe(lower(recipe), profile="default")
     assert info["kernel"]["pinned"] is None  # type: ignore[index]
-    assert "Kernel: 6.1  tdx=yes  pinned=-" in render(info)
     (unpinned,) = [d for d in lint(recipe) if d.code == "source-unpinned"]
     assert unpinned.subject == "sources.kernel"
     assert unpinned.message == (
@@ -409,5 +408,4 @@ def test_inspect_and_lint_report_the_kernel_pin(tmp_path: Path, config: Path) ->
     write_lock(lock(recipe, resolver=lambda s: "c" * 40), tmp_path / "build" / "tundravm.lock")
     info = describe(lower(recipe), profile="default")
     assert info["kernel"]["pinned"] == "ccccccc"  # type: ignore[index]
-    assert "Kernel: 6.1  tdx=yes  pinned=ccccccc" in render(info)
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]

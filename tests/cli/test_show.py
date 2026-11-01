@@ -15,33 +15,39 @@ from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.declarative import lifecycle
 from tundravm.testing import UPDATE_GOLDEN_ENV
 
-SERVICE_SHOW = Path(__file__).with_name("show-service.txt")
-"""``tundravm show`` of the ``service`` template (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it)."""
+GOLDEN = Path(__file__).parent
+"""``show-<template>.txt``: ``tundravm show`` of a template (``TUNDRAVM_UPDATE_GOLDEN=1``
+rewrites them)."""
+
+INTERNAL = ("dev-access", "devtools", "app-ready", "SALT=", "mkosi-chroot", "Hooks")
+"""What ``show`` never prints: internal fragment and unit names, and shell."""
 
 
-def test_show_an_image_file(project: Path, cli: Cli) -> None:
-    result = cli("show", "demo.py")
+@pytest.mark.parametrize("template", ["service", "prover"])
+def test_show_reads_like_the_image_file(
+    template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert cli("new", "demo", "--template", template).code == EXIT_OK
+    monkeypatch.chdir(tmp_path / "demo")
+    result = cli("show")
     assert result.code == EXIT_OK, result.err
-    assert "/srv/www/index.html" in result.out and "busybox" in result.out
-    lines = result.out.splitlines()
-    assert lines[0] == "demo  demo.py"
-    profiles = [line.split()[0] for line in lines if line.startswith("profile=")]
-    assert profiles == ["profile=production", "profile=dev"]
-    dev = cli("show", "demo.py", "--profile", "dev").out.splitlines()
-    assert [line for line in dev if line.startswith("profile=")] == [dev[1]]
-    assert dev[1].startswith("profile=dev ")
+    golden = GOLDEN / f"show-{template}.txt"
+    if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
+        golden.write_text(result.out, encoding="utf-8")
+    assert result.out == golden.read_text(encoding="utf-8")
+    for internal in INTERNAL:
+        assert internal not in result.out, internal
+
+
+def test_show_selects_profiles(project: Path, cli: Cli) -> None:
+    """--profile P picks some, each shown whole."""
+    dev = cli("show", "demo.py", "--profile", "dev")
+    assert dev.code == EXIT_OK, dev.err
+    assert "\nBuilt into dev:\n" in dev.out and "Built into production" not in dev.out
     refused = cli("show", "demo.py", "--dev")
     assert refused.code == EXIT_SDK_ERROR
     assert "tundravm show demo.py --profile dev" in refused.err
-    assert "Extends: production\n" in result.out and "Components (" in result.out
-    for internal in ("variant=", "Inherits", "Fragments", "Policy:", "Extends: base"):
-        assert internal not in result.out, internal
-    payload = json.loads(cli("show", "demo.py", "--json").out)
-    assert payload["schema"] == "tundravm.show/1" and payload["image"] == "demo"
-    assert (payload["file"], set(payload["profiles"])) == ("demo.py", {"production", "dev"})
-    assert len(payload["digest"]) == 64
-    only = json.loads(cli("show", "demo.py", "--json", "--profile", "dev").out)
-    assert set(only["profiles"]) == {"dev"}
 
 
 def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli) -> None:
@@ -50,25 +56,6 @@ def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli)
     (origin,) = rows["File(extra, /srv/www/index.html)"]
     assert origin["action"] == "declared" and origin["location"].startswith("demo.py:")
     assert (origin["profile"], origin["components"]) == ("image", [])
-
-
-def test_show_lists_what_the_service_template_declares(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert cli("new", "demo", "--template", "service").code == EXIT_OK
-    monkeypatch.chdir(tmp_path / "demo")
-    result = cli("show")
-    assert result.code == EXIT_OK, result.err
-    if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
-        SERVICE_SHOW.write_text(result.out, encoding="utf-8")
-    assert result.out == SERVICE_SHOW.read_text(encoding="utf-8")
-    dev = json.loads(cli("show", "--json", "--profile", "dev").out)["profiles"]["dev"]
-    assert dev["components"] == [
-        {"components": [], "name": "app"},
-        {"components": [], "name": "network"},
-        {"components": [], "name": "dev-access"},
-    ]
 
 
 def test_without_a_build_show_reads_the_project_image(project: Path, cli: Cli) -> None:
@@ -88,7 +75,7 @@ def test_show_the_image_units_and_tree(project: Path, cli: Cli) -> None:
         "\n# egress\ntee-base  4460/tcp, 123/udp, 1.1.1.1"
         in cli("show", "filtered.py", "--units").out
     )
-    egress = json.loads(cli("show", "filtered.py", "--json").out)["egress"]
+    egress = json.loads(cli("show", "filtered.py", "--units", "--json").out)["egress"]
     assert egress["tee-base"][:2] == ["4460/tcp", "123/udp"]
     tree = json.loads(cli("show", "demo.py", "--tree", "--json").out)["tree"]
     paths = {row["path"] for row in tree}

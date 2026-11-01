@@ -42,9 +42,9 @@ def image_file(tmp_path: Path) -> Path:
 def test_cli_shows_and_compiles_a_declarative_recipe(image_file: Path, tmp_path: Path) -> None:
     code, out = run_main("show", str(image_file), "--json")
     assert code == EXIT_OK
-    payload = json.loads(out)["profiles"]
-    assert set(payload) == {"default", "azure"}
-    assert payload["default"]["base"] == "debian/bookworm"
+    payload = json.loads(out)
+    assert set(payload["resolved"]) == {"default", "azure"}
+    assert payload["base"]["distribution"] == "debian/bookworm"
 
     code, out = run_main("show", str(image_file), "--profile", "azure")
     assert code == EXIT_OK and "azure" in out
