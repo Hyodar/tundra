@@ -362,6 +362,7 @@ a `when=` phrase per other.
 | `DevAccess` | debug access, only in the `dev` profile | none |
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
 | `Nethermind` | Nethermind built with the .NET 10 SDK, `dotnet` preset | `rpc`, `ws`, `engine_api` |
+| `Lighthouse` | a beacon node from the Lighthouse release | `http` |
 | `TaikoClient` | the taiko-client driver, built with Go | none |
 | `Raiko` | the Raiko TDX prover, built with Cargo | `http` |
 

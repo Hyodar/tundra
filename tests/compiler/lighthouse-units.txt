@@ -1,0 +1,85 @@
+# lighthouse.service
+[Unit]
+Description=lighthouse.service
+After=nethermind-ready.service tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
+Requires=nethermind-ready.service tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/lighthouse/lighthouse bn --network=hoodi --datadir=/persistent/data/lighthouse --execution-endpoint=http://127.0.0.1:8551/ --execution-jwt=${CREDENTIALS_DIRECTORY}/jwt --http --http-address=127.0.0.1 --http-port=5052 --port=9000 --disable-upnp --checkpoint-sync-url=https://checkpoint.example
+User=lighthouse
+WorkingDirectory=/persistent/data/lighthouse
+Environment=STATE_DIRECTORY=/persistent/data/lighthouse
+LoadCredential=jwt:/run/tundravm/secrets/jwt
+ReadWritePaths=-/persistent/data/lighthouse
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+
+# lighthouse.service.d/20-tundravm.conf
+[Service]
+LimitNOFILE=65536
+
+# tundravm-generated-jwt.service
+[Unit]
+Description=Generate this boot's secret jwt
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c "mkdir -p -m 0711 /run/tundravm && mkdir -p -m 0700 /run/tundravm/secrets && if [ ! -s /run/tundravm/secrets/jwt ]; then od -An -v -N32 -tx1 /dev/urandom | tr -d ' \\n' > /run/tundravm/secrets/jwt.tmp && [ -s /run/tundravm/secrets/jwt.tmp ] && mv /run/tundravm/secrets/jwt.tmp /run/tundravm/secrets/jwt; fi"
+TimeoutStartSec=60s
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=none
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+

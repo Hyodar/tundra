@@ -15,7 +15,8 @@ findings, a lint rule ``tundravm check`` runs, of the codes the class declares a
 - Ways in for people: :class:`SshAccess`, :class:`DevAccess` (``image.dev``).
 - :class:`Observability` with :class:`JournalExport` and :class:`PrometheusRemoteWrite`
   (``image.observability``).
-- Workloads: :class:`Nethermind`, :class:`TaikoClient` and :class:`Raiko`.
+- Workloads: :class:`Nethermind`, :class:`Lighthouse`, :class:`TaikoClient` and
+  :class:`Raiko`.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from tundravm.declarative.model import Diagnostic, Resolved
 from tundravm.diagnostics import Rule
 
 from ._base import EVIDENCE, DevAccess, Firewall, Network, SshAccess, Tdxs, TeeBase
+from ._lighthouse import Lighthouse
 from ._nethermind import Nethermind
 from ._observability import JournalExport, Observability, PrometheusRemoteWrite
 from ._taiko import Raiko, TaikoClient
@@ -46,6 +48,7 @@ __all__ = [
     "Endpoint",
     "Firewall",
     "JournalExport",
+    "Lighthouse",
     "Nethermind",
     "Network",
     "Observability",

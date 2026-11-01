@@ -18,6 +18,7 @@ from tundravm.components import (
     Endpoint,
     Firewall,
     JournalExport,
+    Lighthouse,
     Nethermind,
     Network,
     Observability,
@@ -46,6 +47,8 @@ config = Secret("raiko-config")
 execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
 driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
 prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"))
+CHECKPOINT = "https://checkpoint.example"
+beacon = Lighthouse(execution=execution.engine_api, jwt=jwt, checkpoint_sync_url=CHECKPOINT)
 
 
 def stack(**changes: object) -> Image:
@@ -120,6 +123,9 @@ def test_component_checks_report_what_the_contract_warns_about() -> None:
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
     unchecked = Image("x", components=[Tdxs(validator="tdx")])
     assert "tdxs-validator-unchecked" in {d.code for d in plan(unchecked).lint()}
+    blind = Lighthouse(execution=execution.engine_api, jwt=jwt)
+    found = {d.code for d in plan(Image("x", components=[execution, blind])).lint()}
+    assert {"lighthouse-checkpoint-missing", "lighthouse-volatile-state"} <= found
 
 
 PCS = "api.trustedservices.intel.com:443"
@@ -167,6 +173,11 @@ TAIKO: dict[str, Any] = {
         (prover, Egress(hosts=[PCS])),
         (Raiko(config=config, l2_rpc=REMOTE), Egress(hosts=[PCS, "10.0.0.7:8545"])),
         (Raiko(config=config, l1=["10.0.0.9:8545"]), Egress(hosts=[PCS, "10.0.0.9:8545"])),
+        (beacon, Egress([TCP(9000), UDP(9000), UDP(9001)], ["checkpoint.example:443"])),
+        (
+            Lighthouse(execution=REMOTE, jwt=jwt, checkpoint_sync_url="http://10.0.0.9:5052"),
+            Egress([TCP(9000), UDP(9000), UDP(9001)], ["10.0.0.9:5052", "10.0.0.7:8545"]),
+        ),
         (SshAccess(from_delivery=True), Egress()),
         (DevAccess(password="tdx"), Egress()),
     ],
@@ -210,6 +221,10 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
             "proxy 'p.example:80' is not IP:PORT",
         ),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
+        (lambda: replace(beacon, network="goerli"), "not one Lighthouse ships"),
+        (lambda: replace(beacon, checkpoint_sync_url="checkpoint.example"), "http"),
+        (lambda: replace(beacon, jwt="jwt"), "secret the execution client reads"),  # type: ignore[arg-type]
+        (lambda: replace(beacon, execution=Endpoint("127.0.0.1", 8551)), "readiness"),
     ],
 )
 def test_component_configuration_is_checked(make: object, message: str) -> None:

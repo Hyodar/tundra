@@ -22,6 +22,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `Component` is a dataclass with `compose()`, typed exports and an optional `check()`; `Profile(extends=, add=, changes=, production=)` edits with `value.ref.edit(...)` and `.remove()`.
 - `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential, bound by naming it in argv or `environment=`; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
 - `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it: `Nethermind(jwt=Generated("jwt"))` and its consensus client need no delivered JWT.
+- `Lighthouse(execution=, jwt=, checkpoint_sync_url=)` runs the v8.3.2 release as a beacon node on `hoodi` (or another network it ships) beside `Nethermind`, dialing its peers without accepting any unless `expose_p2p=True`.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
 
 ### Network and clouds

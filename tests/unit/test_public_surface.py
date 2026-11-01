@@ -58,6 +58,7 @@ COMPONENTS = [
     "Endpoint",
     "Firewall",
     "JournalExport",
+    "Lighthouse",
     "Nethermind",
     "Network",
     "Observability",
@@ -274,6 +275,7 @@ def test_the_component_library_is_components() -> None:
     shipped = [
         "DevAccess",
         "Firewall",
+        "Lighthouse",
         "Nethermind",
         "Network",
         "Observability",

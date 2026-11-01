@@ -766,6 +766,31 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 |---|---|
 | `JournalExport.service(proxy: str \| None = None) -> Service` | The `journal-export` service, through *proxy* (`IP:PORT`) when given. |
 
+### `Lighthouse`
+
+*dataclass*
+
+```python
+Lighthouse(
+    *,
+    execution: Endpoint,
+    jwt: Secret | Generated,
+    checkpoint_sync_url: str | None = None,
+    network: str = 'hoodi',
+    state: VolumeDirectory | None = None,
+    http_port: int = 5052,
+    expose_p2p: bool = False,
+    resources: Resources | None = None,
+    source: dm.Http = Http(url='https://github.com/sigp/lighthouse/releases/download/v8.3.2/lighthouse-v8.3.2-x86_64-unknown-linux-gnu.tar.gz', sha256='ea914e932462d6a93ad78c21377d70f995e05ac224248be0b58c2f4d6740439a'),
+)
+```
+
+| Member | Does |
+|---|---|
+| `Lighthouse.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `lighthouse-checkpoint-missing`, `lighthouse-volatile-state`. |
+| `Lighthouse.http` | The beacon node API, on the loopback. |
+| `Lighthouse.outbound() -> Egress` | The p2p ports, the checkpoint URL's `HOST:PORT` and *execution* when it is not on the loopback. |
+
 ### `Nethermind`
 
 *dataclass*
