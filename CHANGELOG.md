@@ -81,7 +81,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** the default Debian snapshot moves from `20251113T083151Z` to `20261018T082309Z`; `Debian(snapshot=)` keeps the old one.
 - `lock` prints the snapshot, each source's ref and pin and the toolchain; `build --tree-only` without a lock says its tree will drift.
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.
-- The ESP is a fixed 128 MiB; a UKI over 126 MiB fails, naming `RootFS.verity()`.
+- An initramfs disk's ESP is sized to hold `RootFS.initramfs(uki_max_size=)`, 256M by default (272 MiB); verity's stays 128 MiB, and a UKI past it fails naming `uki_max_size=`.
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
 - A kernel fixture with its own config builds in every driver a target needs; a weekly workflow builds it and Debian's newest 6.12 (6.12.113, from the security pool).
 - `DebianConfig` reads the snapshot's main pool, then its security pool, which alone carries a kernel shipped as a security update.

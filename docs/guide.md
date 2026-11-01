@@ -684,9 +684,10 @@ as a secret. Nothing about it is attested.
 | `RootFS.initramfs()` | the OS in the UKI's initrd: small services, one file to measure (default); `max_size="4G"` caps its tmpfs, else half the memory |
 | `RootFS.verity()` | a read-only erofs root, its dm-verity hash partition beside the ESP and root hash on the command line, under a volatile overlay |
 
-Choose verity when the payload is large. Every disk boots the UKI from a fixed 128 MiB
-FAT32 ESP: a UKI over 126 MiB fails the build with both sizes. The layout and the cap are
-recorded in the manifest, never switched by a size threshold.
+Choose verity when the payload is large. The ESP holds a UKI of
+`RootFS.initramfs(uki_max_size=)` (256M by default), verity's 128 MiB: a bigger UKI fails
+the build with both sizes. The layout and the cap are recorded in the manifest,
+never switched by a size threshold.
 
 ### Network and observability
 
@@ -797,7 +798,7 @@ when the committed tree differs from what the image compiles to. The starter's t
 
 ```text
 mkosi.conf                     the QEMU disk: Format=disk, Dependencies=payload, the ESP
-mkosi.repart/00-esp.conf       a fixed 128M FAT32 ESP holding the UKI
+mkosi.repart/00-esp.conf       a 272M FAT32 ESP sized to hold the UKI
 mkosi.images/payload/mkosi.conf  Include=../../payload
 payload/mkosi.conf             the OS: Format=uki, packages, kernel modules
 payload/mkosi.conf.d/          one file per concern: 10-platform, 20-tee-base, 30-tdxs, ...
@@ -908,8 +909,8 @@ The fixture's production build in CI, digests cut short:
 
 ```text
 built build/fixture/production/c51b7d941cf88309
-  payload.efi    68.0 MiB  sha256 4484014ecb65d546  ESP 128.0 MiB, 58.1 MiB left
-  qemu.raw      129.0 MiB  sha256 54675b3b4771aee6
+  payload.efi    68.0 MiB  sha256 4484014ecb65d546  ESP 272.0 MiB, 199.8 MiB left
+  qemu.raw      273.0 MiB  sha256 54675b3b4771aee6
 source            kind  ref           pin           toolchain  checkout  deps
   git-codereview  git   6c2c97b0f412  6c2c97b0f412  go1.26.0   fetched   fetched
   rust-probe      git   7fdfe4315f7b  7fdfe4315f7b  1.91.0     fetched   fetched
