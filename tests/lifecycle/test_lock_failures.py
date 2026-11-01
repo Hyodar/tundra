@@ -39,10 +39,7 @@ recipe = Recipe(
 
 RAIKO_LINE = f"  raiko: git {RAIKO} @ feat/tdx: ref 'feat/tdx' not found"
 TOOL_LINE = f"  tool: http {TOOL}: HTTP 404"
-HINT = (
-    "Fix the refs above, or drop NAME from --update to keep its existing pin, "
-    "or pass --offline to reuse existing pins."
-)
+HINT = "Fix it upstream. A source left out of `tundravm lock --update NAME` keeps its pin."
 
 
 class _Upstream:

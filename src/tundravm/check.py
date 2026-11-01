@@ -1638,8 +1638,8 @@ _SOURCE_LINE = re.compile(r"(?P<file>.+):(?P<line>[0-9]+)")
 
 
 def _where(d: Diagnostic) -> str:
-    """*d*'s variant as the reports show it: ``common`` for the whole recipe."""
-    return d.variant or "common"
+    """*d*'s profile as the reports show it: ``image`` for the whole image."""
+    return d.variant or "image"
 
 
 def render(diagnostics: Sequence[Diagnostic]) -> str:
@@ -1681,7 +1681,7 @@ def explain(codes: Sequence[str]) -> str:
     """What each of *codes* checks and how to fix it, as ``tundravm check --explain`` prints it.
 
     A code :data:`RULES` does not register is a :class:`~tundravm.errors.ValidationError`
-    whose hint lists the codes.
+    whose hint names the closest code and the lint reference.
     """
     unknown = [code for code in codes if code not in RULES]
     if unknown:
@@ -1689,7 +1689,8 @@ def explain(codes: Sequence[str]) -> str:
         guess = f"Did you mean {close[0]!r}? " if close else ""
         raise ValidationError(
             f"Unknown check code(s): {', '.join(unknown)}.",
-            hint=f"{guess}Codes: {', '.join(sorted(RULES))}.",
+            hint=f"{guess}docs/reference/lint.md lists every code tundravm checks; a code "
+            "a Component's check() returns is explained by that component.",
         )
     blocks = []
     for code in dict.fromkeys(codes):

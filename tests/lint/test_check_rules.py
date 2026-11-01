@@ -470,7 +470,7 @@ def test_render_text_and_dict() -> None:
         "error service-user-missing [default] app: boom",
         "    hint: fix it",
         "info variant-empty [x]: m",
-        "warning lock-stale [common]: w",
+        "warning lock-stale [image]: w",
         "1 error, 1 warning, 1 info",
     ]
     assert diag.context == (("group", "app"), ("user", "app"))
@@ -516,7 +516,7 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
     assert "| Profile | Subject |" in render_markdown([plain])
     lines = render_github([placed, plain], "recipe.py").splitlines()
     assert lines[0].startswith("::warning file=node.py,line=27,title=app-port::[default]")
-    assert lines[1].startswith("::warning file=recipe.py,title=lock-stale::[common]")
+    assert lines[1].startswith("::warning file=recipe.py,title=lock-stale::[image]")
 
 
 # CLI

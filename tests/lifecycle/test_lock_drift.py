@@ -107,10 +107,13 @@ def test_drift_names_the_section_and_the_change(
     locked = lock(_recipe())
     recipe = _recipe(extra)
 
-    assert lock_status(recipe, locked) == (
-        Diagnostic(
-            "lock-changed", "error", f"{section} changed since the lock: {detail}", subject=section
-        ),
+    (found,) = lock_status(recipe, locked)
+    assert found == Diagnostic(
+        "lock-changed",
+        "error",
+        f"{section} changed since the lock: {detail}",
+        subject=section,
+        hint=found.hint,
     )
     drift = compare_lock(locked.lockfile, _payload(recipe))
     assert drift.changed == (section,)

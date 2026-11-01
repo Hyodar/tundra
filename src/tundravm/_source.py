@@ -1489,6 +1489,18 @@ def default_resolver(source: Source) -> str:
     return _download_digest(source)
 
 
+def _unreachable_hint(url: str) -> str:
+    """What to do when git cannot read *url*: tundra-tools, which every image builds, is
+    private, so its usual cause is a missing read access."""
+    if "github.com/Hyodar/tundra-tools" in url:
+        return (
+            "tundra-tools is private: give git read access to github.com/Hyodar/tundra-tools "
+            "(a credential helper or an SSH insteadOf), or build from a mirror with "
+            "Tdxs(source=Git(mirror, ref))."
+        )
+    return "Check the repository URL, its access rights and the network."
+
+
 def _ls_remote(source: GitSource) -> str:
     """The commit *source*'s ref points at, without prompting for credentials."""
     command = ["git", "ls-remote", source.url, source.ref]
@@ -1524,7 +1536,7 @@ def _ls_remote(source: GitSource) -> str:
             f"Cannot resolve {described}: {reason}.",
             source=described,
             reason=reason,
-            hint="Check the repository URL, its access rights and the network.",
+            hint=_unreachable_hint(source.url),
             context={"argv": " ".join(command)},
         )
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
@@ -1644,14 +1656,14 @@ def _unresolved(failures: Mapping[str, SourceError], total: int, *, offline: boo
         verb = "needs" if count == 1 else "need"
         head = f"Cannot lock offline: {count} {noun} {verb} the network to resolve:"
         hint = (
-            "Run `tundravm lock IMAGE` without --offline, or pin the source inline "
+            "Run `tundravm lock` where the network reaches them, or pin the source inline "
             "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...))."
         )
     else:
         head = f"Cannot lock: {count} {noun} could not be resolved:"
-        hint = (
-            "Fix the refs above, or drop NAME from --update to keep its existing pin, "
-            "or pass --offline to reuse existing pins."
+        hints = dict.fromkeys(error.hint for error in failures.values() if error.hint)
+        hint = " ".join(
+            (*hints, "A source left out of `tundravm lock --update NAME` keeps its pin.")
         )
     lines = [head]
     lines.extend(f"  {name}: {error.source}: {error.reason}" for name, error in failures.items())

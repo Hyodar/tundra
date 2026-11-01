@@ -831,7 +831,17 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
         diagnostics.extend(lock_status(loaded.recipe, locked, variants=names))
         diagnostics.extend(_toolchain(loaded.backend, locked))
     drift = None
-    if args.tree is not None and resolved:
+    if args.tree is not None and resolved and not Path(args.tree).is_dir():
+        diagnostics.append(
+            Diagnostic(
+                "tree-drift",
+                "error",
+                f"{args.tree} is not a directory: there is no committed tree to compare",
+                subject=args.tree,
+                hint=f"Write it with `tundravm build --tree-only {args.tree}` and commit it.",
+            )
+        )
+    elif args.tree is not None and resolved:
         img = _lowered(loaded, found)
         drift = diff_against(img, args.tree, profiles=names)
         for change in drift.changes:
@@ -839,8 +849,7 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
                 Diagnostic(
                     "tree-drift",
                     "error",
-                    f"{args.tree}/{change.path}: {change.status} relative to what the image "
-                    "compiles to",
+                    _TREE_DRIFT[change.status].format(tree=args.tree),
                     subject=change.path,
                     hint=f"Rewrite it with `tundravm build --tree-only {args.tree}` and review "
                     "the diff.",
@@ -860,6 +869,15 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     if fmt == "text" and (explained := explain_command(diagnostics)):
         print(explained, file=out)
     return EXIT_FAILURE if bad else EXIT_OK
+
+
+_TREE_DRIFT = {
+    "added": "missing from {tree}: the image compiles it",
+    "removed": "in {tree}, but the image does not compile it",
+    "modified": "modified in {tree}: differs from what the image compiles to",
+    "mode": "mode differs in {tree} from what the image compiles to",
+}
+"""A ``tree-drift`` message per status: the committed tree is the old side of the diff."""
 
 
 def _toolchain(backend: BuildBackend | None, locked: Lock) -> tuple[Diagnostic, ...]:
@@ -1142,7 +1160,8 @@ def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
     if args.mode is None:
         raise ValidationError(
             "run needs --mode simulated or --mode tdx.",
-            hint="The security mode is always explicit: simulated (no TDX) or tdx (a TDX host).",
+            hint="The security mode is always explicit: --mode simulated boots without TDX "
+            "(add --dev to start the services), --mode tdx needs `tundravm doctor --for tdx`.",
         )
     build = _resolve_build(args.subject, found, dev=args.dev)
     instance = instances.launch(

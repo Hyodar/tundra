@@ -56,7 +56,7 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     assert "\n\ntree-drift (error)\n" in result.out
     unknown = cli("check", "--explain", "source-unpined")
     assert unknown.code == EXIT_SDK_ERROR
-    assert "Did you mean 'source-unpinned'? Codes: cloud-glue-unconditional," in unknown.err
+    assert "Did you mean 'source-unpinned'? docs/reference/lint.md lists" in unknown.err
 
 
 def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:

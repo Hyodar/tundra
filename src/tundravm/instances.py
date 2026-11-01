@@ -173,7 +173,9 @@ def open_instance(root: Path, name: str) -> Instance:
         known = sorted(p.name for p in root.iterdir()) if root.is_dir() else []
         raise StateError(
             f"No instance {name!r} under {root}.",
-            hint=f"Instances: {', '.join(known)}." if known else "Start one with `tundravm run`.",
+            hint=f"Instances: {', '.join(known)}."
+            if known
+            else "Start one with `tundravm run --mode simulated --dev`.",
             context={"instances": str(root)},
         )
     data = json.loads((path / INSTANCE).read_text(encoding="utf-8"))

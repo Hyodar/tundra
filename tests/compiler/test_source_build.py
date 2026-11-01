@@ -414,7 +414,7 @@ def test_drift_reports_added_moved_changed_and_removed_sources(
     if diagnostic is None:
         assert status == ()
     else:
-        assert diagnostic in status
+        assert diagnostic in [replace(found, hint=None) for found in status]
     if drift is not None:
         builds = lower(recipe).source_builds()
         pins = {"tool": locked.lockfile.fetches[0]}

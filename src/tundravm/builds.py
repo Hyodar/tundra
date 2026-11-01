@@ -150,7 +150,8 @@ class Build:
         if target not in self.targets:
             raise ValidationError(
                 f"Build {self.id} has no {target} artifact (targets: {', '.join(self.targets)}).",
-                hint=f"Build it with `tundravm build --target {target}`.",
+                hint=f"Add {target!r} to the image's targets= if it is not there, then "
+                f"`tundravm build --target {target}`.",
                 context={"build": str(self.path)},
             )
         return self.path / ARTIFACT_NAMES[cast(OutputTarget, target)]

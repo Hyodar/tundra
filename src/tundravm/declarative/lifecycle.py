@@ -661,8 +661,9 @@ def lock(
 
 
 def drift_diagnostics(drift_lines: Iterator[tuple[str, str, str]]) -> tuple[Diagnostic, ...]:
+    hint = "Review the change, then run `tundravm lock` to record it and commit the lockfile."
     return tuple(
-        Diagnostic(code, "error", message, subject=section)
+        Diagnostic(code, "error", message, subject=section, hint=hint)
         for code, section, message in drift_lines
     )
 
@@ -701,7 +702,14 @@ def image_lock_status(
 
     found = drift_diagnostics(lines())
     if not found and not drift.digest_matches:
-        found = (Diagnostic("lock-stale", "error", "the image digest differs from the lock"),)
+        found = (
+            Diagnostic(
+                "lock-stale",
+                "error",
+                "the image digest differs from the lock",
+                hint="Run `tundravm lock` to record it and commit the lockfile.",
+            ),
+        )
     return found
 
 
