@@ -9,6 +9,7 @@ from tundravm import Image, Service
 from tundravm._image import lower, recipe_of
 from tundravm.components import (
     EVIDENCE,
+    Component,
     DevAccess,
     Egress,
     Endpoint,
@@ -25,7 +26,7 @@ from tundravm.components import (
     TeeBase,
 )
 from tundravm.errors import ValidationError
-from tundravm.ports import TCP
+from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
 from tundravm.sources import Git
 from tundravm.storage import OperatorKey, Volume
@@ -118,6 +119,44 @@ def test_component_checks_report_what_the_contract_warns_about() -> None:
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
     unchecked = Image("x", components=[Tdxs(validator="tdx")])
     assert "tdxs-validator-unchecked" in {d.code for d in plan(unchecked).lint()}
+
+
+PCS = "api.trustedservices.intel.com:443"
+REMOTE = Endpoint("10.0.0.7", 8545, ready=execution.rpc.ready)
+
+
+@pytest.mark.parametrize(
+    ("component", "sends"),
+    [
+        (TeeBase(nameservers=["9.9.9.9"]), Egress([TCP(4460), UDP(123)], ["9.9.9.9"])),
+        (TeeBase(time=False, dns=False), Egress()),
+        (Tdxs(), Egress()),
+        (Tdxs(get_collateral=True), Egress(hosts=[PCS])),
+        (
+            Tdxs(check_revocations=True),
+            Egress(hosts=[PCS, "certificates.trustedservices.intel.com:443"]),
+        ),
+        (
+            Observability(
+                logs=JournalExport("https://logs.example:19532"),
+                metrics=PrometheusRemoteWrite("https://[fd00::9]/api/v1/write"),
+            ),
+            Egress(hosts=["logs.example:19532", "[fd00::9]:443"]),
+        ),
+        (execution, Egress([TCP(30303), UDP(30303)])),
+        (driver, Egress([TCP(443)])),
+        (
+            TaikoClient(engine=REMOTE, rpc=REMOTE, jwt=jwt, chain=chain),
+            Egress([TCP(443)], ["10.0.0.7:8545"]),
+        ),
+        (prover, Egress(hosts=[PCS])),
+        (Raiko(config=config, l2_rpc=REMOTE), Egress(hosts=[PCS, "10.0.0.7:8545"])),
+        (SshAccess(from_delivery=True), Egress()),
+        (DevAccess(password="tdx"), Egress()),
+    ],
+)
+def test_each_shipped_component_says_where_it_sends(component: Component, sends: Egress) -> None:
+    assert component.outbound() == sends
 
 
 @pytest.mark.parametrize(

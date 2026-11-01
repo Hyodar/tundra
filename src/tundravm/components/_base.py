@@ -35,6 +35,7 @@ from tundravm.errors import ValidationError
 
 __all__ = [
     "EVIDENCE",
+    "INTEL_PCS",
     "DevAccess",
     "Firewall",
     "Network",
@@ -46,6 +47,11 @@ __all__ = [
 
 EVIDENCE = ServiceReady("tdxs.service", Notify())
 """The implied evidence service is ready: what a service that asks for quotes requires."""
+
+INTEL_PCS = "api.trustedservices.intel.com:443"
+"""Intel's provisioning certification service: TDX collateral and the PCK CRL, over HTTPS."""
+INTEL_CERTIFICATES = "certificates.trustedservices.intel.com:443"
+"""Where Intel publishes its root CA's CRL, over HTTPS."""
 
 _SSH_KEY = re.compile(
     r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com"
@@ -542,6 +548,13 @@ class Tdxs(Component):
 
     def readiness(self) -> tuple[Readied, ...]:
         return (EVIDENCE,)
+
+    def outbound(self) -> Egress:
+        """Intel's PCS over HTTPS with *get_collateral* or *check_revocations*, and the root
+        CA's CRL with *check_revocations*; nothing otherwise (quotes are made in the guest)."""
+        fetches = self.get_collateral or self.check_revocations
+        hosts = [INTEL_PCS] if fetches else []
+        return Egress(hosts=[*hosts, INTEL_CERTIFICATES] if self.check_revocations else hosts)
 
     def compose(self) -> Iterator[object]:
         if not isinstance(self.source, dm.Git):

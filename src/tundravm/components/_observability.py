@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from tundravm._image._component import Component
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
-from tundravm._image._values import Package
+from tundravm._image._values import Egress, Package
 from tundravm.declarative import model as dm
 from tundravm.declarative.config import ConfigFile
 from tundravm.diagnostics import Rule
@@ -43,6 +44,23 @@ def _check_url(owner: object, url: object) -> None:
             f"{kind}: url {url!r} must be one word without quotes.",
             hint="Pass the URL alone, without spaces or quotes.",
         )
+    try:
+        named = bool(urlsplit(url).hostname) and urlsplit(url).port != 0
+    except ValueError:
+        named = False
+    if not named:
+        raise ValidationError(
+            f"{kind}: url {url!r} names no host, or a port outside 1..65535.",
+            hint="Pass the receiver's URL: 'https://logs.example:19532'.",
+        )
+
+
+def _destination(url: str) -> str:
+    """*url*'s ``HOST:PORT``, the port its scheme implies when it names none."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
 def _check_credential(owner: object, credential: object) -> None:
@@ -152,6 +170,7 @@ class Observability(Component):
 
     *logs* is a :class:`JournalExport`, *metrics* a :class:`PrometheusRemoteWrite`; each
     is optional. Their credentials are secrets the image declares in ``secrets=``.
+    :meth:`outbound` is each sink's host and port (a host name stands for its port).
     Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Component name:
     ``observability``.
     """
@@ -175,6 +194,11 @@ class Observability(Component):
                 "Observability exports nothing.",
                 hint="Pass logs=JournalExport(url) and/or metrics=PrometheusRemoteWrite(url).",
             )
+
+    def outbound(self) -> Egress:
+        """Each sink's ``HOST:PORT``."""
+        sinks = (sink for sink in (self.logs, self.metrics) if sink is not None)
+        return Egress(hosts=list(dict.fromkeys(_destination(sink.url) for sink in sinks)))
 
     def compose(self) -> Iterator[object]:
         if self.logs is not None:

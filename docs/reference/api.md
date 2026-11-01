@@ -784,6 +784,7 @@ Nethermind(
 |---|---|
 | `Nethermind.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `nethermind-volatile-state`: a database on the volatile root resyncs every boot. |
 | `Nethermind.engine_api` | The Engine API a consensus driver calls with the shared JWT. |
+| `Nethermind.outbound() -> Egress` | The p2p port, over TCP and UDP (discovery); its RPC and Engine API are loopback. |
 | `Nethermind.rpc` | JSON-RPC over HTTP. |
 | `Nethermind.ws` | JSON-RPC over WebSocket, on the RPC port. |
 
@@ -825,6 +826,7 @@ The export path for logs and metrics: `image.observability` takes it.
 | Member | Does |
 |---|---|
 | `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear. |
+| `Observability.outbound() -> Egress` | Each sink's `HOST:PORT`. |
 
 ### `PrometheusRemoteWrite`
 
@@ -865,6 +867,7 @@ Raiko(
 |---|---|
 | `Raiko.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `raiko-listens-publicly`: a prover reachable around its attested ingress. |
 | `Raiko.http` | Raiko's HTTP API. |
+| `Raiko.outbound() -> Egress` | Intel's PCS over HTTPS (TDX collateral), and *l2_rpc* when it is not on the loopback. |
 
 ### `Resolved`
 
@@ -984,6 +987,10 @@ TaikoClient(
 
 The `taiko-client` driver: follows L1 and drives the execution client's Engine API, so the L2 chain advances.
 
+| Member | Does |
+|---|---|
+| `TaikoClient.outbound() -> Egress` | TCP 443 for the L1 endpoints *chain* names, and *engine* and *rpc* when they are not on the loopback. |
+
 ### `Tdxs`
 
 *dataclass*
@@ -1009,6 +1016,7 @@ The evidence service: `tdxs` from tundra-tools, socket-activated on `/var/tdxs.s
 | `Tdxs.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tdxs-validator-unchecked`: a validator with nothing to compare a quote to. |
 | `Tdxs.from_policy(policy: str \| Path \| Mapping[str, object], *, validator: du.TdxsType = 'tdx', allow_placeholder: bool = False, **kwargs: Any) -> Tdxs` | A verifier whose `expected_measurements` are *policy*'s registers. |
 | `Tdxs.group` | The group whose members may ask for quotes. |
+| `Tdxs.outbound() -> Egress` | Intel's PCS over HTTPS with *get_collateral* or *check_revocations*, and the root CA's CRL with *check_revocations*; nothing otherwise (quotes are made in the guest). |
 | `Tdxs.socket` | Where a service asks for quotes (its `tdx` group may connect). |
 
 ### `TeeBase`

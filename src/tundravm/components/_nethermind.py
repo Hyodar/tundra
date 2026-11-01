@@ -8,7 +8,7 @@ from tundravm._image._component import Component, Endpoint
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
 from tundravm._image._storage import VolumeDirectory
-from tundravm._image._values import Resources, TcpProbe
+from tundravm._image._values import TCP, UDP, Egress, Resources, TcpProbe
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.diagnostics import Rule
@@ -19,6 +19,7 @@ __all__ = ["NETHERMIND_SOURCE", "Nethermind"]
 NETHERMIND_SOURCE = dm.Git("https://github.com/NethermindEth/nethermind.git", "1.32.3")
 """The Nethermind release the component builds; ``tundravm lock`` pins it to a commit."""
 
+_P2P_PORT = 30303
 _PROJECT = "src/Nethermind/Nethermind.Runner"
 _RUNTIME = "linux-x64"
 _HOME = "/usr/lib/nethermind"
@@ -62,7 +63,8 @@ class Nethermind(Component, build_network=True):
     ``taiko-alethia``...). It reads the Engine API secret *jwt* as a credential, keeps its
     database in *state* (a volume directory; ``None`` keeps it on the volatile root, so
     it resyncs at every boot, which :meth:`check` reports), and runs under the ``dotnet``
-    hardening preset.
+    hardening preset. It sends to its peers on the p2p port, 30303 over TCP and UDP
+    (:meth:`outbound`), so behind an ``Egress`` it reaches the peers that use that port.
 
     Exports :attr:`rpc` (JSON-RPC over HTTP), :attr:`ws` (the same port over WebSocket)
     and :attr:`engine_api`, each ready once the RPC port accepts connections.
@@ -107,6 +109,10 @@ class Nethermind(Component, build_network=True):
     def engine_api(self) -> Endpoint:
         """The Engine API a consensus driver calls with the shared JWT."""
         return Endpoint("127.0.0.1", self.engine_port, ready=self.service("nethermind").ready)
+
+    def outbound(self) -> Egress:
+        """The p2p port, over TCP and UDP (discovery); its RPC and Engine API are loopback."""
+        return Egress(ports=[TCP(_P2P_PORT), UDP(_P2P_PORT)])
 
     def compose(self) -> Iterator[object]:
         yield dm.Build(
