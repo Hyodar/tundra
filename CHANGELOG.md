@@ -3,413 +3,83 @@
 ## Unreleased
 
 tundravm v2 makes mkosi accessible for confidential VMs by making the choices for you:
-Debian trixie, systemd, a measured UKI, Intel TDX. An image is one Python `Image` with a
-few typed slots. What every confidential image needs is implied, and each implied default
-has one escape hatch. The compiler writes one mkosi 27.1 tree that uses mkosi's own
-composition, so the tree stays readable and buildable without tundravm. mkosi 27.1 is a
-pinned dependency, run in-process.
+Debian trixie, systemd, a measured UKI, Intel TDX. You declare one Python `Image`; what
+every confidential image needs is implied, each default has one typed escape hatch, and the
+compiler writes one plain mkosi 27.1 tree you can read and build without tundravm. Twelve
+commands take it from `new` to a locked, reproducible, signed build that runs, deploys and
+attests. Nothing keeps a compatibility alias. Real TDX quotes and the attested delivery
+channel are not done yet: until then `attest` and `secrets` say `unverified first contact`.
+Breaking changes are marked **Breaking**.
 
-The command line is the operator's loop in twelve commands. A build is an immutable
-directory with a canonical, optionally signed manifest that `verify` checks anywhere.
-`run`, `deploy`, `attest` and `secrets` work with explicit builds and write receipts.
-Nothing here keeps a compatibility alias: every old name and verb is gone, and the
-sections below say where each went. Real TDX quotes (gate 2) and the attested channel for
-delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` say
-`unverified first contact`.
+### SDK
 
-### The mkosi-native tree
+- **Breaking:** `Image`, `Service`, `Component` and `Profile` replace `Recipe`, `Variant` and `Fragment` as the public surface.
+- **Breaking:** every public name has one home (`tundravm`, `.ports`, `.systemd`, `.components`, `.storage`, `.secrets`, `.sources`, `.errors`, `.testing`); flat imports are gone.
+- **Breaking:** `profile` replaces `variant` everywhere, `--json` output and `tundravm.testing` included; `show --json` says `image` and `components`.
+- `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports and 8745, one hardened user per service, and `tdxs`.
+- `Service` takes an argv; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`); `expose=` is the only way to open a port.
+- A timer service keeps every keyword and refuses the ones only a long-lived service has.
+- `Hardening.preset(NAME)` names the runtime class (`static`, `jit`, `node`, `python`, `dotnet`).
+- `Component` is a dataclass with `compose()`, typed exports (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()`.
+- `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)`, which takes the value's own constructor keywords, and `value.ref.remove()`.
+- `Volume` with `OperatorKey`, `TpmSeal` or `BrokerKey`, `Secret` as a systemd credential, `AttestedTLS` and `TLS` ingress, `RootFS.verity()`, `Observability`.
+- `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
+- `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.
+- The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`.
+- `tundravm.testing`: `plan(image)`, `assert_clean`, `assert_diagnostic`, `assert_tree`, `read_lock`, `FakeMkosi`, `FakeSources`, `boot`, `run_cli`.
 
-- One mkosi 27.1 project per image. The root `mkosi.conf` is the QEMU raw disk
-  (`qemu.raw`: an ESP around `payload.efi` through `ExtraTrees=%O/payload.efi`).
-  `mkosi.images/payload/` includes `payload/`, the OS: `mkosi.conf` (`Format=uki`), one
-  `mkosi.conf.d/NN-<concern>.conf` per component, the trees and the `mkosi.<phase>.d/`
-  scripts. `mkosi.images/azure/` and `mkosi.images/gcp/` wrap the same payload and
-  convert it at postoutput into `azure.vhd` (fixed VHD) and `gcp.tar.gz` (oldgnu sparse).
-- Every tree pins `MinimumVersion=27.1`, `Snapshot=`, `ToolsTree=default` with its
-  distribution, release and snapshot, `SourceDateEpoch=`, a `Seed=` per image,
-  `History=no` and `WithNetwork=`, and ships `/etc/machine-id` as `uninitialized`.
-- The payload carries the provisioning glue of every cloud target the image names,
-  inert elsewhere through `ConditionVirtualization=`, so one UKI and one set of
-  measurements cover every disk.
-- `RootFS.verity()`: an erofs root and its dm-verity hash partition beside the ESP in
-  every disk, the root hash on the UKI command line, a volatile overlay on top. CI builds
-  it, boots it from dm-verity, and checks that both converters keep the partitions.
-- Lint `mkosi-configure-script` and `mkosi-environment-passthrough` refuse what would make
-  `mkosi summary` lie or leak the host.
-- The Linux backend runs the pinned mkosi in a child forked by mkosi's `fork_and_wait`,
-  never from `PATH`; every other tool comes from the pinned tools tree. The Lima backend
-  runs the same mkosi commit in an x86-64 Debian guest. Builds never switch backend.
-- `doctor` prints one row per capability (`build:x86-64`, `build:go`, `build:rustup`,
-  `run:simulated`, `run:tdx`, `deploy:gcp`, `deploy:azure`, `verify:*`), each failure with
-  its fix; `--for` picks one. `build:go` says what the host's `go` is for and wants 1.21 or
-  newer; `build:rustup` says what the host's `rustup` is for. Both block only when the
-  image (`doctor IMAGE`, else the project's) has a Go source, or a Cargo source that pins a
-  Rust toolchain or is not checked out yet; otherwise they are `optional: not needed by
-  this image`, and without an image a missing tool is `optional`, never a failure.
-- A Go source builds with the toolchain its `go.mod` names (the `toolchain` line, else the
-  `go` line), pinned: the host's `go` fetches that release into the module cache with the
-  modules (`GOTOOLCHAIN=<release>`), the offline build selects it from the copied cache,
-  and Debian's `golang` is only the bootstrap. A release the host cannot fetch is
-  `E_SOURCE` naming it and its module, never a failure inside mkosi; a host without `go`
-  1.21+ is `E_STATE` naming the source and the fix before anything is fetched;
-  `Go(env=)` refuses `GOTOOLCHAIN`. `Tdxs` builds tundra-tools as a Go build (prefetched modules and
-  toolchain, `CGO_ENABLED=0`, `-buildvcs=false`) instead of a script that needed the
-  network, so an image builds from tundra-tools master (`go 1.25.0`) on trixie (Go 1.24).
-- A Cargo source builds with the toolchain its `rust-toolchain.toml` (or `rust-toolchain`)
-  pins: the host's `rustup` installs that channel, with the file's components and targets
-  and `--profile minimal` unless it names another, into `.sources/deps/rustup`, the cargo
-  of that toolchain fetches the crates, and the offline build runs that toolchain's own
-  `cargo` and `rustc` (Debian's `cargo` is not rustup's proxy); Debian's toolchain only
-  links. A channel that is not pinned (`stable`, `1.91`, an undated `nightly`) is
-  `E_SOURCE` with the fix, a channel the host cannot install is `E_SOURCE` naming it, and
-  a pinned source on a host without `rustup` is `E_STATE` before any toolchain runs. A
-  source that pins none builds with Debian's `cargo`, and the manifest says so.
-  `Cargo(env=)` refuses `RUSTUP_TOOLCHAIN`.
-- Evidence: `docs/design/evidence/gate1-tree.md`.
+### CLI
 
-### The concise SDK
+- **Breaking:** twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
+- `new NAME [--template service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written.
+- The `service` template builds your own Go program from `app/`; the prover template adds a volume, a secret, attested TLS and `policies/`.
+- The `--ci` workflow checks the image, the lock and the committed tree, and builds with `TUNDRA_TOOLS_TOKEN` when the repository sets it.
+- `show` leads with the image and its file, then production; with a build, with the build's report; `--diff` compares two builds.
+- `run --mode simulated|tdx` is always explicit; a production build boots fail-closed without TDX, and `--dev` runs the dev build's services.
+- `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` run the one replacement workflow on GCP.
+- `attest` verifies fresh evidence and delivers nothing; `secrets` attests again before it delivers or unlocks.
+- `doctor` prints one row per capability with its fix; `build:go` and `build:rustup` block only when the image needs them.
+- **Breaking:** `convert --from systemd` prints an `Image` file that passes `check`, and `--mode` is gone.
+- `convert --from mkosi` writes Python that parses, converts a tundravm tree's payload, and turns its cloud wrappers into `targets=`.
+- Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".
 
-- `Image`, `Service`, `Component` and `Profile` are the public surface, and every public
-  name has one home, with no aliases: `tundravm` (18: `Image`, `Profile`, `Service`, the
-  contents `Package`, `File`, `Tree`, `User`, `Group`, the foundation `Debian`, `Kernel`,
-  `RootFS`, `Mkosi`, and `load`, `lower`, `compile`, `bake`, `doctor`), `tundravm.ports`
-  (`TCP`, `UDP`, `AttestedTLS`, `TLS`), `tundravm.systemd` (what `Service` keywords take),
-  `tundravm.components` (`Component`, its exports, `Resolved`, `Diagnostic`, `Rule` and
-  the shipped library), `tundravm.storage` (`Volume`, `VolumeDirectory`, `OperatorKey`,
-  `TpmSeal`, `BrokerKey`), `tundravm.secrets` (`Secret`, `Credential`), `tundravm.sources`
-  (`GoBinary`, `CargoBinary`, `Build`, `Install`, `Local`, `Git`, `Http`) and
-  `tundravm.errors`. The
-  quickstart imports from two of them; the last release had 126 names in `tundravm`. Design:
-  `docs/design/namespaces-2026-10-31.md`.
-- `Image(name, ...)` slots: `base`, `packages`, `files`, `services`, `components`,
-  `volumes`, `secrets`, `ingress`, `network`, `users`, `groups`, `kernel`, `rootfs`,
-  `observability`, `targets`, `dev`, `profiles`, `mkosi`. Implied: Debian trixie from the
-  locked snapshot, the TEE baseline, a curated kernel module set, a firewall that opens
-  only exposed ports and the management port 8745, one hardened user per service, and the
-  `tdxs` evidence service. `Image`'s docstring lists each with its escape hatch.
-- `Service(name, argv, ...)` takes an argv, never a command line. `requires=[x.ready]`
-  waits for real readiness (`Notify()`, `HttpProbe`, `TcpProbe`); `expose=` opens the
-  firewall; `state=`, `credentials=`, `resources=`, `shutdown=`, `timer=`, `socket=` and
-  `unit=DropIn(...)` group the rest.
-- `convert --from systemd` prints an `Image` file over the public namespaces, which loads
-  and passes `check`: one `Service` per service unit with its drop-ins and its timer or
-  socket, directives no keyword holds in `unit=DropIn(...)`, a note where the unit differs
-  from what the image implies and an unsupported line for what no slot holds. `--mode` is
-  gone: the output follows the image's defaults, so no byte-exact mode applies.
-- `Local("app")` is a source like `Git` and `Http`: the directory beside the image file,
-  so your own program builds into the image without being pushed anywhere first. The path
-  is relative to the file that declares it and must stay inside the project directory (the
-  nearest `pyproject.toml`); an absolute path is refused. `lock` pins its content digest,
-  the sha256 over each file's path, sha256 and exec bit and each symlink's target, of the
-  files a git checkout would hold (`git ls-files --cached --others
-  --exclude-per-directory=.gitignore` inside a work tree, every file outside one; never
-  `.git`). `build` copies those files into the workspace like a checkout, so the Go and
-  Rust toolchain rules, the prefetch and the offline sandbox apply unchanged. A directory
-  that changed since the lock is `local-changed` naming its path, in `check` and
-  `lock --check`. `build --dev` re-pins it in the lock first, with no network, rewriting
-  only the Local entries and printing `lock: <name> re-pinned, local source changed`; a
-  production build refuses it until `tundravm lock` records it. The manifest
-  and the SBOM record the digest, and `show BUILD` prints it in its sources table's pin
-  column.
-- `Kernel.default(cmdline=[...])` and `Kernel.build(..., cmdline=[...])` append kernel
-  parameters to the UKI's command line after the image's own; none is added by default.
-  Each entry is one parameter, and the ones tundravm sets (`root=`, `roothash=`,
-  `systemd.verity*`, `systemd.volatile=`, `init=`, `systemd.unit=`, `console=`) are refused
-  with what sets them. They move the recipe digest. `Mkosi(settings=)` refuses
-  `KernelCommandLine` at construction and names `cmdline=`.
-- `Hardening.preset("static" | "dotnet" | "jit" | "node" | "python")` names the runtime
-  class; each preset's deviation from `static` is written beside it.
-- `Component` is a class with configuration fields, `compose()`, typed exports
-  (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()` lint rule.
-- `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)` and
-  `value.ref.remove()`. `dev=DevAccess(...)` is the non-production `dev` profile.
-- `value.ref.edit(...)` takes the keywords of the value's own constructor
-  (`service.ref.edit(environment={...})`, not the lowered unit's `env=`). The edited value
-  is checked like a new one, and anything else is refused with the keywords an edit of
-  that kind sets.
-- The runtime slots: `Volume(name, mount=, unlock=OperatorKey() | TpmSeal(...) | BrokerKey(...))`
-  with `volume.directory(...)` as a service's state; `Secret(name, required=, rotation=)`
-  read as a systemd credential; `AttestedTLS(port, upstream=)` and `TLS`, refused unless
-  they are the only path to a loopback upstream; `RootFS.initramfs()` and
-  `RootFS.verity()`; `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))`.
-  The image records all of them in `/etc/tundravm/runtime.json`.
-- `tundravm.components`: `TeeBase`, `Network`, `Firewall`, `Tdxs` (implied, replaced by
-  passing one), `SshAccess`, `DevAccess`, `Observability`, and the surge workloads
-  `Nethermind`, `TaikoClient` and `Raiko`, each with exports and a `check()`.
-- The templates (`service`, `prover`), the examples and surge are `Image` files. The
-  `service` template's app is your own program: `new` writes `app/main.go` and `app/go.mod`,
-  a small Go HTTP server the image builds through `Local("app")` and runs as the sandboxed
-  `app` service (it was a page busybox httpd served), so the starter is the whole story of
-  a service in a TDX image; `cloud` keeps the busybox page.
-  `examples/surge-tdx-prover/image.py` is 33 lines (was 151 plus 500 more in helpers);
-  byte parity with the 2024 nethermind-tdx tree is dropped.
-- An image file names no backend: `TUNDRAVM_BACKEND`, else `local` on Linux x86-64 and
-  `lima` elsewhere.
-- `tundravm.testing.plan(image)` takes an `Image`; the planned value is `PlannedImage`.
-- `scan_console`, the unit lines of a boot summary and the integration probe read the
-  console line by line as its writers wrote it: a line a kernel line interrupted is whole,
-  the kernel line after it, as `on_console` already matched.
-- `tundravm.testing` says profile where it said variant: `PlannedImage.profile`,
-  `CompiledTree.profiles`, `.default_profile` and `.profile(name)`, the `profile=` argument of
-  every `CompiledTree` reader, `fragment_plan(profile=)`, `assert_diagnostic(profile=,
-  profiles=)`, `profiles=` on `compile_tree`, `assert_clean`, `assert_tree_matches` and the
-  `compiled` fixture, and the `Profiles` alias (was `Variants`).
-- `FakeMkosi` writes a PE UKI, GPT disks and the GCP tarball around one, so a test build is
-  measured and reported like a real one. `uki_size=` pads its UKI, and a failing build
-  writes that UKI first. `FakeSources` keeps a dependency cache it already prefetched.
-- The rest of the SDK says profile too: `Diagnostic(profile=)` and `.profile`, `"profile"`
-  in `check --json`, `Resolved.profile`, `Tree.profiles` from `tundravm.compile()`,
-  `Artifact.profile` from `tundravm.bake()`, `profiles` and `profile` in `show --json`, the
-  `profile` key of error contexts, and the lint code `profile-empty` (was `variant-empty`).
-  `examples/02_variants.py` is `examples/02_profiles.py`.
-- `Service(resources=, shutdown=)` lower without a finding. `unit-extra` fires only when a
-  service's `unit=DropIn(...)` or raw unit directives set what a `Service` keyword covers
-  (`MemoryMax=`, `env=`, ...), and names that keyword; a drop-in for what no keyword covers is
-  quiet.
-- A `Service(timer=...)` keeps `environment=`, `resources=`, `shutdown=`, `unit=`, `groups=`,
-  `working_directory=`, `logs=` and `runtime=` (they were dropped), and refuses `readiness=`,
-  `expose=`, `credentials=` and a volume `state=` at construction, naming the keyword.
-  `Kernel(modules=)` on a built kernel is refused (they were dropped).
-- `File(owner=)` and `Tree(owner=)` in a profile's `add=` (and in `dev=`) are owned in that
-  profile, through `/etc/tmpfiles.d/50-tundravm-owned-<profile>.conf`; the owner was dropped.
-- `convert --from mkosi` writes Python that parses: package names are never broken at a
-  hyphen, strings are double-quoted, trees resolve beside the image file, and a second tree at
-  one target is reported instead of colliding. On a tree tundravm wrote it converts the
-  payload (`Verity=hash` as `RootFS.verity()`), and notes the QEMU disk, the cloud wrappers and
-  the payload's generated trees and scripts instead of copying them or converting mkosi's
-  `default-initrd`; the cloud wrappers present become `targets=`, so the converted surge
-  tree builds the same outputs and passes `check`.
-- `show IMAGE` leads with the image: its name and file on the first line (`file` in
-  `--json`), then the production profile and the others in declaration order, each block
-  headed `profile=NAME  debian/trixie (x86_64)`; `--dev` picks the image's dev profile (it was
-  ignored).
-- A component declares the codes its `check()` reports on its class:
-  `rules = (Rule(code, severity, summary, fix),)`. A code it does not declare is
-  `rule-undeclared`, an error naming the class and the code. The shipped components carry
-  their own rules (the registry keeps tundravm's), and `docs/reference/lint.md` lists them
-  by component.
-- `check --explain CODE` explains a code an image's own component declares, through the
-  image given or the project's, and says where it comes from (`declared by App in
-  demo.py`); the report's `explain:` line names component codes too.
-- `Rule.severity` is every level a code reports at, the default first, with a `when=`
-  phrase for each other one; `lint.md` and `--explain` print
-  `error (warning under Policy(storage_safety='warn'))` from them, and the registry test
-  checks the levels against the reporters. `toolchain-drift` is a warning: the strict
-  path that made it an error had no caller.
-- Evidence: `docs/design/evidence/gate4-sdk.md`.
+### Build and lock
 
-### Profiles and the ESP
+- `build` publishes `build/<image>/production/<id>/` once, read-only, with a canonical `manifest.json` whose digest is `<id>`.
+- **Breaking:** a production build needs `build/tundravm.lock` (`lock-missing`); a development build writes a missing one and re-pins `Local` sources.
+- **Breaking:** lockfile version 6 names a profile's sections `profiles.<name>`; an older lock is refused: run `tundravm lock`.
+- `lock --check` never writes or fetches, and exits 1 on drift, a missing lockfile included; `--json` lists no drift when clean.
+- `build` ends with a report: artifacts, sources and toolchains, time per phase, the UKI's Authenticode digest, predicted registers.
+- Every build carries `measurements.json` with a `tundravm.policy/2` policy per record, an SPDX SBOM, and `observations.json`.
+- `build --reproduce`, `--sign KEY`, `--offline` and `verify [--rebuild]` check the bytes anywhere.
+- The ESP is a fixed 128 MiB FAT32; a UKI over 126 MiB fails with both sizes and `RootFS.verity()` as the fix.
 
-- Every profile is lowered whatever a compile selects (35a24b1). The shared payload is
-  the intersection of all profiles; `payload/mkosi.profiles/<name>/` holds what each
-  builds beyond it. A declaration one profile removes moves into the overlays of the
-  profiles that keep it, the default profile's included through
-  `payload/mkosi.conf.d/99-<default>.conf`. A profile's build no longer depends on which
-  other profiles are compiled with it, and no shared script names a profile.
-- The ESP is a fixed 128M FAT32 of 512-byte clusters (9894da4):
-  `SizeMinBytes=SizeMaxBytes=128M`, `Minimize=off`,
-  `SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"`. OVMF reads it as FAT32 by cluster count,
-  and the disks no longer carry a 481 MiB ESP. Its FAT32 holds a UKI of up to 126 MiB. A
-  larger one fails the disk build, and `build` says so with the UKI's size, the ESP's and
-  the fix (`RootFS.verity()` keeps the OS out of the UKI) instead of mkosi's disk-full.
-  The build report prints the room the UKI leaves.
-- The changelog and plan record both (79dd67a).
+### Sources and toolchains
 
-### The operator's loop
+- `Local("app")` builds a directory beside the image file, pinned by its content digest; an edit is `local-changed`.
+- `Git` and `Http` sources are fetched on the host into the workspace; the build sandbox never fetches. `show BUILD` names each toolchain.
+- A Go source builds with the toolchain its `go.mod` names, fetched by the host's `go` 1.21+; `Tdxs` is one, so every image needs it.
+- A Cargo source builds with the toolchain its `rust-toolchain.toml` pins, installed by the host's `rustup`; an unpinned channel is refused.
 
-- Twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`,
-  `secrets`, `verify`, `convert`, `doctor`. Shell completion is
-  `python -m tundravm.completion bash|zsh|fish`.
-- `build` writes `BUILD/<image>/production/<id>/` (`development/` for a non-production
-  profile): `payload.efi`, `qemu.raw`, each target's disk, `packages.json`,
-  `measurements.json`, `sbom.spdx.json`, `inputs/`, `tree/`, `manifest.json`,
-  `manifest.sig` with `--sign`, `observations.json`. It is published with one rename, made
-  read-only and never written again. `<id>` is the manifest's digest; `latest-production`
-  and `latest-development` point at the newest. A stale lock is refused. A production
-  build is a locked build: without `build/tundravm.lock` it refuses with `lock-missing`
-  (`tundravm lock IMAGE` first), so its bytes reproduce and its manifest names every pin;
-  a development build writes a missing lock first.
-- `manifest.json` (`tundravm.manifest/1`) binds every artifact and input by sha256, the
-  tree by a digest over paths, modes, contents and symlink targets, the UKI and its root
-  hash, the lock, the sources (each Go source with its toolchain and checksum, each Cargo
-  source with its Rust toolchain and what its `rustc -vV` says), the package manifest, the
-  SBOM, the measurement records and the toolchain, with explicit `missing` and `unchecked`
-  states. The UKI's record carries its SHA-384 Authenticode digest
-  (`uki.authenticode_sha384`), the event RTMR1's log records for the loaded UKI, which
-  `verify` recomputes. `verify` checks it
-  offline, a signature against an OpenSSH allowed-signers file, and `--rebuild`
-  reproduces it. A signed manifest was verified from a second checkout.
-- `build` ends with a report, and `show BUILD` (`--json`: under `report`) leads with the
-  same one, read back from the build directory. It lists each artifact with its size and
-  sha256, the UKI with the room the ESP leaves it, and a sources table: kind, ref, pin, the
-  Go or Rust toolchain, and whether the checkout and the dependency prefetch were fetched,
-  copied or cached. Then come the time per phase (checkouts, prefetch, mkosi,
-  measurements, total), the UKI's Authenticode digest, and one row per measurement record
-  and predicted register. `observations.json` records the phase times and the fetch
-  states. The fetch reports the checkouts and the dependency prefetch as two phases.
-- `build --reproduce` builds again in an independent workspace and records the comparison
-  in `observations.json`.
-- `measurements.json` holds one record per target and boot path: predictions, unknowns
-  with their reason, RTMR3 outside the policy, and a `tundravm.policy/2` policy that
-  `attest --policy` takes.
-- `run [BUILD] --mode simulated|tdx` boots `qemu.raw` through OVMF from its ESP as a named
-  instance with receipts under `.tundravm/instances/`; `run status|logs|stop|ssh|mode`.
-- `deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID]` publishes and
-  starts an explicit build with a receipt; `deploy status|logs|mode|upgrade|rollback`.
-  `upgrade` and `rollback` run the one replacement workflow on GCP.
-- `attest INSTANCE --policy FILE` verifies fresh evidence and delivers nothing.
-  `secrets deliver` and `secrets unlock` attest again first; production delivery needs
-  `trusted`. Values travel on the SSH command's stdin only.
-- `[tool.tundravm]` keeps `image`, `build` and `backend`, under `TUNDRAVM_IMAGE`,
-  `TUNDRAVM_BUILD` and `TUNDRAVM_BACKEND`.
-- Every code `check` reports is a registered rule with a severity, what it checks and how
-  to fix it. `check --explain CODE` (repeatable) prints them, and a text report ends with the
-  `--explain` command naming its codes.
-- `check`'s text report prints a finding several profiles share as one line naming them
-  (`[dev, production]`), and a hint consecutive findings share once after them. `--json`
-  and the GitHub annotations keep one finding per profile and subject. `[image]` marks a
-  finding about the whole image.
-- `check --tree DIR` reports a missing tree once, and says of each drifted file whether
-  the tree misses it, has it extra or has it modified.
-- Output papercuts: a reader closing the pipe (`show --json | head`) ends a command
-  quietly with 141; `check --explain` takes one code per flag, so `check --explain
-  tree-drift demo.py` checks nothing and explains `tree-drift`; the text summary counts
-  findings and says when they took fewer lines (`2 errors, 0 warnings, 0 infos (1 line)`);
-  `E_SOURCE` for a modified checkout says its fix once; `run --mode tdx` and `doctor`
-  rows nest no parentheses; `No production build under build/.` names a directory;
-  `doctor`'s build row says sudo may ask for a password unless `sudo -n true` succeeds;
-  `lock --check` without a lockfile is drift (exit 1, naming `tundravm lock`), not
-  `E_LOCKFILE`.
-- Lockfile version 6 names a profile's sections `profiles.<name>.<key>`, the word the API
-  uses; a lockfile an older tundravm wrote is refused, with `tundravm lock` as the fix.
-  `check` reports a profile's lock drift as that profile's finding
-  (`lock-changed [dev] files: files changed since the lock`).
-- `new` prints the first loop after `uv sync` (`lock`, `build --tree-only mkosi`, `pytest`,
-  `build --dev`, `run --mode simulated --dev`), and the project README and the image's
-  docstring list the same commands with `uv run`. The generated image is `ruff format`
-  clean. The `--ci` workflow fences `show` in the job summary, checks out without
-  credentials and uses the actions tundravm's own CI uses.
-- Hints name the fix: a lock that cannot read tundra-tools says the repository is private
-  and how to reach it or a mirror; `deploy` of a target the build lacks says to add it to
-  `targets=`; an unknown `--explain` code points at the lint reference; a missing instance
-  and a `run` without `--mode` give the command to start one.
-- Where each removed verb went:
+### Lint
 
-  | Removed | Now |
-  |---|---|
-  | `init` | `new NAME [--template service\|prover] [--ci]` |
-  | `inspect`, `explore`, `preview`, `explain` | `show [IMAGE]`, `--units`, `--tree`, `--json` |
-  | `status` | `show BUILD`, `run status`, `deploy status` |
-  | `diff`, `changes` | `check --tree DIR`, `show --diff OLD NEW` |
-  | `lint`, `compile --check`, `ci` | `check [--profile P] [--tree DIR]` |
-  | `compile` | `build --tree-only DIR` |
-  | `fetch` | `build` fetches; `lock --update`; `build --offline` |
-  | `bake`, `bake --verify-reproducible` | `build`, `build --reproduce` |
-  | `measure`, `measure --export-policy` | `measurements.json` in every build |
-  | `sbom` | `sbom.spdx.json` in every build |
-  | `evidence`, `release`, `witness`, `verify` (bundles) | `manifest.json`, `manifest.sig`, `verify BUILD` |
-  | `deploy qemu` | `run [BUILD] --mode simulated\|tdx` |
-  | `deploy azure\|gcp --param` | `deploy azure\|gcp --build BUILD` with `[tool.tundravm.azure\|gcp]` |
-  | `clean` | `build --clean-cache` |
-  | `config` | the resolution rule in every `--help` epilog |
-  | `completion` | `python -m tundravm.completion SHELL` |
-  | `units convert` | `convert PATH --from systemd` |
-  | `units render` | `show IMAGE --units` |
-  | `import` | `convert PATH --from mkosi` |
+- Every code `check` reports is a registered rule with its severities, what it checks and how to fix it.
+- `check --explain CODE` prints a rule, an image's own component's included, and a text report ends with the `--explain` line for its codes.
+- **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
+- A finding several profiles share prints once (`[dev, production]`), `[image]` marks an image-wide one, and a shared hint prints once.
 
-- Evidence: `docs/design/evidence/gate5-cli.md`.
+### Docs
 
-### Execution modes
-
-- A production profile is fail-closed. Every tree ships `tdx-evidence.service`, a root
-  oneshot that looks for the `tdx_guest` CPU flag, then `/dev/tdx_guest` or configfs-tsm's
-  report directory. Every unit made from a `Service`, and every scheduled `Task`, has
-  `Requires=` and `After=` on it, `tdxs.service` included. Without a TDX quote path a
-  production profile's gate fails with `tdx-evidence: refused: no TDX quote path` on the
-  console, and none of its services start. There is no fallback.
-- A development profile (`Variant(release=False)`, `Profile(production=False)`, `dev=`)
-  sets the gate's mode through a drop-in. Without TDX it records `simulated` in
-  `/run/tundravm/mode` and its services run. Boot tasks, probes, `Unit` declarations,
-  mounts, `runtime-init` (the control plane) and the cloud glue are not gated.
-- `attest` reads the guest's mode over the session: `simulated` makes the evidence
-  simulated, never the reverse. For a production build, simulated evidence never passes,
-  and a TD with the `DEBUG` attribute is `untrusted`. The quote's `TDATTRIBUTES` is
-  parsed, and records carry `debug`, `simulated`, `production` and `guest_mode`.
-- `secrets deliver` and `secrets unlock` refuse a production build in a simulated
-  instance before they contact it. A development build in a simulated instance releases
-  on `simulated` only. A production build on TDX also needs no `DEBUG` attribute.
-- `run --mode simulated` of a production build still boots, so its console shows the
-  refusal. `run status` and `run mode` say `fail-closed`.
-- CI boots the production fixture without TDX and asserts the refusal. It builds the
-  fixture's dev profile and runs it with `run --mode simulated` until the host fetches its
-  page. Evidence: `docs/design/evidence/gate3-fail-closed.md`.
-
-### CI
-
-- The jobs that bake the `Image` templates read tundra-tools with the repository secret
-  `TUNDRA_TOOLS_TOKEN` when it is set (`docs/guide.md#ci`). Without it, the template bake
-  and boot tests skip and name the repository they cannot read; with it, they must pass.
-  The `test` job runs only the unit suite; the new `templates` job bakes for real, and a
-  newer push to a branch cancels the run it supersedes.
-- The boot harness finds a marker that kernel lines interrupted on the serial console. It
-  also matches the console with each run of whole kernel lines written into another line
-  cut out, so `fixture-boot` no longer waits out its budget when a `virtio_blk` line lands
-  inside the gate's refusal.
-
-### Documentation
-
-- `README.md` is one screen: what tundravm is, install, the quickstart and its transcript.
-- `docs/guide.md` is the one guide, task-ordered, with what is proven and what is not.
-- `docs/trust.md` is the threat model, the platform limits and recovery.
-- `docs/reference/cli.md` and `docs/reference/api.md` are generated by
-  `python -m tundravm._reference docs/reference` from the parser and the `__all__` of each
-  public namespace, one section each; `tests/docs/test_reference.py` fails when they are
-  stale.
-- `docs/reference/lint.md` is generated the same way from the rule registry: every code
-  `tundravm check` reports, its severity, what it checks and how to fix it.
-- `tests/docs/test_docs.py` runs every Python block of the prose pages, parses every
-  documented command with the real parser, and resolves every relative link and anchor.
-- Deleted: `docs/tutorial.md`, `docs/api.md`, `docs/cli.md`, `docs/concepts.md`,
-  `docs/module-authoring.md`, `docs/testing.md`, `docs/policy.md` and
-  `docs/reproducibility.md`, 63 000 words written for the pre-v2 SDK and CLI.
+- `README.md` is one screen, `docs/guide.md` the one guide in the order of the loop, `docs/trust.md` the threat model and recovery.
+- `docs/reference/` (commands, API, check codes) is generated from the code; the prose's examples run in the tests.
 
 ### Removed
 
-- The per-variant tree layouts: `Mkosi(layout=, dialect=, init_script=, cloud_postoutput=)`,
-  the `nethermind-v1` dialect (sandbox-fetching hooks, legacy units and debloat list,
-  historical cloud scripts), per-variant settings, kernels and source keys,
-  `Tdxs(legacy_units=)`, the lowering-parity and byte-identical nethermind golden tests.
-- The tree importer and `tundravm import` (now `convert --from mkosi`).
-- The nix backend, the generated `flake.nix` and `flake.lock`, the nixpkgs pin and
-  resolver, Lima's Rosetta option, the repository's `flake.nix`.
-- `Recipe`, `Variant`, `Fragment`, `Task`, `Unit`, `Disk`, `Key`, `Secrets`, `Firewall`
-  and the other internal model names from the top level of `tundravm`.
-- The 23 old CLI verbs, without aliases (table above).
-- The flat spellings (`from tundravm import TCP, Volume, Secret, ...`), `tundravm.image`
-  (now the private `tundravm._image`), `tundravm.components.nethermind` and `.taiko`,
-  `IMAGE_OBJECT_NAMES`, and the public-looking internals `tundravm.observability` and
-  `tundravm.platforms` (now `_reporting` and `_platforms`).
-- `evidence.py`, `release.py`, `witness.py`, `verify.py`, `changes.py`, `explore.py`,
-  `preview.py`, `watch.py`, `status.py` and `clean.py`, with their bundle schemas, which
-  had no consumer.
-- The in-process backend: `TUNDRAVM_BACKEND`, `[tool.tundravm] backend` and
-  `Backend(...)` take `local` or `lima`. Builds no longer produce simulated artifacts, and
-  the manifest has no `simulated` field (`run --mode simulated` is unchanged).
-- `tundravm.testing.fake_bake` and `bake_in_process`; `FakeMkosi` (mkosi) and the new
-  `FakeSources` (git and http fetches) let a test run a real build with nothing forked or
-  fetched.
-- Placeholder measurements: `measure()` drops `allow_placeholder=` and
-  `PlaceholderMeasurementWarning`, and an artifact that is no UKI or disk is always refused.
-  `Tdxs.from_policy(allow_placeholder=True)` still reads a committed placeholder policy.
-- `bake-result.json`: a build's record is its build directory's `manifest.json`.
-  `tundravm.bake()` drops `verify_reproducible=` and `offline=` (`tundravm build --reproduce`
-  and `--offline`).
-- `tundravm.declarative.deploy`, `Qemu`, `Azure`, `Gcp`, `Deployment`, `diff`, `fetch` and
-  `read_artifacts`: `tundravm run`, `tundravm deploy`, `tundravm check --tree` and
-  `tundravm build` replace them.
-- `explain.py`: `show` keeps the description and provenance rendering it needs.
-- The `--format` machinery and the Markdown renderers of `check`, lock drift, tree diffs and
-  `attest`, which no command printed: `check` has `--json`, and prints GitHub annotations
-  when `GITHUB_ACTIONS=true`.
-- The `tundravm fetch` hints in emitted build scripts and source errors: they now say
-  `run tundravm lock, then tundravm build` and `is not fetched: run tundravm build`.
+- **Breaking:** the 23 old verbs, without aliases: `init` is `new`; `inspect`, `explain` and `status` are `show`; `lint` and `diff` are `check`.
+- **Breaking:** `compile` is `build --tree-only`, `bake` is `build`, `deploy qemu` is `run`, `import` and `units convert` are `convert`, `clean` is `build --clean-cache`.
+- **Breaking:** the per-variant tree layouts and the `nethermind-v1` dialect; byte parity with the 2024 nethermind-tdx tree is dropped.
+- **Breaking:** the nix and in-process backends; `TUNDRAVM_BACKEND` takes `local` or `lima`.
+- **Breaking:** `bake-result.json`, the evidence, release and witness bundles, and placeholder measurements.
+- **Breaking:** `check --format` and the Markdown renderers; `check` prints text, `--json` or GitHub annotations.
+- **Breaking:** `tundravm.testing.fake_bake` and `bake_in_process`; use `FakeMkosi` and `FakeSources`.
+- The pre-v2 docs: the tutorial, concepts, module-authoring, testing, policy and reproducibility pages.
