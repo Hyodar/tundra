@@ -170,3 +170,9 @@ and `show`. The generated workflow was parsed as YAML.
    as the image's own (S; `convert.py`).
 10. The guide is at 7875 of its 8000 words: the next paragraph needs a cut first; the
     doctor sample and the Imports table (the API reference has both) are the candidates.
+11. Components contribute their own egress (Nethermind peers, raiko collateral,
+    Observability sinks) so a derived `Egress` covers them; today each image lists them by
+    hand, and the surge prover declares none (`egress-unfiltered`) (M; `_image/_lower.py`,
+    `components/`).
+12. The default snapshot (`LOCKED_SNAPSHOT`, 20251113T083151Z) is a year old; bumping it is
+    its own deliberate change, not a date-dependent lint (S; needs a CI run).
