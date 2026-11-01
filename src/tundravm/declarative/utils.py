@@ -31,6 +31,7 @@ from tundravm.measure.policy import (
     validator_measurements,
 )
 
+from .._keywords import Keywords
 from ._component import Composite, Export, HttpEndpoint, component
 from ._kernel_hardening import KernelHardening
 from ._network import NETWORK_DIR
@@ -637,7 +638,7 @@ _INTERFACE = re.compile(r"[A-Za-z0-9*?\[\]!_.:-]+")
 
 
 @dataclass(frozen=True, slots=True)
-class StaticAddress:
+class StaticAddress(Keywords):
     """A fixed address for :class:`Network`: ``StaticAddress("10.0.0.5/24", gateway="10.0.0.1")``.
 
     *address* is CIDR (address and prefix length); *gateway*, when set, is the default route.
@@ -894,7 +895,7 @@ class SshAccess(Composite):
         if not self.authorized_keys and not self.from_secrets:
             raise ValidationError(
                 "SshAccess has no key to accept, so nobody could log in.",
-                hint="Pass authorized_keys=(...), or from_secrets=True with a Secrets(...).",
+                hint="Pass SshAccess(keys=[...]), or SshAccess(from_delivery=True).",
             )
         yield Package("openssh-server")
         yield File.text(SSH_CONFIG, self.config())

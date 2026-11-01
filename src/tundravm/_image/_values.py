@@ -26,6 +26,7 @@ from tundravm.declarative.model import Git, Http
 from tundravm.declarative.utils import StaticAddress
 from tundravm.errors import ValidationError
 
+from .._keywords import Keywords, shown, subject
 from ._change import Ref
 
 __all__ = [
@@ -69,12 +70,18 @@ _KERNEL_PARAMETER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(=[^\s\x00-\x1f\x7f]
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
-    return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
+    return ValidationError(f"{subject(owner)}: {message}", hint=hint)
 
 
 def _absolute(owner: object, path: object, what: str = "path") -> str:
     if not isinstance(path, str) or not path.startswith("/") or "\n" in path:
-        raise _fail(owner, f"{what} {path!r} must be an absolute path.")
+        raise _fail(
+            owner,
+            f"{what}= {path!r} is not an absolute path.",
+            hint=f'{what}="/{path.lstrip("./")}"'
+            if isinstance(path, str) and "\n" not in path
+            else f'{what}="/etc/app.conf"',
+        )
     return posixpath.normpath(path)
 
 
@@ -82,7 +89,7 @@ def _absolute(owner: object, path: object, what: str = "path") -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class TCP:
+class TCP(Keywords):
     """An inbound TCP port: ``Service(expose=[TCP(8080)])`` opens it in the firewall."""
 
     port: int
@@ -97,7 +104,7 @@ class TCP:
 
 
 @dataclass(frozen=True, slots=True)
-class UDP:
+class UDP(Keywords):
     """An inbound UDP port: ``Service(expose=[UDP(53)])`` opens it in the firewall."""
 
     port: int
@@ -116,7 +123,13 @@ type PortValue = TCP | UDP
 
 def _check_port(owner: object, port: object) -> None:
     if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
-        raise _fail(owner, f"{port!r} is not a port number (1-65535).")
+        raise _fail(
+            owner,
+            f"{port!r} is not a port number (1-65535).",
+            hint=f"{type(owner).__name__}({int(port)})"
+            if isinstance(port, str) and port.isdigit()
+            else f"{type(owner).__name__}(8080)",
+        )
 
 
 # ── Content ─────────────────────────────────────────────────────────────
@@ -137,9 +150,17 @@ class Package(Located):
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name or any(c.isspace() for c in self.name):
-            raise _fail(self, f"{self.name!r} is not a package name.")
+            raise _fail(
+                self,
+                f"{self.name!r} is not a package name.",
+                hint='Name one Debian package, lower case, as apt spells it: Package("curl").',
+            )
         if not isinstance(self.backports, bool):
-            raise _fail(self, "backports= must be True or False.")
+            raise _fail(
+                self,
+                f"backports= must be True or False, got {self.backports!r}.",
+                hint=f'Package("{self.name}", backports=True)',
+            )
 
     @property
     def ref(self) -> Ref:
@@ -165,11 +186,21 @@ class File(Located):
     def __post_init__(self) -> None:
         object.__setattr__(self, "path", _absolute(self, self.path))
         if not isinstance(self.content, (str, bytes, Path)):
-            raise _fail(self, f"content of {self.path!r} must be text, bytes or a Path.")
+            raise _fail(
+                self,
+                f"content= of {self.path!r} must be text, bytes or a Path.",
+                hint=f'File.text("{self.path}", "...") or File.copy("host/file", "{self.path}")',
+            )
         if self.mode is not None and (
             isinstance(self.mode, bool) or not isinstance(self.mode, int) or not 0 <= self.mode
         ):
-            raise _fail(self, f"mode {self.mode!r} must be an octal int such as 0o644.")
+            raise _fail(
+                self,
+                f"mode= {self.mode!r} is not a file mode.",
+                hint=f"mode=0o{self.mode}"
+                if isinstance(self.mode, str) and self.mode.isdigit()
+                else "mode=0o644, an octal int",
+            )
         if self.mode is None and not isinstance(self.content, Path):
             raise _fail(
                 self,
@@ -232,10 +263,18 @@ class Tree(Located):
         if isinstance(self.src, str):
             object.__setattr__(self, "src", Path(self.src))
         if not isinstance(self.src, Path):
-            raise _fail(self, f"src {self.src!r} must be a host path.")
+            raise _fail(
+                self,
+                f"src= {self.src!r} is not a host path.",
+                hint='Tree("app/static", "/srv/www"): a directory beside the image file.',
+            )
         object.__setattr__(self, "dst", _absolute(self, self.dst, "dst"))
         if isinstance(self.exclude, str):
-            raise _fail(self, "exclude= takes a list of patterns, not one string.")
+            raise _fail(
+                self,
+                "exclude= takes a list of patterns, not one string.",
+                hint=f'exclude=["{self.exclude}"]',
+            )
         object.__setattr__(self, "exclude", tuple(self.exclude))
         _check_owner(self, self.owner)
 
@@ -270,7 +309,7 @@ PACKAGE_KEYRINGS = "/usr/share/keyrings/"
 
 
 @dataclass(frozen=True, slots=True)
-class AptRepository:
+class AptRepository(Keywords):
     """A second apt archive, pinned and signed: ``Debian(repositories=[AptRepository(...)])``.
 
     A ``https://snapshot.debian.org/archive/<archive>`` *url* is dated by *snapshot*, or by
@@ -292,11 +331,19 @@ class AptRepository:
 
     def __post_init__(self) -> None:
         if isinstance(self.components, str):
-            raise _fail(self, "components= takes a list, not one string.")
+            raise _fail(
+                self,
+                "components= takes a list, not one string.",
+                hint=f'components=["{self.components}"]',
+            )
         object.__setattr__(self, "components", tuple(self.components))
         url = self.url
         if not isinstance(url, str) or not url.startswith("https://"):
-            raise _fail(self, f"url {url!r} is not an https:// address.")
+            raise _fail(
+                self,
+                f"url= {url!r} is not an https:// address.",
+                hint="Pass the archive's https:// URL; apt checks its signature with key=.",
+            )
         if any(c.isspace() or c in "[]" for c in url):
             raise _fail(
                 self,
@@ -304,11 +351,19 @@ class AptRepository:
                 hint="An AptRepository is signed by key= and pinned by snapshot= or sha256=.",
             )
         if not isinstance(self.suite, str) or not _SUITE.fullmatch(self.suite):
-            raise _fail(self, f"suite {self.suite!r} is not a suite name.")
+            raise _fail(
+                self,
+                f"suite= {self.suite!r} is not a suite name.",
+                hint='Name the suite under dists/: "trixie-security", "stable".',
+            )
         if not self.components or not all(
             isinstance(c, str) and _SUITE.fullmatch(c) for c in self.components
         ):
-            raise _fail(self, f"components {self.components!r} must name one or more.")
+            raise _fail(
+                self,
+                f"components= {self.components!r} names no component.",
+                hint='components=["main"]',
+            )
         self._check_key()
         self._check_pin()
 
@@ -334,9 +389,17 @@ class AptRepository:
                 )
             for date in (dated["date"], self.snapshot):
                 if date is not None and not _SNAPSHOT_DATE.fullmatch(date):
-                    raise _fail(self, f"snapshot {date!r} is not a date such as 20261018T082309Z.")
+                    raise _fail(
+                        self,
+                        f"snapshot= {date!r} is not a snapshot.debian.org date.",
+                        hint='snapshot="20261018T082309Z"',
+                    )
             if dated["date"] is not None and self.snapshot is not None:
-                raise _fail(self, f"{self.url} names its date; snapshot= would name another.")
+                raise _fail(
+                    self,
+                    f"{self.url} names its date; snapshot= would name another.",
+                    hint="Drop snapshot=, or drop the date from url=.",
+                )
             return
         if self.snapshot is not None:
             raise _fail(
@@ -381,7 +444,7 @@ class AptRepository:
 
 
 @dataclass(frozen=True, slots=True)
-class Debian:
+class Debian(Keywords):
     """The distribution an image is built from: ``Debian("trixie")``, the tested baseline.
 
     *snapshot* is the snapshot.debian.org archive the packages come from
@@ -399,20 +462,40 @@ class Debian:
 
     def __post_init__(self) -> None:
         if not isinstance(self.release, str) or not self.release or "/" in self.release:
-            raise _fail(self, f"{self.release!r} is not a Debian release name.")
+            raise _fail(
+                self,
+                f"{self.release!r} is not a Debian release name.",
+                hint='Debian("trixie")',
+            )
         for what in ("snapshot", "efi_stub"):
             value = getattr(self, what)
             if value is not None and (not isinstance(value, str) or not value):
-                raise _fail(self, f"{what}= must be a string or None, got {value!r}.")
+                raise _fail(
+                    self,
+                    f"{what}= must be a string or None, got {value!r}.",
+                    hint=f'Debian("trixie", {what}="...") or leave {what}= out',
+                )
         if isinstance(self.repositories, (str, AptRepository)):
-            raise _fail(self, "repositories= takes a list of AptRepository values.")
+            raise _fail(
+                self,
+                "repositories= takes a list of AptRepository values.",
+                hint="Debian(repositories=[AptRepository(url, suite, key=...)])",
+            )
         object.__setattr__(self, "repositories", tuple(self.repositories))
         names: set[str] = set()
         for repository in self.repositories:
             if not isinstance(repository, AptRepository):
-                raise _fail(self, f"repositories= holds {repository!r}, not an AptRepository.")
+                raise _fail(
+                    self,
+                    f"repositories= holds {shown(repository)}, not an AptRepository.",
+                    hint="Debian(repositories=[AptRepository(url, suite, key=...)])",
+                )
             if repository.name in names:
-                raise _fail(self, f"repositories= names {repository.name!r} twice.")
+                raise _fail(
+                    self,
+                    f"repositories= names {repository.name!r} twice.",
+                    hint="List each archive once.",
+                )
             names.add(repository.name)
 
     @property
@@ -438,7 +521,7 @@ it: ``Kernel(cmdline=)`` refuses them, with an ``rd.`` prefix too and every
 
 
 @dataclass(frozen=True, slots=True)
-class Kernel:
+class Kernel(Keywords):
     """The kernel: ``Kernel.default()`` (the distribution's, tested) or ``Kernel.build(...)``.
 
     ``Kernel.default()`` installs Debian's ``linux-image-amd64`` and keeps the curated
@@ -470,9 +553,17 @@ class Kernel:
                 hint="Use Kernel.build('6.12.48', Git(url, ref)) or Kernel.default().",
             )
         if self.source is not None and not isinstance(self.source, (Git, Http)):
-            raise _fail(self, f"source must be Git(...) or Http(...), got {self.source!r}.")
+            raise _fail(
+                self,
+                f"source= must be Git(...) or Http(...), got {shown(self.source)}.",
+                hint='Kernel.build("6.12.48", Git(url, "v6.12.48"), config=Path("kernel.config"))',
+            )
         if self.config is not None and not isinstance(self.config, Path):
-            raise _fail(self, "config= must be a pathlib.Path.")
+            raise _fail(
+                self,
+                f"config= must be a pathlib.Path, got {shown(self.config)}.",
+                hint='config=Path(__file__).parent / "kernel.config"',
+            )
         if isinstance(self.cmdline, str):
             raise _fail(
                 self,
@@ -480,7 +571,13 @@ class Kernel:
                 hint=f"Pass cmdline={self.cmdline.split()!r}.",
             )
         if isinstance(self.modules, str):
-            raise _fail(self, "modules= takes a list of module names.")
+            raise _fail(
+                self,
+                "modules= takes a list of module names.",
+                hint=f'Kernel.default(modules=["{self.modules}"])'
+                if isinstance(self.modules, str)
+                else 'Kernel.default(modules=["kvm"])',
+            )
         object.__setattr__(self, "patches", tuple(self.patches))
         object.__setattr__(self, "modules", tuple(self.modules))
         object.__setattr__(self, "cmdline", tuple(self.cmdline))
@@ -549,7 +646,7 @@ def _check_kernel_parameter(owner: Kernel, parameter: object) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class Egress:
+class Egress(Keywords):
     """Outbound traffic the image may send; everything else is dropped.
 
     Without an ``Egress`` the image does not filter outbound traffic. With one, the
@@ -577,7 +674,11 @@ class Egress:
         object.__setattr__(self, "hosts", tuple(self.hosts))
         for port in self.ports:
             if not isinstance(port, (TCP, UDP)):
-                raise _fail(self, f"ports= entry {port!r} is not TCP(...) or UDP(...).")
+                raise _fail(
+                    self,
+                    f"ports= holds {shown(port)}, not TCP(...) or UDP(...).",
+                    hint="Egress(ports=[TCP(443)])",
+                )
         for host in self.hosts:
             egress_host(self, host)
 
@@ -617,7 +718,7 @@ def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
 
 
 @dataclass(frozen=True, slots=True)
-class Mkosi:
+class Mkosi(Keywords):
     """mkosi settings and scripts the image adds verbatim, recorded in the manifest.
 
     *settings* maps an mkosi 27.1 key to its value (``{"Locale": "C.UTF-8"}``), each written
@@ -638,7 +739,11 @@ class Mkosi:
         object.__setattr__(self, "scripts", tuple(tuple(s) for s in self.scripts))
         for key, value in settings.items():
             if not isinstance(key, str) or not _MKOSI_KEY.fullmatch(key):
-                raise _fail(self, f"{key!r} is not an mkosi setting name.")
+                raise _fail(
+                    self,
+                    f"settings= names {key!r}, which is not an mkosi setting name.",
+                    hint='Spell the key as mkosi.conf does: settings={"ToolsTreePackages": "..."}.',
+                )
             name = _mkosi_setting(key)
             if name is None:
                 raise _fail(
@@ -651,7 +756,11 @@ class Mkosi:
                     self, f"settings= sets {key}=, which tundravm writes itself.", hint=hint
                 )
             if not isinstance(value, str) or "\n" in value:
-                raise _fail(self, f"settings[{key!r}] must be one line of text.")
+                raise _fail(
+                    self,
+                    f"settings[{key!r}] must be one line of text.",
+                    hint="Join several values with spaces on one line.",
+                )
         for entry in self.scripts:
             if len(entry) != 2 or not all(isinstance(part, str) for part in entry):
                 raise _fail(
@@ -748,15 +857,20 @@ def mkosi_section(key: str) -> str:
     """The section of mkosi's ``mkosi.conf`` a :class:`Mkosi` *key* is written in."""
     found = _mkosi_setting(key)
     if found is None:
-        raise ValueError(f"{key!r} is not an mkosi 27.1 setting")
+        raise ValidationError(
+            f"Mkosi: settings= names {key!r}, which mkosi 27.1 does not know.",
+            hint="Check the spelling against mkosi's documentation of its settings.",
+        )
     return found[0]
 
 
 # ── Grouped service options ─────────────────────────────────────────────
 
+_RESOURCE_EXAMPLE = {"memory_max": "8G", "memory_high": "6G", "cpu_quota": "200%"}
+
 
 @dataclass(frozen=True, slots=True)
-class Resources:
+class Resources(Keywords):
     """What a service may use: ``Resources(memory_max="8G", tasks_max=4096)``.
 
     Each field is one cgroup directive; unset fields render nothing.
@@ -774,11 +888,21 @@ class Resources:
         for what in ("memory_max", "memory_high", "cpu_quota"):
             value = getattr(self, what)
             if value is not None and (not isinstance(value, str) or not value):
-                raise _fail(self, f"{what}= must be a string such as '8G', got {value!r}.")
+                raise _fail(
+                    self,
+                    f"{what}= must be a string, got {value!r}.",
+                    hint=f'Resources({what}="{value}G")'
+                    if what.startswith("memory") and isinstance(value, int)
+                    else f'Resources({what}="{_RESOURCE_EXAMPLE[what]}")',
+                )
         for what in ("cpu_weight", "tasks_max", "io_weight"):
             value = getattr(self, what)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
-                raise _fail(self, f"{what}= must be an int, got {value!r}.")
+                raise _fail(
+                    self,
+                    f"{what}= must be an int, got {value!r}.",
+                    hint=f"Resources({what}=100)",
+                )
         if not self.entries():
             raise _fail(self, "sets no limit.", hint="Pass Resources(memory_max='8G').")
 
@@ -796,7 +920,7 @@ class Resources:
 
 
 @dataclass(frozen=True, slots=True)
-class Shutdown:
+class Shutdown(Keywords):
     """How a service is stopped: ``Shutdown(timeout="120s", signal="SIGINT")``."""
 
     _: KW_ONLY
@@ -808,20 +932,36 @@ class Shutdown:
 
     def __post_init__(self) -> None:
         if self.timeout is not None and (not isinstance(self.timeout, str) or not self.timeout):
-            raise _fail(self, f"timeout {self.timeout!r} is not a systemd time span.")
+            raise _fail(
+                self,
+                f"timeout= {self.timeout!r} is not a systemd time span.",
+                hint='Shutdown(timeout="30s")',
+            )
         if self.signal is not None and (
             not isinstance(self.signal, str) or not self.signal.startswith("SIG")
         ):
-            raise _fail(self, f"signal {self.signal!r} is not a signal name such as 'SIGINT'.")
+            raise _fail(
+                self,
+                f"signal= {self.signal!r} is not a signal name.",
+                hint='Shutdown(signal="SIGINT")',
+            )
         if self.kill_mode is not None and self.kill_mode not in (
             "control-group",
             "mixed",
             "process",
             "none",
         ):
-            raise _fail(self, f"kill_mode {self.kill_mode!r} is not a systemd kill mode.")
+            raise _fail(
+                self,
+                f"kill_mode= {self.kill_mode!r} is not a systemd kill mode.",
+                hint='Shutdown(kill_mode="mixed"): one of control-group, mixed, process, none.',
+            )
         if not isinstance(self.final_kill, bool):
-            raise _fail(self, "final_kill= must be True or False.")
+            raise _fail(
+                self,
+                f"final_kill= must be True or False, got {self.final_kill!r}.",
+                hint="Shutdown(final_kill=False)",
+            )
 
     def entries(self) -> tuple[tuple[str, str], ...]:
         """The ``[Service]`` directives beyond ``TimeoutStopSec=`` and ``KillMode=``."""
@@ -834,7 +974,7 @@ class Shutdown:
 
 
 @dataclass(frozen=True, slots=True)
-class HttpProbe:
+class HttpProbe(Keywords):
     """Readiness: the service answers *url* with a 2xx, polled until *timeout*.
 
     The probe is a bounded unit of its own, so ``requires=[other.ready]`` means the
@@ -849,9 +989,17 @@ class HttpProbe:
 
     def __post_init__(self) -> None:
         if not isinstance(self.url, str) or not self.url.startswith(("http://", "https://")):
-            raise _fail(self, f"url {self.url!r} must be an http:// or https:// URL.")
+            raise _fail(
+                self,
+                f"url= {self.url!r} is not an http:// or https:// URL.",
+                hint='HttpProbe("http://127.0.0.1:8080/health")',
+            )
         if "'" in self.url or any(c.isspace() for c in self.url):
-            raise _fail(self, f"url {self.url!r} must be one word without quotes.")
+            raise _fail(
+                self,
+                f"url= {self.url!r} holds spaces or quotes.",
+                hint='HttpProbe("http://127.0.0.1:8080/health"): one word, escaped as a URL.',
+            )
         _check_span(self, self.timeout, self.interval)
 
     def command(self) -> tuple[str, ...]:
@@ -864,7 +1012,7 @@ class HttpProbe:
 
 
 @dataclass(frozen=True, slots=True)
-class TcpProbe:
+class TcpProbe(Keywords):
     """Readiness: *host* accepts a TCP connection on *port*, polled until *timeout*.
 
     The probe is a bounded unit of its own and uses bash's ``/dev/tcp``, which Debian
@@ -880,7 +1028,11 @@ class TcpProbe:
     def __post_init__(self) -> None:
         _check_port(self, self.port)
         if not isinstance(self.host, str) or not self.host or any(c in self.host for c in " '/"):
-            raise _fail(self, f"host {self.host!r} is not a host name or address.")
+            raise _fail(
+                self,
+                f"host= {self.host!r} is not a host name or address.",
+                hint=f'TcpProbe({self.port!r}, host="127.0.0.1")',
+            )
         _check_span(self, self.timeout, self.interval)
 
     def command(self) -> tuple[str, ...]:
@@ -893,7 +1045,7 @@ class TcpProbe:
 
 
 @dataclass(frozen=True, slots=True)
-class Notify:
+class Notify(Keywords):
     """Readiness: the program itself reports ``READY=1`` on ``$NOTIFY_SOCKET``.
 
     The unit becomes ``Type=notify``, so systemd holds everything that requires it until
@@ -907,13 +1059,21 @@ type Readiness = HttpProbe | TcpProbe | Notify
 
 def _check_span(owner: object, timeout: object, interval: object) -> None:
     if not isinstance(timeout, str) or not timeout:
-        raise _fail(owner, f"timeout {timeout!r} is not a systemd time span such as '90s'.")
+        raise _fail(
+            owner,
+            f"timeout= {timeout!r} is not a systemd time span.",
+            hint=f'{type(owner).__name__}(..., timeout="90s")',
+        )
     if not isinstance(interval, str) or not re.fullmatch(r"\d+(\.\d+)?", interval):
-        raise _fail(owner, f"interval {interval!r} must be a number of seconds, e.g. '0.5'.")
+        raise _fail(
+            owner,
+            f"interval= {interval!r} is not a number of seconds.",
+            hint=f'{type(owner).__name__}(..., interval="0.5")',
+        )
 
 
 @dataclass(frozen=True, slots=True)
-class Credential:
+class Credential(Keywords):
     """A systemd credential a service reads: ``Credential("jwt", "/etc/app/jwt")``.
 
     The service gets ``LoadCredential=<name>:<source>`` and reads the value under

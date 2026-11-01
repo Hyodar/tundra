@@ -1,4 +1,11 @@
-"""Typed SDK error model with stable, machine-readable error codes."""
+"""Typed SDK error model with stable, machine-readable error codes.
+
+Every error has one shape, in the words of the image file: a first line saying what is
+wrong, naming the public object and keyword (``Service("app"): argv= is empty``), then a
+``fix:`` line with the public spelling that repairs it (``fix: Service("app",
+["/usr/bin/app"])``), then any context, one ``  key: value`` line each. ``str(error)`` is
+that text, and ``tundravm`` prints it as it is.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +32,11 @@ class ErrorCode(StrEnum):
 
 
 class TdxError(Exception):
-    """Base error class that carries code, optional hint, and context."""
+    """Base error class: what is wrong (``args[0]``), the fix (:attr:`hint`), and context.
+
+    :attr:`hint` is the ``fix:`` line: what to write or run instead, never a restatement of
+    the problem.
+    """
 
     code: str
     hint: str | None
@@ -47,7 +58,7 @@ class TdxError(Exception):
     def __str__(self) -> str:
         parts = [super().__str__()]
         if self.hint:
-            parts.append(f"Hint: {self.hint}")
+            parts.append(f"fix: {self.hint}")
         if self.context:
             for k, v in self.context.items():
                 if v:

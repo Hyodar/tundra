@@ -220,9 +220,9 @@ def test_the_image_collects_the_volumes_and_secrets_its_services_bind() -> None:
     assert (image.volumes, image.secrets) == ((data,), (token, cert))
     other = Volume("data", mount="/srv", unlock=OperatorKey())
     twin = Service("b", ["/usr/bin/b"], state=other.directory("b"))
-    with pytest.raises(ValidationError, match="two different volumes are called 'data'"):
+    with pytest.raises(ValidationError, match='two different values are Volume\\("data"\\)'):
         prover(services=[app(), twin])
-    with pytest.raises(TypeError, match="volumes"):
+    with pytest.raises(ValidationError, match="takes no keyword volumes="):
         Image("x", volumes=[data])  # type: ignore[call-arg]
 
 
@@ -391,7 +391,10 @@ def test_attested_tls_is_the_only_way_in(planned: PlannedImage) -> None:
         (lambda: AttestedTLS(443, upstream=Endpoint("127.0.0.1", 8080, scheme="https")), "HTTP"),
         (lambda: prover(services=[app(expose=[TCP(8080)])]), "not the only path"),
         (lambda: prover(services=[app(expose=[TCP(443)])]), "also exposed"),
-        (lambda: prover(ingress=[AttestedTLS(MANAGEMENT_PORT, upstream=upstream())]), "management"),
+        (
+            lambda: prover(ingress=[AttestedTLS(MANAGEMENT_PORT, upstream=upstream())]),
+            "where the attested endpoint listens",
+        ),
     ],
 )
 def test_an_ingress_that_would_not_be_the_only_path_is_refused(make: object, message: str) -> None:

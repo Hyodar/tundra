@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, get_args
 
+from ._keywords import Keywords
 from .errors import ValidationError
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ Context = tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
-class Diagnostic:
+class Diagnostic(Keywords):
     """One finding: a lint *code*, its *severity* and a one-line *message*.
 
     *subject* names what it is about (a path, unit, user, lockfile section;
@@ -85,7 +86,7 @@ RuleCheck = Callable[["Lowered", str, "ProfileState"], Iterator[Diagnostic]]
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class Rule:
+class Rule(Keywords):
     """One code ``tundravm check`` reports: its severity, what it checks and how to fix it.
 
     A component declares the codes its ``check()`` reports on its class, as

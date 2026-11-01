@@ -142,7 +142,8 @@ class SecretDelivery(Module):
             if not spec.targets:
                 raise ValidationError(
                     f"secret {spec.name!r} requires at least one delivery target.",
-                    hint="Deliver it with SecretFile(PATH) or SecretEnv(NAME) in targets=.",
+                    hint="Bind the Secret in a Service: argv=[..., secret], environment= or "
+                    "credentials=.",
                 )
 
     @property
@@ -348,7 +349,7 @@ class SecretDelivery(Module):
         if self.method != "http_post":
             raise ValidationError(
                 "Only http_post secret delivery is supported.",
-                hint="Secrets() delivers over the attested endpoint only.",
+                hint="Leave the delivery to tundravm: secrets arrive over the attested endpoint.",
             )
 
         lines = [

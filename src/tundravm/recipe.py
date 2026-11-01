@@ -119,7 +119,7 @@ def _backend(value: object, recipe_path: Path) -> BuildBackend:
     raise ValidationError(
         f"Attribute {BACKEND_NAME!r} is a {type(value).__name__}, not a build backend.",
         hint="Bind a backend instance, e.g. backend = LimaMkosiBackend().",
-        context={"recipe": str(recipe_path)},
+        context={"image": str(recipe_path)},
     )
 
 
@@ -134,7 +134,7 @@ def import_recipe_module(recipe_path: Path, *, extra_paths: Sequence[str | Path]
         raise ValidationError(
             f"Cannot import image file: {recipe_path}",
             hint="The image file must be a .py file.",
-            context={"recipe": str(recipe_path)},
+            context={"image": str(recipe_path)},
         )
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
@@ -188,7 +188,7 @@ def recipe_load_error(exc: Exception, recipe_path: Path) -> ValidationError:
             "or pass --traceback."
         ),
         context={
-            "recipe": str(recipe_path),
+            "image": str(recipe_path),
             "location": location,
             "error": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__,
         },
@@ -231,7 +231,7 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
         raise ValidationError(
             f"{recipe_path.name} has no attribute {attr!r}.",
             hint=f"Available names: {', '.join(_public_names(module)) or '(none)'}",
-            context={"recipe": str(recipe_path), "attr": attr},
+            context={"image": str(recipe_path), "attr": attr},
         )
     value = getattr(module, attr)
     found = _as_recipe(value)
@@ -243,7 +243,7 @@ def _resolve_attr(module: ModuleType, attr: str, recipe_path: Path) -> Recipe:
         f"Attribute {attr!r} is a {type(value).__name__}, not an Image or a zero-argument "
         "function returning one.",
         hint="Pass --attr NAME where NAME binds an Image, or a function that returns one.",
-        context={"recipe": str(recipe_path), "attr": attr},
+        context={"image": str(recipe_path), "attr": attr},
     )
 
 
@@ -283,7 +283,7 @@ def _find_image(module: ModuleType, recipe_path: Path) -> Image | None:
         raise ValidationError(
             f"File defines several images: {', '.join(sorted(images))}.",
             hint="Name one of them `image`, or pass --attr NAME.",
-            context={"recipe": str(recipe_path)},
+            context={"image": str(recipe_path)},
         )
     if images:
         return next(iter(images.values()))
@@ -314,9 +314,9 @@ def _discover(module: ModuleType, recipe_path: Path) -> Recipe:
         return next(iter(instances.values()))
     if len(instances) > 1:
         raise ValidationError(
-            f"File defines several internal models: {', '.join(sorted(instances))}.",
+            f"File defines several images: {', '.join(sorted(instances))}.",
             hint="Bind one tundravm.Image to `image`, or pass --attr NAME.",
-            context={"recipe": str(recipe_path)},
+            context={"image": str(recipe_path)},
         )
 
     factories = {
@@ -331,13 +331,13 @@ def _discover(module: ModuleType, recipe_path: Path) -> Recipe:
         raise ValidationError(
             f"File defines several image factories: {', '.join(sorted(factories))}.",
             hint="Bind the Image to `image`, name one factory `build`, or pass --attr NAME.",
-            context={"recipe": str(recipe_path)},
+            context={"image": str(recipe_path)},
         )
 
     raise ValidationError(
         "File does not define an Image.",
         hint=("Bind a tundravm.Image to a module-level `image`, or pass --attr NAME."),
-        context={"recipe": str(recipe_path)},
+        context={"image": str(recipe_path)},
     )
 
 
@@ -368,7 +368,7 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
             raise ValidationError(
                 f"Factory {name}() requires arguments: {', '.join(required)}.",
                 hint="An image factory must be callable with no arguments.",
-                context={"recipe": str(recipe_path), "attr": name},
+                context={"image": str(recipe_path), "attr": name},
             )
     try:
         result = factory()
@@ -386,12 +386,12 @@ def _call_factory(factory: Callable[..., object], name: str, recipe_path: Path) 
                 "Return the Image from the factory instead of compiling or building inside it; "
                 "the CLI runs those steps."
             ),
-            context={"recipe": str(recipe_path), "attr": name},
+            context={"image": str(recipe_path), "attr": name},
         )
     raise ValidationError(
         f"Factory {name}() returned {type(result).__name__}, not an Image.",
         hint="Return the Image from the factory.",
-        context={"recipe": str(recipe_path), "attr": name},
+        context={"image": str(recipe_path), "attr": name},
     )
 
 
@@ -448,7 +448,7 @@ def load_file(
         raise ValidationError(
             f"Image file not found: {recipe_path}",
             hint="Pass the path of a Python file that binds an Image.",
-            context={"recipe": str(recipe_path)},
+            context={"image": str(recipe_path)},
         )
     module = import_recipe_module(recipe_path, extra_paths=extra_paths)
     from tundravm._image import Image, recipe_of

@@ -7,12 +7,15 @@ so a service reads as what it does rather than as a list of systemd directives.
 
 from __future__ import annotations
 
+import difflib
 import posixpath
 import re
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from typing import Any, Literal, Protocol
 
+from tundravm._keywords import subject
 from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
@@ -43,6 +46,24 @@ _UNIT_STEM = re.compile(r"[A-Za-z0-9:_.\\@-]+")
 _DIRECTORY = re.compile(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
 _READINESS: tuple[type, ...] = (HttpProbe, TcpProbe, Notify)
 _PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+")
+_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_EXPECTED = {
+    "readiness": "a readiness",
+    "resources": "a Resources",
+    "shutdown": "a Shutdown",
+    "timer": "an Every or a Calendar",
+    "socket": "a Listen",
+    "unit": "a DropIn",
+}
+_EXAMPLE = {
+    "readiness": "TcpProbe(8080), HttpProbe(url) or Notify()",
+    "resources": 'Resources(memory_max="2G")',
+    "shutdown": 'Shutdown(timeout="30s")',
+    "timer": 'Every("1h") or Calendar("daily")',
+    "socket": "Listen(8080)",
+    "unit": "DropIn(...)",
+}
+_DIRECTORY_ROOTS = {"state": "/var/lib", "logs": "/var/log", "runtime": "/run"}
 
 
 class Built(Protocol):
@@ -81,7 +102,8 @@ _REQUIREMENTS: tuple[type, ...] = (
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
-    return ValidationError(f"Service: {message}", hint=hint)
+    named = subject(owner) if isinstance(owner, Service) else "Service"
+    return ValidationError(f"{named}: {message}", hint=hint)
 
 
 def executable_of(value: object) -> str | None:
@@ -97,6 +119,18 @@ def executable_of(value: object) -> str | None:
     return None
 
 
+def _listed(name: str, value: object) -> str:
+    """*value* as the list the keyword *name* takes: a command line split into its words."""
+    if isinstance(value, str):
+        words = shlex.split(value) if name == "argv" else [value]
+        return "[" + ", ".join(f'"{word}"' for word in words) + "]"
+    if isinstance(value, (TCP, UDP)):
+        return f"[{value!r}]"
+    if name == "expose" and isinstance(value, int):
+        return f"[TCP({value})]"
+    return "[...]"
+
+
 def _sandbox(value: object) -> Hardening:
     """``hardening=`` as the :class:`Hardening` it names."""
     if isinstance(value, Hardening):
@@ -106,10 +140,13 @@ def _sandbox(value: object) -> Hardening:
         return Hardening.relaxed()
     if isinstance(value, str) and value in CEILINGS:
         return Hardening.preset(value)  # type: ignore[arg-type]
+    close = difflib.get_close_matches(value, list(CEILINGS), n=1) if isinstance(value, str) else []
     raise _fail(
         value,
         f"hardening={value!r} is not a sandbox.",
-        hint=f"Name a preset ({names}), or pass Hardening.preset(name, ...) with deviations.",
+        hint=f'Service(..., hardening="{close[0]}")'
+        if close
+        else f"Name a preset ({names}), or pass Hardening.preset(name, ...) with deviations.",
     )
 
 
@@ -189,9 +226,17 @@ class Service(Located):
         self._freeze()
         object.__setattr__(self, "hardening", _sandbox(self.hardening))
         if not isinstance(self.name, str) or not _UNIT_STEM.fullmatch(self.name):
-            raise _fail(self, f"{self.name!r} is not a service name.")
+            raise _fail(
+                self,
+                f"{self.name!r} is not a service name.",
+                hint='Use letters, digits, "-", "_" and "@": Service("app", [...]).',
+            )
         if "." in self.name and not self.name.endswith(".service"):
-            raise _fail(self, f"{self.name!r} must be a .service unit.")
+            raise _fail(
+                self,
+                f"{self.name!r} names a unit that is not a .service.",
+                hint=f'Service("{self.name.partition(".")[0]}", [...]): the .service is implied.',
+            )
         if self.package is None:
             self._check_argv()
         else:
@@ -204,7 +249,11 @@ class Service(Located):
         for name in ("argv", "requires", "credentials", "expose", "groups"):
             value = getattr(self, name)
             if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
-                raise _fail(self, f"{name}= must be a list, got {value!r}.")
+                raise _fail(
+                    self,
+                    f"{name}= must be a list, got {value!r}.",
+                    hint=f"{name}={_listed(name, value)}",
+                )
             object.__setattr__(self, name, tuple(value))
         object.__setattr__(self, "environment", FrozenMap(dict(self.environment)))
 
@@ -212,27 +261,35 @@ class Service(Located):
         if not self.argv:
             raise _fail(
                 self,
-                f"{self.name!r} has an empty argv.",
-                hint="Pass the program and its arguments: ['/usr/bin/app', '--flag'].",
+                "argv= is empty, so nothing runs.",
+                hint=f'Service("{self.name}", ["/usr/bin/app", "--flag"]), or a built binary: '
+                f'Service("{self.name}", [GoBinary("app", Local("app"))]).',
             )
         first = self.argv[0]
         if executable_of(first) is None:
             if not isinstance(first, str) or not first.lstrip("+-!@:").startswith("/"):
                 raise _fail(
                     self,
-                    f"{self.name!r} starts with {first!r}, which is not a program path.",
-                    hint="systemd searches no $PATH: spell '/usr/bin/app', or pass a built "
+                    f"argv= starts with {first!r}, which is not a program path.",
+                    hint=f'Service("{self.name}", ["/usr/bin/{first}", ...]): systemd searches '
+                    "no $PATH; or pass a built binary such as GoBinary(...)."
+                    if isinstance(first, str) and first and "/" not in first
+                    else "Spell the absolute path, ['/usr/bin/app', ...], or pass a built "
                     "binary such as GoBinary(...).",
                 )
         for argument in self.argv[1:]:
             if not isinstance(argument, (str, Endpoint, Secret, Credential)):
                 raise _fail(
                     self,
-                    f"{self.name!r} argv holds {argument!r}, which is not a word.",
+                    f"argv= holds {argument!r}, which is not a word.",
                     hint="Pass strings, an Endpoint a component exported, or a Secret.",
                 )
             if isinstance(argument, str) and "\n" in argument:
-                raise _fail(self, f"{self.name!r} argv holds a multi-line argument.")
+                raise _fail(
+                    self,
+                    "argv= holds a multi-line argument.",
+                    hint="Ship the text as File.text(path, text) and pass its path in argv.",
+                )
 
     @classmethod
     def packaged(
@@ -268,12 +325,16 @@ class Service(Located):
         """A package's unit decides what its own file says; only the sandbox, the order,
         the ports and a drop-in are the image's."""
         if not isinstance(self.package, str) or not _PACKAGE.fullmatch(self.package):
-            raise _fail(self, f"package= {self.package!r} is not a package name.")
+            raise _fail(
+                self,
+                f"package= {self.package!r} is not a package name.",
+                hint='Name the Debian package that ships the unit: package="openssh-server".',
+            )
         if self.argv:
             raise _fail(
                 self,
-                f"{self.name!r} is the unit of package {self.package!r}, which runs its own "
-                "ExecStart=.",
+                f"is the unit of package {self.package!r}, which runs its own ExecStart=, but "
+                "argv= is given too.",
                 hint="Drop argv, or write Service(name, argv) without package=.",
             )
         given = {
@@ -295,27 +356,28 @@ class Service(Located):
             if value:
                 raise _fail(
                     self,
-                    f"{self.name!r} is the unit of package {self.package!r}, so {keyword}= "
-                    "does not apply: the package's unit file decides it.",
+                    f"is the unit of package {self.package!r}, so {keyword}= does not apply: the "
+                    "package's unit file decides it.",
                     hint="Say it in unit=DropIn(...), or write Service(name, argv) of your own.",
                 )
         if isinstance(self.readiness, Notify):
             raise _fail(
                 self,
-                f"{self.name!r} is the unit of package {self.package!r}, whose own Type= "
-                "decides when it is ready.",
+                f"is the unit of package {self.package!r}, whose own Type= decides when it is "
+                "ready, so readiness=Notify() does not apply.",
                 hint="Use readiness=TcpProbe(port) or HttpProbe(url): a probe is its own unit.",
             )
         if self.hardening == Hardening.none():
             raise _fail(
                 self,
-                f"{self.name!r} runs under a sandbox or not at all.",
+                "a packaged unit runs under a sandbox or not at all, so hardening=Hardening.none() "
+                "does not apply.",
                 hint='hardening="relaxed" is the loosest sandbox a packaged unit takes.',
             )
         if self.unit is not None and self.unit.hardening is not None:
             raise _fail(
                 self,
-                f"{self.name!r} sets its sandbox in unit=DropIn(hardening=...).",
+                "sets its sandbox in unit=DropIn(hardening=...).",
                 hint="Pass it as hardening=: it replaces the package's sandbox.",
             )
 
@@ -324,25 +386,25 @@ class Service(Located):
             if isinstance(item, Service):
                 raise _fail(
                     self,
-                    f"{self.name!r} requires a Service value; it needs its readiness.",
+                    f"requires= holds the Service {item.name!r}; it waits for its readiness.",
                     hint=f"Pass requires=[{item.name}.ready].",
                 )
             if isinstance(item, Component):
                 raise _fail(
                     self,
-                    f"{self.name!r} requires a Component value; it needs its readiness.",
+                    "requires= holds a Component; it waits for its readiness.",
                     hint="Pass requires=[component.ready].",
                 )
             if not isinstance(item, _REQUIREMENTS):
                 raise _fail(
                     self,
-                    f"{self.name!r} requires {item!r}, which is not a readiness handle.",
+                    f"requires= holds {item!r}, which is not a readiness handle.",
                     hint="Pass other.ready, component.ready or an exported Endpoint.",
                 )
             if isinstance(item, Endpoint) and item.ready is None:
                 raise _fail(
                     self,
-                    f"{self.name!r} requires an endpoint that carries no readiness.",
+                    "requires= holds an Endpoint that carries no readiness.",
                     hint="Export it as Endpoint(..., ready=service.ready).",
                 )
             self._check_readiness(item)
@@ -355,7 +417,7 @@ class Service(Located):
             if not item.handles():
                 raise _fail(
                     self,
-                    f"{self.name!r} requires component {item.name!r}, which declares no readiness.",
+                    f"requires= waits for component {item.name!r}, which declares no readiness.",
                     hint="Give one of its services readiness=HttpProbe(...), TcpProbe(...) "
                     "or Notify().",
                 )
@@ -364,7 +426,7 @@ class Service(Located):
         if handle is not None and handle.probe is None:
             raise _fail(
                 self,
-                f"{self.name!r} requires {handle.unit!r}, which declares no readiness.",
+                f"requires= waits for {handle.unit!r}, which declares no readiness.",
                 hint="Give it readiness=HttpProbe(...), TcpProbe(...) or Notify(); After= "
                 "alone only waits for the exec, not for the program to serve.",
             )
@@ -380,7 +442,11 @@ class Service(Located):
         )
         for name, value, kinds in checks:
             if value is not None and not isinstance(value, kinds):
-                raise _fail(self, f"{name}= holds {value!r}, which is not the expected value.")
+                raise _fail(
+                    self,
+                    f"{name}= holds {value!r}, not {_EXPECTED[name]}.",
+                    hint=f"{name}={_EXAMPLE[name]}",
+                )
         names: set[str] = set()
         for credential in self.credentials:
             if not isinstance(credential, (Credential, Secret)):
@@ -390,7 +456,11 @@ class Service(Located):
                     hint="Pass the Secret the image declares: credentials=[jwt].",
                 )
             if credential.name in names:
-                raise _fail(self, f"{self.name!r} binds credential {credential.name!r} twice.")
+                raise _fail(
+                    self,
+                    f"credentials= binds {credential.name!r} twice.",
+                    hint="List each Secret once in credentials=.",
+                )
             names.add(credential.name)
         for port in self.expose:
             if not isinstance(port, (TCP, UDP)):
@@ -399,6 +469,13 @@ class Service(Located):
                     f"expose= holds {port!r}, not a port.",
                     hint="Pass expose=[TCP(8080)].",
                 )
+        if len(set(self.expose)) != len(self.expose):
+            twice = next(port for port in self.expose if self.expose.count(port) > 1)
+            raise _fail(
+                self,
+                f"expose= lists {twice!r} twice.",
+                hint=f"List each port once: expose=[{twice!r}].",
+            )
         if self.state is not None and not isinstance(self.state, (str, VolumeDirectory)):
             raise _fail(
                 self,
@@ -412,18 +489,38 @@ class Service(Located):
             if value is not None and (
                 not isinstance(value, str) or not _DIRECTORY.fullmatch(value)
             ):
-                raise _fail(self, f"{name}= {value!r} must be a directory name.")
+                raise _fail(
+                    self,
+                    f"{name}= {value!r} must be a directory name.",
+                    hint=f'{name}="{self.stem}": systemd makes it under '
+                    f"{_DIRECTORY_ROOTS[name]}, owned by the service's user.",
+                )
         if self.working_directory is not None and not str(self.working_directory).startswith("/"):
-            raise _fail(self, f"working_directory {self.working_directory!r} must be absolute.")
+            raise _fail(
+                self,
+                f"working_directory= {self.working_directory!r} is not an absolute path.",
+                hint=f'working_directory="/{str(self.working_directory).lstrip("./")}"',
+            )
         for group in self.groups:
             if not isinstance(group, str) or not group:
-                raise _fail(self, f"groups= holds {group!r}, not a group name.")
+                raise _fail(
+                    self,
+                    f"groups= holds {group!r}, not a group name.",
+                    hint='groups=["tdx"]: each a group the image declares or Debian ships.',
+                )
         if not isinstance(self.quotes, bool):
             raise _fail(
                 self, f"quotes= holds {self.quotes!r}.", hint="Pass quotes=True or drop it."
             )
         for key, value in self.environment.items():
-            if isinstance(key, str) and isinstance(value, (Secret, Credential)):
+            if not isinstance(key, str) or not _ENV_KEY.fullmatch(key):
+                raise _fail(
+                    self,
+                    f"environment= names {key!r}, which is not a variable name.",
+                    hint='Use letters, digits and "_", not starting with a digit: '
+                    'environment={"APP_PORT": "8080"}.',
+                )
+            if isinstance(value, (Secret, Credential)):
                 continue
             if not isinstance(key, str) or not isinstance(value, str) or "\n" in value:
                 raise _fail(
@@ -442,7 +539,7 @@ class Service(Located):
             if known != binding:
                 raise _fail(
                     self,
-                    f"{self.name!r} binds two different credentials named {binding.name!r}.",
+                    f"binds two different credentials named {binding.name!r}.",
                     hint="Declare the Secret once and pass that value everywhere it is read.",
                 )
         for argument in self.argv:
@@ -452,7 +549,7 @@ class Service(Located):
                 if name not in found:
                     raise _fail(
                         self,
-                        f"{self.name!r} reads credential {name!r} it does not bind.",
+                        f"argv= reads credential {name!r}, which the service does not bind.",
                         hint="Pass the Secret itself as the argument (argv=[..., secret]), or "
                         "credentials=[secret] beside a word that embeds secret.path.",
                     )
@@ -488,14 +585,14 @@ class Service(Located):
             if given:
                 raise _fail(
                     self,
-                    f"{self.name!r} runs on a timer, so {name}= does not apply: {why}.",
+                    f"runs on a timer, so {name}= does not apply: {why}.",
                     hint=f"Drop {name}=, or drop timer= to run it as a long-lived service.",
                 )
         referenced = tuple(r for r in self._references() if not isinstance(r, InstanceKey))
         if referenced:
             raise _fail(
                 self,
-                f"{self.name!r} runs on a timer, so it cannot read credential "
+                "runs on a timer, so it cannot read credential "
                 f"{referenced[0].name!r}: secret delivery orders long-lived services only.",
                 hint="Drop it from argv= and environment=, or drop timer= to run it as a "
                 "long-lived service.",

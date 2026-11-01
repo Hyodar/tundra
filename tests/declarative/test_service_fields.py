@@ -259,7 +259,7 @@ def test_write_paths_on_a_declared_mount_are_created_after_the_mount() -> None:
 
 
 def test_write_paths_on_a_mount_refuse_a_dynamic_user() -> None:
-    with pytest.raises(ValidationError, match="Dynamic"):
+    with pytest.raises(ValidationError, match="dynamic user"):
         _on_disk(Service("app", "/usr/bin/app", user=Dynamic(), write_paths=("/persistent/a",)))
 
 

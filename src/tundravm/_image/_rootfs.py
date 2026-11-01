@@ -8,6 +8,8 @@ from typing import Literal
 
 from tundravm.errors import ValidationError
 
+from .._keywords import Keywords
+
 __all__ = ["RootFS"]
 
 _SIZE = re.compile(r"[1-9][0-9]*[KMG]|[1-9][0-9]?%")
@@ -15,7 +17,7 @@ _UKI_SIZE = re.compile(r"[1-9][0-9]*[MG]")
 
 
 @dataclass(frozen=True, slots=True)
-class RootFS:
+class RootFS(Keywords):
     """Where the OS lives: ``RootFS.initramfs()`` (the default) or ``RootFS.verity()``.
 
     ``initramfs`` puts the whole OS in the UKI's ``.initrd``: small services, one file to

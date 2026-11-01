@@ -30,6 +30,7 @@ from tundravm.errors import ValidationError
 from tundravm.models import unit_name
 from tundravm.policy import Policy
 
+from .._keywords import Keywords, subject
 from .systemd import (
     SERVICE_OWNED,
     Condition,
@@ -80,8 +81,14 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
 
 
+_NAME_HINTS = {
+    "ref": 'Git(url, "v1.2.3"): a tag, a branch or a commit, which `tundravm lock` pins.',
+}
+"""Fixes for an empty string that are better than a placeholder."""
+
+
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
-    return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
+    return ValidationError(f"{subject(owner)}: {message}", hint=hint)
 
 
 def _toolchain_name(using: Go | Cargo | Dotnet) -> str:
@@ -99,30 +106,50 @@ def _freeze(owner: object, *names: str) -> None:
 
 def _require_name(owner: object, value: str, what: str = "name") -> None:
     if not isinstance(value, str) or not value.strip():
-        raise _fail(owner, f"{what} must be a non-empty string, got {value!r}.")
+        raise _fail(
+            owner,
+            f"{what} must be a non-empty string, got {value!r}.",
+            hint=_NAME_HINTS.get(what, f'Pass {what}="...".'),
+        )
 
 
 def _require_absolute(owner: object, path: str, what: str = "path") -> None:
     if not isinstance(path, str) or not path.startswith("/"):
-        raise _fail(owner, f"{what} {path!r} must be an absolute path.")
+        raise _fail(
+            owner,
+            f"{what} {path!r} must be an absolute path.",
+            hint=f'Spell it from the root: "/{str(path).lstrip("./")}".',
+        )
 
 
 def _require_bool(owner: object, value: object, what: str) -> None:
     if not isinstance(value, bool):
-        raise _fail(owner, f"{what} must be True or False, got {value!r}.")
+        raise _fail(
+            owner,
+            f"{what} must be True or False, got {value!r}.",
+            hint=f"Pass {what}=True or {what}=False.",
+        )
 
 
 def _require_relative(owner: object, path: str, what: str) -> None:
     parts = path.rstrip("/").split("/")
     if not path or path.startswith("/") or ".." in parts:
-        raise _fail(owner, f"{what} {path!r} must be relative and stay inside the tree.")
+        raise _fail(
+            owner,
+            f"{what} {path!r} must be relative and stay inside the tree.",
+            hint="Name a path inside the tree, such as 'bin/app', without '..'.",
+        )
 
 
 def _require_mode(owner: object, mode: int | None) -> None:
     if mode is None:
         return
     if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
-        raise _fail(owner, f"mode {mode!r} must be an int between 0 and 0o7777.")
+        raise _fail(
+            owner,
+            f"mode {mode!r} must be an int between 0 and 0o7777.",
+            hint="Pass an octal int such as mode=0o644.",
+        )
 
 
 def _require_choice(owner: object, value: object, choices: tuple[str, ...], what: str) -> None:
@@ -163,9 +190,17 @@ def _snapshot(value: object) -> object:
 def _require_env(owner: object, name: str = "env") -> None:
     for key, value in _freeze_map(owner, name).items():
         if not _ENV_KEY.fullmatch(key):
-            raise _fail(owner, f"invalid environment variable name {key!r}.")
+            raise _fail(
+                owner,
+                f"invalid environment variable name {key!r}.",
+                hint='Use letters, digits and "_", not starting with a digit: "APP_PORT".',
+            )
         if not isinstance(value, str) or "\n" in value:
-            raise _fail(owner, f"environment value for {key!r} must be one line of text.")
+            raise _fail(
+                owner,
+                f"environment value for {key!r} must be one line of text.",
+                hint="Pass one line of text; ship longer values as a file.",
+            )
 
 
 def _require_names(owner: object, values: Sequence[str], what: str) -> None:
@@ -175,7 +210,11 @@ def _require_names(owner: object, values: Sequence[str], what: str) -> None:
 
 def _require_items(owner: Fragment | Recipe | Platform, items: tuple[object, ...]) -> None:
     if not isinstance(items, tuple):
-        raise _fail(owner, f"{owner.name!r} items must be a list or tuple, got {items!r}.")
+        raise _fail(
+            owner,
+            f"{owner.name!r} items must be a list or tuple, got {items!r}.",
+            hint="Pass a list: items=[...].",
+        )
     for item in items:
         if not isinstance(item, (Fragment, *DECLARATION_TYPES)):
             raise _fail(
@@ -204,7 +243,11 @@ class Fragment(Located):
         _require_names(self, self.requires, "required fragment name")
         for check in self.checks:
             if not callable(check):
-                raise _fail(self, f"{self.name!r} check {check!r} is not callable.")
+                raise _fail(
+                    self,
+                    f"{self.name!r} check {check!r} is not callable.",
+                    hint="Pass a function that takes the resolved image and returns findings.",
+                )
 
 
 EMPTY_FRAGMENT = Fragment("empty")
@@ -239,20 +282,38 @@ class Variant(Located):
         _freeze(self, "changes", "outputs")
         _require_name(self, self.name)
         if not isinstance(self.release, bool):
-            raise _fail(self, f"release= of {self.name!r} must be True or False.")
+            raise _fail(
+                self,
+                f"release= of {self.name!r} must be True or False.",
+                hint="Pass release=True or release=False.",
+            )
         if self.name == BASE_VARIANT:
-            raise _fail(self, f"{BASE_VARIANT!r} is reserved for Recipe.items.")
+            raise _fail(
+                self,
+                f"{BASE_VARIANT!r} is the image's own content, not a profile name.",
+                hint="Name the profile something else.",
+            )
         if self.inherits is not None:
             _require_name(self, self.inherits, "inherits")
             if self.inherits == self.name:
-                raise _fail(self, f"profile {self.name!r} cannot inherit itself.")
+                raise _fail(
+                    self,
+                    f"profile {self.name!r} cannot inherit itself.",
+                    hint="Extend another profile, or leave inherits= out.",
+                )
         if not isinstance(self.add, Fragment):
-            raise _fail(self, f"add= of {self.name!r} must be a Fragment.")
+            raise _fail(
+                self,
+                f"add= of profile {self.name!r} holds {self.add!r}, not content.",
+                hint="Profile(add=[Package(...), Service(...)])",
+            )
         _check_changes(self)
         for target in self.outputs:
             _require_choice(self, target, TARGETS, "output")
         if len(set(self.outputs)) != len(self.outputs):
-            raise _fail(self, f"profile {self.name!r} lists an output twice.")
+            raise _fail(
+                self, f"profile {self.name!r} lists an output twice.", hint="List each target once."
+            )
 
 
 def _check_changes(variant: Variant) -> None:
@@ -269,14 +330,22 @@ def _check_changes(variant: Variant) -> None:
         target = change.target
         seen = touched.get(target, set())
         if target in touched and (seen is None or isinstance(change, Remove)):
-            raise _fail(variant, f"profile {variant.name!r} changes {target} twice.")
+            raise _fail(
+                variant,
+                f"profile {variant.name!r} changes {target} twice.",
+                hint="Keep one change per declaration in a profile.",
+            )
         if isinstance(change, Remove):
             touched[target] = None
             continue
         assert seen is not None
         for name in change.fields:
             if name in seen:
-                raise _fail(variant, f"profile {variant.name!r} edits {target}.{name} twice.")
+                raise _fail(
+                    variant,
+                    f"profile {variant.name!r} edits {target}.{name} twice.",
+                    hint="Set each field once in a profile's edits.",
+                )
             seen.add(name)
         touched[target] = seen
 
@@ -340,7 +409,12 @@ class Mkosi:
             if (value := getattr(self, what)) is not None:
                 _require_name(self, value, what)
         if self.seed is not None and not _UUID.fullmatch(self.seed):
-            raise _fail(self, f"seed {self.seed!r} must be a UUID.")
+            raise _fail(
+                self,
+                f"seed {self.seed!r} must be a UUID.",
+                hint="Pass a UUID such as '6f0c4a49-3cfb-4f4a-9a43-1d1f1f3c2c1e', or leave "
+                "seed= out.",
+            )
         if self.compress is not None:
             _require_choice(self, self.compress, ("zstd", "xz", "gz"), "compress")
         _require_choice(self, self.manifest, ("json", "changelog"), "manifest")
@@ -386,7 +460,9 @@ class Platform(Located):
 
     def __post_init__(self) -> None:
         if not self.distribution:
-            raise _fail(self, "name a distribution: Debian('trixie').")
+            raise _fail(
+                self, "name a distribution: Debian('trixie').", hint='Pass base=Debian("trixie").'
+            )
         _freeze(self, "items")
         _require_name(self, self.release, "release")
         if "/" in self.release:
@@ -409,7 +485,12 @@ class Platform(Located):
                     "root goes in mirror= (default https://snapshot.debian.org).",
                 )
         if self.epoch is not None and (isinstance(self.epoch, bool) or self.epoch < 0):
-            raise _fail(self, f"epoch {self.epoch!r} must be a non-negative int or None.")
+            raise _fail(
+                self,
+                f"epoch {self.epoch!r} must be a non-negative int or None.",
+                hint="Pass epoch=0 or a later SOURCE_DATE_EPOCH, or leave it out for the "
+                "snapshot's.",
+            )
         _require_items(self, self.items)
 
     @property
@@ -438,7 +519,11 @@ def _check_kernel_modules(platform: Debian) -> None:
     if value == "all":
         return
     if isinstance(value, str) or not isinstance(value, Sequence):
-        raise _fail(platform, f"kernel_modules must be 'all' or a tuple of names, got {value!r}.")
+        raise _fail(
+            platform,
+            f"kernel_modules must be 'all' or a tuple of names, got {value!r}.",
+            hint="Pass Kernel.default(modules=[...]) to keep more of Debian's modules.",
+        )
     object.__setattr__(platform, "kernel_modules", tuple(value))
     for name in value:
         if not isinstance(name, str) or not MODULE_NAME.fullmatch(name):
@@ -491,7 +576,12 @@ class Debian(Platform):
         object.__setattr__(self, "kernel_cmdline", tuple(self.kernel_cmdline))
         for parameter in self.kernel_cmdline:
             if not isinstance(parameter, str) or parameter.split() != [parameter]:
-                raise _fail(self, f"kernel_cmdline entry {parameter!r} is not one parameter.")
+                raise _fail(
+                    self,
+                    f"kernel_cmdline entry {parameter!r} is not one parameter.",
+                    hint="Pass each parameter as its own entry: cmdline=['quiet', "
+                    "'mitigations=auto'].",
+                )
         if self.boot is not None:
             _require_choice(self, self.boot, tuple(BOOT_PACKAGES), "boot")
         if self.kernel_package is not None:
@@ -558,13 +648,25 @@ class Recipe:
         _require_name(self, self.name)
         _require_items(self, self.items)
         if not self.variants:
-            raise _fail(self, "a recipe needs at least one variant.")
+            raise _fail(
+                self,
+                "the image declares no profile.",
+                hint="Declare the image's production profile.",
+            )
         names: set[str] = set()
         for variant in self.variants:
             if not isinstance(variant, Variant):
-                raise _fail(self, f"variants= holds {variant!r}, not a Variant.")
+                raise _fail(
+                    self,
+                    f"profiles= holds {variant!r}, not a Profile.",
+                    hint='Image(profiles={"dev": Profile(...)})',
+                )
             if variant.name in names:
-                raise _fail(self, f"profile {variant.name!r} is declared twice.")
+                raise _fail(
+                    self,
+                    f"profile {variant.name!r} is declared twice.",
+                    hint="Give each profile its own name.",
+                )
             names.add(variant.name)
         if not isinstance(self.platform, Platform):
             raise _fail(
@@ -573,9 +675,13 @@ class Recipe:
                 hint="Pass a distribution: platform=Debian('trixie').",
             )
         if not isinstance(self.mkosi, Mkosi):
-            raise _fail(self, "mkosi= must be a Mkosi value.")
+            raise _fail(self, "mkosi= must be a Mkosi value.", hint="Pass Image(mkosi=Mkosi(...)).")
         if self.policy is not None and not isinstance(self.policy, Policy):
-            raise _fail(self, "policy= must be a tundravm.Policy value.")
+            raise _fail(
+                self,
+                "policy= must be a tundravm.Policy value.",
+                hint="Pick the policy with tundravm build --offline or tundravm lock.",
+            )
 
     def variant(self, name: str) -> Variant:
         """The variant called *name*; ``ValidationError`` when there is none."""
@@ -620,7 +726,11 @@ def _declaration_type(owner: object, kind: str) -> type:
     for cls in DECLARATION_TYPES:
         if cls.__name__ == kind:
             return cls
-    raise _fail(owner, f"{kind!r} is not a declaration type.")
+    raise _fail(
+        owner,
+        f"{kind!r} is not a declaration type.",
+        hint="Name a declaration such as Service, File or Package.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -671,10 +781,18 @@ class Edit(Located):
 
     def __post_init__(self) -> None:
         if not isinstance(self.target, Ref):
-            raise _fail(self, f"target must be a Ref, got {self.target!r}.")
+            raise _fail(
+                self,
+                f"target must be a Ref, got {self.target!r}.",
+                hint="Use value.ref.edit(...) or value.ref.remove().",
+            )
         frozen = _freeze_map(self, "fields")
         if not frozen:
-            raise _fail(self, f"the edit of {self.target} sets no field.")
+            raise _fail(
+                self,
+                f"the edit of {self.target} sets no field.",
+                hint="Set at least one keyword: value.ref.edit(environment={...}).",
+            )
         values = {k: _snapshot(v) for k, v in frozen.items()}
         object.__setattr__(self, "fields", FrozenMap(values))
         cls = _declaration_type(self, self.target.kind)
@@ -702,7 +820,9 @@ class Remove(Located):
 
     def __post_init__(self) -> None:
         if not isinstance(self.target, Ref):
-            raise _fail(self, f"target must be a Ref, got {self.target!r}.")
+            raise _fail(
+                self, f"target must be a Ref, got {self.target!r}.", hint="Use value.ref.remove()."
+            )
 
 
 type VariantChange = Edit | Remove
@@ -775,7 +895,11 @@ class Ready:
         if not isinstance(self.step, str) or not (
             self.step == ALL_STEPS or _ENTRY_NAME.fullmatch(self.step)
         ):
-            raise _fail(self, f"invalid step name {self.step!r}.")
+            raise _fail(
+                self,
+                f"invalid step name {self.step!r}.",
+                hint="Wait for a readiness handle: volume.ready, secret.ready or other.ready.",
+            )
 
     def __str__(self) -> str:
         return self.step
@@ -793,7 +917,11 @@ def _require_steps(owner: object, what: str, *, sentinel: bool = False) -> None:
     """
     values = getattr(owner, what)
     if isinstance(values, (str, Ready, BootStep)) or not isinstance(values, (tuple, list)):
-        raise _fail(owner, f"{what} must be a list of readiness handles, got {values!r}.")
+        raise _fail(
+            owner,
+            f"{what} must be a list of readiness handles, got {values!r}.",
+            hint=f"Pass a list: {what}=[other.ready].",
+        )
     handles: list[Ready] = []
     for value in values:
         if isinstance(value, BootStep):
@@ -804,13 +932,13 @@ def _require_steps(owner: object, what: str, *, sentinel: bool = False) -> None:
             raise _fail(
                 owner,
                 f"{what} entry {value!r} is not a readiness handle.",
-                hint="Pass key.ready, disk.ready, secrets.ready or a BootStep's .ready.",
+                hint="Pass volume.ready, secret.ready or another service's .ready.",
             )
         if isinstance(value, UnitReady) and not sentinel:
             raise _fail(
                 owner,
                 f"{what} cannot wait for unit {value.unit}.",
-                hint="A BootStep waits for steps; order units with after=/requires=.",
+                hint="Order services with requires=[other.ready].",
             )
         if value == RUNTIME_INIT and not sentinel:
             raise _fail(owner, f"{what} cannot name RUNTIME_INIT.", hint="Name the steps.")
@@ -829,7 +957,11 @@ class Package(Declared):
     def __post_init__(self) -> None:
         _require_name(self, self.name)
         if any(ch.isspace() for ch in self.name):
-            raise _fail(self, f"package name {self.name!r} contains whitespace.")
+            raise _fail(
+                self,
+                f"package name {self.name!r} contains whitespace.",
+                hint='Name one package per entry: packages=["curl", "jq"].',
+            )
         _require_choice(self, self.role, ("runtime", "build"), "role")
 
 
@@ -872,7 +1004,11 @@ class File(Declared):
     def __post_init__(self) -> None:
         _require_absolute(self, self.path)
         if not isinstance(self.content, (str, bytes, Path)):
-            raise _fail(self, f"content of {self.path!r} must be str, bytes or Path.")
+            raise _fail(
+                self,
+                f"content of {self.path!r} must be str, bytes or Path.",
+                hint=f'File.text("{self.path}", "...") or File.copy("host/file", "{self.path}")',
+            )
         _require_mode(self, self.mode)
         if self.mode is None and not isinstance(self.content, Path):
             raise _fail(
@@ -945,7 +1081,11 @@ class FileTree(Declared):
         _freeze(self, "exclude")
         _require_absolute(self, self.path)
         if not isinstance(self.source, Path):
-            raise _fail(self, f"source of {self.path!r} must be a pathlib.Path.")
+            raise _fail(
+                self,
+                f"source of {self.path!r} must be a pathlib.Path.",
+                hint=f'Tree("host/dir", "{self.path}")',
+            )
         _require_names(self, self.exclude, "exclude pattern")
         _require_mode(self, self.mode)
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
@@ -961,9 +1101,17 @@ class Group(Declared):
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _GROUP_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid group name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid group name {self.name!r}.",
+                hint='Use lower case letters, digits, "-" and "_": Group("app").',
+            )
         if self.gid is not None and self.gid < 0:
-            raise _fail(self, f"gid {self.gid} must not be negative.")
+            raise _fail(
+                self,
+                f"gid {self.gid} must not be negative.",
+                hint=f'Group("{self.name}", gid=1000), or leave gid= out.',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -979,16 +1127,28 @@ class User(Declared):
     def __post_init__(self) -> None:
         _freeze(self, "groups")
         if not isinstance(self.name, str) or not _GROUP_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid user name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid user name {self.name!r}.",
+                hint='Use lower case letters, digits, "-" and "_": User("app").',
+            )
         if self.home is not None:
             _require_absolute(self, self.home, "home")
         _require_absolute(self, self.shell, "shell")
         if self.uid is not None and self.uid < 0:
-            raise _fail(self, f"uid {self.uid} must not be negative.")
+            raise _fail(
+                self,
+                f"uid {self.uid} must not be negative.",
+                hint=f'User("{self.name}", uid=1000), or leave uid= out.',
+            )
         if isinstance(self.primary_group, str):
             _require_name(self, self.primary_group, "primary_group")
         elif isinstance(self.primary_group, int) and self.primary_group < 0:
-            raise _fail(self, f"primary_group {self.primary_group} must not be negative.")
+            raise _fail(
+                self,
+                f"primary_group {self.primary_group} must not be negative.",
+                hint=f'User("{self.name}", primary_group="{self.name}"), or a gid of 0 or more.',
+            )
         _require_names(self, self.groups, "group")
 
 
@@ -1020,11 +1180,17 @@ class Unit(Declared):
         _require_ports(self, "ports")
         _require_steps(self, "needs", sentinel=True)
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid unit name {self.name!r}.")
+            raise _fail(
+                self, f"invalid unit name {self.name!r}.", hint='Name the unit like "app.service".'
+            )
         _require_bool(self, self.allow_secret, "allow_secret")
         if self.content is not None:
             if not isinstance(self.content, (str, Path)):
-                raise _fail(self, f"content of {self.name!r} must be str or Path.")
+                raise _fail(
+                    self,
+                    f"content of {self.name!r} must be str or Path.",
+                    hint="Pass the unit's text, or a Path to a unit file.",
+                )
             if "." not in self.name:
                 raise _fail(
                     self,
@@ -1041,10 +1207,15 @@ class Unit(Declared):
             raise _fail(
                 self,
                 f"unit {self.name!r} has no content and neither enables, disables nor masks it.",
+                hint="Pass the unit's text, or enable, disable or mask the unit a package ships.",
             )
         if self.dropin is not None:
             if not isinstance(self.dropin, DropIn):
-                raise _fail(self, f"dropin= must be a DropIn, got {self.dropin!r}.")
+                raise _fail(
+                    self,
+                    f"dropin= must be a DropIn, got {self.dropin!r}.",
+                    hint="Pass unit=DropIn(...).",
+                )
             own = UNIT_SUFFIXES.get("." + unit_name(self.name).rpartition(".")[2], "")
             for section in self.dropin.sections():
                 if section not in ("Unit", "Install", own):
@@ -1052,6 +1223,8 @@ class Unit(Declared):
                         self,
                         f"drop-in {self.dropin.name!r} writes [{section}], "
                         f"which unit {self.name!r} does not have.",
+                        hint="Write the directives of a section the unit has, or [Unit] and "
+                        "[Install].",
                     )
 
     @classmethod
@@ -1068,8 +1241,8 @@ class Unit(Declared):
         """The unit file *source* (UTF-8, read when the recipe lowers) shipped as *name*."""
         if not isinstance(source, Path):
             raise ValidationError(
-                f"Unit.from_file({name!r}) takes a pathlib.Path source, got {source!r}.",
-                hint="Pass Unit(name, text) for unit text, or Resources.file() for a path.",
+                f"the unit file of {name!r} must be a pathlib.Path, got {source!r}.",
+                hint="Pass Path(__file__).parent / NAME, or write Service(name, argv) instead.",
             )
         return cls(name, source, enabled, masked, needs, allow_secret)
 
@@ -1173,15 +1346,27 @@ class Service(Declared):
         _require_bool(self, self.enabled, "enabled")
         _require_bool(self, self.remain_after_exit, "remain_after_exit")
         if not isinstance(self.name, str) or not _UNIT_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid service name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid service name {self.name!r}.",
+                hint='Use letters, digits, "-", "_" and "@": Service("app", [...]).',
+            )
         if self.name.endswith(".target") or (
             "." in self.name and not self.name.endswith(".service")
         ):
-            raise _fail(self, f"service {self.name!r} must be a .service unit.")
+            raise _fail(
+                self,
+                f"service {self.name!r} must be a .service unit.",
+                hint=f'Service("{self.name.partition(".")[0]}", [...]): the .service is implied.',
+            )
         if isinstance(self.exec_start, str):
             _require_name(self, self.exec_start, "exec_start")
         elif not self.exec_start:
-            raise _fail(self, f"service {self.name!r} has an empty exec_start.")
+            raise _fail(
+                self,
+                f"service {self.name!r} has an empty exec_start.",
+                hint=f'Service("{self.name.removesuffix(".service")}", ["/usr/bin/app"])',
+            )
         else:
             _require_names(self, self.exec_start, "exec_start argument")
         for what in ("wanted_by", "timeout_stop"):
@@ -1213,7 +1398,7 @@ class Service(Declared):
                 self,
                 f"service {self.name!r} would run as user {stem!r}, which is not a valid "
                 "user name.",
-                hint="Pass user= (a user the image declares) or user=Dynamic().",
+                hint="Pass user=, a user the image declares, or rename the service.",
             )
         if not self.enabled and self.wanted_by is not None:
             raise _fail(
@@ -1225,7 +1410,11 @@ class Service(Declared):
         require_extra(self, ("Service",), SERVICE_OWNED, name="directives")
         for section, keys in self.directives.items():
             if twice := sorted(set(keys) & set(self.extra.get(section, {}))):
-                raise _fail(self, f"extra= sets {section}.{twice[0]}, which a keyword renders.")
+                raise _fail(
+                    self,
+                    f"extra= sets {section}.{twice[0]}, which a keyword renders.",
+                    hint="Set it with its keyword, and drop it from unit=DropIn(...).",
+                )
         _require_socket(self)
 
     @property
@@ -1261,13 +1450,21 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
         _require_name(owner, owner.group, "group")
     for group in owner.groups:
         if not isinstance(group, str) or not _GROUP_NAME.fullmatch(group):
-            raise _fail(owner, f"invalid group name {group!r} in groups=.")
+            raise _fail(
+                owner,
+                f"invalid group name {group!r} in groups=.",
+                hint='groups=["tdx"]: each a group name.',
+            )
     if owner.working_dir is not None:
         _require_absolute(owner, owner.working_dir, "working_dir")
     _require_env(owner)
     files = (owner.env_file,) if isinstance(owner.env_file, str) else owner.env_file or ()
     if not isinstance(files, tuple):
-        raise _fail(owner, f"env_file= must be a path or a list of paths, got {files!r}.")
+        raise _fail(
+            owner,
+            f"env_file= must be a path or a list of paths, got {files!r}.",
+            hint="Pass environment={...} on the Service instead.",
+        )
     for path in files:
         _require_absolute(owner, path.removeprefix("-") if isinstance(path, str) else path)
     _require_names(owner, owner.exec_start_post, "exec_start_post")
@@ -1284,7 +1481,11 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
             _require_name(owner, value, what)
             _require_relative(owner, value, what)
             if any(ch.isspace() for ch in value):
-                raise _fail(owner, f"{what} {value!r} must be one directory name.")
+                raise _fail(
+                    owner,
+                    f"{what} {value!r} must be one directory name.",
+                    hint=f'{what}="app": one directory name, made under its systemd root.',
+                )
     for path in owner.write_paths:
         optional = isinstance(path, str) and path.startswith("-")
         _require_absolute(owner, path[1:] if optional else path, "write_paths entry")
@@ -1296,7 +1497,11 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
             raise _fail(owner, f"{what} {value!r} is not a systemd time span.", hint="Use '5s'.")
     for resource, value in _freeze_map(owner, "limits").items():
         if isinstance(value, bool) or not isinstance(value, (str, int)):
-            raise _fail(owner, f"limit {resource!r} must be a str or int, got {value!r}.")
+            raise _fail(
+                owner,
+                f"limit {resource!r} must be a str or int, got {value!r}.",
+                hint='Resources(memory_max="2G", tasks_max=4096)',
+            )
     if owner.hardening is not None and not isinstance(owner.hardening, Hardening):
         raise _fail(
             owner,
@@ -1306,7 +1511,7 @@ def _require_unit_fields(owner: Service | DropIn) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class DropIn:
+class DropIn(Keywords):
     """A typed drop-in over a service's unit: ``Service(..., unit=DropIn(...))``.
 
     Renders ``/usr/lib/systemd/system/<unit>.d/<name>.conf`` with the fields that are set
@@ -1367,9 +1572,17 @@ class DropIn:
         if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid drop-in name {self.name!r}.", hint="Use '30-limits'.")
         if self.name in ("10-tundravm-needs", "tundravm-secrets"):
-            raise _fail(self, f"drop-in name {self.name!r} is reserved for tundravm.")
+            raise _fail(
+                self,
+                f"drop-in name {self.name!r} is reserved for tundravm.",
+                hint='Name the drop-in something else: DropIn("30-local", ...).',
+            )
         if self.exec_start is not None and not self.exec_start:
-            raise _fail(self, "exec_start must not be empty.")
+            raise _fail(
+                self,
+                "exec_start must not be empty.",
+                hint="Pass the command line, or leave exec_start= out.",
+            )
         _require_names(self, self.exec_start_pre, "exec_start_pre")
         if self.timeout_stop is not None:
             _require_name(self, self.timeout_stop, "timeout_stop")
@@ -1381,7 +1594,11 @@ class DropIn:
         sections = ("Unit", "Service", "Socket", "Timer", "Mount", "Install")
         require_extra(self, sections, SERVICE_OWNED)
         if not self.sections():
-            raise _fail(self, f"drop-in {self.name!r} changes nothing.")
+            raise _fail(
+                self,
+                f"drop-in {self.name!r} changes nothing.",
+                hint="Set a directive in the drop-in, or drop unit=.",
+            )
 
     def sections(self) -> tuple[str, ...]:
         """The sections this drop-in writes (``Unit``, ``Service`` and ``extra``'s)."""
@@ -1414,10 +1631,18 @@ class Template(Declared):
         _require_absolute(self, self.path)
         _require_bool(self, self.allow_secret, "allow_secret")
         if not isinstance(self.template, (str, Path)):
-            raise _fail(self, f"template of {self.path!r} must be str or Path.")
+            raise _fail(
+                self,
+                f"template of {self.path!r} must be str or Path.",
+                hint="Pass the template's text, or a Path to it.",
+            )
         for key, value in _freeze_map(self, "variables").items():
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-                raise _fail(self, f"variable {key!r} must be str, int or float, got {value!r}.")
+                raise _fail(
+                    self,
+                    f"variable {key!r} must be str, int or float, got {value!r}.",
+                    hint="Pass strings or numbers as template values.",
+                )
         _require_mode(self, self.mode)
         _require_choice(self, self.stage, ("skeleton", "extra"), "stage")
 
@@ -1441,7 +1666,11 @@ class Hook(Declared):
             _require_name(self, self.cwd, "cwd")
         _require_names(self, self.after, "after")
         if self.name in self.after:
-            raise _fail(self, f"hook {self.name!r} cannot run after itself.")
+            raise _fail(
+                self,
+                f"hook {self.name!r} cannot run after itself.",
+                hint="Order the step after another one.",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1471,7 +1700,11 @@ class BootStep(Declared):
         _require_steps(self, "after")
         _require_steps(self, "before")
         if self.ready in self.after or self.ready in self.before:
-            raise _fail(self, f"step {self.name!r} cannot run after or before itself.")
+            raise _fail(
+                self,
+                f"step {self.name!r} cannot run after or before itself.",
+                hint="Order the step after or before another one.",
+            )
 
     @property
     def ready(self) -> Ready:
@@ -1495,7 +1728,9 @@ class Repository(Declared):
     def __post_init__(self) -> None:
         _freeze(self, "components")
         if not isinstance(self.in_image, bool):
-            raise _fail(self, f"in_image {self.in_image!r} must be a bool.")
+            raise _fail(
+                self, f"in_image {self.in_image!r} must be a bool.", hint="Pass True or False."
+            )
         _require_name(self, self.name)
         _require_name(self, self.url, "url")
         _require_name(self, self.suite, "suite")
@@ -1543,7 +1778,9 @@ class Debloat(Declared):
 
     def __post_init__(self) -> None:
         if self.keep_modules is not None and not isinstance(self.keep_modules, bool):
-            raise _fail(self, "keep_modules must be True, False or None.")
+            raise _fail(
+                self, "keep_modules must be True, False or None.", hint="Pass True, False or None."
+            )
         _freeze(
             self,
             "remove",
@@ -1561,7 +1798,11 @@ class Debloat(Declared):
         frozen: dict[str, tuple[str, ...]] = {}
         for variant, paths in _freeze_map(self, "keep_paths_by_variant").items():
             if isinstance(paths, str) or not isinstance(paths, Sequence):
-                raise _fail(self, f"keep_paths_by_variant[{variant!r}] must be a list of paths.")
+                raise _fail(
+                    self,
+                    f"keep_paths_by_variant[{variant!r}] must be a list of paths.",
+                    hint="Pass a list of paths for each profile.",
+                )
             for path in paths:
                 _require_absolute(self, path, "keep_paths_by_variant path")
             frozen[variant] = tuple(paths)
@@ -1581,10 +1822,18 @@ class Setting(Declared):
         _require_name(self, self.section, "section")
         _require_name(self, self.key, "key")
         if not isinstance(self.values, tuple):
-            raise _fail(self, f"{self.section}.{self.key} values must be a tuple of strings.")
+            raise _fail(
+                self,
+                f"{self.section}.{self.key} values must be a tuple of strings.",
+                hint='Pass Mkosi(settings={"Key": "value"}).',
+            )
         for value in self.values:
             if not isinstance(value, str):
-                raise _fail(self, f"{self.section}.{self.key} value {value!r} is not a string.")
+                raise _fail(
+                    self,
+                    f"{self.section}.{self.key} value {value!r} is not a string.",
+                    hint='Pass Mkosi(settings={"Key": "value"}): each value one string.',
+                )
 
 
 # ── Keys, disks and secrets ─────────────────────────────────────────────
@@ -1601,18 +1850,34 @@ class Key(Declared):
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid key name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid key name {self.name!r}.",
+                hint='Use letters, digits, "-" and "_": Volume("data", ...).',
+            )
         if self.output is not None:
             _require_absolute(self, self.output, "output")
         _require_choice(self, self.strategy, ("random", "pipe"), "strategy")
         if self.strategy == "pipe" and not self.pipe:
-            raise _fail(self, f"key {self.name!r}: the pipe strategy requires pipe=.")
+            raise _fail(
+                self,
+                f"key {self.name!r}: the pipe strategy requires pipe=.",
+                hint="Pass the volume's unlock= as OperatorKey(), BrokerKey(...) or TpmSeal(...).",
+            )
         if self.strategy != "pipe" and self.pipe is not None:
-            raise _fail(self, f"key {self.name!r}: pipe= is only valid with strategy='pipe'.")
+            raise _fail(
+                self,
+                f"key {self.name!r}: pipe= is only valid with strategy='pipe'.",
+                hint="Pass the volume's unlock= as OperatorKey(), BrokerKey(...) or TpmSeal(...).",
+            )
         if self.pipe is not None:
             _require_absolute(self, self.pipe, "pipe")
         if isinstance(self.size, bool) or self.size <= 0:
-            raise _fail(self, f"key {self.name!r}: size {self.size!r} must be positive.")
+            raise _fail(
+                self,
+                f"key {self.name!r}: size {self.size!r} must be positive.",
+                hint="Leave the key size at its default.",
+            )
 
     @property
     def ready(self) -> Ready:
@@ -1643,7 +1908,11 @@ class Disk(Declared):
     def __post_init__(self) -> None:
         _freeze(self, "directories")
         if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid disk name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid disk name {self.name!r}.",
+                hint='Use letters, digits, "-" and "_": Volume("data", ...).',
+            )
         _require_absolute(self, self.mount, "mount")
         if self.device is not None:
             _require_absolute(self, self.device, "device")
@@ -1661,7 +1930,11 @@ class Disk(Declared):
         if self.mapper is not None:
             _require_name(self, self.mapper, "mapper")
             if self.key is None:
-                raise _fail(self, f"disk {self.name!r}: a plain disk cannot set mapper=.")
+                raise _fail(
+                    self,
+                    f"disk {self.name!r}: a plain disk cannot set mapper=.",
+                    hint="Give the volume unlock=OperatorKey(), BrokerKey(...) or TpmSeal(...).",
+                )
         _require_choice(
             self, self.format, ("always", "on_initialize", "on_fail", "never"), "format"
         )
@@ -1687,13 +1960,21 @@ class Schema:
         for what in ("min_length", "max_length"):
             value = getattr(self, what)
             if value is not None and value < 0:
-                raise _fail(self, f"{what} {value} must not be negative.")
+                raise _fail(
+                    self,
+                    f"{what} {value} must not be negative.",
+                    hint="Pass a length of 0 or more.",
+                )
         if (
             self.min_length is not None
             and self.max_length is not None
             and self.min_length > self.max_length
         ):
-            raise _fail(self, "min_length exceeds max_length.")
+            raise _fail(
+                self,
+                "min_length exceeds max_length.",
+                hint="Pass a minimum no larger than the maximum.",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1718,10 +1999,19 @@ class SecretEnv:
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _ENV_KEY.fullmatch(self.name):
-            raise _fail(self, f"invalid environment variable name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid environment variable name {self.name!r}.",
+                hint='Use letters, digits and "_", not starting with a digit: '
+                'environment={"API_TOKEN": secret}.',
+            )
         if self.service is not None:
             if not isinstance(self.service, str) or not _UNIT_NAME.fullmatch(self.service):
-                raise _fail(self, f"invalid service name {self.service!r}.")
+                raise _fail(
+                    self,
+                    f"invalid service name {self.service!r}.",
+                    hint='Name the Service that reads it: Service("app", ...).',
+                )
             if "." in self.service and not self.service.endswith(".service"):
                 raise _fail(
                     self,
@@ -1748,10 +2038,20 @@ class Secret:
         _freeze(self, "targets")
         _require_name(self, self.name)
         if not self.targets:
-            raise _fail(self, f"secret {self.name!r} requires at least one delivery target.")
+            raise _fail(
+                self,
+                f"secret {self.name!r} requires at least one delivery target.",
+                hint="Bind the Secret in a Service: argv=[..., secret], environment= or "
+                "credentials=.",
+            )
         for target in self.targets:
             if not isinstance(target, (SecretFile, SecretEnv)):
-                raise _fail(self, f"secret {self.name!r} target {target!r} is not a target.")
+                raise _fail(
+                    self,
+                    f"secret {self.name!r} target {target!r} is not a target.",
+                    hint="Bind the Secret in a Service: argv=[..., secret], environment= or "
+                    "credentials=.",
+                )
 
 
 SecretTargetKind = Literal["file", "env"]
@@ -1787,19 +2087,31 @@ class ExternalDelivery:
             raise _fail(
                 self,
                 f"{self.name!r} is the built-in provider's name.",
-                hint="Name what delivers the targets, e.g. ExternalDelivery('vault-agent').",
+                hint="Name the program that delivers the secrets, such as 'vault-agent'.",
             )
         kinds = get_args(SecretTargetKind)
         if not self.supports or any(kind not in kinds for kind in self.supports):
-            raise _fail(self, f"supports must name 'file' and/or 'env', got {self.supports!r}.")
+            raise _fail(
+                self,
+                f"supports must name 'file' and/or 'env', got {self.supports!r}.",
+                hint="Pass supports=('file',), ('env',) or both.",
+            )
         if len(set(self.supports)) != len(self.supports):
-            raise _fail(self, f"supports {self.supports!r} names a kind twice.")
+            raise _fail(
+                self, f"supports {self.supports!r} names a kind twice.", hint="Name each kind once."
+            )
         if self.unit is not None and self.ready_path is not None:
-            raise _fail(self, "takes unit= or ready_path=, not both.")
+            raise _fail(
+                self, "takes unit= or ready_path=, not both.", hint="Pass unit= or ready_path=."
+            )
         if self.unit is not None and (
             not isinstance(self.unit, str) or not _UNIT_NAME.fullmatch(self.unit)
         ):
-            raise _fail(self, f"invalid unit name {self.unit!r}.")
+            raise _fail(
+                self,
+                f"invalid unit name {self.unit!r}.",
+                hint='Name the unit like "vault-agent.service".',
+            )
         if self.ready_path is not None:
             _require_absolute(self, self.ready_path, "ready_path")
 
@@ -1850,15 +2162,23 @@ class Secrets(Declared):
         if self.delivery is not None and not isinstance(self.delivery, ExternalDelivery):
             raise _fail(
                 self,
-                f"delivery must be an ExternalDelivery or None, got {self.delivery!r}.",
-                hint="Pass delivery=ExternalDelivery('NAME', supports=('file',)).",
+                f"delivery= must name an external delivery or None, got {self.delivery!r}.",
+                hint="Leave delivery= out: the attested endpoint delivers each Secret.",
             )
         names: set[str] = set()
         for entry in self.entries:
             if not isinstance(entry, Secret):
-                raise _fail(self, f"entries= holds {entry!r}, not a Secret.")
+                raise _fail(
+                    self,
+                    f"entries= holds {entry!r}, not a Secret.",
+                    hint="Bind Secret values in a Service.",
+                )
             if entry.name in names:
-                raise _fail(self, f"secret {entry.name!r} is declared twice.")
+                raise _fail(
+                    self,
+                    f"secret {entry.name!r} is declared twice.",
+                    hint="Declare the Secret once and pass that value everywhere it is used.",
+                )
             names.add(entry.name)
         if isinstance(self.store, Disk):
             object.__setattr__(self, "store", self.store.ref)
@@ -1872,7 +2192,11 @@ class Secrets(Declared):
             )
         _require_name(self, self.host, "host")
         if isinstance(self.port, bool) or not 0 < self.port < 65536:
-            raise _fail(self, f"port {self.port!r} is out of range.")
+            raise _fail(
+                self,
+                f"port {self.port!r} is out of range.",
+                hint="Leave the management port at its default.",
+            )
         _require_absolute(self, self.ssh_directory, "ssh_directory")
         if self.ssh_key_path is not None:
             _require_absolute(self, self.ssh_key_path, "ssh_key_path")
@@ -1898,7 +2222,11 @@ class RuntimeTools(Declared):
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, (Git, Local)):
-            raise _fail(self, "source must be a Git or a Local source.")
+            raise _fail(
+                self,
+                "source must be a Git or a Local source.",
+                hint='Pass Tdxs(source=Git(url, ref)) or Tdxs(source=Local("tools")).',
+            )
         for what in ("key_config", "disk_config", "secret_config", "secret_manifest"):
             _require_absolute(self, getattr(self, what), what)
 
@@ -1907,7 +2235,7 @@ class RuntimeTools(Declared):
 
 
 @dataclass(frozen=True, slots=True)
-class Git:
+class Git(Keywords):
     """A git repository at *ref* (a tag, a branch, or a 40-hex commit ``tundravm lock`` pins).
 
     *subdir* builds one directory of the checkout: relative, no ``..``, and a directory of
@@ -1930,18 +2258,22 @@ class Git:
 
 
 @dataclass(frozen=True, slots=True)
-class Http:
+class Http(Keywords):
     url: str
     sha256: str | None = None
 
     def __post_init__(self) -> None:
         _require_name(self, self.url, "url")
         if self.sha256 is not None and not _SHA256.fullmatch(self.sha256):
-            raise _fail(self, "sha256 must be 64 lowercase hex characters.")
+            raise _fail(
+                self,
+                "sha256 must be 64 lowercase hex characters.",
+                hint="Pass sha256= of `curl -fsSL URL | sha256sum`, 64 lowercase hex characters.",
+            )
 
 
 @dataclass(frozen=True, slots=True)
-class Local:
+class Local(Keywords):
     """A directory of the project: ``Local("app")``, the program beside the image file.
 
     *path* is relative to the directory of the file that declares it (the image file,
@@ -1967,7 +2299,11 @@ class Local:
         if isinstance(self.path, Path):
             object.__setattr__(self, "path", self.path.as_posix())
         if not isinstance(self.path, str) or not self.path.strip():
-            raise _fail(self, f"path must be a non-empty directory path, got {self.path!r}.")
+            raise _fail(
+                self,
+                f"path must be a non-empty directory path, got {self.path!r}.",
+                hint='Local("app"): a directory relative to the image file.',
+            )
         if self.path.startswith("/"):
             raise _fail(
                 self,
@@ -2011,7 +2347,7 @@ def project_directory(base: Path) -> Path:
 
 
 @dataclass(frozen=True, slots=True)
-class Install:
+class Install(Keywords):
     """Install *source* (relative to the build directory) at *destination*.
 
     ``artifact=True`` installs the output of the toolchain the build is ``using``:
@@ -2043,7 +2379,11 @@ class Install:
                 hint="Directory copies keep the built files' modes.",
             )
         if not self.directory and self.source.endswith("/"):
-            raise _fail(self, f"{self.source!r} names a directory; pass directory=True.")
+            raise _fail(
+                self,
+                f"{self.source!r} names a directory; pass directory=True.",
+                hint=f'Install("{self.source}", "{self.destination}", directory=True)',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2077,7 +2417,11 @@ class Build(Declared):
     def __post_init__(self) -> None:
         _freeze(self, "install", "packages")
         if not isinstance(self.name, str) or not _BUILD_NAME.fullmatch(self.name):
-            raise _fail(self, f"invalid build name {self.name!r}.")
+            raise _fail(
+                self,
+                f"invalid build name {self.name!r}.",
+                hint='Use letters, digits, ".", "_" and "-": Build("site", ...).',
+            )
         if self.command is not None:
             if isinstance(self.command, str) or not isinstance(self.command, Sequence):
                 raise _fail(
@@ -2087,7 +2431,12 @@ class Build(Declared):
                 )
             object.__setattr__(self, "command", tuple(self.command))
             if not self.command or not all(isinstance(w, str) and w for w in self.command):
-                raise _fail(self, f"build {self.name!r} command= must name a program.")
+                raise _fail(
+                    self,
+                    f"build {self.name!r} command= must name a program.",
+                    hint=f'Build("{self.name}", source, command=["hugo", "--minify"], '
+                    "install=[...])",
+                )
         if [self.script, self.command, self.using].count(None) != 2:
             raise _fail(
                 self,
@@ -2097,7 +2446,11 @@ class Build(Declared):
             )
         if self.using is not None:
             if not isinstance(self.using, (Go, Cargo, Dotnet)):
-                raise _fail(self, f"build {self.name!r} using= must be Go, Cargo or Dotnet.")
+                raise _fail(
+                    self,
+                    f"build {self.name!r} using= must be Go, Cargo or Dotnet.",
+                    hint=f'Build("{self.name}", source, using=Go(...), install=[...])',
+                )
             if self.packages or self.env:
                 raise _fail(
                     self,
@@ -2114,15 +2467,28 @@ class Build(Declared):
                 hint="Use letters, digits and '._+@/-' ('/' is cached as '_').",
             )
         if not isinstance(self.source, (Git, Http, Local)):
-            raise _fail(self, f"build {self.name!r} source must be Local, Git or Http.")
+            raise _fail(
+                self,
+                f"build {self.name!r} source must be Local, Git or Http.",
+                hint=f'Build("{self.name}", Local("app"), ...), Git(url, ref) or Http(url, sha256)',
+            )
         if self.script is not None:
             _require_name(self, self.script, "script")
         if not self.install:
-            raise _fail(self, f"build {self.name!r} installs nothing.")
+            raise _fail(
+                self,
+                f"build {self.name!r} installs nothing.",
+                hint=f'Build("{self.name}", source, ..., '
+                'install=[Install("out/app", "/usr/bin/app")])',
+            )
         names: list[str] = []
         for step in self.install:
             if not isinstance(step, Install):
-                raise _fail(self, f"build {self.name!r} install step {step!r} is not Install.")
+                raise _fail(
+                    self,
+                    f"build {self.name!r} install step {step!r} is not Install.",
+                    hint='install=[Install("out/app", "/usr/bin/app")]',
+                )
             names.append(posixpath.basename(step.destination.rstrip("/")))
             if step.artifact and (
                 self.using is None or posixpath.normpath(step.source) != self.using.artifact
@@ -2183,7 +2549,11 @@ class DebianConfig:
         if self.snapshot is not None:
             _require_name(self, self.snapshot, "snapshot")
         if self.sha256 is not None and not _SHA256.fullmatch(self.sha256):
-            raise _fail(self, "sha256 must be 64 lowercase hex characters.")
+            raise _fail(
+                self,
+                "sha256 must be 64 lowercase hex characters.",
+                hint="Pass sha256= of the config file, 64 lowercase hex characters.",
+            )
 
     @property
     def series(self) -> str:
@@ -2224,12 +2594,20 @@ class KernelPatch:
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, (Path, Http)):
-            raise _fail(self, "source must be a pathlib.Path or Http(url, sha256).")
+            raise _fail(
+                self,
+                "source must be a pathlib.Path or Http(url, sha256).",
+                hint='Pass Path("fix.patch") or Http(url, sha256).',
+            )
         if self.name is None:
             raw = self.source.name if isinstance(self.source, Path) else self.source.url
             object.__setattr__(self, "name", posixpath.basename(raw.split("?", 1)[0]))
         if not isinstance(self.name, str) or not re.fullmatch(r"[A-Za-z0-9][\w.+-]*", self.name):
-            raise _fail(self, f"patch name {self.name!r} must be a file name.")
+            raise _fail(
+                self,
+                f"patch name {self.name!r} must be a file name.",
+                hint='Name it like "0001-fix.patch".',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2253,14 +2631,26 @@ class KernelConfig(Declared):
         normal: dict[str, str] = {}
         for key, value in options.items():
             if not _KCONFIG_OPTION.fullmatch(key):
-                raise _fail(self, f"option {key!r} is not a CONFIG_* name.")
+                raise _fail(
+                    self,
+                    f"option {key!r} is not a CONFIG_* name.",
+                    hint='Name an option like "CONFIG_TDX_GUEST_DRIVER".',
+                )
             if value is None:
                 value = "n"
             if not isinstance(value, str) or not value or "\n" in value:
-                raise _fail(self, f"{key}: value {value!r} must be y, m, n, None or a value.")
+                raise _fail(
+                    self,
+                    f"{key}: value {value!r} must be y, m, n, None or a value.",
+                    hint='Pass "y", "m", "n", None or the option\'s value.',
+                )
             normal[key] = value
         if not normal:
-            raise _fail(self, "KernelConfig sets no option.")
+            raise _fail(
+                self,
+                "the kernel config fragment sets no option.",
+                hint="Set at least one option, or drop the fragment.",
+            )
         object.__setattr__(self, "options", FrozenMap(normal))
         if not self.name:
             digest = hashlib.sha256(repr(sorted(normal.items())).encode()).hexdigest()
@@ -2315,20 +2705,38 @@ class Kernel(Declared):
     def __post_init__(self) -> None:
         _require_name(self, self.version, "version")
         if not isinstance(self.source, (Git, Http)):
-            raise _fail(self, "source must be Git or Http.")
+            raise _fail(
+                self,
+                "source must be Git or Http.",
+                hint='Kernel.build("6.12.48", Git(url, "v6.12.48"), config=...)',
+            )
         if self.config is not None and not isinstance(self.config, Path):
-            raise _fail(self, "config must be a pathlib.Path.")
+            raise _fail(self, "config must be a pathlib.Path.", hint='config=Path("kernel.config")')
         _freeze(self, "fragments", "patches")
         _require_bool(self, self.modules, "modules")
         if self.base is not None and not isinstance(self.base, (DebianConfig, Path)):
-            raise _fail(self, "base must be DebianConfig(...) or a pathlib.Path.")
+            raise _fail(
+                self,
+                "base must be DebianConfig(...) or a pathlib.Path.",
+                hint='config=Path("kernel.config")',
+            )
         if not all(isinstance(item, KernelConfig) for item in self.fragments):
-            raise _fail(self, "fragments must be KernelConfig values.")
+            raise _fail(
+                self,
+                "fragments= holds a value that is not a kernel config fragment.",
+                hint="Pass the kernel's config= as one file.",
+            )
         if not all(isinstance(item, KernelPatch) for item in self.patches):
-            raise _fail(self, "patches must be KernelPatch values.")
+            raise _fail(
+                self, "patches must be KernelPatch values.", hint='patches=[Path("0001-fix.patch")]'
+            )
         names = [patch.name for patch in self.patches]
         if len(set(names)) != len(names):
-            raise _fail(self, f"two patches share a name: {names!r}.")
+            raise _fail(
+                self,
+                f"two patches share a name: {names!r}.",
+                hint="Give each patch its own file name.",
+            )
         composing = self.base is not None or self.fragments or self.patches or self.modules
         if self.config is not None and composing:
             raise _fail(
@@ -2401,7 +2809,7 @@ def _require_span(owner: object, value: object, what: str, key: str, section: st
 
 
 @dataclass(frozen=True, slots=True)
-class Every:
+class Every(Keywords):
     """``Service(timer=Every("1h"))``: run *first* after boot (default: *interval*), then
     *interval* after each start (``OnBootSec=`` + ``OnUnitActiveSec=``); *jitter* spreads
     the start (``RandomizedDelaySec=``)."""
@@ -2427,7 +2835,7 @@ class Every:
 
 
 @dataclass(frozen=True, slots=True)
-class Calendar:
+class Calendar(Keywords):
     """``Service(timer=Calendar("daily"))``: run at calendar times (``OnCalendar=``, a
     shorthand such as ``daily`` or ``*-*-* 03:00:00``). *persistent* catches up on a run
     missed while the machine was off (``Persistent=yes``); *jitter* spreads the start."""
@@ -2470,7 +2878,7 @@ class Calendar:
 
 
 @dataclass(frozen=True, slots=True)
-class Listen:
+class Listen(Keywords):
     """``Service(socket=Listen(...))``: systemd listens and starts the service on demand.
 
     *address* is a TCP/UDP port (``8080``), ``"host:port"``, or an absolute socket path
@@ -2490,10 +2898,18 @@ class Listen:
     def __post_init__(self) -> None:
         address = self.address
         if isinstance(address, bool) or not isinstance(address, (int, str)):
-            raise _fail(self, f"address must be a port or a path, got {address!r}.")
+            raise _fail(
+                self,
+                f"address must be a port or a path, got {address!r}.",
+                hint='Listen(8080) for a port, Listen("/run/app/app.sock") for a path.',
+            )
         if isinstance(address, int):
             if not 0 < address < 65536:
-                raise _fail(self, f"port {address} is out of range (1-65535).")
+                raise _fail(
+                    self,
+                    f"port {address} is out of range (1-65535).",
+                    hint="Listen(8080): a port in 1..65535.",
+                )
         elif not (address.startswith("/") and "\n" not in address) and not (
             _LISTEN_ADDRESS.fullmatch(address)
         ):
@@ -2505,7 +2921,11 @@ class Listen:
         _require_choice(self, self.kind, ("stream", "datagram"), "kind")
         _require_bool(self, self.accept, "accept")
         if self.accept and self.kind != "stream":
-            raise _fail(self, "accept=True needs a stream socket.")
+            raise _fail(
+                self,
+                "accept=True needs a stream socket.",
+                hint='Listen(8080, accept=True) with kind="stream", or drop accept=.',
+            )
         for what in ("user", "group"):
             if (value := getattr(self, what)) is not None:
                 _require_name(self, value, what)
@@ -2541,7 +2961,9 @@ def _require_socket(service: Service) -> None:
     if socket is None:
         return
     if not isinstance(socket, Listen):
-        raise _fail(service, f"socket must be a Listen, got {socket!r}.")
+        raise _fail(
+            service, f"socket must be a Listen, got {socket!r}.", hint="socket=Listen(8080)"
+        )
     template = unit_name(service.name).endswith("@.service")
     if socket.accept != template:
         name = service.name.removesuffix(".service").removesuffix("@")
@@ -2572,7 +2994,11 @@ class Port:
     def __post_init__(self) -> None:
         number = self.number
         if isinstance(number, bool) or not isinstance(number, int) or not 0 < number < 65536:
-            raise _fail(self, f"port {number!r} is not a port number (1-65535).")
+            raise _fail(
+                self,
+                f"port {number!r} is not a port number (1-65535).",
+                hint="Pass a port in 1..65535: TCP(443).",
+            )
         _require_choice(self, self.protocol, ("tcp", "udp"), "protocol")
 
     def __str__(self) -> str:
@@ -2622,7 +3048,11 @@ class Firewall(Declared):
         _freeze(self, "egress_rules")
         for rule in self.egress_rules:
             if not isinstance(rule, EgressRule):
-                raise _fail(self, f"egress rule {rule!r} is not an EgressRule.")
+                raise _fail(
+                    self,
+                    f"egress rule {rule!r} is not an EgressRule.",
+                    hint="Egress(ports=[TCP(443)], hosts=[...])",
+                )
         if self.egress == "unfiltered" and self.egress_rules:
             raise _fail(
                 self,
@@ -2648,7 +3078,7 @@ class EgressRule:
 
     def __post_init__(self) -> None:
         if self.port is not None and not isinstance(self.port, Port):
-            raise _fail(self, f"port {self.port!r} is not a Port.")
+            raise _fail(self, f"port {self.port!r} is not a Port.", hint="Egress(ports=[TCP(443)])")
         if self.host is not None and (
             not isinstance(self.host, str) or not _EGRESS_HOST.fullmatch(self.host)
         ):
@@ -2658,7 +3088,11 @@ class EgressRule:
                 hint="Pass '10.0.0.5' or '10.0.0.0/8'.",
             )
         if self.port is None and self.host is None:
-            raise _fail(self, "a rule needs a port, a host or both.")
+            raise _fail(
+                self,
+                "a rule needs a port, a host or both.",
+                hint="Egress(ports=[TCP(443)]) or Egress(hosts=['10.0.0.5:443'])",
+            )
         object.__setattr__(self, "origins", tuple(tuple(o) for o in self.origins))
 
     @property
@@ -2713,9 +3147,17 @@ class UnitOutput(UnitReady):
 
 def _require_service_name(owner: object, name: object) -> None:
     if not isinstance(name, str) or not _UNIT_NAME.fullmatch(name):
-        raise _fail(owner, f"invalid unit name {name!r}.")
+        raise _fail(
+            owner,
+            f"invalid unit name {name!r}.",
+            hint='Use letters, digits, "-", "_" and "@": Service("app", [...]).',
+        )
     if "." in name and not name.endswith(".service"):
-        raise _fail(owner, f"{name!r} must be a .service unit.")
+        raise _fail(
+            owner,
+            f"{name!r} must be a .service unit.",
+            hint=f'Service("{str(name).partition(".")[0]}", [...]): the .service is implied.',
+        )
 
 
 def _require_command(owner: object, command: object, what: str) -> None:
@@ -2726,7 +3168,11 @@ def _require_command(owner: object, command: object, what: str) -> None:
         _require_names(owner, command, f"{what} argument")
         words = list(command)
     else:
-        raise _fail(owner, f"{what} must be a command line or a non-empty argv.")
+        raise _fail(
+            owner,
+            f"{what} must be a command line or a non-empty argv.",
+            hint='Pass argv: Service("app", ["/usr/bin/app"]).',
+        )
     if not words[0].lstrip("+-!@:").startswith("/"):
         raise _fail(
             owner,
@@ -2793,7 +3239,11 @@ class Task(Declared):
             _require_absolute(self, target, f"credential {name!r}")  # type: ignore[arg-type]
         for group in self.groups:
             if not isinstance(group, str) or not _GROUP_NAME.fullmatch(group):
-                raise _fail(self, f"invalid group name {group!r} in groups=.")
+                raise _fail(
+                    self,
+                    f"invalid group name {group!r} in groups=.",
+                    hint='groups=["tdx"]: each a group name.',
+                )
         if self.working_dir is not None:
             _require_absolute(self, self.working_dir, "working_dir")
         for what in ("logs", "runtime"):
@@ -2810,21 +3260,31 @@ class Task(Declared):
         condition_entries(self, self.conditions)
         _require_service_name(self, self.name)
         if "@" in self.name:
-            raise _fail(self, f"task {self.name!r} cannot be a template unit.")
+            raise _fail(
+                self,
+                f"task {self.name!r} cannot be a template unit.",
+                hint="Name the service without @.",
+            )
         _require_command(self, self.command, "command")
         if self.schedule is not None and not isinstance(self.schedule, (Every, Calendar)):
             raise _fail(
-                self, f"schedule must be Every(...) or Calendar(...), got {self.schedule!r}."
+                self,
+                f"schedule must be Every(...) or Calendar(...), got {self.schedule!r}.",
+                hint='timer=Every("1h") or timer=Calendar("daily")',
             )
         if self.user is not None and not isinstance(self.user, (Dynamic, Root)):
             if not isinstance(self.user, str) or not _GROUP_NAME.fullmatch(self.user):
-                raise _fail(self, f"invalid user name {self.user!r}.")
+                raise _fail(
+                    self,
+                    f"invalid user name {self.user!r}.",
+                    hint='Use lower case letters, digits, "-" and "_": user="app".',
+                )
         stem = unit_name(self.name).removesuffix(".service")
         if self.user is None and not (_GROUP_NAME.fullmatch(stem) and len(stem) <= 32):
             raise _fail(
                 self,
                 f"task {self.name!r} would run as user {stem!r}, which is not a valid user name.",
-                hint="Pass user= (a user the image declares) or user=Dynamic().",
+                hint="Pass user=, a user the image declares, or rename the service.",
             )
         for what in ("group", "description", "wanted_by"):
             if (value := getattr(self, what)) is not None:
@@ -2836,9 +3296,17 @@ class Task(Declared):
         require_targets(self, "after", "requires", "wants")
         _require_steps(self, "needs", sentinel=True)
         if not isinstance(self.hardening, Hardening):
-            raise _fail(self, f"hardening must be a Hardening, got {self.hardening!r}.")
+            raise _fail(
+                self,
+                f"hardening must be a Hardening, got {self.hardening!r}.",
+                hint='hardening="static", a preset name, or Hardening.preset(...)',
+            )
         if self.schedule is not None and self.wanted_by is not None:
-            raise _fail(self, "a scheduled task is started by its timer; drop wanted_by.")
+            raise _fail(
+                self,
+                "a scheduled task is started by its timer; drop wanted_by.",
+                hint="Drop timer= to run it at boot, or keep timer= alone.",
+            )
 
     @property
     def unit(self) -> str:
@@ -2850,8 +3318,8 @@ class Task(Declared):
         """A ``needs=`` handle: "this boot task has finished" (not for scheduled tasks)."""
         if self.schedule is not None:
             raise ValidationError(
-                f"Task {self.name!r} runs on a schedule, so it never 'finishes' at boot.",
-                hint="Wait for a boot task (no schedule=), or order with after=.",
+                f'Service("{self.name}") runs on a timer, so it never finishes at boot.',
+                hint="Wait for a service without timer=, or drop it from requires=.",
             )
         return UnitReady(self.unit)
 
@@ -2896,11 +3364,19 @@ class Mount(Declared):
             )
         _require_name(self, self.what, "what")
         if any(ch.isspace() for ch in self.what):
-            raise _fail(self, f"what {self.what!r} contains whitespace.")
+            raise _fail(
+                self,
+                f"what {self.what!r} contains whitespace.",
+                hint="Name what to mount without spaces.",
+            )
         if self.type is not None and (
             not isinstance(self.type, str) or not _FS_TYPE.fullmatch(self.type)
         ):
-            raise _fail(self, f"invalid filesystem type {self.type!r}.")
+            raise _fail(
+                self,
+                f"invalid filesystem type {self.type!r}.",
+                hint='Name a filesystem type like "ext4".',
+            )
         for option in self.options:
             if (
                 not isinstance(option, str)
@@ -3003,7 +3479,11 @@ class Resolved:
     def __post_init__(self) -> None:
         _freeze(self, "targets")
         if not self.targets:
-            raise _fail(self, f"profile {self.profile!r} resolved to no targets.")
+            raise _fail(
+                self,
+                f"profile {self.profile!r} resolved to no targets.",
+                hint="Image(targets=['qemu'])",
+            )
 
     def bind(self, ref: Ref) -> Declaration:
         """The profile's final declaration *ref* names; ``ValidationError`` when absent."""

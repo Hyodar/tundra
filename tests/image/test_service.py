@@ -308,7 +308,7 @@ def test_the_shell_escape_is_explicit() -> None:
 def test_an_empty_argv_is_refused() -> None:
     with pytest.raises(ValidationError) as caught:
         Service("app", [])
-    assert "empty argv" in str(caught.value)
+    assert "argv= is empty" in str(caught.value)
 
 
 @pytest.mark.parametrize(

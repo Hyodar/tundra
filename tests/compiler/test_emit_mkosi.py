@@ -254,7 +254,7 @@ def test_compile_not_bootable_writes_a_disk_without_uki(tmp_path: Path) -> None:
     assert "Bootable" not in plain
     assert "\nFormat=disk\n" in _main(plain_out)
     assert (plain_out / "mkosi.repart" / "00-esp.conf").is_file()
-    with pytest.raises(ValidationError, match="writes Bootable= itself"):
+    with pytest.raises(ValidationError, match="sets Bootable=, which tundravm writes itself"):
         compile(_recipe(Package("curl"), Setting("Content", "Bootable", ("yes",))))
 
 

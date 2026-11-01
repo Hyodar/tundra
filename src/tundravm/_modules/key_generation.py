@@ -61,7 +61,7 @@ class KeySpec:
         if self.strategy == "pipe" and not self.pipe_path:
             raise ValidationError(
                 "pipe strategy requires pipe_path.",
-                hint="Give Key(strategy='pipe') a pipe= path to read the key from.",
+                hint="Unlock the volume with OperatorKey(), BrokerKey(...) or TpmSeal(...).",
                 context={"key": self.name},
             )
         if self.strategy != "pipe" and self.pipe_path is not None:
@@ -99,8 +99,8 @@ class KeyGeneration(Module):
         self.keys = tuple(self.keys)
         if not self.keys:
             raise ValidationError(
-                "KeyGeneration requires at least one key definition.",
-                hint="Declare at least one Key().",
+                "volume key generation has no volume to make a key for.",
+                hint='Keep state on a Volume("data", unlock=OperatorKey()).',
             )
         names: set[str] = set()
         output_paths: set[str] = set()
@@ -108,14 +108,14 @@ class KeyGeneration(Module):
             if spec.name in names:
                 raise ValidationError(
                     f"Duplicate key name {spec.name!r}.",
-                    hint="Give each Key() a unique name.",
+                    hint="Give each Volume its own name.",
                 )
             names.add(spec.name)
             if spec.output is not None:
                 if spec.output in output_paths:
                     raise ValidationError(
-                        "Each generated key output path must be unique.",
-                        hint="Give each Key() its own output= path.",
+                        "two volume keys are written to one path.",
+                        hint="Give each Volume its own name.",
                         context={"key": spec.name, "path": spec.output},
                     )
                 output_paths.add(spec.output)

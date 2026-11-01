@@ -96,7 +96,7 @@ def test_boot_task_ready_names_its_unit() -> None:
     assert task.ready == UnitReady("migrate.service")
     assert task.ready.unit == "migrate.service"
     assert Service("app", "/usr/bin/app", needs=[task.ready]).needs == (task.ready,)
-    with pytest.raises(ValidationError, match="schedule"):
+    with pytest.raises(ValidationError, match="runs on a timer"):
         _ = Task("tick", "/bin/true", schedule=Every("1h")).ready
     with pytest.raises(ValidationError, match="cannot wait for unit"):
         BootStep("seed", "true", after=[task.ready])

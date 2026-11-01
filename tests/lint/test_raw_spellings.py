@@ -105,7 +105,7 @@ def test_every_typed_setting_hint_is_the_reserved_keys_sentence(section: str, ke
 
 
 def test_settings_the_tree_writes_itself_are_refused() -> None:
-    with pytest.raises(ValidationError, match="ToolsTree= itself"):
+    with pytest.raises(ValidationError, match="sets ToolsTree=, which tundravm writes itself"):
         lower(Recipe("r", items=(Setting("Build", "ToolsTree", ("default",)),)))
 
 

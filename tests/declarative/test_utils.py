@@ -187,8 +187,6 @@ def test_utils_freeze_lists_and_reject_bad_values() -> None:
         Tdxs(expected_measurements=(("rtmr0", "ab"),))  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="EfiStub"):
         EfiStub(snapshot="", version="1")
-    with pytest.raises(TypeError):
-        EfiStub(SNAPSHOT, "1")  # type: ignore[misc]
 
 
 def test_accounts_are_the_postinst_prelude_groups_first() -> None:

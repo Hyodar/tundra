@@ -34,7 +34,12 @@ def _fail(kind: str, path: str, message: str, hint: str | None = None) -> Valida
 
 def _float(value: float, kind: str, path: str) -> str:
     if not math.isfinite(value):
-        raise _fail(kind, path, f"{value!r} is not a finite number.")
+        raise _fail(
+            kind,
+            path,
+            f"{value!r} is not a finite number.",
+            hint="Pass a finite number, or the value as a string.",
+        )
     text = repr(value)
     mantissa, _, exponent = text.partition("e")
     if exponent and "." not in mantissa:
@@ -46,7 +51,12 @@ def _keys(mapping: Mapping[object, object], kind: str, path: str, sort: bool) ->
     keys: list[str] = []
     for key in mapping:
         if not isinstance(key, str) or not key:
-            raise _fail(kind, path, f"key {key!r} must be a non-empty string.")
+            raise _fail(
+                kind,
+                path,
+                f"key {key!r} must be a non-empty string.",
+                hint="Name each key with a non-empty string.",
+            )
         keys.append(key)
     return sorted(keys) if sort else keys
 
@@ -256,7 +266,9 @@ class ConfigFile:
 
         def render(value: object, at: str) -> list[str]:
             if not isinstance(value, (Mapping, list, tuple)):
-                raise _fail("yaml", at, "data must be a mapping or a list.")
+                raise _fail(
+                    "yaml", at, "data must be a mapping or a list.", hint="Pass a dict or a list."
+                )
             if not value:
                 return ["{}" if isinstance(value, Mapping) else "[]"]
             return _yaml_lines(value, 0, sort_keys, at)
@@ -282,7 +294,9 @@ class ConfigFile:
 
         def render(value: object, at: str) -> list[str]:
             if not isinstance(value, Mapping):
-                raise _fail("toml", at, "data must be a mapping.")
+                raise _fail(
+                    "toml", at, "data must be a mapping.", hint="Pass a dict of keys to values."
+                )
             return _toml_table(value, [], at, sort_keys, array=False)
 
         return cls._file("toml", path, data, render, mode, stage, allow_secret)
@@ -326,16 +340,31 @@ class ConfigFile:
 
         def render(value: object, at: str) -> list[str]:
             if not isinstance(value, Mapping):
-                raise _fail("ini", at, "sections must be a mapping of mappings.")
+                raise _fail(
+                    "ini",
+                    at,
+                    "sections must be a mapping of mappings.",
+                    hint="Pass {section: {key: value}}.",
+                )
             lines: list[str] = []
             for section in _keys(value, "ini", at, sort_keys):
                 body = value[section]
                 if not isinstance(body, Mapping) or "]" in section or "\n" in section:
-                    raise _fail("ini", at, f"section {section!r} must map keys to values.")
+                    raise _fail(
+                        "ini",
+                        at,
+                        f"section {section!r} must map keys to values.",
+                        hint=f"Pass {{{section!r}: {{key: value}}}}.",
+                    )
                 lines.extend(("", f"[{section}]") if lines else (f"[{section}]",))
                 for key in _keys(body, "ini", at, sort_keys):
                     if not _INI_KEY.fullmatch(key) or key != key.strip():
-                        raise _fail("ini", at, f"invalid key {key!r} in [{section}].")
+                        raise _fail(
+                            "ini",
+                            at,
+                            f"invalid key {key!r} in [{section}].",
+                            hint="Name each key without '=', '[' or ']'.",
+                        )
                     items = body[key] if isinstance(body[key], (list, tuple)) else (body[key],)
                     lines.extend(f"{key} = {_word(v, 'ini', at)}" for v in items if v is not None)
             return lines
@@ -361,10 +390,20 @@ class ConfigFile:
 
         def render(value: object, at: str) -> list[str]:
             if not isinstance(value, Mapping):
-                raise _fail("env", at, "values must be a mapping.")
+                raise _fail(
+                    "env",
+                    at,
+                    "values must be a mapping.",
+                    hint="Pass a dict of variable names to values.",
+                )
             for key in value:
                 if not isinstance(key, str) or not _ENV_KEY.fullmatch(key):
-                    raise _fail("env", at, f"invalid variable name {key!r}.")
+                    raise _fail(
+                        "env",
+                        at,
+                        f"invalid variable name {key!r}.",
+                        hint='Use letters, digits and "_", not starting with a digit: "APP_PORT".',
+                    )
             return [f"{k}={_env_value(value[k], at)}" for k in _keys(value, "env", at, sort_keys)]
 
         return cls._file("env", path, values, render, mode, stage, allow_secret)

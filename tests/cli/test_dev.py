@@ -152,5 +152,5 @@ def test_a_host_that_cannot_run_the_mode_is_refused_before_the_build(
     monkeypatch.setattr(instances, "tdx_refusal", lambda: "no Intel TDX host: kvm_intel tdx is off")
     result = cli("dev", "--mode", "tdx")
     assert result.code == EXIT_SDK_ERROR
-    assert "run --mode tdx cannot run here" in result.err and "doctor --for tdx" in result.err
+    assert "dev --mode tdx cannot run here" in result.err and "doctor --for tdx" in result.err
     assert not (project / "build").exists()

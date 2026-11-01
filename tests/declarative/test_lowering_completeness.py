@@ -251,7 +251,7 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
     [
         (
             (_secrets("a", "/run/same"), _secrets("b", "/run/same")),
-            r"Secrets\(b\) and Secrets\(a\) both deliver a secret to /run/same",
+            r"secret deliveries .b. and .a. both write /run/same",
         ),
         (
             (
@@ -260,7 +260,7 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
                 _secrets("a", "/run/a"),
                 _secrets("b", "/run/b"),
             ),
-            r"Secrets\(a\) writes /etc/tdx/secrets-a.yaml, which RuntimeTools.key_config",
+            r"/etc/tdx/secrets-a.yaml is written twice: by secret delivery .a. and by the volume",
         ),
     ],
     ids=["same-file-target", "path-overlap"],
@@ -346,7 +346,7 @@ def test_settings_mkosi_reads_in_the_main_image_only_go_to_the_root(tmp_path: Pa
 def test_settings_the_compiler_writes_name_their_declaration(
     setting: Setting, alternative: str
 ) -> None:
-    with pytest.raises(ValidationError, match="the compiler writes") as err:
+    with pytest.raises(ValidationError, match="which tundravm writes itself") as err:
         lower(_recipe(setting))
     assert alternative in (err.value.hint or "")
 

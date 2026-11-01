@@ -1,4 +1,5 @@
-"""Every ``raise <TdxError subclass>(...)`` in ``src/tundravm`` tells the user what to do next."""
+"""Every ``raise <TdxError subclass>(...)`` in ``src/tundravm``, and every error a ``_fail``
+helper or a factory returns, tells the user what to do next: its ``fix:`` line."""
 
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ def _error_classes(modules: list[ModuleType]) -> frozenset[str]:
             if inspect.isclass(value) and issubclass(value, TdxError):
                 names.add(name)
                 names.add(value.__name__)
-    return frozenset(names)
+    return frozenset({*names, "_fail"})
 
 
 def _called_name(call: ast.Call) -> str | None:
@@ -56,10 +57,12 @@ def _raises(path: Path, errors: frozenset[str]) -> list[tuple[int, str, str, ast
             inner = scope
             if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
                 inner = f"{scope}.{child.name}" if scope else child.name
-            if isinstance(child, ast.Raise) and isinstance(child.exc, ast.Call):
-                name = _called_name(child.exc)
+            raised = child.exc if isinstance(child, ast.Raise) else None
+            raised = child.value if isinstance(child, ast.Return) else raised
+            if isinstance(raised, ast.Call):
+                name = _called_name(raised)
                 if name in errors:
-                    found.append((child.lineno, scope or "<module>", name, child.exc))
+                    found.append((raised.lineno, scope or "<module>", name, raised))
             visit(child, inner)
 
     visit(tree, "")

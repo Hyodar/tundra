@@ -299,7 +299,8 @@ class StateBuilder:
                         source, _, dest = value.partition(":")
                         if not source:
                             raise ValidationError(
-                                f"Setting Build.BuildSources: {value!r} names no host directory.",
+                                f"Mkosi: settings= sets BuildSources={value!r}, which names no "
+                                "host directory.",
                                 hint="Write each value as 'src' or 'src:dest'.",
                             )
                         profile.build_sources.append((source, dest))
@@ -724,7 +725,7 @@ def walk_tree(root: Path, exclude: Sequence[str]) -> list[tuple[str, Path]]:
 
 def _file(profile: ProfileState, item: File) -> None:
     content = item.content
-    data = _read(content, owner=f"File {item.path}") if isinstance(content, Path) else content
+    data = _read(content, owner=f'File("{item.path}")') if isinstance(content, Path) else content
     mode = item.mode
     if mode is None:  # File.copy: the execute bit git records, nothing else
         executable = isinstance(content, Path) and content.stat().st_mode & 0o111
@@ -790,15 +791,16 @@ def _directory(profile: ProfileState, item: FileTree) -> None:
     """
     if not item.source.is_dir():
         raise ValidationError(
-            f"FileTree {item.path}: source {item.source} is not an existing directory.",
-            hint="Relative paths resolve against the working directory; check source= exists.",
+            f'Tree("{item.source}", "{item.path}"): {item.source} is not a directory.',
+            hint='Pass a directory relative to the working directory: Tree("app/static", '
+            '"/srv/www").',
             context={"path": item.path, "source": str(item.source)},
         )
     found = walk_directory(item.source, item.exclude, follow=item.symlinks == "follow")
     if not found:
         raise ValidationError(
-            f"FileTree {item.path}: no files to copy from {item.source}.",
-            hint="Check source= and exclude=.",
+            f'Tree("{item.source}", "{item.path}"): {item.source} holds no file to copy.',
+            hint="Check src= and exclude=.",
         )
     entries = profile.skeleton_files if item.stage == "skeleton" else profile.files
     prefix = item.path.rstrip("/")
@@ -813,7 +815,9 @@ def _directory(profile: ProfileState, item: FileTree) -> None:
             entries.append(FileEntry(path, b"", mode, kind="directory"))
             continue
         mode = kept if item.mode is None else _mode(item.mode)
-        entries.append(FileEntry(path, _read(host, owner="FileTree"), mode))
+        entries.append(
+            FileEntry(path, _read(host, owner=f'Tree("{item.source}", "{item.path}")'), mode)
+        )
 
 
 def _template(profile: ProfileState, item: Template) -> None:
@@ -873,7 +877,7 @@ def _unit(
         if isinstance(content, Path):
             content = _read_text(
                 content,
-                owner=f"Unit {unit.name}",
+                owner=f"the unit file of {unit.name}",
                 hint="Save the unit file as UTF-8; systemd units are text.",
             )
         if waits:
@@ -959,7 +963,7 @@ def _service(
         owner = fields["user"]
         if service.user is not None and not isinstance(service.user, (str, Root)):
             raise ValidationError(
-                f"Service {name!r} writes {on_mounts[0]} on a disk as a Dynamic() user, "
+                f"Service {name!r} writes {on_mounts[0]} on a volume as a dynamic user, "
                 "whose uid changes between boots.",
                 hint="Run it as a system user (drop user=), or keep its state in state=.",
             )
@@ -1312,17 +1316,18 @@ def _secret_paths(tools: RuntimeTools, secrets: Sequence[Secrets]) -> list[tuple
         (_suffixed(tools.secret_config, entry.name), _suffixed(tools.secret_manifest, entry.name))
         for entry in secrets
     ]
-    owners: dict[str, str] = {tools.key_config: "RuntimeTools.key_config"}
-    owners.setdefault(tools.disk_config, "RuntimeTools.disk_config")
+    owners: dict[str, str] = {tools.key_config: "the volume keys"}
+    owners.setdefault(tools.disk_config, "the volumes")
     for entry, written in zip(secrets, result, strict=True):
         for path in written:
             if path in owners:
                 raise ValidationError(
-                    f"Secrets({entry.name}) writes {path}, which {owners[path]} also writes.",
-                    hint="Rename one of them, or move the RuntimeTools paths apart.",
+                    f"{path} is written twice: by secret delivery {entry.name!r} and by "
+                    f"{owners[path]}.",
+                    hint="Bind the Secret in a Service and let it read the secret's path.",
                     context={"path": path},
                 )
-            owners[path] = f"Secrets({entry.name})"
+            owners[path] = f"secret delivery {entry.name!r}"
     delivered: dict[str, str] = {}
     for entry in secrets:
         for secret in entry.entries:
@@ -1331,8 +1336,8 @@ def _secret_paths(tools: RuntimeTools, secrets: Sequence[Secrets]) -> list[tuple
                     continue
                 if delivered.setdefault(target.path, entry.name) != entry.name:
                     raise ValidationError(
-                        f"Secrets({entry.name}) and Secrets({delivered[target.path]}) both "
-                        f"deliver a secret to {target.path}.",
+                        f"secret deliveries {entry.name!r} and {delivered[target.path]!r} both "
+                        f"write {target.path}.",
                         hint="Give each delivered file its own path.",
                         context={"path": target.path},
                     )
@@ -1370,8 +1375,8 @@ def output_conditions(needs: Sequence[Ready]) -> tuple[tuple[str, str], ...]:
 def _refuse_outputs(kind: str, name: str, needs: Sequence[Ready]) -> None:
     if output_units(needs):
         raise ValidationError(
-            f"{kind} {name!r} needs a task.output(...), which only a Service or a Task takes.",
-            hint="Wait for the task with needs=[task.ready], or make the consumer a Service.",
+            f"{kind} {name!r} requires setup.output(...), which only a Service takes.",
+            hint="Wait for the setup with requires=[setup.ready], or make it a Service.",
         )
 
 
@@ -1458,8 +1463,8 @@ def _task(
     stem = name.removesuffix(".service")
     if any(unit_name(s.name) == name and s.command for s in profile.services):
         raise ValidationError(
-            f"Duplicate unit '{name}' in profile '{profile.name}'.",
-            hint="A Task and a Service cannot share a name.",
+            f"Two services are named {stem!r} in profile {profile.name!r}.",
+            hint="Give the scheduled one and the long-lived one their own names.",
             context={"unit": name, "profile": profile.name},
         )
     user = task.user

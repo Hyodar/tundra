@@ -89,8 +89,8 @@ class Composite(Fragment):
     def _wrap(self, name: str, composed: object) -> Fragment:
         if isinstance(composed, (str, bytes)) or not isinstance(composed, Iterable):
             raise ValidationError(
-                f"{type(self).__name__}.compose() returned {composed!r}, not items or a Fragment.",
-                hint="Return (or yield) the declarations and fragments the component holds.",
+                f"{type(self).__name__}.compose() returned {composed!r}, not declarations.",
+                hint="Return (or yield) the declarations and components it holds.",
             )
         check: Callable[[Resolved], Iterable[Diagnostic]] | None = getattr(self, "check", None)
         checks = () if check is None else (_collected(check),)

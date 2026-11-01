@@ -289,14 +289,15 @@ def tdx_refusal() -> str | None:
     return None if row.verdict == "ready" else row.detail
 
 
-def require_host(mode: Mode) -> None:
+def require_host(mode: Mode, *, command: str) -> None:
     """Refuse *mode* where this host cannot run it: ``tdx`` unless ``doctor --for tdx`` is
-    ready, either mode without QEMU; ``dev`` asks before it builds."""
+    ready, either mode without QEMU; ``dev`` asks before it builds. *command* is the
+    command the refusal names (``run``, ``dev``)."""
     if mode == "tdx":
         refused = tdx_refusal()
         if refused is not None:
             raise DeploymentError(
-                f"run --mode tdx cannot run here: {refused}.",
+                f"{command} --mode tdx cannot run here: {refused}.",
                 hint="Run `tundravm doctor --for tdx` for the missing prerequisite, or use "
                 "--mode simulated (no TDX, verdicts are `simulated`).",
             )
@@ -318,7 +319,7 @@ def launch(
     cpus: int = 2,
 ) -> Instance:
     """``run``: start *build*'s ``qemu.raw`` as a new instance; see the module docstring."""
-    require_host(mode)
+    require_host(mode, command="run")
     if mode == "simulated" and build.production:
         print(
             "note: a production build in simulated mode is fail-closed: tdx-evidence.service "

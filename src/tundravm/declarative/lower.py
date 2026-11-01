@@ -602,14 +602,14 @@ def _variant_kernel(
     if kernel is None:
         if configs:
             raise ValidationError(
-                f"KernelConfig {configs[0].name!r} configures a kernel, but the profile "
+                f"kernel config fragment {configs[0].name!r} configures a kernel, but the profile "
                 "builds none.",
                 hint='Declare Kernel(version, source, base=DebianConfig("6.12.48-1")).',
             )
         return None
     if configs and kernel.base is None:
         raise ValidationError(
-            f"KernelConfig {configs[0].name!r} needs a composed kernel; Kernel "
+            f"kernel config fragment {configs[0].name!r} needs a composed kernel; Kernel "
             f"{kernel.version} takes a whole config file.",
             hint="Pass Kernel(base=Path(...)) instead of config= to compose from it.",
         )
@@ -629,7 +629,7 @@ def merged_kernel_options(
         merged["CONFIG_MODULES"] = ("n", "Kernel(modules=False)")
     for config in (*kernel.fragments, *configs):
         where = display_location(config.declared_at)
-        label = f"KernelConfig {config.name!r}" + (f" ({where})" if where else "")
+        label = f"kernel config fragment {config.name!r}" + (f" ({where})" if where else "")
         for option, raw in config.options.items():
             value = raw or "n"
             seen = merged.get(option)
@@ -637,8 +637,7 @@ def merged_kernel_options(
                 raise ValidationError(
                     f"kernel-option-conflict: {option} is {seen[0]} in {seen[1]} "
                     f"and {value} in {label}.",
-                    hint="Drop one of them, or remove one declaration from the profile "
-                    "(KernelConfig.ref(name).remove()).",
+                    hint="Set the option once in the kernel's config= file.",
                     context={"option": option},
                 )
             merged.setdefault(option, (value, label))
@@ -733,8 +732,8 @@ def _setting_bool(setting: Setting, value: str) -> bool:
     if lowered in _FALSE:
         return False
     raise ValidationError(
-        f"Setting {setting.section}.{setting.key}: {value!r} is not a boolean.",
-        hint=f"Use one of: {', '.join(sorted(_TRUE | _FALSE))}",
+        f"Mkosi: settings= sets {setting.key}={value!r}, which is not a boolean.",
+        hint=f"Use one of: {', '.join(sorted(_TRUE | _FALSE))}.",
     )
 
 
@@ -752,8 +751,8 @@ def _refuse_unreproducible(setting: Setting) -> None:
     """
     if setting.key == CONFIGURE_SCRIPTS:
         raise ValidationError(
-            f"mkosi-configure-script: Setting {setting.section}.{setting.key} runs scripts "
-            "that rewrite the configuration after `mkosi summary` resolved it.",
+            f"Mkosi: settings= sets {setting.key}=, whose scripts rewrite the configuration "
+            "after `mkosi summary` resolved it.",
             hint=CONFIGURE_SCRIPT_HINT,
             context={
                 "setting": f"{setting.section}.{setting.key}",
@@ -764,8 +763,8 @@ def _refuse_unreproducible(setting: Setting) -> None:
     if setting.key == "PassEnvironment" or (setting.key == "Environment" and passed):
         names = ", ".join(passed or setting.values)
         raise ValidationError(
-            f"mkosi-environment-passthrough: Setting {setting.section}.{setting.key} passes "
-            f"the host's {names} into the build.",
+            f"Mkosi: settings= sets {setting.key}=, which passes the host's {names} into the "
+            "build.",
             hint=ENVIRONMENT_HINT,
             context={
                 "setting": f"{setting.section}.{setting.key}",
@@ -843,8 +842,7 @@ def _mkosi_options(
             ]
             if mapped or setting.key in _COMPILER_KEYS:
                 raise ValidationError(
-                    f"Setting {setting.section}.{setting.key}: the compiler writes "
-                    f"{setting.key}= itself.",
+                    f"Mkosi: settings= sets {setting.key}=, which tundravm writes itself.",
                     hint=f"Write {setting.key}= in [{mapped[0]}]."
                     if mapped
                     else f"Declare it with {_COMPILER_KEYS[setting.key]}.",
@@ -854,8 +852,8 @@ def _mkosi_options(
             continue
         if len(setting.values) != 1:
             raise ValidationError(
-                f"Setting {setting.section}.{setting.key} takes exactly one value.",
-                hint=f"Pass one value for {setting.key}=.",
+                f"Mkosi: settings= gives {setting.key}= several values; it takes one.",
+                hint=f'Mkosi(settings={{"{setting.key}": "value"}})',
             )
         (value,) = setting.values
         changes[field] = _setting_bool(setting, value) if key in _BOOL_SETTINGS else value

@@ -12,7 +12,7 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT
-from tundravm import File, Image, Package, Profile, Service
+from tundravm import File, Image, Package, Profile, Service, errors
 from tundravm._reference import MODULES, lint_markdown
 from tundravm.check import RULES
 from tundravm.systemd import Every
@@ -595,3 +595,56 @@ def test_a_rule_an_image_file_can_hit_speaks_the_public_api(code: str) -> None:
         for what in (*_hits(text), *_renamed(text), *_internal(text))
     ]
     assert found == []
+
+
+ERROR_DENYLIST = {
+    "a private name": re.compile(r"(?<![\w.])_[A-Z][A-Za-z]+\b"),
+    "recipe (the image file, Image)": re.compile(r"\b[Rr]ecipes?\b"),
+    "variant (profile)": re.compile(r"\b[Vv]ariants?\b"),
+}
+"""Beyond the internal model's names, what no error message, fix or context key says."""
+ERROR_CALLS = frozenset({"_fail", *(name for name in errors.__all__ if name.endswith("Error"))})
+
+
+def _error_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
+    """``(line, text)`` of every string an error raised or returned is built from: its
+    message, its fix and its context."""
+    for node in ast.walk(tree):
+        value = node.exc if isinstance(node, ast.Raise) else None
+        value = node.value if isinstance(node, ast.Return) else value
+        if not isinstance(value, ast.Call):
+            continue
+        if getattr(value.func, "id", getattr(value.func, "attr", "")) in ERROR_CALLS:
+            for leaf in ast.walk(value):
+                if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str):
+                    yield leaf.lineno, leaf.value
+
+
+def _error_hits(text: str) -> list[str]:
+    return [*_internal(text), *(what for what, p in ERROR_DENYLIST.items() if p.search(text))]
+
+
+def test_errors_name_the_public_api() -> None:
+    """An error says what is wrong and what to write in the image file's words."""
+    found = [
+        f"{path.relative_to(PACKAGE)}:{line}: {what}: {text[:80]!r}"
+        for path in sorted(PACKAGE.rglob("*.py"))
+        for line, text in _error_strings(ast.parse(path.read_text(encoding="utf-8")))
+        for what in _error_hits(text)
+    ]
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'raise _fail(self, "Declare at least one Disk().", hint="h")',
+        'raise ValidationError("x", hint="Give Key(strategy=\'pipe\') a pipe= path.")',
+        'raise ValidationError("Setting Build.BuildSources: x", hint="y")',
+        'raise ValidationError("x", hint="y", context={"recipe": path})',
+        'return SourceError("see tundravm.declarative.model", source="s", reason="r", hint="h")',
+        'raise _fail(self, "x", hint="Pass delivery=_Delivery().")',
+    ],
+)
+def test_error_denylist_catches_internal_names(source: str) -> None:
+    assert any(_error_hits(text) for _, text in _error_strings(ast.parse(source)))

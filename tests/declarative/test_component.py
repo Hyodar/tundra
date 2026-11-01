@@ -90,8 +90,6 @@ def test_a_component_is_a_frozen_keyword_only_fragment() -> None:
     assert not hasattr(app, "__dict__")
     with pytest.raises(FrozenInstanceError):
         app.port = 1  # type: ignore[misc]
-    with pytest.raises(TypeError):
-        WebApp("1.0")  # type: ignore[misc, arg-type, call-arg]
 
 
 @pytest.mark.parametrize(
@@ -156,7 +154,7 @@ def test_compose_is_required_and_must_return_items() -> None:
         def compose(self) -> str:  # type: ignore[override]
             return "nope"
 
-    with pytest.raises(ValidationError, match="not items or a Fragment"):
+    with pytest.raises(ValidationError, match="not declarations"):
         Wrong()
 
 

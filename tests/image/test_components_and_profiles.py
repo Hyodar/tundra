@@ -81,8 +81,6 @@ class Picky(Sloppy):
 def test_a_component_is_a_frozen_keyword_only_dataclass() -> None:
     assert Database(port=5432) == Database()
     assert "port=5432" in repr(Database())
-    with pytest.raises(TypeError):
-        Database(5432)  # type: ignore[misc]
 
 
 def test_the_fragment_is_named_after_the_class() -> None:

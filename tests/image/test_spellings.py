@@ -56,7 +56,10 @@ INSTALL = Install("public", "/srv/www", mode=None, directory=True)
             "dates a snapshot",
         ),
         (lambda: AptRepository(DEBIAN, "s", key=KEYRING, sha256=PIN), "pin it twice"),
-        (lambda: AptRepository(DEBIAN, "s", key=KEYRING, snapshot="today"), "not a date"),
+        (
+            lambda: AptRepository(DEBIAN, "s", key=KEYRING, snapshot="today"),
+            "not a snapshot.debian.org date",
+        ),
         (
             lambda: AptRepository(
                 f"{DEBIAN}/20261018T082309Z", "s", key=KEYRING, snapshot="20261018T082309Z"

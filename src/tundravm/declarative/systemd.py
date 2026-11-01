@@ -12,13 +12,15 @@ import dataclasses
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from tundravm._source import FrozenMap
 from tundravm._units.directives import is_known
 from tundravm._units.render import HARDENING_KEYS
 from tundravm.errors import ValidationError
 from tundravm.models import unit_name
+
+from .._keywords import Keywords, subject
 
 if TYPE_CHECKING:
     from .model import Ref
@@ -122,11 +124,11 @@ stays under; see :data:`PRESETS`."""
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
-    return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
+    return ValidationError(f"{subject(owner)}: {message}", hint=hint)
 
 
 @dataclass(frozen=True, slots=True)
-class Hardening:
+class Hardening(Keywords):
     """The sandbox a generated unit runs in: one field per knob, and reviewed presets.
 
     The field defaults are :meth:`strict`; :meth:`relaxed` and :meth:`none` are the other
@@ -176,9 +178,18 @@ class Hardening:
             if isinstance(value, list):
                 object.__setattr__(self, name, tuple(value))
             elif value is not None and not isinstance(value, tuple):
-                raise _fail(self, f"{name}= must be a list of strings, got {value!r}.")
+                raise _fail(
+                    self,
+                    f"{name}= must be a list of strings, got {value!r}.",
+                    hint=f'Hardening.strict({name}=["..."])',
+                )
         if self.protect_system not in ("strict", "full", "yes", "no"):
-            raise _fail(self, f"invalid protect_system {self.protect_system!r}.")
+            raise _fail(
+                self,
+                f"invalid protect_system {self.protect_system!r}.",
+                hint='Hardening.strict(protect_system="strict"): one of '
+                f"{', '.join(repr(v) for v in get_args(ProtectSystem))}.",
+            )
         if self.network not in ("inet", "unix", "none", "any"):
             raise _fail(
                 self,
@@ -191,13 +202,21 @@ class Hardening:
             _require_flag(self, name)
         for device in self.devices:
             if not isinstance(device, str) or not device.startswith("/dev/"):
-                raise _fail(self, f"device {device!r} must be a path under /dev/.")
+                raise _fail(
+                    self,
+                    f"device {device!r} must be a path under /dev/.",
+                    hint=f'Hardening.strict(devices=["/dev/{str(device).removeprefix("/dev/").lstrip("/")}"])',
+                )
         for cap in self.capabilities or ():
             if not isinstance(cap, str) or not _CAPABILITY.fullmatch(cap):
                 raise _fail(self, f"invalid capability {cap!r}.", hint="Use CAP_NET_BIND_SERVICE.")
         for word in (*self.syscalls, *self.deny_syscalls):
             if not isinstance(word, str) or not _WORD.fullmatch(word):
-                raise _fail(self, f"invalid system call or group {word!r}.")
+                raise _fail(
+                    self,
+                    f"invalid system call or group {word!r}.",
+                    hint="Name a system call such as 'mlock' or a group such as '@system-service'.",
+                )
         if self.umask is not None and (
             not isinstance(self.umask, str) or not _UMASK.fullmatch(self.umask)
         ):
@@ -389,7 +408,11 @@ _SANDBOX_KEYS = ("ProtectHostname", "RestrictRealtime", "RestrictNamespaces", "L
 
 def _require_flag(owner: object, name: str) -> None:
     if not isinstance(getattr(owner, name), bool):
-        raise _fail(owner, f"{name} must be True or False, got {getattr(owner, name)!r}.")
+        raise _fail(
+            owner,
+            f"{name} must be True or False, got {getattr(owner, name)!r}.",
+            hint=f"Pass {name}=True or {name}=False.",
+        )
 
 
 _RELAXED = Hardening.strict(
@@ -473,7 +496,7 @@ class Condition:
         ``vm`` ..."""
         if kind not in _VIRTUALIZATION:
             raise ValidationError(
-                f"Condition.virtualization: unknown kind {kind!r}.",
+                f"virtualization condition: unknown kind {kind!r}.",
                 hint=f"Use one of: {', '.join(sorted(_VIRTUALIZATION))}.",
             )
         return cls("ConditionVirtualization", _negated(kind, negate))
@@ -483,7 +506,7 @@ class Condition:
         """``ConditionPathExists=``: the unit runs only when *path* exists."""
         if not isinstance(path, str) or not path.startswith("/") or "\n" in path:
             raise ValidationError(
-                f"Condition.path_exists: {path!r} is not an absolute path.",
+                f"path condition: {path!r} is not an absolute path.",
                 hint='Pass a path like "/dev/tdx_guest".',
             )
         return cls("ConditionPathExists", _negated(path, negate))
@@ -494,7 +517,7 @@ class Condition:
         kernel command line."""
         if not isinstance(word, str) or not word or any(ch.isspace() for ch in word):
             raise ValidationError(
-                f"Condition.kernel_command_line: {word!r} is not one word.",
+                f"kernel command line condition: {word!r} is not one word.",
                 hint='Pass one word, like "debug" or "tundravm.mode=dev".',
             )
         return cls("ConditionKernelCommandLine", _negated(word, negate))
@@ -520,8 +543,8 @@ def condition_entries(owner: object, conditions: object) -> tuple[tuple[str, str
     if items is None or not all(isinstance(item, Condition) for item in items):
         raise _fail(
             owner,
-            f"conditions= must be a tuple of Condition, got {conditions!r}.",
-            hint='Use conditions=(Condition.virtualization("microsoft"),).',
+            f"conditions= must be a tuple of conditions, got {conditions!r}.",
+            hint="Pass the conditions tundravm's targets define, or leave conditions= out.",
         )
     return tuple(item.entry for item in items)
 
@@ -578,9 +601,17 @@ def require_targets(owner: object, *names: str) -> None:
         for value in values:
             if isinstance(value, Ref):
                 if value.kind not in UNIT_REF_KINDS:
-                    raise _fail(owner, f"{name}= ref {value} does not name a unit.")
+                    raise _fail(
+                        owner,
+                        f"{name}= ref {value} does not name a unit.",
+                        hint="Pass another service's ref: requires=[other.ready].",
+                    )
             elif not isinstance(value, str) or not _UNIT_NAME.fullmatch(value):
-                raise _fail(owner, f"invalid unit name {value!r} in {name}=.")
+                raise _fail(
+                    owner,
+                    f"invalid unit name {value!r} in {name}=.",
+                    hint=f'{name}=["db.service"]: a unit name.',
+                )
         object.__setattr__(owner, name, tuple(dict.fromkeys(values)))
 
 
@@ -605,7 +636,11 @@ def require_extra(
     """
     value = getattr(owner, name)
     if not isinstance(value, Mapping):
-        raise _fail(owner, f"{name}= must be a mapping of sections, got {value!r}.")
+        raise _fail(
+            owner,
+            f"{name}= must be a mapping of sections, got {value!r}.",
+            hint=f'unit=DropIn({name}={{"Service": {{"LimitNOFILE": "65536"}}}})',
+        )
     frozen: dict[str, FrozenMap[str | tuple[str, ...]]] = {}
     for section, keys in value.items():
         if section not in sections:
@@ -615,7 +650,11 @@ def require_extra(
                 hint=f"Expected one of: {', '.join(sections)}.",
             )
         if not isinstance(keys, Mapping) or not keys:
-            raise _fail(owner, f"{name}[{section!r}] must be a non-empty mapping of directives.")
+            raise _fail(
+                owner,
+                f"{name}[{section!r}] must be a non-empty mapping of directives.",
+                hint=f'unit=DropIn({name}={{"{section}": {{"Key": "value"}}}})',
+            )
         entries: dict[str, str | tuple[str, ...]] = {}
         for key, item in keys.items():
             field = owned.get(f"{section}.{key}") or (
@@ -628,13 +667,26 @@ def require_extra(
                     hint=f"Use {field}= instead of {name}=.",
                 )
             if not isinstance(key, str) or not is_known(section, key):
-                raise _fail(owner, f"{name}= directive {section}.{key} is unknown to systemd.")
+                raise _fail(
+                    owner,
+                    f"{name}= directive {section}.{key} is unknown to systemd.",
+                    hint="Check the spelling against systemd's directive index (`man "
+                    "systemd.directives`).",
+                )
             items = (item,) if isinstance(item, str) else item
             if not isinstance(items, (tuple, list)) or not items:
-                raise _fail(owner, f"{name}= value of {section}.{key} must be a string or list.")
+                raise _fail(
+                    owner,
+                    f"{name}= value of {section}.{key} must be a string or list.",
+                    hint="Pass a string, or a list for a directive written once per value.",
+                )
             for line in items:
                 if not isinstance(line, str) or "\n" in line:
-                    raise _fail(owner, f"{name}= value of {section}.{key} must be one line.")
+                    raise _fail(
+                        owner,
+                        f"{name}= value of {section}.{key} must be one line.",
+                        hint="Join the value on one line.",
+                    )
             entries[key] = item if isinstance(item, str) else tuple(items)
         frozen[section] = FrozenMap(entries)
     object.__setattr__(owner, name, FrozenMap(frozen))

@@ -104,9 +104,13 @@ def _image_services(image: object) -> tuple[Service, ...]:
 def _first[T: (Volume, Secret)](kind: str, found: dict[str, T], value: T) -> None:
     known = found.setdefault(value.name, value)
     if known != value:
+        where = [display_location(declared_at(v)) for v in (known, value)]
+        lines = f" (at {where[0]} and {where[1]})" if all(where) else ""
+        named = f'{type(value).__name__}("{value.name}")'
         raise ValidationError(
-            f"Image: two different {kind}s are called {value.name!r}: {known!r} and {value!r}.",
-            hint=f"Declare the {kind} once and pass that value everywhere it is used.",
+            f"Image: two different values are {named}{lines}: {known!r} and {value!r}.",
+            hint=f"Declare it once, {value.name} = {named[:-1]}, ...), and pass that value "
+            "everywhere it is used.",
         )
 
 

@@ -49,7 +49,7 @@ def test_external_delivery_validates_its_name_and_kinds() -> None:
         ExternalDelivery("vault-agent", ())
     with pytest.raises(ValidationError, match="names a kind twice"):
         ExternalDelivery("vault-agent", ("file", "file"))
-    with pytest.raises(ValidationError, match="delivery must be an ExternalDelivery"):
+    with pytest.raises(ValidationError, match="delivery= must name an external delivery"):
         Secrets(delivery="vault-agent")  # type: ignore[arg-type]
 
 

@@ -18,6 +18,7 @@ from typing import Literal
 from tundravm._location import Located
 from tundravm.errors import ValidationError
 
+from .._keywords import Keywords
 from ._component import BootReady
 from ._secrets import RUNTIME_DIRECTORY, BrokerKey
 
@@ -56,7 +57,7 @@ _RESERVED_MOUNTS = ("/", "/usr", "/etc", "/boot", "/efi", "/run", "/proc", "/sys
 
 
 @dataclass(frozen=True, slots=True)
-class OperatorKey:
+class OperatorKey(Keywords):
     """Unlock with a passphrase an operator supplies on every boot (flashbots' model).
 
     ``tundravm secrets unlock INSTANCE VOLUME`` sends it over the attested channel once
@@ -73,7 +74,7 @@ class OperatorKey:
 
 
 @dataclass(frozen=True, slots=True)
-class TpmSeal:
+class TpmSeal(Keywords):
     """Unlock with a random key sealed to a vTPM the operator trusts.
 
     Nothing about the trust boundary is implied, so every field is stated:
@@ -258,7 +259,7 @@ class Volume(Located):
 
 
 @dataclass(frozen=True, slots=True)
-class VolumeDirectory:
+class VolumeDirectory(Keywords):
     """A directory on a :class:`Volume`: ``data.directory("app")``, bound as a state.
 
     The image creates it once the volume is open, owned by the one service that binds it

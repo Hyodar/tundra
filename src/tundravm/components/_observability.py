@@ -27,6 +27,8 @@ from tundravm.declarative.config import ConfigFile
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
+from .._keywords import Keywords
+
 __all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite", "Proxy"]
 
 LOGS_SERVICE = "journal-export"
@@ -106,7 +108,7 @@ done < {PROXY_HOSTS}
 
 
 @dataclass(frozen=True, slots=True)
-class Proxy:
+class Proxy(Keywords):
     """The fixed-address proxy both exporters reach their sinks through:
     ``Proxy("10.0.0.9", 3128)``, which ``proxy="10.0.0.9:3128"`` also spells.
 
@@ -200,7 +202,7 @@ def _check_credential(owner: object, credential: object) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class JournalExport:
+class JournalExport(Keywords):
     """Ship the journal to *url* (a ``systemd-journal-remote`` receiver) over HTTPS.
 
     *credential* is a :class:`~tundravm.secrets.Secret` holding the client's PEM key and
@@ -238,7 +240,7 @@ class JournalExport:
 
 
 @dataclass(frozen=True, slots=True)
-class PrometheusRemoteWrite:
+class PrometheusRemoteWrite(Keywords):
     """Send node metrics to *url*, a Prometheus remote-write receiver.
 
     *credential* is a :class:`~tundravm.secrets.Secret` holding a bearer token. The agent

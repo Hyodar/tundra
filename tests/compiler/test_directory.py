@@ -71,10 +71,10 @@ def test_binary_files_are_emitted_byte_for_byte(tmp_path: Path) -> None:
 
 
 def test_rejects_missing_or_empty_src(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="existing directory"):
+    with pytest.raises(ValidationError, match="is not a directory"):
         lower(_recipe(FileTree("/etc", tmp_path / "missing")))
     (tmp_path / "empty").mkdir()
-    with pytest.raises(ValidationError, match="no files"):
+    with pytest.raises(ValidationError, match="holds no file"):
         lower(_recipe(FileTree("/etc", tmp_path / "empty")))
 
 

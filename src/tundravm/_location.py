@@ -20,6 +20,8 @@ from contextvars import ContextVar
 from types import FrameType
 from typing import Self
 
+from ._keywords import Keywords, check_call
+
 _PACKAGE = os.path.dirname(os.path.abspath(__file__)) + os.sep
 _LIBRARIES = tuple(
     sorted(
@@ -64,7 +66,7 @@ def caller_location() -> str:
     return ""
 
 
-class Located:
+class Located(Keywords):
     """Base recording where each instance was constructed (:attr:`declared_at`).
 
     The location is not part of the value: equal declarations written on
@@ -74,6 +76,7 @@ class Located:
     __slots__ = ("_declared_at",)
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
+        check_call(cls, args, kwargs)
         self = object.__new__(cls)
         object.__setattr__(self, "_declared_at", caller_location())
         return self
@@ -119,4 +122,11 @@ def display_location(location: str, root: str | None = None) -> str:
     return f"{path}:{line}"
 
 
-__all__ = ["Located", "anchored", "caller_location", "declared_at", "display_location", "located"]
+__all__ = [
+    "Located",
+    "anchored",
+    "caller_location",
+    "declared_at",
+    "display_location",
+    "located",
+]

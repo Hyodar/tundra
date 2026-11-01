@@ -202,7 +202,7 @@ def test_keys_and_disks_refuse_inconsistent_arguments(
 def test_key_generation_rejects_duplicate_and_shared_outputs(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match=r"key 'a' is declared twice"):
         _compile(tmp_path, Key("a"), Key("a", output="/k"))
-    with pytest.raises(ValidationError, match="output path must be unique"):
+    with pytest.raises(ValidationError, match="written to one path"):
         _compile(tmp_path, Key("a", output="/k"), Key("b", output="/k"))
     with pytest.raises(ValidationError, match="invalid key name"):
         Key("bad name")
@@ -286,9 +286,9 @@ def test_disk_encryption_supports_multiple_disks(tmp_path: Path) -> None:
 def test_disk_encryption_rejects_conflicting_disks(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match=r"Volume\('a'\) is declared twice"):
         _compile(tmp_path, Disk("a", "/a"), Disk("a", "/b"))
-    with pytest.raises(ValidationError, match="unique mount point"):
+    with pytest.raises(ValidationError, match="mount at one path"):
         _compile(tmp_path, Disk("a", "/persistent"), Disk("b", "/persistent"))
-    with pytest.raises(ValidationError, match="unique mapper name"):
+    with pytest.raises(ValidationError, match="share a device mapper name"):
         _compile(
             tmp_path,
             Disk("a", "/a", key=Path("/k/a"), mapper="m"),

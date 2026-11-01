@@ -1507,7 +1507,7 @@ def _cmd_dev(args: argparse.Namespace, out: TextIO) -> int:
     loaded = _loaded(args, found)
     img = _lowered(loaded, found)
     profile = builds.choose_profile(img, None, dev=True)
-    instances.require_host(args.mode)
+    instances.require_host(args.mode, command="dev")
     latest = None
     with contextlib.suppress(StateError):
         latest = builds.resolve(None, root=found.build, image=img.image_id, dev=True)

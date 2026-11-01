@@ -145,7 +145,7 @@ def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
     code, out = _cli(monkeypatch, _Upstream(), str(image_file), *update)
     assert (code, out) == (EXIT_SDK_ERROR, "")
     assert (target.read_bytes() if target.exists() else None) == before
-    assert capsys.readouterr().err == f"error [E_LOCKFILE]: {report}\nHint: {HINT}\n"
+    assert capsys.readouterr().err == f"error [E_LOCKFILE]: {report}\nfix: {HINT}\n"
 
 
 def test_offline_lock_reports_every_unpinned_source_at_once(image_file: Path) -> None:

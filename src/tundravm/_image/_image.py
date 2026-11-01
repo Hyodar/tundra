@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from typing import TYPE_CHECKING
 
+from tundravm._keywords import shown, subject
 from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
@@ -30,15 +31,34 @@ type Content = str | Package | File | Tree | Service | Component | User | Group
 """What an image's (or a profile's) content may be."""
 
 _CONTENT: tuple[type, ...] = (str, Package, File, Tree, Service, Component, User, Group)
+_SLOT_OF = {
+    "Service": "services=[...]",
+    "Package": "packages=[...]",
+    "File": "files=[...]",
+    "Tree": "files=[...]",
+    "User": "users=[...]",
+    "Group": "groups=[...]",
+}
+"""The ``Image`` slot each value goes in, for a value passed in the wrong one."""
+_SLOT_EXAMPLE = {
+    "packages": '"curl"',
+    "files": 'File.text("/etc/app.conf", "...")',
+    "users": 'User("app")',
+    "groups": 'Group("app")',
+}
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
-    return ValidationError(f"{type(owner).__name__}: {message}", hint=hint)
+    return ValidationError(f"{subject(owner)}: {message}", hint=hint)
 
 
 def _tuple(owner: object, name: str, value: object) -> tuple[object, ...]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
-        raise _fail(owner, f"{name}= must be a list, got {value!r}.")
+        raise _fail(
+            owner,
+            f"{name}= must be a list, got {shown(value)}.",
+            hint=f'{name}=["{value}"]' if isinstance(value, str) else f"{name}=[{shown(value)}]",
+        )
     return tuple(value)
 
 
@@ -47,7 +67,7 @@ def _check_content(owner: object, name: str, items: Sequence[object]) -> None:
         if not isinstance(item, _CONTENT):
             raise _fail(
                 owner,
-                f"{name}= holds {item!r}, which is not image content.",
+                f"{name}= holds {shown(item)}, which is not image content.",
                 hint="Pass a package name, Package, File, Tree, Service, Component, User or Group.",
             )
 
@@ -83,14 +103,22 @@ class Profile(Located):
         object.__setattr__(self, "changes", _tuple(self, "changes", self.changes))
         _check_content(self, "add", self.add)
         if self.extends is not None and (not isinstance(self.extends, str) or not self.extends):
-            raise _fail(self, f"extends= must be a profile name or None, got {self.extends!r}.")
+            raise _fail(
+                self,
+                f"extends= must be a profile name or None, got {shown(self.extends)}.",
+                hint='Profile(extends="dev") names a key of Image(profiles=...).',
+            )
         if not isinstance(self.production, bool):
-            raise _fail(self, "production= must be True or False.")
+            raise _fail(
+                self,
+                f"production= must be True or False, got {shown(self.production)}.",
+                hint="Profile(production=False) marks a profile's artifacts non-production.",
+            )
         for change in self.changes:
             if not isinstance(change, (Edit, Remove, dm.Edit, dm.Remove)):
                 raise _fail(
                     self,
-                    f"changes= holds {change!r}, which is not an edit or a removal.",
+                    f"changes= holds {shown(change)}, which is not an edit or a removal.",
                     hint="Use value.ref.edit(FIELD=...) or value.ref.remove().",
                 )
 
@@ -213,7 +241,11 @@ class Image(Located):
             or not self.name
             or any(c.isspace() or c == "/" for c in self.name)
         ):
-            raise _fail(self, f"{self.name!r} is not an image name.")
+            raise _fail(
+                self,
+                f"{self.name!r} is not an image name.",
+                hint='Name it in one word without "/": Image("demo").',
+            )
         self._check_slots()
         self._check_services()
         self._check_profiles()
@@ -235,19 +267,46 @@ class Image(Located):
         for slot, items, kinds, what in slots:
             for item in items:
                 if not isinstance(item, kinds):
-                    raise _fail(self, f"{slot}= holds {item!r}, not {what}.")
+                    raise _fail(
+                        self,
+                        f"{slot}= holds {shown(item)}, not {what}.",
+                        hint=f"Put a {type(item).__name__} in {_SLOT_OF[type(item).__name__]}."
+                        if type(item).__name__ in _SLOT_OF
+                        else f"{slot}=[{_SLOT_EXAMPLE[slot]}]",
+                    )
         if not isinstance(self.base, Debian):
-            raise _fail(self, f"base= holds {self.base!r}, not a Debian.")
+            raise _fail(
+                self,
+                f"base= holds {shown(self.base)}, not a Debian.",
+                hint='base=Debian("trixie")',
+            )
         if not isinstance(self.kernel, Kernel):
-            raise _fail(self, f"kernel= holds {self.kernel!r}, not a Kernel.")
+            raise _fail(
+                self,
+                f"kernel= holds {shown(self.kernel)}, not a Kernel.",
+                hint="kernel=Kernel.default(modules=[...]) or Kernel.build(...)",
+            )
         from tundravm.components import DevAccess, Network, Observability
 
         if self.network is not None and not isinstance(self.network, Network):
-            raise _fail(self, f"network= holds {self.network!r}, not a Network.")
+            raise _fail(
+                self,
+                f"network= holds {shown(self.network)}, not a Network.",
+                hint="network=Network(egress=Egress(...)), from tundravm.components",
+            )
         if self.dev is not None and not isinstance(self.dev, DevAccess):
-            raise _fail(self, f"dev= holds {self.dev!r}, not a DevAccess.")
+            raise _fail(
+                self,
+                f"dev= holds {shown(self.dev)}, not a DevAccess.",
+                hint="dev=DevAccess(ssh_keys=[...]), from tundravm.components",
+            )
         if self.observability is not None and not isinstance(self.observability, Observability):
-            raise _fail(self, f"observability= holds {self.observability!r}, not Observability.")
+            raise _fail(
+                self,
+                f"observability= holds {shown(self.observability)}, not Observability.",
+                hint="observability=Observability(logs=JournalExport(url)), from "
+                "tundravm.components",
+            )
         if not isinstance(self.rootfs, RootFS):
             raise _fail(
                 self,
@@ -255,7 +314,11 @@ class Image(Located):
                 hint="Pass RootFS.initramfs() or RootFS.verity().",
             )
         if self.mkosi is not None and not isinstance(self.mkosi, Mkosi):
-            raise _fail(self, f"mkosi= holds {self.mkosi!r}, not a Mkosi.")
+            raise _fail(
+                self,
+                f"mkosi= holds {shown(self.mkosi)}, not a Mkosi.",
+                hint='mkosi=Mkosi(settings={"Key": "value"})',
+            )
         if not self.targets:
             raise _fail(self, "targets= names no target.", hint="Pass targets=('qemu',).")
         for target in self.targets:
@@ -266,7 +329,11 @@ class Image(Located):
                     hint=f"Known targets: {', '.join(TARGETS)}.",
                 )
         if len(set(self.targets)) != len(self.targets):
-            raise _fail(self, "targets= names a target twice.")
+            raise _fail(
+                self,
+                "targets= names a target twice.",
+                hint=f"targets={list(dict.fromkeys(self.targets))!r}",
+            )
 
     def _check_services(self) -> None:
         for item in self.services:
@@ -278,12 +345,25 @@ class Image(Located):
                     "and may declare more than one service.",
                 )
             if not isinstance(item, Service):
-                raise _fail(self, f"services= holds {item!r}, not a Service.")
+                raise _fail(
+                    self,
+                    f"services= holds {shown(item)}, not a Service.",
+                    hint='services=[Service("app", ["/usr/bin/app"])]',
+                )
+        units = [item.unit_name for item in self.services]
+        for item in self.services:
+            if units.count(item.unit_name) > 1:
+                raise _fail(
+                    self,
+                    f"services= holds two services named {item.stem!r}.",
+                    hint="Give each its own name, or keep one: a name is one unit, one user "
+                    "and one firewall rule.",
+                )
         for entry in self.components:
             if not isinstance(entry, Component):
                 raise _fail(
                     self,
-                    f"components= holds {entry!r}, not a Component.",
+                    f"components= holds {shown(entry)}, not a Component.",
                     hint="Subclass Component and give it a compose() method.",
                 )
 
@@ -309,8 +389,10 @@ class Image(Located):
                 ):
                     raise _fail(
                         self,
-                        f"volumes {name!r} and {volume.name!r} mount at {other} and "
+                        f'Volume("{name}") and Volume("{volume.name}") mount at {other} and '
                         f"{volume.mount}, one inside the other.",
+                        hint="Give each volume its own mount= beside the other's, or leave "
+                        "mount= out for /persistent/<name>.",
                     )
             mounts[volume.mount] = volume.name
             if isinstance(volume.unlock, TpmSeal):
@@ -323,6 +405,20 @@ class Image(Located):
                         hint="One payload boots on every target, so seal to the vTPM of the "
                         "only target you trust, or use unlock=OperatorKey().",
                     )
+        from ._runtime import services_of
+
+        exposed: dict[object, str] = {}
+        for service in services_of([*self.services, *self.components]):
+            for port in service.expose:
+                other = exposed.setdefault(port, service.stem)
+                if other != service.stem:
+                    raise _fail(
+                        self,
+                        f'Service("{other}") and Service("{service.stem}") both expose '
+                        f"{port!r}, which one program can listen on.",
+                        hint=f'Keep expose=[{port!r}] on one of them, and give "{service.stem}" '
+                        "a port of its own.",
+                    )
         ports: set[int] = set()
         for way in self.ingress:
             if not isinstance(way, (AttestedTLS, TLS)):
@@ -332,17 +428,33 @@ class Image(Located):
                     hint="Plain TCP exposure is Service(expose=[TCP(port)]).",
                 )
             if way.port in ports:
-                raise _fail(self, f"ingress port {way.port} is declared twice.")
+                raise _fail(
+                    self,
+                    f"ingress= takes port {way.port} twice.",
+                    hint="Give each ingress its own port.",
+                )
             if way.port == MANAGEMENT_PORT:
-                raise _fail(self, f"ingress port {way.port} is the management ingress.")
+                raise _fail(
+                    self,
+                    f"ingress= takes port {way.port}, where the attested endpoint listens.",
+                    hint=f"Pick another port: {type(way).__name__}(8443, ...).",
+                )
             ports.add(way.port)
 
     def _check_profiles(self) -> None:
         for name, profile in self.profiles.items():
             if not isinstance(name, str) or not name:
-                raise _fail(self, f"profiles= is keyed by {name!r}, not a profile name.")
+                raise _fail(
+                    self,
+                    f"profiles= is keyed by {shown(name)}, not a profile name.",
+                    hint='profiles={"dev": Profile(...)}',
+                )
             if not isinstance(profile, Profile):
-                raise _fail(self, f"profile {name!r} holds {profile!r}, not a Profile.")
+                raise _fail(
+                    self,
+                    f"profiles[{name!r}] holds {shown(profile)}, not a Profile.",
+                    hint=f'profiles={{"{name}": Profile(add=[...], changes=[...])}}',
+                )
             if name == BASE_PROFILE:
                 raise _fail(
                     self,
@@ -360,7 +472,11 @@ class Image(Located):
                     hint=f"Declared profiles: {known}.",
                 )
             if profile.extends == name:
-                raise _fail(self, f"profile {name!r} extends itself.")
+                raise _fail(
+                    self,
+                    f"profile {name!r} extends itself.",
+                    hint='Extend another profile, or leave extends= out for "production".',
+                )
         if self.dev is not None and DEV_PROFILE in self.profiles:
             raise _fail(
                 self,

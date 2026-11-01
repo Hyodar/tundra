@@ -23,6 +23,7 @@ from tundravm.declarative import model as dm
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
+from .._keywords import Keywords
 from ._change import Ref
 from ._values import Egress, Readiness
 
@@ -50,7 +51,7 @@ _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 @dataclass(frozen=True, slots=True)
-class ServiceReady:
+class ServiceReady(Keywords):
     """ "That service is ready": ``service.ready``, what ``requires=`` takes.
 
     *probe* is the readiness mechanism the service declared, so a dependent unit is
@@ -91,7 +92,7 @@ type Readied = ServiceReady | BootReady
 
 
 @dataclass(frozen=True, slots=True)
-class ComponentReady:
+class ComponentReady(Keywords):
     """ "That component is up": ``component.ready``.
 
     It stands for :meth:`Component.readiness`: by default the readiness of every service
@@ -115,7 +116,7 @@ class ComponentReady:
 
 
 @dataclass(frozen=True, slots=True)
-class Endpoint:
+class Endpoint(Keywords):
     """Where a component answers, with its readiness: an export a caller can wire.
 
     It renders as its :attr:`url` in an argv, and ``requires=[endpoint]`` waits for the
@@ -177,7 +178,7 @@ class Endpoint:
 
 
 @dataclass(frozen=True, slots=True)
-class ServiceRef:
+class ServiceRef(Keywords):
     """A service a component composed, named from outside: ``node.service("node")``.
 
     ``.ready`` waits for it and ``.ref`` is what a :class:`~tundravm.Profile`
