@@ -1,0 +1,10 @@
+A small web host with the directory conventions mkosi documents: mkosi.extra/ (a site and a
+unit), mkosi.skeleton/ (an apt setting the packages install over), mkosi.postinst and
+mkosi.finalize.
+
+Upstream: https://github.com/systemd/mkosi/blob/v27.1/mkosi/resources/man/mkosi.1.md (the
+          directory conventions), not a tree mkosi ships.
+License:  LGPL-2.1-or-later (the documentation it follows); this tree is tundravm's.
+Exercises: ExtraTrees= with a unit inside it, SkeletonTrees= beside it at the same target,
+          PostInstallationScripts= and FinalizeScripts= from the conventional files, an
+          implied package (openssl).

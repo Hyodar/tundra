@@ -1,0 +1,9 @@
+An application image with profiles, as mkosi documents them: a mkosi.profiles/debug/
+directory with its own packages, command line and extra tree, and a mkosi.conf.d fragment
+matched by a profile that has no directory.
+
+Upstream: https://github.com/systemd/mkosi/blob/v27.1/mkosi/resources/man/mkosi.1.md
+          (mkosi.profiles/ and [Match] Profiles=), not a tree mkosi ships.
+License:  LGPL-2.1-or-later (the documentation it follows); this tree is tundravm's.
+Exercises: a profile directory as Profile(add=), a profile's extra tree, a setting a
+          Profile cannot change, a fragment mkosi reads only for a named profile.

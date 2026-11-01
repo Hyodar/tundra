@@ -1,0 +1,15 @@
+systemd's mkosi tree, the Debian face of it.
+
+Upstream: https://github.com/systemd/systemd (mkosi/)
+Commit:   009c4c9a7d95db221e4b9640ebcc34b3c6c8066a (tag v258)
+License:  LGPL-2.1-or-later
+Files:    mkosi.conf.d/debian/ and mkosi.conf.d/debian-ubuntu/ as upstream has them, but for
+          debug.conf and efi-debug.conf (dbgsym packages behind WITH_DEBUG=1). mkosi.conf is
+          the universal part of upstream's mkosi/mkosi.conf: its Dependencies= on the
+          subimages, the ExtraTrees= of their outputs, Initrds=, RepartDirectories=,
+          RuntimeScratch= and the Include= of the sanitizer and coverage trees are left out,
+          and MinimumVersion=commit:... is the 27.1 release the pin predates.
+Exercises: a tree naming no distribution, a [Match]ed directory with its own mkosi.conf.d,
+          PrepareScripts=, VolatilePackages=, PassEnvironment=, Environment=, the signing
+          settings, a build directory outside the tree, [Runtime] credentials, files read
+          only for an architecture or an environment variable.

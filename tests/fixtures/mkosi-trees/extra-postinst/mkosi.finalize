@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+rm -f "$BUILDROOT/var/cache/apt/pkgcache.bin"

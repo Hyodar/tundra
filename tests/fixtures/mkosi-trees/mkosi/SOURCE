@@ -1,0 +1,14 @@
+mkosi's own image tree, at the release tundravm pins.
+
+Upstream: https://github.com/systemd/mkosi
+Commit:   ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b (tag v27.1)
+License:  LGPL-2.1-or-later
+Files:    mkosi.conf, mkosi.postinst and, of mkosi.conf.d/, the files a Debian build reads
+          (debian.conf, debian-kali-ubuntu/mkosi.conf, bootable.conf, x86-64.conf) plus two
+          it does not: memory.conf and metadata.conf match Format=uki, which the tree does
+          not build, and centos.conf another distribution. The other distributions' files,
+          mkosi.profiles/ and mkosi.extra/ are left out.
+Exercises: a tree naming no distribution (mkosi builds the host's), Include=mkosi-vm,
+          Format=directory, Release=testing, Repositories=, KernelCommandLine=, RemoveFiles=,
+          the boot and initrd settings, Incremental=, History=, a [Runtime] setting, files
+          mkosi reads for no selection.

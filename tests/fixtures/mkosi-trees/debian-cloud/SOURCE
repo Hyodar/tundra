@@ -1,0 +1,10 @@
+A plain Debian cloud disk, written by hand from the mkosi documentation.
+
+Upstream: https://github.com/systemd/mkosi/blob/v27.1/mkosi/resources/man/mkosi.1.md (the
+          settings and the repart definitions of a bootable disk), not a tree mkosi ships.
+License:  LGPL-2.1-or-later (the documentation it follows); this tree is tundravm's.
+Files:    mkosi.conf and mkosi.repart/ (an ESP and an ext4 root).
+Exercises: Mirror= and Snapshot=, Format=disk with Bootable=yes, a bootloader and UKI
+          choice, KernelCommandLine= with the console the image owns, KernelModules= with a
+          glob, Locale=, Timezone=, Hostname=, WithDocs=, WithRecommends=, RootPassword=,
+          Ssh=, Checksum=, RepartDirectories= and the VM sizing of [Runtime].
