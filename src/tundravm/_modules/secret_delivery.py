@@ -197,32 +197,6 @@ class SecretDelivery(Module):
             return kind in self.provider_supports
         return BUILTIN_SECRET_CAPABILITIES.get(kind, False)
 
-    def boot_targets(self) -> list[dict[str, object]]:
-        """What the image expects at boot: the SSH key, then each secret's targets."""
-        rows: list[dict[str, object]] = [
-            {
-                "secret": None,
-                "kind": "ssh-key",
-                "location": f"{self.ssh_dir.rstrip('/')}/authorized_keys",
-                "provider": BUILTIN_SECRET_PROVIDER,
-                "supported": True,
-                "required": True,
-            }
-        ]
-        for spec in sorted(self.secrets, key=lambda s: s.name):
-            rows.extend(
-                {
-                    "secret": spec.name,
-                    "kind": target.kind,
-                    "location": target.location,
-                    "provider": self.provider,
-                    "supported": self.delivers(target.kind),
-                    "required": spec.required,
-                }
-                for target in spec.targets
-            )
-        return rows
-
     def check(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
         yield from self._check_targets(profile)
         yield from self._check_services(image, profile)
