@@ -958,9 +958,10 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
 ### A built kernel (plan 5.2 item 1, the `kernel` workflow)
 
 `.github/workflows/kernel.yml` builds `tests/fixtures/kernel/recipe.py`: gregkh/linux
-`v6.12.57` (`97a5dacb9050`) with `config.amd64_none_cloud-amd64` of Debian's
-`linux-config-6.12` 6.12.57-1, `CONFIG_MODULES=n` and a fragment that only drops debug info
-(`DEBUG_INFO_NONE=y`, no BTF), the composed kernel `Kernel.build` lowers to. Run
+`v6.12.111` (`b819bf73ee69`) with `config.amd64_none_cloud-amd64` of Debian's
+`linux-config-6.12` 6.12.111-1 from the default snapshot's pool, `CONFIG_MODULES=n` and a
+fragment that only drops debug info (`DEBUG_INFO_NONE=y`, no BTF), the composed kernel
+`Kernel.build` lowers to. Run
 41299630516 (head `12e91cf`, platform snapshot `20261018T082309Z`) took 21m30s: 1m11s to
 fetch the source and the config, 19m14s for the mkosi build that compiles it on the
 runner's 4 cores without ccache (the build script has none), 11s to boot. Run 41299024098,
@@ -1014,7 +1015,10 @@ release, at least once per Debian point release, never by date in `check`:
 2. Set it in `LOCKED_SNAPSHOT`, the cloud template's `SNAPSHOT` (`templates.py`), the
    fixture recipe, `test_mkosi_smoke.py`, `test_templates_bake.py` and the hint examples.
    Move the template's `EFI_STUB_VERSION` to the `systemd-boot-efi` that snapshot ships:
-   the pool keeps only what a suite lists, so the old `.deb` is usually gone.
+   the pool keeps only what a suite lists, so the old `.deb` is usually gone. Move the
+   kernel fixture's `SNAPSHOT` and `VERSION` with it: the newest `linux` of
+   `dists/trixie-security/main/source/Sources.xz` whose `linux-config-6.12` `.deb` the
+   `debian` pool still holds, then run the `kernel` workflow.
 3. Check that each package the curated sets name (`BOOT_PACKAGES`, `KERNEL_BUILD_PACKAGES`,
    the shipped components, the templates) is in the new `Packages`; fix a renamed one.
 4. Regenerate the goldens (`TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest

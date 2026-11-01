@@ -38,12 +38,10 @@ from tundravm.declarative.utils import Composite
 
 SNAPSHOT = "20261018T082309Z"
 SEED = "0f6b1c2e-7a5d-4c3b-9e81-2d4a6b8c0e13"
-VERSION = "6.12.57"
-"""The stable release Debian trixie's ``linux`` 6.12.57-1 packages, the one the kernel
-workflow first proved."""
-KERNEL_SNAPSHOT = "20251113T083151Z"
-"""The snapshot whose pool still holds ``linux-config-6.12`` 6.12.57-1; :data:`SNAPSHOT`'s
-holds 6.12.107-1 and later."""
+VERSION = "6.12.111"
+"""The stable release Debian trixie's ``linux`` 6.12.111-1 packages: the newest whose
+``linux-config-6.12`` :data:`SNAPSHOT`'s pool holds (6.12.113-1 is in the security pool
+only, which ``DebianConfig`` does not read)."""
 
 FRAGMENT = KernelConfig(
     {
@@ -111,7 +109,7 @@ recipe = Recipe(
         Kernel(
             VERSION,
             Git("https://github.com/gregkh/linux", f"v{VERSION}"),
-            base=DebianConfig(f"{VERSION}-1", snapshot=KERNEL_SNAPSHOT),
+            base=DebianConfig(f"{VERSION}-1"),
             fragments=(FRAGMENT,),
         ),
         BootProbe(),
