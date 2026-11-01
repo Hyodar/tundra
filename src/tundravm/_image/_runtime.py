@@ -45,6 +45,7 @@ __all__ = [
     "RUNTIME_TMPFILES",
     "Runtime",
     "RuntimeFragment",
+    "bound",
     "check_bindings",
     "services_of",
 ]
@@ -107,32 +108,46 @@ def _image_services(image: object) -> tuple[Service, ...]:
     return tuple(services_of(items))
 
 
+def _first[T: (Volume, Secret)](kind: str, found: dict[str, T], value: T) -> None:
+    known = found.setdefault(value.name, value)
+    if known != value:
+        raise ValidationError(
+            f"Image: two different {kind}s are called {value.name!r}: {known!r} and {value!r}.",
+            hint=f"Declare the {kind} once and pass that value everywhere it is used.",
+        )
+
+
+def bound(image: object) -> tuple[tuple[Volume, ...], tuple[Secret, ...]]:
+    """The volumes the image's services keep state on and the secrets they bind (each
+    ``TLS`` certificate too), in order of first use: what ``image.volumes`` and
+    ``image.secrets`` are."""
+    from ._image import Image
+
+    assert isinstance(image, Image)
+    volumes: dict[str, Volume] = {}
+    secrets: dict[str, Secret] = {}
+    for service in _image_services(image):
+        if isinstance(service.state, VolumeDirectory):
+            _first("volume", volumes, service.state.volume)
+        for secret in service.secrets:
+            _first("secret", secrets, secret)
+    for way in image.ingress:
+        if isinstance(way, TLS):
+            _first("secret", secrets, way.certificate)
+    return tuple(volumes.values()), tuple(secrets.values())
+
+
 def check_bindings(image: object) -> None:
-    """Every secret and volume a service binds is declared, every shared directory says
-    who shares it, and no service exposes what an ingress fronts."""
+    """Every shared directory says who shares it, and no service exposes what an ingress
+    fronts."""
     from ._image import Image
 
     assert isinstance(image, Image)
     services = _image_services(image)
-    secrets = {secret.name: secret for secret in image.secrets}
-    volumes = {volume.name: volume for volume in image.volumes}
     owners: dict[str, list[str]] = {}
     for service in services:
-        for secret in service.secrets:
-            if secrets.get(secret.name) != secret:
-                raise ValidationError(
-                    f"Image: service {service.name!r} binds secret {secret.name!r}, which "
-                    "secrets= does not declare.",
-                    hint=f"Add it to the image: secrets=[..., {secret.name}].",
-                )
         state = service.state
         if isinstance(state, VolumeDirectory):
-            if volumes.get(state.volume.name) != state.volume:
-                raise ValidationError(
-                    f"Image: service {service.name!r} keeps its state on volume "
-                    f"{state.volume.name!r}, which volumes= does not declare.",
-                    hint=f"Add it to the image: volumes=[..., {state.volume.name}].",
-                )
             owners.setdefault(state.path, []).append(service.name)
             if len(set(owners[state.path])) > 1 and state.group is None:
                 raise ValidationError(
@@ -145,12 +160,6 @@ def check_bindings(image: object) -> None:
         (port.port, port.protocol): service.name for service in services for port in service.expose
     }
     for way in image.ingress:
-        if isinstance(way, TLS) and secrets.get(way.certificate.name) != way.certificate:
-            raise ValidationError(
-                f"Image: TLS({way.port}) takes its certificate from secret "
-                f"{way.certificate.name!r}, which secrets= does not declare.",
-                hint=f"Add it to the image: secrets=[..., {way.certificate.name}].",
-            )
         owner = exposed.get((way.upstream.port, "tcp"))
         if owner is not None:
             raise ValidationError(

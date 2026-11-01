@@ -55,8 +55,6 @@ def upstream(service: Service | None = None) -> Endpoint:
 def prover(**changes: object) -> Image:
     fields: dict[str, object] = {
         "services": [app()],
-        "volumes": [data],
-        "secrets": [token],
         "ingress": [AttestedTLS(443, upstream=upstream())],
         "network": Network(egress=Egress()),
     }
@@ -117,7 +115,6 @@ def test_a_shared_directory_needs_a_group_and_is_owned_by_it() -> None:
                 Service("a", ["/usr/bin/a"], state=data.directory("chain")),
                 Service("b", ["/usr/bin/b"], state=data.directory("chain")),
             ],
-            volumes=[data],
         )
     image = Image(
         "x",
@@ -125,7 +122,6 @@ def test_a_shared_directory_needs_a_group_and_is_owned_by_it() -> None:
             Service("a", ["/usr/bin/a"], state=shared),
             Service("b", ["/usr/bin/b"], state=shared),
         ],
-        volumes=[data],
     )
     planned = plan(image, "production")
     (step,) = [step for step in planned.init_steps if step.name == "volume-data"]
@@ -150,7 +146,6 @@ def test_a_tpm_sealed_volume_is_a_vtpm_key_and_no_operator_bootstrap() -> None:
     image = Image(
         "x",
         services=[Service("a", ["/usr/bin/a"], state=cache.directory("a"))],
-        volumes=[cache],
         targets=("azure",),
     )
     planned = plan(image, "production")
@@ -181,8 +176,9 @@ def test_tpm_seal_is_refused_where_that_vtpm_does_not_boot(
     platform: str, targets: Sequence[str], message: str
 ) -> None:
     seal = TpmSeal(platform=platform, pcrs=[7], recovery="none")  # type: ignore[arg-type]
+    state = Volume("v", mount="/v", unlock=seal).directory("a")
     with pytest.raises(ValidationError, match=message) as caught:
-        Image("x", volumes=[Volume("v", mount="/v", unlock=seal)], targets=tuple(targets))  # type: ignore[arg-type]
+        Image("x", services=[Service("a", ["/a"], state=state)], targets=tuple(targets))  # type: ignore[arg-type]
     assert "cannot be TPM-sealed" in str(caught.value)
 
 
@@ -213,9 +209,16 @@ def test_volume_values_are_checked(make: object, message: str) -> None:
         make()  # type: ignore[operator]
 
 
-def test_a_service_cannot_keep_state_on_an_undeclared_volume() -> None:
-    with pytest.raises(ValidationError, match="volumes= does not declare"):
-        prover(volumes=[])
+def test_the_image_collects_the_volumes_and_secrets_its_services_bind() -> None:
+    cert = Secret("tls")
+    image = prover(ingress=[TLS(443, upstream=upstream(), certificate=cert)])
+    assert (image.volumes, image.secrets) == ((data,), (token, cert))
+    other = Volume("data", mount="/srv", unlock=OperatorKey())
+    twin = Service("b", ["/usr/bin/b"], state=other.directory("b"))
+    with pytest.raises(ValidationError, match="two different volumes are called 'data'"):
+        prover(services=[app(), twin])
+    with pytest.raises(TypeError, match="volumes"):
+        Image("x", volumes=[data])  # type: ignore[call-arg]
 
 
 # ── Secrets ─────────────────────────────────────────────────────────────
@@ -250,7 +253,7 @@ def test_nothing_of_a_secret_is_written_into_the_image(planned: PlannedImage) ->
 
 def test_an_optional_secret_starts_the_service_without_it() -> None:
     service = app(credentials=[token, flags])
-    image = prover(services=[service], secrets=[token, flags])
+    image = prover(services=[service])
     planned = plan(image, "production")
     unit = planned.service("app")
     assert unit.values("Service", "SetCredential") == ("flags:",)
@@ -262,8 +265,6 @@ def test_an_optional_secret_starts_the_service_without_it() -> None:
 
 
 def test_secret_bindings_are_checked() -> None:
-    with pytest.raises(ValidationError, match="secrets= does not declare"):
-        prover(secrets=[])
     with pytest.raises(ValidationError, match="does not bind"):
         Service("x", ["/usr/bin/x", token.path])
     with pytest.raises(ValidationError, match="rotation"):
@@ -282,7 +283,7 @@ def test_a_broker_is_recorded_and_waited_for_like_an_operator() -> None:
         state=fleet.directory("app"),
         credentials=[released],
     )
-    image = Image("fleet", services=[service], secrets=[released], volumes=[fleet])
+    image = Image("fleet", services=[service])
     manifest = json.loads(plan(image, "production").file("/etc/tundravm/runtime.json").text)
     source = {"kind": "broker-key", "url": "https://kbs.example", "audience": "prover"}
     assert manifest["secrets"][0]["source"] == source
@@ -338,12 +339,6 @@ def test_attested_tls_is_the_only_way_in(planned: PlannedImage) -> None:
         (lambda: prover(services=[app(expose=[TCP(8080)])]), "not the only path"),
         (lambda: prover(services=[app(expose=[TCP(443)])]), "also exposed"),
         (lambda: prover(ingress=[AttestedTLS(MANAGEMENT_PORT, upstream=upstream())]), "management"),
-        (
-            lambda: prover(
-                ingress=[TLS(443, upstream=upstream(), certificate=Secret("tls"))],
-            ),
-            "secrets= does not declare",
-        ),
     ],
 )
 def test_an_ingress_that_would_not_be_the_only_path_is_refused(make: object, message: str) -> None:
@@ -353,9 +348,7 @@ def test_an_ingress_that_would_not_be_the_only_path_is_refused(make: object, mes
 
 def test_tls_reads_its_certificate_as_a_credential() -> None:
     cert = Secret("tls")
-    image = prover(
-        ingress=[TLS(8443, upstream=upstream(), certificate=cert)], secrets=[token, cert]
-    )
+    image = prover(ingress=[TLS(8443, upstream=upstream(), certificate=cert)])
     planned = plan(image, "production")
     relay = planned.unit("tls-8443.service")
     assert relay.values("Service", "LoadCredential") == ("tls:/run/tundravm/credentials/tls",)
@@ -452,6 +445,7 @@ def test_volume_tpm_on_cloud_points_a_cloud_sealed_volume_at_an_attested_release
 ) -> None:
     seal = TpmSeal(platform=platform, pcrs=[7], recovery="none")  # type: ignore[arg-type]
     volume = Volume("cache", mount="/cache", unlock=seal)
-    image = Image("x", volumes=[volume], targets=(target,))  # type: ignore[arg-type]
+    service = Service("a", ["/usr/bin/a"], state=volume.directory("a"))
+    image = Image("x", services=[service], targets=(target,))  # type: ignore[arg-type]
     found = {d.code for d in plan(image, "production").lint()}
     assert ("volume-tpm-on-cloud" in found) is reported

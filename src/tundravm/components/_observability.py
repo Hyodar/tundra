@@ -203,7 +203,7 @@ class Observability(Component):
     """The export path for logs and metrics: ``image.observability`` takes it.
 
     *logs* is a :class:`JournalExport`, *metrics* a :class:`PrometheusRemoteWrite`; each
-    is optional. Their credentials are secrets the image declares in ``secrets=``.
+    is optional. Their credentials are secrets, which the image collects from them.
     :meth:`outbound` is each sink's host and port (a host name stands for its port).
 
     *proxy* (``"IP:PORT"``, ``"[IPv6]:PORT"``) is an HTTP CONNECT proxy at a fixed address

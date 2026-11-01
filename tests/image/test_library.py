@@ -51,8 +51,6 @@ prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"
 def stack(**changes: object) -> Image:
     fields: dict[str, object] = {
         "components": [execution, driver, prover],
-        "volumes": [data],
-        "secrets": [jwt, chain, config],
     }
     fields.update(changes)
     return Image("stack", **fields)  # type: ignore[arg-type]
@@ -112,11 +110,11 @@ def test_the_workloads_pin_their_sources_and_read_their_secrets(planned: Planned
 
 
 def test_component_checks_report_what_the_contract_warns_about() -> None:
-    volatile = Image("x", components=[Nethermind(jwt=jwt)], secrets=[jwt])
+    volatile = Image("x", components=[Nethermind(jwt=jwt)])
     found = {d.code for d in plan(volatile, "production").lint()}
     assert "nethermind-volatile-state" in found
     public = Raiko(config=config, listen="0.0.0.0:8080")
-    found = {d.code for d in plan(Image("x", components=[public], secrets=[config])).lint()}
+    found = {d.code for d in plan(Image("x", components=[public])).lint()}
     assert "raiko-listens-publicly" in found
     clockless = Image("x", components=[TeeBase(time=False)])
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
@@ -212,7 +210,6 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
             "proxy 'p.example:80' is not IP:PORT",
         ),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
-        (lambda: stack(secrets=[jwt, config]), "taiko-chain"),
     ],
 )
 def test_component_configuration_is_checked(make: object, message: str) -> None:
@@ -279,7 +276,7 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
         logs=JournalExport("https://logs.example:19532", credential=logs_key),
         metrics=PrometheusRemoteWrite("https://metrics.example/api/v1/write", credential=token),
     )
-    image = Image("x", observability=observability, secrets=[logs_key, token])
+    image = Image("x", observability=observability)
     planned = plan(image, "production")
     upload = planned.service("journal-export")
     assert "--url=https://logs.example:19532" in (upload.exec_start or "")
@@ -299,7 +296,7 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
         dependents = [path for path in units if unit in planned.file(path).text]
         assert dependents == [f"/usr/lib/systemd/system/{unit}"], unit
     proxied = replace(observability, proxy="[fd00::9]:3128")
-    planned = plan(Image("x", observability=proxied, secrets=[logs_key, token]), "production")
+    planned = plan(Image("x", observability=proxied), "production")
     environment = planned.service("journal-export").values("Service", "Environment")
     assert "https_proxy=http://[fd00::9]:3128" in environment
     config_text = planned.file("/etc/tundravm/metrics-export.yml").text

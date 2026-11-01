@@ -39,8 +39,6 @@ raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:80
 image = Image(
     "prover",
     components=[raiko],
-    volumes=[data],
-    secrets=[config],
     ingress=[AttestedTLS(443, upstream=raiko.http)],
     network=Network(egress=Egress(ports=[TCP(443)])),
     rootfs=RootFS.verity(),

@@ -360,8 +360,6 @@ app = App(version=APP_VERSION, port=APP_PORT, state=data.directory("app"), token
 image = Image(
     "$title",
     components=[app],
-    volumes=[data],
-    secrets=[token],
     # TLS on 443, relayed to the app on the loopback: the only way requests reach it.
     ingress=[AttestedTLS(443, upstream=app.http)],
     # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.

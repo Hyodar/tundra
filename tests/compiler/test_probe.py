@@ -41,7 +41,6 @@ def test_a_dev_profile_compiles_the_checks_its_declarations_imply(tmp_path: Path
             ),
             Service("tick", ["/usr/bin/tick"], timer=Every("15m")),
         ],
-        volumes=[data],
         network=Network(egress=Egress(ports=[UDP(9), TCP(443)], hosts=["192.0.2.0/24"])),
         kernel=Kernel.build(
             "6.12.48", Git("https://example.com/linux.git", "v6.12.48"), config=config

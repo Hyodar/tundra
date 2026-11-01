@@ -109,8 +109,8 @@ class TaikoClient(Component, build_network=True):
         for name in ("jwt", "chain"):
             if not isinstance(getattr(self, name), Secret):
                 raise ValidationError(
-                    f"TaikoClient: {name}= must be a Secret the image declares.",
-                    hint="Declare the Secret once: pass it to the image's secrets= and here.",
+                    f"TaikoClient: {name}= must be a Secret.",
+                    hint=f"Pass {name}=Secret('{name}'), delivered after attestation.",
                 )
 
     def outbound(self) -> Egress:

@@ -177,8 +177,6 @@ Passing a baseline component in `components=` replaces the implied one.
 | `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)` | `tundravm` |
 | `services` | `Service` | `tundravm` |
 | `components` | `Component` instances | `tundravm.components` |
-| `volumes` | `Volume`: see [Volumes](#volumes) | `tundravm.storage` |
-| `secrets` | `Secret`: see [Secrets](#secrets) | `tundravm.secrets` |
 | `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) | `tundravm.ports` |
 | `network` | `Network(dhcp=, static=, egress=, interfaces=)` | `tundravm.components` |
 | `users`, `groups` | `User`, `Group` for resources several services share | `tundravm` |
@@ -420,8 +418,6 @@ prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"
 image = Image(
     "surge-tdx-prover",
     components=[execution, driver, prover],
-    volumes=[data],
-    secrets=[jwt, chain, config],
     ingress=[AttestedTLS(443, upstream=prover.http)],
     network=Network(egress=Egress()),
     rootfs=RootFS.verity(),
@@ -493,7 +489,8 @@ not depend on which profiles a compile selects. `build --profile staging` is
 
 ## Volumes, secrets and ingress
 
-The prover template uses all three runtime contracts:
+The image collects each volume and secret from the services that bind it; the prover
+template uses all three runtime contracts:
 
 ```python
 from tundravm import Image, RootFS
@@ -509,8 +506,6 @@ raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:80
 image = Image(
     "prover",
     components=[raiko],
-    volumes=[data],
-    secrets=[config],
     ingress=[AttestedTLS(443, upstream=raiko.http)],
     rootfs=RootFS.verity(),
     dev=DevAccess(password="tdx"),

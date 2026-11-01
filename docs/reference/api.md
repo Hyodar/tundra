@@ -130,8 +130,6 @@ Image(
     files: Sequence[File | Tree] = (),
     services: Sequence[Service] = (),
     components: Sequence[Component] = (),
-    volumes: Sequence[Volume] = (),
-    secrets: Sequence[Secret] = (),
     ingress: Sequence[Ingress] = (),
     network: Network | None = None,
     users: Sequence[User] = (),

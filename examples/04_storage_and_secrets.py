@@ -63,8 +63,6 @@ image = Image(
             state=cache.directory("index", mode=0o700),
         ),
     ],
-    volumes=[data, cache],
-    secrets=[token, flags],
     # Outbound: HTTPS, and what the baseline sends.
     network=Network(egress=Egress(ports=[TCP(443)])),
     targets=("azure",),

@@ -135,13 +135,14 @@ class Image(Located):
       Escape: ``targets=``.
     - *A raw bootable disk for QEMU* as the default artifact. Escape: ``targets=``.
 
-    **The runtime contracts**, each a slot:
+    **The runtime contracts**. The image collects :attr:`volumes` and :attr:`secrets` from
+    what binds them, so a volume or a secret is written once, where it is used:
 
-    - ``volumes=[Volume(name, mount=, unlock=...)]``: LUKS2 volumes that unlock at boot
-      (``OperatorKey()``, ``TpmSeal(...)`` or ``BrokerKey(...)``); a service binds a
-      directory on one with ``state=volume.directory("x")`` and waits for it.
-    - ``secrets=[Secret(name)]``: values delivered after attestation and read as systemd
-      credentials (``Service(credentials=[jwt])``); nothing is written into the image.
+    - LUKS2 volumes that unlock at boot (``OperatorKey()``, ``TpmSeal(...)`` or
+      ``BrokerKey(...)``): a service binds a directory on one with
+      ``state=volume.directory("x")`` and waits for it.
+    - Secrets delivered after attestation and read as systemd credentials
+      (``Service(credentials=[jwt])``); nothing is written into the image.
     - ``ingress=[AttestedTLS(port, upstream=...)]`` (or ``TLS``): the only path from
       outside to a service that listens on the loopback.
     - ``rootfs=RootFS.verity()``: a dm-verity erofs root instead of the initrd.
@@ -177,8 +178,6 @@ class Image(Located):
     files: Sequence[File | Tree] = ()
     services: Sequence[Service] = ()
     components: Sequence[Component] = ()
-    volumes: Sequence[Volume] = ()
-    secrets: Sequence[Secret] = ()
     ingress: Sequence[Ingress] = ()
     network: Network | None = None
     users: Sequence[User] = ()
@@ -190,6 +189,10 @@ class Image(Located):
     dev: DevAccess | None = None
     profiles: Mapping[str, Profile] = field(default_factory=FrozenMap)
     mkosi: Mkosi | None = None
+    volumes: tuple[Volume, ...] = field(init=False, default=())
+    """Every volume a service's ``state=`` sits on, in order of first use."""
+    secrets: tuple[Secret, ...] = field(init=False, default=())
+    """Every secret a service binds or a ``TLS`` ingress takes, in order of first use."""
 
     def __post_init__(self) -> None:
         for name in (
@@ -197,8 +200,6 @@ class Image(Located):
             "files",
             "services",
             "components",
-            "volumes",
-            "secrets",
             "ingress",
             "users",
             "groups",
@@ -214,10 +215,13 @@ class Image(Located):
             raise _fail(self, f"{self.name!r} is not an image name.")
         self._check_slots()
         self._check_services()
-        self._check_runtime()
         self._check_profiles()
-        from ._runtime import check_bindings
+        from ._runtime import bound, check_bindings
 
+        volumes, secrets = bound(self)
+        object.__setattr__(self, "volumes", volumes)
+        object.__setattr__(self, "secrets", secrets)
+        self._check_runtime()
         check_bindings(self)
 
     def _check_slots(self) -> None:
@@ -296,10 +300,6 @@ class Image(Located):
                 )
         mounts: dict[str, str] = {}
         for volume in self.volumes:
-            if not isinstance(volume, Volume):
-                raise _fail(self, f"volumes= holds {volume!r}, not a Volume.")
-            if volume.name in mounts.values():
-                raise _fail(self, f"volume {volume.name!r} is declared twice.")
             for other, name in mounts.items():
                 if (
                     volume.mount == other
@@ -322,13 +322,6 @@ class Image(Located):
                         hint="One payload boots on every target, so seal to the vTPM of the "
                         "only target you trust, or use unlock=OperatorKey().",
                     )
-        names: set[str] = set()
-        for secret in self.secrets:
-            if not isinstance(secret, Secret):
-                raise _fail(self, f"secrets= holds {secret!r}, not a Secret.")
-            if secret.name in names:
-                raise _fail(self, f"secret {secret.name!r} is declared twice.")
-            names.add(secret.name)
         ports: set[int] = set()
         for way in self.ingress:
             if not isinstance(way, (AttestedTLS, TLS)):

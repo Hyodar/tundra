@@ -29,8 +29,6 @@ prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"
 image = Image(
     "surge-tdx-prover",
     components=[execution, driver, prover],
-    volumes=[data],
-    secrets=[jwt, chain, config],
     ingress=[AttestedTLS(443, upstream=prover.http)],
     network=Network(egress=Egress()),
     rootfs=RootFS.verity(),

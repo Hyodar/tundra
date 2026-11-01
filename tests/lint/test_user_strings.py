@@ -144,6 +144,10 @@ RENAMED_KEYWORDS = {
         "remove": "changes=(value.ref.remove(),)",
     },
     "Build": {"recipe": "using=", "cache_key": "cache_namespace="},
+    "Image": {
+        "volumes": "collected from Service(state=volume.directory(...))",
+        "secrets": "collected from Service(credentials=[...])",
+    },
     "BootStep": {"priority": "after=/before= readiness handles"},
     "fake_fragment": {"priority": "after="},
     **{
