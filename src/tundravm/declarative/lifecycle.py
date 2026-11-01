@@ -35,6 +35,7 @@ from tundravm._source import (
     fetch_source,
     is_fetched,
     prefetch_deps,
+    require_host_go,
     resolve_pins,
     write_marker,
 )
@@ -818,6 +819,8 @@ def fetch_image(
         else:
             pins[name] = pin
     offline = img.policy.network_mode == "offline"
+    if not offline:
+        require_host_go(builds.values())
     if pending:
         pins.update(_resolve_for_fetch(img, pending, resolver=resolver, offline=offline))
     root = Path(build) / SOURCES_DIRNAME

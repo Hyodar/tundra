@@ -115,6 +115,7 @@ $ tundravm doctor --for build
 
 ```text
 build:x86-64     ready (mkosi 27.1, sudo (no unprivileged user namespaces here))
+build:go         ready (go1.24.4, which fetches each Go source's modules and the toolchain its go.mod names for the offline build (every image's Tdxs is one))
 run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
 run:tdx          unavailable: no Intel TDX host (kvm_intel tdx is not enabled)
 deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI
@@ -667,6 +668,16 @@ are prefetched there too, so `build --offline` can run on a machine without netw
 connected build filled the workspace. A modified checkout fails with `E_SOURCE`;
 `build --clean-cache` starts the workspace afresh.
 
+A Go source builds with the toolchain its `go.mod` names: the `toolchain` line, else the
+`go` line (`go 1.25.0` is `go1.25.0`, `go 1.22` is `go1.22.0`). The host's `go`, 1.21 or
+newer and of any version, fetches that release from the Go module proxy with the modules,
+and the offline build runs it from the same cache: Debian's `golang` is only the bootstrap
+that switches to it. A release the host cannot fetch fails the build with `E_SOURCE`,
+naming the release and its module. A `go.mod` older than Go 1.21, which publishes no
+toolchain, builds with Debian's `go`. The manifest records each Go source's toolchain with
+its checksum, and `show BUILD` prints it. Without a host `go` 1.21 or newer, `build` of an
+image with a Go source stops before it fetches anything; `doctor --for build` checks it.
+
 ## Build
 
 ```console
@@ -714,7 +725,7 @@ hex digits of the sha256 of the document without `id`. It binds:
 | `root_hash`, `rootfs` | the verity root hash (or `null`) and the layout |
 | `tree` | a digest over the tree's paths, modes, contents and symlink targets |
 | `lock` | the lock it was built against and the committed one it was checked against |
-| `sources`, `packages`, `sbom`, `summary` | the source pins, the package manifest, the SBOM, mkosi's resolved summary |
+| `sources`, `packages`, `sbom`, `summary` | the source pins and each Go source's toolchain, the package manifest, the SBOM, mkosi's resolved summary |
 | `measurements` | the state of each measurement record |
 | `toolchain` | the backend, mkosi, the tools tree, tundravm, the measurement tools |
 | `kind`, `profile`, `targets`, `ports` | what the build is |

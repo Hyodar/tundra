@@ -39,7 +39,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.lifecycle import bake_image, check_report, compile_image
 from tundravm.declarative.utils import EfiStub
-from tundravm.errors import ErrorCode, PolicyError, StateError
+from tundravm.errors import ErrorCode, PolicyError, SourceError, StateError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
 pytestmark = [pytest.mark.usefixtures("isolated_cwd"), pytest.mark.boundary]
@@ -98,6 +98,27 @@ def snapshot(tmp_path: Path) -> Iterator[tuple[str, str]]:
         server.server_close()
 
 
+HOST_GO = "go1.24.4"
+"""What the fake host ``go`` says it is."""
+TOOLCHAIN = "go1.22.0"
+"""What the fixtures' ``go 1.22`` selects: the first Go 1.22 release."""
+TOOLCHAIN_MODULE = f"golang.org/toolchain@v0.0.1-{TOOLCHAIN}.linux-amd64"
+TOOLCHAIN_ZIPHASH = f"cache/download/golang.org/toolchain/@v/v0.0.1-{TOOLCHAIN}.linux-amd64.ziphash"
+
+
+def _toolchain_download(argv: Sequence[str], env: Mapping[str, str]) -> bool:
+    """Fill the module cache as ``go mod download golang.org/toolchain@...`` would."""
+    if tuple(argv[:3]) != ("go", "mod", "download") or len(argv) != 4:
+        return False
+    assert argv[3] == TOOLCHAIN_MODULE and env["GOTOOLCHAIN"] == TOOLCHAIN
+    cache = Path(env["GOMODCACHE"])
+    (cache / TOOLCHAIN_MODULE / "bin").mkdir(parents=True, exist_ok=True)
+    (cache / TOOLCHAIN_MODULE / "bin" / "go").write_text("go\n", encoding="utf-8")
+    (cache / TOOLCHAIN_ZIPHASH).parent.mkdir(parents=True, exist_ok=True)
+    (cache / TOOLCHAIN_ZIPHASH).write_text("h1:toolchain=\n", encoding="utf-8")
+    return True
+
+
 class _Toolchain:
     """Fake host toolchains: ``which`` finds *present*; ``run`` records and fills the cache."""
 
@@ -108,6 +129,7 @@ class _Toolchain:
         monkeypatch.setattr(
             shutil, "which", lambda name, *a, **k: f"/usr/bin/{name}" if name in found else None
         )
+        monkeypatch.setattr(_source, "host_go_version", lambda: HOST_GO if "go" in found else None)
         monkeypatch.setattr(_source, "run_tool", self.run)
 
     def run(
@@ -115,6 +137,8 @@ class _Toolchain:
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append((tuple(argv), cwd, dict(env)))
         assert cwd.is_dir() and not (cwd / ".git").exists()  # a scratch copy, not the checkout
+        if _toolchain_download(argv, env):
+            return subprocess.CompletedProcess(list(argv), 0, "", "")
         cache = env.get("GOMODCACHE") or env.get("CARGO_HOME") or argv[-1]
         (Path(cache) / "downloaded").write_text("dep\n", encoding="utf-8")
         return subprocess.CompletedProcess(
@@ -174,6 +198,72 @@ def _locked(recipe: Recipe, pin: str, deb: str | None = None) -> Lock:
 # ── dependency prefetch ──────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("go_mod", "toolchain"),
+    [
+        ("module m\n\ngo 1.25.0\n", "go1.25.0"),
+        ("go 1.22 // a language version\n", "go1.22.0"),
+        ("go 1.21rc1\n", "go1.21rc1"),
+        ("go 1.25.0\ntoolchain go1.25.3\n", "go1.25.3"),
+        ("go 1.25.0\ntoolchain go1.24.2\n", "go1.25.0"),
+        ("go 1.25.0\ntoolchain default\n", "go1.25.0"),
+        ("go 1.20\n", "local"),
+        ("module m\n", "local"),
+    ],
+    ids=[
+        "go",
+        "language",
+        "prerelease",
+        "toolchain",
+        "older-toolchain",
+        "default",
+        "pre-1.21",
+        "none",
+    ],
+)
+def test_the_toolchain_is_the_one_go_mod_names(go_mod: str, toolchain: str) -> None:
+    """The newer of the toolchain line and the go line, as ``go`` selects it; ``go 1.N`` is
+    ``go1.N.0`` from 1.21 on, and older Go has no toolchain module, so Debian's builds it."""
+    assert _source.go_toolchain(go_mod) == toolchain
+
+
+@pytest.mark.parametrize(
+    ("host", "refused"),
+    [(None, "there is no go on PATH"), ("go1.19.8", "the host's go is go1.19.8"), (HOST_GO, None)],
+    ids=["missing", "too-old", "fine"],
+)
+def test_a_go_source_needs_go_1_21_on_the_host_before_anything_runs(
+    tmp_path: Path,
+    go_repo: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    host: str | None,
+    refused: str | None,
+) -> None:
+    url, first = go_repo
+    tools = _GoModules(monkeypatch, ["go"])
+    monkeypatch.setattr(_source, "host_go_version", lambda: host)
+    recipe = _recipe(_build(url, "go"))
+    if refused is None:
+        (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
+        assert fetched.deps == "go: prefetched"
+        return
+    with pytest.raises(StateError) as error:
+        fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
+    message = str(error.value)
+    assert (
+        f"Go source build 'tool' needs Go 1.21 or newer on the host to fetch its toolchain "
+        f"and modules: {refused}." in message
+    )
+    assert "golang" in message and "https://go.dev/dl" in message
+    assert "tundravm doctor --for build" in message
+    assert tools.calls == [] and not (tmp_path / ".sources").exists()
+
+
+def test_a_toolchain_that_is_not_a_release_is_refused() -> None:
+    with pytest.raises(SourceError, match="`toolchain go1.25.0-corp` is not a Go release"):
+        _source.go_toolchain("go 1.25.0\ntoolchain go1.25.0-corp\n")
+
+
 @pytest.mark.parametrize("kind", ["go", "cargo", "dotnet"])
 def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch, kind: str
@@ -188,7 +278,7 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     cache = (out / ".sources" / "deps" / CACHES[kind]).resolve()
     assert fetched.deps == f"{CACHES[kind]}: prefetched"
     assert (cache / "downloaded").is_file()
-    ((argv, cwd, env),) = tools.calls
+    *_, (argv, cwd, env) = tools.calls
     expected = {
         "go": ("go", "mod", "download"),
         "cargo": ("cargo", "fetch", "--locked"),
@@ -205,6 +295,7 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     assert argv == expected
     if kind == "go":
         assert env["GOMODCACHE"] == str(cache) and "-mod=mod" in env["GOFLAGS"].split()
+        assert env["GOTOOLCHAIN"] == TOOLCHAIN
     if kind == "cargo":
         assert env["CARGO_HOME"] == str(cache)
     assert not cwd.exists()  # the scratch copy is gone
@@ -212,9 +303,10 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
     recorded = json.loads(marker.read_text(encoding="utf-8"))
     assert recorded["build"] == "tool" and recorded["spec"]["toolchain"] == kind
 
+    calls = len(tools.calls)
     (again,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert again.cached and again.deps == f"{CACHES[kind]}: kept"
-    assert len(tools.calls) == 1
+    assert len(tools.calls) == calls
 
 
 def _script_build(url: str) -> Build:
@@ -224,11 +316,10 @@ def _script_build(url: str) -> Build:
 @pytest.mark.parametrize(
     ("make", "present", "code", "deps", "calls", "deps_dir"),
     [
-        (_build, [], 0, "skipped (no host go)", 0, False),
-        (_build, ["go"], 1, "failed (go mod: boom)", 1, True),
-        (_script_build, ["go"], 0, None, 0, False),
+        (_build, ["go"], 1, "failed (go mod: boom)", 2, True),
+        (_script_build, [], 0, None, 0, False),
     ],
-    ids=["no-host-go", "go-fails", "script-build"],
+    ids=["go-fails", "script-build"],
 )
 def test_a_prefetch_that_cannot_run_records_why(
     tmp_path: Path,
@@ -241,9 +332,9 @@ def test_a_prefetch_that_cannot_run_records_why(
     calls: int,
     deps_dir: bool,
 ) -> None:
-    """Without the host toolchain the deps are skipped, a failing prefetch is recorded and
-    leaves no marker (the build downloads online), and a script build (or a kernel) has no
-    dependency cache; the fetch succeeds either way."""
+    """A failing prefetch is recorded and leaves no marker (the build downloads online), and
+    a script build (or a kernel) has no dependency cache, nor needs a host go; the fetch
+    succeeds either way."""
     url, first = repo
     tools = _Toolchain(monkeypatch, present, code=code)
     recipe = _recipe(make(url))
@@ -281,6 +372,8 @@ class _GoModules(_Toolchain):
         self, argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append((tuple(argv), cwd, dict(env)))
+        if _toolchain_download(argv, env):
+            return subprocess.CompletedProcess(list(argv), 0, "", "")
         cache = Path(env["GOMODCACHE"])
         assert (cwd / "go.sum").is_file()
         (cache / MODULE_DIR).mkdir(parents=True, exist_ok=True)
@@ -302,24 +395,58 @@ def test_fetch_keeps_the_deps_only_while_their_manifest_is_complete(
     assert fetched.deps == "go: prefetched"
     deps = out / ".sources" / "deps"
     (marker,) = deps.glob("*.go.json")
-    contents = json.loads(marker.read_text(encoding="utf-8"))["contents"]
-    assert sorted(contents) == ["cache/download/example.com/!dep/@v/v1.2.0.mod", MODULE_DIR]
-    assert contents[MODULE_DIR] == "dir"
+    recorded = json.loads(marker.read_text(encoding="utf-8"))
+    contents = recorded["contents"]
+    assert sorted(contents) == [
+        "cache/download/example.com/!dep/@v/v1.2.0.mod",
+        TOOLCHAIN_ZIPHASH,
+        MODULE_DIR,
+        TOOLCHAIN_MODULE,
+    ]
+    assert contents[MODULE_DIR] == contents[TOOLCHAIN_MODULE] == "dir"
+    assert recorded["toolchain"] == {
+        "name": TOOLCHAIN,
+        "module": TOOLCHAIN_MODULE,
+        "sum": "h1:toolchain=",
+    }
+    toolchain_file = marker.with_name(marker.name.removesuffix(".json") + ".toolchain")
+    assert toolchain_file.read_text(encoding="utf-8") == f"{TOOLCHAIN}\n"
 
     (kept,) = fetch(recipe, lock=_locked(recipe, first), build=out)
-    assert kept.deps == "go: kept" and len(tools.calls) == 1
+    assert kept.deps == "go: kept" and len(tools.calls) == 2
 
     shutil.rmtree(deps / "go" / MODULE_DIR)
     (repaired,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert repaired.deps == (
         f"go: prefetched (was incomplete: deps/go/{MODULE_DIR} is missing or changed)"
     )
-    assert len(tools.calls) == 2 and (deps / "go" / MODULE_DIR / "dep.go").is_file()
+    assert len(tools.calls) == 4 and (deps / "go" / MODULE_DIR / "dep.go").is_file()
 
-    shutil.rmtree(deps / "go" / MODULE_DIR)
-    _GoModules(monkeypatch, [])
-    (unrepaired,) = fetch(recipe, lock=_locked(recipe, first), build=out)
-    assert unrepaired.deps == f"go: incomplete (deps/go/{MODULE_DIR} is missing or changed)"
+
+def test_a_toolchain_the_host_cannot_fetch_names_the_release_and_the_fix(
+    tmp_path: Path, go_repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fetch fails on the host, with the release, its module and what to do, never as a
+    build in the sandbox; nothing is recorded, so the next fetch tries again."""
+    url, first = go_repo
+
+    def offline(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        lookup = "dial tcp: lookup proxy.golang.org: no such host"
+        return subprocess.CompletedProcess(list(argv), 1, "", f"go: download {TOOLCHAIN}: {lookup}")
+
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: f"/usr/bin/{name}")
+    monkeypatch.setattr(_source, "host_go_version", lambda: HOST_GO)
+    monkeypatch.setattr(_source, "run_tool", offline)
+    recipe = _recipe(_build(url, "go"))
+    with pytest.raises(SourceError, match=f"Cannot fetch {TOOLCHAIN}, the Go toolchain") as failed:
+        fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
+    assert failed.value.code == ErrorCode.SOURCE
+    assert "no such host" in failed.value.reason
+    assert failed.value.context == {"toolchain": TOOLCHAIN, "module": TOOLCHAIN_MODULE}
+    assert "proxy" in str(failed.value.hint) and "mkosi" not in str(failed.value)
+    assert list((tmp_path / ".sources" / "deps").glob("*.go.*")) == []
 
 
 def test_a_marker_without_a_manifest_is_prefetched_again(
@@ -336,7 +463,7 @@ def test_a_marker_without_a_manifest_is_prefetched_again(
     marker.write_text(json.dumps(record), encoding="utf-8")
     (again,) = fetch(recipe, lock=_locked(recipe, first), build=out)
     assert again.deps == "go: prefetched (was incomplete: the marker has no content manifest)"
-    assert len(tools.calls) == 2
+    assert len(tools.calls) == 4
 
 
 @pytest.mark.parametrize("kind", ["cargo", "dotnet"])
@@ -403,7 +530,7 @@ def test_offline_bake_refuses_a_build_without_prefetched_deps(
     tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     url, first = repo
-    _Toolchain(monkeypatch, [])
+    _Toolchain(monkeypatch, ["go"], code=1)
     recipe = _recipe(_build(url, "go"))
     out = tmp_path / "out"
     fetch(recipe, lock=_locked(recipe, first), build=out)
@@ -476,11 +603,14 @@ def test_offline_bake_after_fetch_builds_without_network(
     )
     assert '"$SRCDIR/tundravm-sources/deps/go"' in hooks
     assert "export GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod" in hooks
-    assert '[ "$WITH_NETWORK" != 0 ] || export GOPROXY=off' in hooks
+    assert "export GOPROXY=file:///build/.tundravm-deps/go/cache/download GOSUMDB=off" in hooks
 
 
-def test_online_bake_keeps_the_trees_network(tmp_path: Path, repo: tuple[str, str]) -> None:
+def test_online_bake_keeps_the_trees_network(
+    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     url, first = repo
+    _Toolchain(monkeypatch, ["go"])
     recipe = replace(_recipe(_build(url, "go")), mkosi=Mkosi(build_network=True))
     backend = _Recording()
     bake_image(lower(recipe), None, locked=_locked(recipe, first), backend=backend, build=tmp_path)

@@ -132,6 +132,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
         "build duplicate basenames",
         lambda: Build("b", GIT, "make", (Install("a", "/usr/bin/x"), Install("b", "/opt/x"))),
     ),
+    ("go chooses its toolchain", lambda: Go(output="tool", env={"GOTOOLCHAIN": "local"})),
     ("kernel config str", lambda: Kernel("6.1", GIT, config="k.config")),  # type: ignore[arg-type]
     ("install artifact dir", lambda: Install("out", "/opt/out", mode=None, artifact=True)),
     ("artifact of a script", lambda: Build("b", GIT, "make", (Install("b", "/x", artifact=True),))),
@@ -150,6 +151,7 @@ INVALID: list[tuple[str, Callable[[], object]]] = [
 MESSAGES = {
     "secret without targets": "secret 's' requires at least one delivery target",
     "secret empty name": "name must be a non-empty string",
+    "go chooses its toolchain": "sets GOTOOLCHAIN: the toolchain is the one the source's go.mod",
 }
 """The message a row of :data:`INVALID` must raise, where the row pins one."""
 

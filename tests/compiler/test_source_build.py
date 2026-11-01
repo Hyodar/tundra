@@ -266,7 +266,7 @@ def test_tdxs_hook_copies_the_fetched_checkout() -> None:
     recipe = _recipe(Tdxs())
     current = _hooks(compile(recipe))
     assert current == lower(recipe).source_builds()["tdxs"].render()
-    assert current.startswith('# tundravm build: {"build":{"kind":"script"')
+    assert current.startswith('# tundravm build: {"build":{"env":{},"kind":"go"')
     assert current.split("\n", 1)[1].startswith("# unpinned: master\n")
     assert "run tundravm lock, then tundravm build" in current
 

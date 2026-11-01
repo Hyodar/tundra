@@ -49,6 +49,7 @@ from typing import Any, Literal, cast
 from . import __version__
 from . import manifest as mf
 from ._reporting import Reporter
+from ._source import SOURCES_DIRNAME, GoBuild, SourceBuild, go_toolchain_record
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
 from .declarative._compile import emit, mkosi_argv
@@ -546,8 +547,16 @@ def _assemble(
     argv = mkosi_argv(img, profile)
     mf.write_canonical(inputs / "mkosi-argv.json", {"argv": argv})
     summary = _summary(out / mf.TREE, argv, work, inputs / "summary.json")
+    toolchains = _go_toolchains(img, profile, locked, work)
     sources = [
-        {"name": f.name, "kind": f.kind, "source": f.source, "ref": f.ref, "pin": f.digest}
+        {
+            "name": f.name,
+            "kind": f.kind,
+            "source": f.source,
+            "ref": f.ref,
+            "pin": f.digest,
+            **({"go_toolchain": toolchains[f.name]} if f.name in toolchains else {}),
+        }
         for f in locked.lockfile.fetches
     ]
     mf.write_canonical(inputs / "sources.json", {"sources": sources})
@@ -617,6 +626,21 @@ def _assemble(
     payload["id"] = mf.build_id(payload)
     mf.write_canonical(out / mf.MANIFEST, payload)
     return payload
+
+
+def _go_toolchains(img: Lowered, profile: str, locked: Lock, work: Path) -> dict[str, Any]:
+    """Each Go source build of *profile* by lock name: the toolchain its prefetch recorded."""
+    pins = {f.name: f for f in locked.lockfile.fetches if f.name is not None}
+    found: dict[str, Any] = {}
+    for spec in img.select([profile]).lock_sources().values():
+        if not isinstance(spec, SourceBuild) or not isinstance(spec.build, GoBuild):
+            continue
+        pin = spec.pin_from(pins)
+        record = None if pin is None else go_toolchain_record(spec, pin, work / SOURCES_DIRNAME)
+        found[spec.key] = record or mf.missing(
+            "no prefetch recorded it: the host had no `go`, or its module download failed"
+        )
+    return found
 
 
 def _record_name(record: Mapping[str, Any]) -> str:

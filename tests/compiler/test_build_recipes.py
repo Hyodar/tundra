@@ -74,10 +74,14 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
     hooks = _hooks(tree)
     distribution = lowered.build_distribution("default")
     assert hooks == spec.render(SHA_A, distribution=distribution)
+    record = spec.go_toolchain_file(SHA_A)
+    assert record == f"{spec.pin_dir(SHA_A)}.go.toolchain"
     assert (
         "mkosi-chroot bash -c 'if [ -d /build/.tundravm-deps/go ]; then export "
         "GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod && "
-        '{ [ "$WITH_NETWORK" != 0 ] || export GOPROXY=off; }; fi && '
+        '{ [ "$WITH_NETWORK" != 0 ] || export '
+        "GOPROXY=file:///build/.tundravm-deps/go/cache/download GOSUMDB=off; }; fi && "
+        f'export GOTOOLCHAIN="$(cat /build/.tundravm-deps/{record} 2>/dev/null || echo local)" && '
         "cd /build/tool && mkdir -p ./build && "
         'SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" CGO_ENABLED=0 go build -trimpath '
         '-buildvcs=false -ldflags "-s -w -buildid=" -o ./build/tool ./cmd/tool\'' in hooks
@@ -87,6 +91,9 @@ def test_go_recipe_lowers_to_go_build_and_renders_its_command() -> None:
         '[ -d "$BUILDROOT/build/.tundravm-deps/go" ] || '
         '{ mkdir -p "$BUILDROOT/build/.tundravm-deps" && cp -a --no-preserve=ownership '
         '"$SRCDIR/tundravm-sources/deps/go" "$BUILDROOT/build/.tundravm-deps/go"; }; }'
+        f' && {{ [ ! -f "$SRCDIR/tundravm-sources/deps/{record}" ] || '
+        '{ mkdir -p "$BUILDROOT/build/.tundravm-deps" && '
+        f'cp "$SRCDIR/tundravm-sources/deps/{record}" "$BUILDROOT/build/.tundravm-deps"/; }}; }}'
     ) in hooks
     assert "BuildPackages=\n    golang\n" in _conf(tree)  # the host fetches the source
 
@@ -102,7 +109,7 @@ def test_go_recipe_renders_like_the_equivalent_script() -> None:
     )
     by_script = Build("tool", Git(REPO, "main"), script=script, install=install)
     recipe_hook, script_hook = (_hooks(_pinned(_recipe(b))) for b in (by_recipe, by_script))
-    copy_deps, uses_deps = lower(_recipe(by_recipe)).source_builds()["tool"]._deps()
+    copy_deps, uses_deps = lower(_recipe(by_recipe)).source_builds()["tool"]._deps(SHA_A)
     assert copy_deps and uses_deps  # a script build has no dependency cache to use
     recipe_hook = recipe_hook.replace(copy_deps, "").replace(uses_deps, "")
     unkeyed = re.compile(r"build\}/tool-[0-9a-f]{16}")

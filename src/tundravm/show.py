@@ -173,6 +173,21 @@ def render_build(build: Build) -> str:
     lines.append(
         f"  toolchain     tundravm {toolchain.get('tundravm')}, backend {toolchain.get('backend')}"
     )
+    go = [
+        (str(source.get("name")), source["go_toolchain"])
+        for source in m.get("sources") or []
+        if isinstance(source, dict) and isinstance(source.get("go_toolchain"), dict)
+    ]
+    if go:
+        lines.append("  go toolchains")
+    for name, record in go:
+        if record.get("state") == "missing":
+            shown = f"missing: {record.get('reason')}"
+        elif record.get("sum"):
+            shown = f"{record.get('name')}  {record.get('sum')}"
+        else:
+            shown = f"{record.get('name')} ({record.get('reason')})"
+        lines.append(f"    {name:<22} {shown}")
     observed = _json(build.path / mf.OBSERVATIONS) or {}
     if observed:
         runner = observed.get("runner") or {}

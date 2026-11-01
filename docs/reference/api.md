@@ -1698,7 +1698,7 @@ Records source checkouts instead of fetching them.
 | `FakeSources.fetch_source(source: Source, pin: str, dest: Path) -> None` |  |
 | `FakeSources.git_output(checkout: Path, *args: str) -> str \| None` |  |
 | `FakeSources.install(setattr: Callable[[object, str, object], None]) -> FakeSources` | Put this fake in place of the fetch boundary using *setattr* (pytest's `monkeypatch.setattr`, which undoes it after the test). |
-| `FakeSources.prefetch_deps(build: SourceBuild, pin: str, *args: object, **kwargs: object) -> None` |  |
+| `FakeSources.prefetch_deps(build: SourceBuild, pin: str, checkout: Path, root: Path, **kwargs: object) -> str \| None` |  |
 
 ### `fragment_plan`
 

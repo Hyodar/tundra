@@ -36,7 +36,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
-from .errors import LockfileError, SourceError, TdxError, ValidationError
+from .errors import LockfileError, SourceError, StateError, TdxError, ValidationError
 from .lockfile.model import LockedFetch
 
 if TYPE_CHECKING:
@@ -67,6 +67,15 @@ BUILD_MARKER = "# tundravm build: "
 (:meth:`SourceBuild.marker`)."""
 _NETWORK_TIMEOUT = 60.0
 """Seconds :func:`default_resolver` waits on ``git ls-remote`` or a stalled download."""
+GO_TOOLCHAIN_MODULE = "golang.org/toolchain"
+"""The module the Go proxy serves each Go release as, ``@v0.0.1-<go>.linux-amd64``."""
+GO_TOOLCHAIN_LOCAL = "local"
+"""``GOTOOLCHAIN`` of a source whose go.mod predates toolchain modules: Debian's ``go``."""
+GO_MOD_TOOLCHAIN = "<go.mod>"
+"""The ``GOTOOLCHAIN`` a prefetch marker records: the one the checkout's go.mod names."""
+_GO_VERSION = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+)|(beta|rc)(\d+))?$")
+_GO_FIRST_TOOLCHAIN = (1, 21, 0, 0)
+"""Go 1.21's language version: the first release published as a toolchain module."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +230,9 @@ class GoBuild:
     build; ``go build -o`` creates it too, so turning it off only drops the step.
     ``reproducible`` adds ``-buildvcs=false``, ``CGO_ENABLED=0`` (unless ``cgo``
     or ``env`` sets it) and ``SOURCE_DATE_EPOCH`` (the build's, else ``0``); ``None``
-    (the default) is on.
+    (the default) is on. The build runs the Go release the source's go.mod names
+    (:func:`go_toolchain`), which ``tundravm build`` fetches on the host with the modules;
+    ``env`` cannot set ``GOTOOLCHAIN``.
     """
 
     output: str
@@ -243,22 +254,52 @@ class GoBuild:
 
     def __post_init__(self) -> None:
         _freeze_recipe(self, ("env",), ("tags", "packages"))
+        if "GOTOOLCHAIN" in self.env:
+            raise ValidationError(
+                "Go(env=...) sets GOTOOLCHAIN: the toolchain is the one the source's go.mod names.",
+                hint="Drop GOTOOLCHAIN; to build with another Go, build a revision whose go.mod "
+                "names it (its toolchain line, else its go line).",
+            )
 
-    def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
-        """``go mod download`` into the module cache *cache*, and its environment.
+    def prefetch(
+        self, cache: str, toolchain: str = GO_MOD_TOOLCHAIN
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
+        """``go mod download`` into the module cache *cache* with the Go *toolchain*.
 
-        ``-modcacherw`` keeps the cache removable without ``go clean -modcache``.
+        ``GOTOOLCHAIN=<toolchain>`` makes the host ``go``, whatever its version, switch to
+        that release, which it downloads into *cache* when absent. ``-modcacherw`` keeps
+        the cache removable without ``go clean -modcache``.
         """
-        env = {**self.env, "GOMODCACHE": cache, "GOFLAGS": "-mod=mod -modcacherw"}
+        env = {
+            **self.env,
+            "GOMODCACHE": cache,
+            "GOFLAGS": "-mod=mod -modcacherw",
+            "GOTOOLCHAIN": toolchain,
+        }
         return ("go", "mod", "download"), env
 
     @staticmethod
     def deps_env(cache: str) -> str:
-        """The exports pointing the in-build ``go`` at the copied module cache *cache*."""
+        """The exports pointing the in-build ``go`` at the copied module cache *cache*.
+
+        Without network the cache is the only proxy and the checksum database is off: the
+        host's ``go`` verified everything in it against ``go.sum`` and the database, and a
+        toolchain module is never in ``go.sum``.
+        """
         return (
             f"export GOMODCACHE={cache} GOFLAGS=-mod=mod && "
-            '{ [ "$WITH_NETWORK" != 0 ] || export GOPROXY=off; }'
+            '{ [ "$WITH_NETWORK" != 0 ] || '
+            f"export GOPROXY=file://{cache}/cache/download GOSUMDB=off; }}"
         )
+
+    @staticmethod
+    def toolchain_env(record: str) -> str:
+        """The export selecting the toolchain the prefetch wrote to *record*.
+
+        Without a record (no host ``go``), ``local``: Debian's ``go``, which refuses a
+        go.mod newer than itself instead of downloading a toolchain.
+        """
+        return f'export GOTOOLCHAIN="$(cat {record} 2>/dev/null || echo {GO_TOOLCHAIN_LOCAL})"'
 
     @property
     def artifact(self) -> str:
@@ -868,7 +909,7 @@ class SourceBuild(NamedSource):
             )
             unpinned = f"# unpinned: {self.source.requested}\n"
             return f"{unpinned}echo {shlex.quote(message)} >&2 && exit 1"
-        copy_deps, uses_deps = self._deps()
+        copy_deps, uses_deps = self._deps(effective)
         inner = f"{uses_deps}{build}".replace("'", "'\\''")
         command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
         fingerprint = self.cache_fingerprint(effective, distribution=distribution or {})
@@ -886,19 +927,21 @@ class SourceBuild(NamedSource):
             f" && rm -f {target}/{FETCH_MARKER}"
         )
 
-    def _deps(self) -> tuple[str, str]:
+    def _deps(self, pin: str) -> tuple[str, str]:
         """``(copy, exports)``: a mounted hook's use of the prefetched dependency cache.
 
         *copy* (``&&``-joined after the checkout copy) copies
         ``$SRCDIR/tundravm-sources/deps/<cache>`` to ``$BUILDROOT/build/.tundravm-deps``
-        once, when ``tundravm build`` filled it; *exports* (inside mkosi-chroot) point
-        the toolchain at that copy, offline when mkosi runs the build without network.
-        Both are empty for a script build.
+        once, when ``tundravm build`` filled it, and a Go build's toolchain record
+        (:meth:`go_toolchain_file`) beside it; *exports* (inside mkosi-chroot) point the
+        toolchain at that copy, offline when mkosi runs the build without network, and
+        select a Go build's toolchain. Both are empty for a script build.
         """
         if not isinstance(self.build, LanguageBuild):
             return "", ""
         cache = self.build.deps
-        mounted = f'"$SRCDIR/{SOURCES_MOUNT}/{DEPS_DIRNAME}/{cache}"'
+        mounted_deps = f"$SRCDIR/{SOURCES_MOUNT}/{DEPS_DIRNAME}"
+        mounted = f'"{mounted_deps}/{cache}"'
         parent = f'"{Build.build_path(DEPS_BUILD_DIR)}"'
         target = f'"{Build.build_path(f"{DEPS_BUILD_DIR}/{cache}")}"'
         copy = (
@@ -906,7 +949,27 @@ class SourceBuild(NamedSource):
             f"{{ mkdir -p {parent} && cp -a --no-preserve=ownership {mounted} {target}; }}; }}"
         )
         chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{cache}")
-        return copy, f"if [ -d {chroot} ]; then {self.build.deps_env(str(chroot))}; fi && "
+        exports = f"if [ -d {chroot} ]; then {self.build.deps_env(str(chroot))}; fi && "
+        record = self.go_toolchain_file(pin)
+        if record is not None:
+            mounted_record = f'"{mounted_deps}/{record}"'
+            copy += (
+                f" && {{ [ ! -f {mounted_record} ] || "
+                f"{{ mkdir -p {parent} && cp {mounted_record} {parent}/; }}; }}"
+            )
+            in_chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{record}")
+            exports += f"{GoBuild.toolchain_env(str(in_chroot))} && "
+        return copy, exports
+
+    def go_toolchain_file(self, pin: str) -> str | None:
+        """``<pin_dir>.go.toolchain``: the ``GOTOOLCHAIN`` a Go build's prefetch selected.
+
+        ``tundravm build`` writes it in ``.sources/deps`` once the host fetched that
+        toolchain (:func:`go_toolchain`); ``None`` for a build that is not Go.
+        """
+        if not isinstance(self.build, GoBuild):
+            return None
+        return f"{self.pin_dir(pin)}.{self.build.deps}.toolchain"
 
     def deps_marker(self, pin: str) -> str | None:
         """``<pin_dir>.<cache>.json``: the file in ``.sources/deps`` that records a prefetch.
@@ -934,7 +997,8 @@ class SourceBuild(NamedSource):
 
         Canonical JSON of the source pin (with git's ``subdir`` and
         ``submodules``), the build recipe (defaults decided, see
-        :func:`resolve_recipe`) and install steps, the toolchain (recipe kind and packages) and the
+        :func:`resolve_recipe`) and install steps, the toolchain (recipe kind and packages, and
+        for Go that the go.mod picks the release) and the
         *distribution* it comes from: base, architecture, mirror, snapshot,
         repositories, build packages and build settings
         (``Lowered.build_distribution``).
@@ -953,6 +1017,7 @@ class SourceBuild(NamedSource):
             "toolchain": {
                 "kind": self.build.kind,
                 "packages": list(self.build_packages()),
+                **({"version": GO_MOD_TOOLCHAIN} if isinstance(self.build, GoBuild) else {}),
             },
         }
         return fingerprint(spec)
@@ -1227,7 +1292,221 @@ def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
     for rel, expected in sorted(contents.items()):
         if _cache_entry(cache / rel) != expected:
             return f"{label}/{rel} is missing or changed"
+    record = build.go_toolchain_file(pin)
+    if record is not None:
+        toolchain = recorded.get("toolchain")
+        named = toolchain.get("name") if isinstance(toolchain, dict) else None
+        try:
+            written = (root / DEPS_DIRNAME / record).read_text(encoding="utf-8").strip()
+        except OSError:
+            written = None
+        if named is None or written != named:
+            return f"{DEPS_DIRNAME}/{record} does not name the recorded Go toolchain"
     return None
+
+
+def go_toolchain_record(build: SourceBuild, pin: str, root: Path) -> dict[str, object] | None:
+    """The Go toolchain the prefetch of *build* at *pin* recorded in ``<root>/deps``.
+
+    ``{"name", "module", "sum"}``: the ``GOTOOLCHAIN`` release, its module and the
+    ``h1:`` checksum the checksum database vouched for; ``{"name": "local", "reason"}``
+    for a go.mod older than toolchain modules. ``None`` for a build that is not Go or
+    that no prefetch recorded.
+    """
+    marker = build.deps_marker(pin)
+    if marker is None or build.go_toolchain_file(pin) is None:
+        return None
+    try:
+        recorded = json.loads((root / DEPS_DIRNAME / marker).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    toolchain = recorded.get("toolchain") if isinstance(recorded, dict) else None
+    return dict(toolchain) if isinstance(toolchain, dict) else None
+
+
+def _go_mod_lookup(text: str, key: str) -> str | None:
+    """The value of go.mod's first *key* line, comment stripped (``gover.GoModLookup``)."""
+    for line in text.splitlines():
+        words = line.strip().split(None, 1)
+        if len(words) == 2 and words[0] == key:
+            return words[1].split("//", 1)[0].strip()
+    return None
+
+
+def _go_version_key(version: str) -> tuple[int, int, int, int] | None:
+    """A Go version's sort key: ``1.21`` < ``1.21beta1`` < ``1.21rc1`` < ``1.21.0``."""
+    match = _GO_VERSION.fullmatch(version)
+    if match is None:
+        return None
+    major, minor, patch, kind, number = match.groups()
+    if patch is not None:
+        return int(major), int(minor), 3, int(patch)
+    if kind is not None:
+        return int(major), int(minor), 1 if kind == "beta" else 2, int(number)
+    return int(major), int(minor), 0, 0
+
+
+def go_toolchain(go_mod: str) -> str:
+    """The ``GOTOOLCHAIN`` the go.mod (or go.work) text *go_mod* selects.
+
+    The newer of its ``toolchain`` line and its ``go`` line, as Go's own selection reads
+    them: ``go 1.N`` for N ≥ 21 is a language version, built by its first release
+    ``go1.N.0``; ``toolchain default`` names nothing. ``local`` when that is older than Go
+    1.21, which publishes no toolchain module (no ``go`` line means ``go 1.16``): Debian's
+    ``go`` builds it. A version that is not a Go release raises ``SourceError``.
+    """
+    go = _go_mod_lookup(go_mod, "go") or "1.16"
+    best = _go_version_key(go)
+    if best is None:
+        raise _not_a_release(f"go {go}")
+    name = f"go{go}.0" if best[2] == 0 and best >= _GO_FIRST_TOOLCHAIN else f"go{go}"
+    line = _go_mod_lookup(go_mod, "toolchain")
+    if line is not None and line != "default":
+        key = _go_version_key(line.removeprefix("go")) if line.startswith("go") else None
+        if key is None:
+            raise _not_a_release(f"toolchain {line}")
+        if key > best:
+            best, name = key, line
+    return name if best >= _GO_FIRST_TOOLCHAIN else GO_TOOLCHAIN_LOCAL
+
+
+def _not_a_release(line: str) -> SourceError:
+    return SourceError(
+        f"go.mod's `{line}` is not a Go release, so no toolchain can be fetched for it.",
+        source="go.mod",
+        reason=f"`{line}` is not a Go release",
+        hint="Build a revision whose go.mod names a Go release (go1.N.P, go1.NrcM).",
+    )
+
+
+def _go_mod_file(workdir: Path, tree: Path) -> Path | None:
+    """The go.work, else the go.mod, ``go`` in *workdir* reads its version lines from.
+
+    Each is looked for in *workdir* and its parents up to *tree*, as ``go`` looks.
+    """
+    directories = [workdir, *(d for d in workdir.parents if d == tree or tree in d.parents)]
+    for name in ("go.work", "go.mod"):
+        for directory in directories:
+            if (directory / name).is_file():
+                return directory / name
+    return None
+
+
+def host_go_version() -> str | None:
+    """The release of the host's ``go`` (``go1.24.4``), as ``go version`` names it unswitched."""
+    path = shutil.which("go")
+    if path is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [path, "version"],
+            env={**os.environ, "GOTOOLCHAIN": "local"},
+            capture_output=True,
+            text=True,
+            timeout=_NETWORK_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    words = completed.stdout.split()
+    return words[2] if completed.returncode == 0 and len(words) > 2 else None
+
+
+def require_host_go(builds: Iterable[NamedSource]) -> None:
+    """Refuse *builds* holding a Go build when the host has no ``go`` 1.21+ to prefetch it.
+
+    Raised before anything is fetched, since the offline sandbox cannot build a Go source
+    whose toolchain and modules the host did not fetch.
+    """
+    go = [b.key for b in builds if isinstance(b, SourceBuild) and isinstance(b.build, GoBuild)]
+    if not go:
+        return
+    found = host_go_version()
+    key = _go_version_key(found.removeprefix("go")) if found else None
+    if key is not None and key >= _GO_FIRST_TOOLCHAIN:
+        return
+    names = ", ".join(repr(name) for name in go)
+    noun = f"Go source build {names} needs" if len(go) == 1 else f"Go source builds {names} need"
+    have = "there is no go on PATH" if found is None else f"the host's go is {found}"
+    raise StateError(
+        f"{noun} Go 1.21 or newer on the host to fetch its toolchain and modules: {have}.",
+        hint=(
+            "Install Go 1.21 or newer (the Debian package golang, or https://go.dev/dl), "
+            "then check the host with `tundravm doctor --for build`."
+        ),
+        context={"sources": ", ".join(go), "go": found or "none"},
+    )
+
+
+def _go_toolchain_module(name: str) -> str:
+    """``golang.org/toolchain@v0.0.1-<name>.linux-amd64``: the module of release *name*."""
+    return f"{GO_TOOLCHAIN_MODULE}@v0.0.1-{name}.linux-amd64"
+
+
+def _go_toolchain_entries(name: str, cache: Path) -> tuple[dict[str, object], dict[str, str]]:
+    """``(record, contents)`` of release *name* in the module cache *cache*.
+
+    The record is :func:`go_toolchain_record`'s; the contents are the manifest entries of
+    the extracted toolchain and its ``.ziphash`` (empty when either is missing).
+    """
+    if name == GO_TOOLCHAIN_LOCAL:
+        reason = "go.mod names no Go 1.21 or newer, the first with a toolchain module"
+        return {"name": name, "reason": reason}, {}
+    module = _go_toolchain_module(name)
+    version = module.split("@", 1)[1]
+    ziphash = f"cache/download/{GO_TOOLCHAIN_MODULE}/@v/{version}.ziphash"
+    contents: dict[str, str] = {}
+    for rel in (module, ziphash):
+        entry = _cache_entry(cache / rel)
+        if entry is not None:
+            contents[rel] = entry
+    try:
+        checksum = (cache / ziphash).read_text(encoding="utf-8").strip()
+    except OSError:
+        checksum = ""
+    if len(contents) != 2 or not checksum.startswith("h1:"):
+        return {"name": name, "module": module}, {}
+    return {"name": name, "module": module, "sum": checksum}, contents
+
+
+def _fetch_go_toolchain(
+    build: SourceBuild, name: str, workdir: Path, cache: Path, env: Mapping[str, str]
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Download Go release *name* into the module cache *cache* with the host ``go``.
+
+    ``go mod download golang.org/toolchain@...`` under ``GOTOOLCHAIN=<name>``: a host
+    ``go`` of another version switches to *name* first, which downloads it; one of that
+    version downloads the module itself. Either way the checksum database vouches for it.
+    Returns :func:`_go_toolchain_entries`; a failure raises ``SourceError`` naming the
+    release, its module and the fix.
+    """
+    module = _go_toolchain_module(name)
+    argv = ("go", "mod", "download", module)
+    try:
+        completed = run_tool(argv, cwd=workdir, env={**os.environ, **env})
+    except OSError as exc:
+        reason = f"cannot run go: {exc.strerror or exc}"
+    else:
+        lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
+        reason = lines[-1] if lines else f"exit status {completed.returncode}"
+        if completed.returncode == 0:
+            record, contents = _go_toolchain_entries(name, cache)
+            if contents:
+                return record, contents
+            reason = f"{module} is not in the module cache after the download"
+    raise SourceError(
+        f"Cannot fetch {name}, the Go toolchain source build {build.key!r}'s go.mod names: "
+        f"{reason}.",
+        source=build.source.describe(),
+        reason=reason,
+        hint=(
+            f"tundravm downloads it on the host as the module {module} from the Go module "
+            "proxy (GOPROXY, proxy.golang.org by default), then builds offline with it. Give "
+            "the host access to the proxy, or build a revision whose go.mod names a toolchain "
+            "the proxy serves."
+        ),
+        context={"toolchain": name, "module": module},
+    )
 
 
 def _cache_entry(path: Path) -> str | None:
@@ -1359,8 +1638,8 @@ def prefetch_deps(
         return "skipped (offline)" if offline else f"skipped (no host {recipe.tool})"
     cache = deps / recipe.deps
     cache.mkdir(parents=True, exist_ok=True)
-    argv, env = recipe.prefetch(str(cache.resolve()))
     scratch = Path(tempfile.mkdtemp(prefix=f".{build.pin_dir(pin)}.", dir=deps))
+    toolchain: dict[str, object] | None = None
     try:
         tree = scratch / "tree"
         shutil.copytree(
@@ -1369,23 +1648,37 @@ def prefetch_deps(
         workdir = tree
         if isinstance(build.source, GitSource) and build.source.subdir:
             workdir = tree / build.source.subdir.strip("/")
+        fetched: dict[str, str] = {}
+        if isinstance(recipe, GoBuild):
+            found = _go_mod_file(workdir, tree)
+            name = go_toolchain(found.read_text(encoding="utf-8") if found else "")
+            argv, env = recipe.prefetch(str(cache.resolve()), name)
+            if name == GO_TOOLCHAIN_LOCAL:
+                toolchain, _ = _go_toolchain_entries(name, cache)
+            else:
+                toolchain, fetched = _fetch_go_toolchain(build, name, workdir, cache, env)
+            (deps / str(build.go_toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
+        else:
+            argv, env = recipe.prefetch(str(cache.resolve()))
         try:
             completed = run_tool(argv, cwd=workdir, env={**os.environ, **env})
         except OSError as exc:
             return f"failed (cannot run {recipe.tool}: {exc.strerror or exc})"
-        contents = _deps_contents(recipe, workdir, tree, cache)
+        contents = dict(sorted({**_deps_contents(recipe, workdir, tree, cache), **fetched}.items()))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     if completed.returncode != 0:
         lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
         last = lines[-1] if lines else f"exit status {completed.returncode}"
         return f"failed ({' '.join(argv[:2])}: {last})"
-    record = {
+    record: dict[str, object] = {
         "build": build.key,
         "checkout": build.pin_dir(pin),
         "spec": build.deps_spec(),
         "contents": contents,
     }
+    if toolchain is not None:
+        record["toolchain"] = toolchain
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     (deps / marker).write_text(text, encoding="utf-8")
     if incomplete:
@@ -1743,8 +2036,12 @@ __all__ = [
     "deps_problem",
     "fetch_source",
     "fingerprint",
+    "go_toolchain",
+    "go_toolchain_record",
+    "host_go_version",
     "is_fetched",
     "prefetch_deps",
+    "require_host_go",
     "resolve_pins",
     "source_drift",
     "source_section",

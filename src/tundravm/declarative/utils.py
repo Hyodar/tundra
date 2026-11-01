@@ -339,18 +339,12 @@ class Tdxs(Composite):
             verify_imds=self.verify_imds,
             verify_identity_token=self.verify_identity_token,
         )
+        go = Go(package="./cmd/tdxs", output="tdxs")
         return Fragment(
             "tdxs",
             items=(
-                *(Package(name, role="build") for name in _tdxs.TDXS_BUILD_PACKAGES),
                 Build(
-                    "tdxs",
-                    self.source,
-                    script=(
-                        'mkdir -p ./build && go build -trimpath -ldflags "-s -w -buildid=" '
-                        "-o ./build/tdxs ./cmd/tdxs"
-                    ),
-                    install=(Install("build/tdxs", "/usr/bin/tdxs"),),
+                    "tdxs", self.source, using=go, install=(Install(go.artifact, "/usr/bin/tdxs"),)
                 ),
                 File(spec.config_path, spec.render_config()),
                 *self._typed_units(spec),

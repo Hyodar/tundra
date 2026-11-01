@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests.cli.conftest import Cli
+from tundravm._source import SourceBuild
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.declarative import lifecycle
 
 
 def test_show_an_image_file(project: Path, cli: Cli) -> None:
@@ -66,6 +70,31 @@ def test_show_a_build(built: Build, cli: Cli) -> None:
     assert report["schema"] == "tundravm.show/1"
     assert report["manifest"]["id"] == built.id and report["signed"] is False
     assert report["observations"]["id"] == built.id
+
+
+def test_a_build_records_and_shows_each_go_sources_toolchain(
+    project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The toolchain the host prefetch recorded is the manifest's, by source, and show names
+    it with the checksum the checksum database vouched for."""
+    release = {
+        "name": "go1.25.0",
+        "module": "golang.org/toolchain@v0.0.1-go1.25.0.linux-amd64",
+        "sum": "h1:toolchain=",
+    }
+
+    def prefetch(build: SourceBuild, pin: str, checkout: Path, root: Path, **_: object) -> str:
+        (root / "deps").mkdir(parents=True, exist_ok=True)
+        (root / "deps" / str(build.deps_marker(pin))).write_text(json.dumps({"toolchain": release}))
+        return "go: prefetched"
+
+    monkeypatch.setattr(lifecycle, "prefetch_deps", prefetch)
+    assert cli("build").code == EXIT_OK
+    (tdxs,) = json.loads(cli("show", "latest", "--json").out)["manifest"]["sources"]
+    assert tdxs["name"] == "tdxs" and tdxs["go_toolchain"] == release
+    assert "  go toolchains\n    tdxs                   go1.25.0  h1:toolchain=\n" in (
+        cli("show", "latest").out
+    )
 
 
 def test_show_a_build_by_path(built: Build, cli: Cli) -> None:

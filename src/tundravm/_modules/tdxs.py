@@ -11,12 +11,6 @@ from tundravm.errors import ValidationError
 if TYPE_CHECKING:
     from tundravm.declarative.model import Ready, Service
 
-TDXS_BUILD_PACKAGES = (
-    "golang",
-    "git",
-    "build-essential",
-)
-
 TDXS_DEFAULT_CONFIG_PATH = "/etc/tdxs/config.yaml"
 TDXS_ROLE_TYPE_ALIASES = {
     "dcap": "tdx",

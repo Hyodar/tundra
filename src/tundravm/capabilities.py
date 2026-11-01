@@ -184,6 +184,31 @@ def _linux_build(name: str, host: Host) -> Capability:
     return Capability(name, "ready", f"mkosi {MKOSI_PIN.version}, {privilege}")
 
 
+GO_PURPOSE = (
+    "fetches each Go source's modules and the toolchain its go.mod names for the offline "
+    "build (every image's Tdxs is one)"
+)
+"""What the host ``go`` is for, in every ``build:go`` row."""
+
+
+def go_capability(host: Host) -> Capability:
+    """``build:go``: the host ``go`` that prefetches Go sources (1.21+ switches toolchains)."""
+    name = "build:go"
+    words = (host.output("go", "version") or "").split()
+    found = words[2] if len(words) > 2 and words[2].startswith("go1.") else None
+    if found is None:
+        return Capability(name, "blocked", f"no go on PATH, which {GO_PURPOSE}: install Go 1.21+")
+    minor = found.removeprefix("go1.").split(".", 1)[0]
+    if not minor.isdigit() or int(minor) < 21:
+        return Capability(
+            name,
+            "blocked",
+            f"{found} predates toolchain switching (Go 1.21), and go {GO_PURPOSE}: "
+            "install Go 1.21+",
+        )
+    return Capability(name, "ready", f"{found}, which {GO_PURPOSE}")
+
+
 def _privilege(host: Host) -> str | None:
     """How mkosi gets privileges here, or ``None`` when it cannot."""
     if host.uid == 0:
@@ -308,6 +333,7 @@ def capabilities(
             continue
         if area == "build":
             rows.append(build_capability(host, backend or default_backend(host)))
+            rows.append(go_capability(host))
         elif area == "run":
             rows.extend(run_capabilities(host))
         elif area == "deploy":

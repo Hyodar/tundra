@@ -17,33 +17,16 @@ scratch project:
   `show` (`--profile`, `--dev`, `--units`, `--tree`, `--json`), `lock`, `lock --check`,
   `lock` without tundra-tools credentials, `doctor` and each `--for`, `--version`, a
   misspelt command and flag.
-- A real `build` (it ran mkosi under sudo and failed in the tdxs build, 2.1 below). Then
-  `build`, `build --dev`, `verify`, `show BUILD`, `run`, `deploy gcp|azure` against
-  `FakeMkosi` builds; `run status|logs|ssh|mode`, `attest`, `secrets deliver|unlock`
-  without an instance.
+- A real `build` (it ran mkosi under sudo and failed in the tdxs build, since fixed:
+  section 3). Then `build`, `build --dev`, `verify`, `show BUILD`, `run`,
+  `deploy gcp|azure` against `FakeMkosi` builds; `run status|logs|ssh|mode`, `attest`,
+  `secrets deliver|unlock` without an instance.
 - `convert --from mkosi` on `examples/surge-tdx-prover/mkosi`, `convert --from systemd`
   (both modes) on a plain `Restart=always` unit.
 - `examples/surge-tdx-prover/image.py` through `check --tree`, `show` and `show --tree`:
   all clean (14 `source-unpinned` warnings, the tree up to date).
 
 ## 2. Findings not fixed, ranked
-
-### 2.1 Every image fails to build from tundra-tools master (M)
-
-`Tdxs` builds `github.com/Hyodar/tundra-tools.git @ master` with `go build` and Debian's
-`golang`. master's `go.mod` now says `go 1.25.0`; trixie ships Go 1.24, so Go tries to
-download the 1.25 toolchain inside the build sandbox, which has no network (`go: download
-go1.25.0: ... dial tcp: lookup proxy.golang.org`), and `build` ends in `E_BACKEND_EXECUTION`
-whose hint names mkosi's log, not a fix. `lock` pins master's HEAD, so a fresh `new` +
-`build` fails. CI does not see it while the template bakes skip without
-`TUNDRA_TOOLS_TOKEN`.
-
-Proposal: (a) the default `Tdxs` source names a tundra-tools commit known to build with
-trixie's Go, moved deliberately, never `master`; (b) every tundra-tools `Build` sets
-`GOTOOLCHAIN=local`, so a mismatch fails as `go.mod requires go >= 1.25.0` instead of a DNS
-error, and never downloads an unpinned toolchain when the sandbox has network; (c) a CI job
-that bakes the starter whenever the token exists. Files: `declarative/utils.py`,
-`_modules/tdxs.py` and the goldens.
 
 ### 2.2 `convert --from mkosi` writes Python that does not parse (S)
 
@@ -112,8 +95,15 @@ writes the Markdown table into `$GITHUB_STEP_SUMMARY` (and use it in the `--ci` 
 - The README's Python block is the minimal image, while the commands under it run on the
   `App` project `new` wrote; left as is to keep the README near 400 words.
 
+### 2.9 `CargoBuild` ignores a source's `rust-toolchain.toml` (M)
+
+The Rust analogue of the Go toolchain fix is not addressed: Debian's `cargo` builds a
+source whatever its `rust-toolchain.toml` pins, and the manifest records no Rust toolchain.
+
 ## 3. Fixed on this branch (the commits carry the why)
 
+- Every image failed to build from tundra-tools master (`go 1.25.0` on trixie's Go 1.24):
+  fixed later on `go-toolchain`, a Go source builds with the toolchain its go.mod names.
 - A finding's `at:` named the console script (`../../.venv/bin/tundravm:10`) when tundravm
   ran through a relative path: frame paths are normalized before the skip test.
 - `lock` without tundra-tools access suggested `--offline`, which `lock` does not have; it
