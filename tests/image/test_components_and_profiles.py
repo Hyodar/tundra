@@ -225,6 +225,17 @@ def test_owner_is_a_boot_step_per_profile(
     assert planned.unit("runtime-init-owners.service").get("Unit", "After") == "local-fs.target"
 
 
+def test_an_owned_file_beside_a_built_binary_lowers() -> None:
+    """A built binary composes its own items, which the owner step's wait copies through."""
+    image = Image(
+        "x",
+        files=[File.text("/srv/x", "x\n", owner="app")],
+        services=[Service("app", [GoBinary("app", Local("."))])],
+    )
+    after = plan(image, "production").service("app").get("Unit", "After") or ""
+    assert "runtime-init-owners.service" in after
+
+
 def test_a_file_under_a_volume_is_refused() -> None:
     data = Volume("data", unlock=OperatorKey())
     image = Image(
