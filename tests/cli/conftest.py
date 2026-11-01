@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,13 @@ image = Image(
 """Gate 4's starter, with a dev profile."""
 
 PYPROJECT = '[project]\nname = "demo"\nversion = "0"\n\n[tool.tundravm]\nimage = "demo.py"\n'
+
+
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """A CLI test's project may run an instance whose QEMU monitor socket lives under it:
+    keep the path within AF_UNIX's 108 bytes under ``-n auto`` too."""
+    return short_tmp_path
 
 
 @pytest.fixture(autouse=True)
@@ -167,6 +175,11 @@ def qemu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     def launch(*args: object, **kwargs: object) -> instances.Instance:
         found = real(*args, **kwargs)  # type: ignore[arg-type]
         started.append(int(found.data["pid"]))
+        # the fake writes its console, then binds the monitor: a test that appends to the
+        # console must not race the fake's truncating open on a loaded host
+        deadline = time.monotonic() + 30
+        while not (found.path / instances.MONITOR).exists() and time.monotonic() < deadline:
+            time.sleep(0.005)
         return found
 
     monkeypatch.setattr(instances, "launch", launch)

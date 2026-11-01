@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import itertools
+import shutil
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -13,6 +16,14 @@ from tundravm.declarative.model import Package, Recipe
 from tundravm.testing import FakeMkosi, Profiles
 from tundravm.testing._fake_sources import FakeSources
 from tundravm.testing._model import CompiledTree, compile_tree
+
+
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int | None:
+    """``-n auto`` spreads a run over the CPUs only when it deselects the integration tests:
+    those build and boot real images and share the host's mkosi state, so they run serially."""
+    if "not integration" in (config.option.markexpr or ""):
+        return None
+    return 0
 
 
 class CompileFactory(Protocol):
@@ -83,3 +94,13 @@ def _no_network_resolution(request: pytest.FixtureRequest, monkeypatch: pytest.M
 def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Run from *tmp_path*: lowering reads ``./build/tundravm.lock``; keep the repository's out."""
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
+def short_tmp_path() -> Iterator[Path]:
+    """A fresh directory directly under the system temp dir, for a test that binds a Unix
+    socket below it: ``tmp_path`` under ``-n auto`` (``.../popen-gwN/<test name>/``) leaves
+    too few of a socket path's 108 bytes for a project's build tree."""
+    path = Path(tempfile.mkdtemp(prefix="tvm-"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)

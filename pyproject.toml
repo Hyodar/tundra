@@ -31,12 +31,17 @@ dev = [
   "hatchling>=1.27.0",
   "mypy>=1.11.2",
   "pytest>=8.3.3",
+  "pytest-xdist>=3.8.0",
   "ruff>=0.6.9",
 ]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra"
+addopts = "-ra -n auto"
+filterwarnings = [
+    # an xdist worker runs execnet's I/O thread; mkosi forks and execs at once
+    "ignore:This process .* is multi-threaded, use of fork\\(\\) may lead to deadlocks:DeprecationWarning",
+]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
