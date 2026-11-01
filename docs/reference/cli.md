@@ -217,7 +217,8 @@ options:
   --diff OLD NEW  Compare two builds.
   --profile P     Profiles of the image (repeatable; default: all); --profile dev is its dev
                   profile.
-  --dev           The latest development build (`show IMAGE --dev`: the image's dev profile).
+  --dev           The latest development build, as `show latest-development`; an image's dev
+                  profile is --profile dev.
   --attr NAME     The image's name in its file.
 ```
 

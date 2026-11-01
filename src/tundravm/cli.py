@@ -36,7 +36,6 @@ from . import __version__, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
 from ._describe import declared_components, describe
-from ._image._image import DEV_PROFILE
 from ._image._lower import component_classes
 from ._reporting import TextReporter
 from ._source import (
@@ -465,7 +464,8 @@ def build_parser() -> argparse.ArgumentParser:
     show_cmd.add_argument(
         "--dev",
         action="store_true",
-        help="The latest development build (`show IMAGE --dev`: the image's dev profile).",
+        help="The latest development build, as `show latest-development`; an image's dev "
+        "profile is --profile dev.",
     )
     show_cmd.add_argument(
         "--attr", default=None, metavar="NAME", help="The image's name in its file."
@@ -1195,12 +1195,16 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
             "An image has no measurements until it is built.",
             hint="Run `tundravm build`, then `tundravm show latest --measurements`.",
         )
+    if args.dev:
+        raise ValidationError(
+            "--dev picks the latest development build, not a profile of an image file.",
+            hint=f"Use `tundravm show {args.subject} --profile dev` for its dev profile.",
+        )
     args.image = Path(args.subject) if args.subject else None
     found = _settings(args)
     loaded = _loaded(args, found)
     img = _lowered(loaded, found)
-    given = [*(args.profile or ()), *([DEV_PROFILE] if args.dev else [])]
-    names = show.ordered_profiles(loaded.variants, _profiles(img, given))
+    names = show.ordered_profiles(loaded.variants, _profiles(img, args.profile or ()))
     locked = _locked(found)
     egress = show.image_egress(loaded.recipe, names[0])
     if args.units:

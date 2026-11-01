@@ -873,9 +873,11 @@ $ tundravm show latest --measurements
 $ tundravm show --diff OLD NEW
 ```
 
-Without a build, `show` prints the image as it resolves, the production profile first;
-`--profile P` picks some, and `--json` adds where each declaration came from.
-With a build (a directory, an id prefix, `latest`; `--dev` the latest development one),
+Without a build, `show` prints the image as it resolves, the production profile first,
+each with the components the file wrote; `--profile P` picks some (`--profile dev` the dev
+profile), and `--json` adds where each declaration came from.
+With a build (a directory, an id prefix, `latest`; `--dev` the latest development one, as
+`latest-development`),
 it prints the build's report, the manifest's provenance, its unchecked guarantees and its
 boot probe's checks; `--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds: packages, files, units, boot payload,
 measurements and policy coverage.

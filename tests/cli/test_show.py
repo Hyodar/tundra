@@ -27,8 +27,12 @@ def test_show_an_image_file(project: Path, cli: Cli) -> None:
     assert lines[0] == "demo  demo.py"
     profiles = [line.split()[0] for line in lines if line.startswith("profile=")]
     assert profiles == ["profile=production", "profile=dev"]
-    dev = cli("show", "demo.py", "--dev").out.splitlines()
-    assert [line for line in dev if line.startswith("profile=")][0].startswith("profile=dev ")
+    dev = cli("show", "demo.py", "--profile", "dev").out.splitlines()
+    assert [line for line in dev if line.startswith("profile=")] == [dev[1]]
+    assert dev[1].startswith("profile=dev ")
+    refused = cli("show", "demo.py", "--dev")
+    assert refused.code == EXIT_SDK_ERROR
+    assert "tundravm show demo.py --profile dev" in refused.err
     assert "Extends: production\n" in result.out and "Components (" in result.out
     for internal in ("variant=", "Inherits", "Fragments", "Policy:", "Extends: base"):
         assert internal not in result.out, internal
