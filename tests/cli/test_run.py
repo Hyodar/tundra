@@ -270,3 +270,15 @@ def test_run_probe_reads_the_probe_off_the_console_and_refuses_production(
     assert "is a production build: it carries no boot probe" in refused.err
     assert "tundravm run --mode simulated --dev --probe" in refused.err
     assert not (project / ".tundravm/instances/demo-2").exists()
+
+
+def test_run_forwards_what_the_input_chain_accepts_not_where_the_output_chain_sends(
+    tmp_path: Path,
+) -> None:
+    conf = tmp_path / "tree/payload/mkosi.extra/etc/nftables.conf"
+    conf.parent.mkdir(parents=True)
+    conf.write_text(
+        "table inet filter {\n\tchain input {\n\t\ttcp dport 8745 accept\n\t}\n"
+        "\tchain output {\n\t\tip daddr 127.0.0.1 tcp dport 19582 accept\n\t}\n}\n"
+    )
+    assert Build(tmp_path, {"ports": [8080]}).tcp_ports() == (8080, 8745)

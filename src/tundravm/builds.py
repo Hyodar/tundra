@@ -177,12 +177,18 @@ class Build:
         return payload if isinstance(payload, dict) else {}
 
     def tcp_ports(self) -> tuple[int, ...]:
-        """The TCP ports the image's firewall accepts (``tcp dport N accept``) and the ones
-        its services declare they listen on (the manifest's ``ports``)."""
+        """The TCP ports the image's firewall accepts inbound (``tcp dport N accept`` in its
+        input chain) and the ones its services declare they listen on (the manifest's
+        ``ports``)."""
         ports: set[int] = {int(p) for p in self.manifest.get("ports", ())}
         for conf in (self.path / mf.TREE).glob("**/mkosi.extra/etc/nftables.conf"):
+            chain = None
             for line in conf.read_text(encoding="utf-8").splitlines():
                 words = line.split()
+                if words[:1] == ["chain"] and len(words) > 1:
+                    chain = words[1]
+                if chain != "input":
+                    continue
                 if "tcp" in words and "dport" in words and "accept" in words:
                     rest = words[words.index("dport") + 1 : words.index("accept")]
                     text = " ".join(rest).strip("{} ")
