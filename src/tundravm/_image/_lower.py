@@ -96,6 +96,8 @@ class _Lowering:
     sends: tuple[tuple[str, Egress], ...] | None = None
     runtime: Runtime = field(init=False)
     baseline_types: tuple[type, ...] = field(init=False)
+    declared: frozenset[str] = field(init=False)
+    """The units of every service the image, its profiles and ``dev=`` declare."""
 
     def __post_init__(self) -> None:
         from tundravm.components import Firewall, Network, Tdxs, TeeBase
@@ -127,6 +129,8 @@ class _Lowering:
             tools=Tdxs().source if evidence is None else evidence.source,
             rootfs=image.rootfs.layout,
         )
+        dev = () if image.dev is None else tuple(services_of((image.dev,)))
+        self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev))
 
     def workload(self) -> tuple[object, ...]:
         """What the image runs beyond its baseline: services, components, observability."""
@@ -848,6 +852,7 @@ class _Lowering:
                         "removes.",
                         hint=f"Remove {item.name!r} too, or edit its requires= in the profile.",
                     )
+                _declared(item, handle, self.declared)
                 units.append(_ready_unit(item, handle))
         return tuple(dict.fromkeys(units))
 
@@ -911,6 +916,20 @@ def _handles(requirement: object, world: dict[str, Service]) -> tuple[Readied, .
     raise ValidationError(
         f"{requirement!r} is not a readiness handle.",
         hint="Pass other.ready, component.ready or an exported Endpoint.",
+    )
+
+
+def _declared(owner: Service, handle: Readied, declared: frozenset[str]) -> None:
+    """Refuse a ``requires=`` on a service's ``.ready`` the image does not declare, which
+    would leave *owner* waiting on a unit nothing writes."""
+    required = handle.service if isinstance(handle, ServiceReady) else None
+    if required is None or handle.unit in declared:
+        return
+    name, other = owner.name.removesuffix(".service"), required.name.removesuffix(".service")
+    raise ValidationError(
+        f'Service("{name}") requires Service("{other}"), which the image does not declare.',
+        hint=f'Image(services=[Service("{other}", [...]), ...]) or the component that '
+        f"composes it, or drop {other}.ready from requires=.",
     )
 
 

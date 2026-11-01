@@ -24,7 +24,15 @@ from tundravm.declarative.systemd import CEILINGS, Hardening
 from tundravm.errors import ValidationError
 
 from ._change import Ref
-from ._component import BootReady, Component, ComponentReady, Endpoint, ServiceReady, ServiceRef
+from ._component import (
+    BootReady,
+    Component,
+    ComponentReady,
+    Endpoint,
+    ServiceReady,
+    ServiceRef,
+    readiness_of,
+)
 from ._secrets import CREDENTIAL_REFERENCE, InstanceKey, Secret
 from ._storage import VolumeDirectory
 from ._values import (
@@ -607,7 +615,7 @@ class Service(Located):
     @property
     def ready(self) -> ServiceReady:
         """ "This service is ready": what another service's ``requires=`` takes."""
-        return ServiceReady(self.unit_name, self.readiness)
+        return readiness_of(self)
 
     def endpoint(self, port: int, *, path: str = "/", scheme: str = "http") -> Endpoint:
         """Where this service answers on the loopback, with its readiness: what an ingress

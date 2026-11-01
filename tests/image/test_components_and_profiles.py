@@ -293,6 +293,11 @@ def test_a_profile_edits_a_service_by_its_public_keywords(
         ("db", {"readiness": None}, "requires 'db.service', which declares no readiness"),
         ("db", None, "requires 'db.service', which the profile removes"),
         ("ghost", {"user": "www"}, "edits Service('ghost'), which it does not inherit"),
+        (
+            "app",
+            {"requires": [Service("cache", ["/usr/bin/cache"], readiness=TcpProbe(6379)).ready]},
+            'Service("app") requires Service("cache"), which the image does not declare',
+        ),
     ],
 )
 def test_what_a_service_edit_still_refuses(

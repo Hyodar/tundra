@@ -41,6 +41,7 @@ __all__ = [
     "component_name",
     "composed",
     "export_providers",
+    "readiness_of",
 ]
 
 _BUILT = "__tundravm_component__"
@@ -60,9 +61,19 @@ class ServiceReady(Keywords):
 
     unit: str
     probe: Readiness | None = field(default=None, compare=False, repr=False)
+    service: Service | None = field(default=None, init=False, compare=False, repr=False)
+    """The :class:`~tundravm.Service` whose ``.ready`` this is, which the image must
+    declare; ``None`` for a unit the image does not write (``Network.online``)."""
 
     def __str__(self) -> str:
         return self.unit
+
+
+def readiness_of(service: Service) -> ServiceReady:
+    """*service*'s ``.ready``, which remembers the service it waits for."""
+    ready = ServiceReady(service.unit_name, service.readiness)
+    object.__setattr__(ready, "service", service)
+    return ready
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +215,9 @@ class ServiceRef(Keywords):
     @property
     def ready(self) -> ServiceReady:
         """The readiness handle of that service."""
-        return ServiceReady(self.unit, self.probe)
+        if self.service is None:
+            return ServiceReady(self.unit, self.probe)
+        return readiness_of(self.service)
 
     def endpoint(self, port: int, *, path: str = "/", scheme: str = "http") -> Endpoint:
         """Where that service answers on the loopback, with its readiness, as
