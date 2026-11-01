@@ -588,7 +588,7 @@ def _rule_source_unpinned(
 def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
     """The ``source-unpinned`` message and hint for the unpinned lockable source *spec*."""
     source = spec.source
-    fetch = " (`tundravm build` then checks it out on the host)"
+    fetch = " (`tundravm build` then fetches it on the host)"
     if isinstance(spec, KernelSource):
         return (
             f"kernel {spec.version} ({source.kind} {source.url} @ {source.requested}) "
@@ -618,9 +618,7 @@ def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
         f"source build {spec.name!r} ({source.kind} {source.url} @ {source.requested}) "
         "is not pinned in the lockfile",
         f"Run `{lock_command()}` to pin it{fetch}, or declare an immutable source "
-        "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
-        "Locking reports a dead upstream ref, with every other source it cannot "
-        "resolve, before anything is written.",
+        "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)).",
     )
 
 
