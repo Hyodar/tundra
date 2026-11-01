@@ -55,6 +55,7 @@ def cloud(prover: Path, monkeypatch: pytest.MonkeyPatch) -> FakeCloud:
 
 @pytest.fixture
 def prover_build(prover: Path, cli: Cli) -> Build:
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     return Build.open((prover / "build/prover/latest-production").resolve())
 
@@ -161,6 +162,7 @@ def test_upgrade_refuses_a_volume_change(
         STARTER.replace("    dev=DevAccess", '    targets=("gcp",),\n    dev=DevAccess')
     )
     monkeypatch.setenv("TUNDRAVM_BUILD", "demo-build")  # its own lock
+    assert cli("lock", "demo.py").code == EXIT_OK
     assert cli("build", "demo.py").code == EXIT_OK
     monkeypatch.delenv("TUNDRAVM_BUILD")
     policy = tmp_path / "p.json"

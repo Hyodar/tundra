@@ -102,7 +102,8 @@ def prover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def built(project: Path, cli: Cli) -> Build:
-    """The production build of the starter."""
+    """The production build of the starter, locked first."""
+    assert cli("lock").code == 0
     result = cli("build")
     assert result.code == 0, result.err
     return Build.open((project / "build" / "demo" / "latest-production").resolve())

@@ -1552,6 +1552,14 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     # ── the lock, the toolchain, the host and the committed tree ──
     Rule(
+        "lock-missing",
+        "error",
+        "A production build has no lockfile to build against: a production build is a "
+        "locked build, so its bytes reproduce and its manifest records every pin (a "
+        "development build writes the lockfile first; `check` notes it).",
+        "Run `tundravm lock IMAGE`, review and commit the lockfile, then build.",
+    ),
+    Rule(
         "lock-changed",
         "error",
         "A section of the image or of one profile (or a source's ref) changed since the lock.",

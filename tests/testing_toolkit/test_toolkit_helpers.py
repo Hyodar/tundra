@@ -300,6 +300,7 @@ def test_the_fakes_run_a_whole_build_with_nothing_forked_or_fetched(
     (tmp_path / "demo.py").write_text(IMAGE, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
+    assert run_cli("lock", "demo.py")[0] == 0
     code, out, err = run_cli("build", "demo.py")
     assert code == 0, err
     assert "built build/demo/production/" in out

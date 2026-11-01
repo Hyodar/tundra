@@ -39,11 +39,11 @@ def test_policy_requires_frozen_lock_for_bake(
     path = tmp_path / "recipe.py"
     path.write_text(FROZEN_RECIPE, encoding="utf-8")
 
-    # The API refuses an unfrozen bake; the CLI never bakes one: it writes the lock first.
+    # The API refuses an unfrozen bake; the CLI never bakes one: a build needs the lock.
     with pytest.raises(PolicyError):
         bake_image(lower(load_recipe(path)), None, locked=None, backend=None, build=tmp_path / "x")
+    assert main(["lock", str(path)], stdout=io.StringIO()) == EXIT_OK
     assert main(["build", str(path)], stdout=io.StringIO()) == EXIT_OK
-    assert (tmp_path / "build" / "tundravm.lock").is_file()
 
     recipe = load_recipe(path)
     assert isinstance(recipe.policy, Policy) and recipe.policy.require_frozen_lock

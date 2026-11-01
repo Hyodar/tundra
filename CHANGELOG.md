@@ -124,8 +124,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `measurements.json`, `sbom.spdx.json`, `inputs/`, `tree/`, `manifest.json`,
   `manifest.sig` with `--sign`, `observations.json`. It is published with one rename, made
   read-only and never written again. `<id>` is the manifest's digest; `latest-production`
-  and `latest-development` point at the newest. A stale lock is refused, a missing one is
-  written first.
+  and `latest-development` point at the newest. A stale lock is refused. A production
+  build is a locked build: without `build/tundravm.lock` it refuses with `lock-missing`
+  (`tundravm lock IMAGE` first), so its bytes reproduce and its manifest names every pin;
+  a development build writes a missing lock first.
 - `manifest.json` (`tundravm.manifest/1`) binds every artifact and input by sha256, the
   tree by a digest over paths, modes, contents and symlink targets, the UKI and its root
   hash, the lock, the sources (each Go source with its toolchain and checksum), the

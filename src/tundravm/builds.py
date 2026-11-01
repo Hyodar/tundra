@@ -64,6 +64,7 @@ from .declarative.lifecycle import (
     read_lock,
     write_lock,
 )
+from .diagnostics import Diagnostic
 from .errors import (
     ArtifactError,
     LockfileError,
@@ -280,8 +281,9 @@ def build(
     """Build *profile* of *img* into an immutable directory under *root* (the build root).
 
     The lockfile ``root/tundravm.lock`` must be current: a stale one is refused (``lock``
-    or ``lock --update`` changes it, never a build); a missing one is created first
-    (refused with *offline*, which builds only from what the lock pins). *reproduce*
+    or ``lock --update`` changes it, never a build). A production build is a locked build,
+    so a missing lockfile refuses it (:func:`lock_missing`); a development build creates it
+    first (refused with *offline*, which builds only from what the lock pins). *reproduce*
     builds again in an independent workspace and records the comparison in
     ``observations.json``; the directory is published either way and :attr:`Outcome.
     reproducible` says how it went. *sign_key* writes ``manifest.sig``. *ports* are the
@@ -364,15 +366,23 @@ def _current_lock(
     """The lock a build of *scoped* (*img* with the targets it builds) freezes against, and
     whether this build wrote the project lock.
 
-    The project lock is the image's as declared: a missing one is written from *img*, a
-    stale one is refused. The outputs are part of the locked payload, so a build whose
-    targets differ from the declared ones (``qemu`` is always built; ``--target``) freezes
-    against a lock derived from the project's for *scoped*: every pin and the toolchain
-    kept, nothing resolved, the digests recomputed for the targets built. A lock already
+    The project lock is the image's as declared: a missing one refuses a production
+    build and is written from *img* for a development one; a stale one is refused. The
+    outputs are part of the locked payload, so a build whose targets differ from the
+    declared ones (``qemu`` is always built; ``--target``) freezes against a lock derived
+    from the project's for *scoped*: every pin and the toolchain kept, nothing resolved,
+    the digests recomputed for the targets built. A lock already
     current for *scoped* (a build's own ``inputs/tundravm.lock``, which ``verify --rebuild``
     builds against) is used as it is.
     """
     if not lockfile.is_file():
+        if kind_of(img, profile) == "production":
+            missing = lock_missing(lockfile)
+            raise LockfileError(
+                f"{missing.message} ({missing.code}).",
+                hint=missing.hint,
+                context={"path": str(lockfile)},
+            )
         if offline:
             raise LockfileError(
                 f"No lockfile at {lockfile}: an offline build builds only what the lock pins.",
@@ -398,6 +408,17 @@ def _current_lock(
     if tuple(img.targets.get(profile, ("qemu",))) != tuple(scoped.targets[profile]):
         locked = lock_image(scoped, scoped.profile_names, previous=locked, offline=True)
     return locked, written
+
+
+def lock_missing(lockfile: Path) -> Diagnostic:
+    """The ``lock-missing`` finding a production build without *lockfile* refuses with."""
+    return Diagnostic(
+        "lock-missing",
+        "error",
+        f"No lockfile at {lockfile}: a production build builds only what a lock pins",
+        subject=str(lockfile),
+        hint="Run `tundravm lock IMAGE`, review and commit the lockfile, then build.",
+    )
 
 
 @contextlib.contextmanager
@@ -975,6 +996,7 @@ __all__ = [
     "choose_targets",
     "export_tree",
     "kind_of",
+    "lock_missing",
     "parse_targets",
     "resolve",
 ]

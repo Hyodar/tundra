@@ -9,7 +9,7 @@ image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated a
 (``ConditionVirtualization=``), so one set of measurements covers all three.
 
     tundravm show examples/02_variants.py --profile production --profile staging
-    tundravm build examples/02_variants.py --tree-only build/variants/mkosi
+    tundravm lock examples/02_variants.py
     tundravm build examples/02_variants.py --profile production
 """
 

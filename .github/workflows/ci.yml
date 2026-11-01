@@ -1,6 +1,8 @@
 # test is the unit suite alone; templates and boot bake the Image templates for real, and
-# the fixture jobs build tests/fixtures/native-tree/recipe.py, whose one source is a public
-# Go program asking for a newer Go than Debian's: the runner's go fetches that toolchain.
+# the fixture jobs lock and build tests/fixtures/native-tree/recipe.py, whose one source is
+# a public Go program asking for a newer Go than Debian's: the runner's go fetches that
+# toolchain. A production build is a locked build, so each build root is locked first
+# (`git ls-remote` over the runner's network).
 # Every job sets up through .github/actions/setup.
 #
 # Every image implies the evidence service, which builds tundra-tools from
@@ -153,8 +155,9 @@ jobs:
           host: boot
           doctor: build run
 
-      - name: Build the fixture's production and dev profiles
+      - name: Lock and build the fixture's production and dev profiles
         run: |
+          uv run tundravm lock tests/fixtures/native-tree/recipe.py
           uv run tundravm build tests/fixtures/native-tree/recipe.py --profile default
           uv run tundravm build tests/fixtures/native-tree/recipe.py --profile dev
           ls -lL "$TUNDRAVM_BUILD/fixture/latest-production/" "$TUNDRAVM_BUILD/fixture/latest-development/"
@@ -238,8 +241,9 @@ jobs:
           host: boot
           doctor: build run
 
-      - name: Build the verity fixture
+      - name: Lock and build the verity fixture
         run: |
+          uv run tundravm lock tests/fixtures/native-tree/recipe.py --attr verity_recipe
           uv run tundravm build tests/fixtures/native-tree/recipe.py --attr verity_recipe \
             --profile default
           uv run tundravm verify latest
@@ -280,10 +284,12 @@ jobs:
         with:
           host: build
 
-      - name: Build the verity fixture's cloud profiles
+      - name: Lock and build the verity fixture's cloud profiles
         run: |
           mkdir -p "$RUNNER_TEMP/verity-cloud"
           for profile in azure gcp; do
+            TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm lock \
+              tests/fixtures/native-tree/recipe.py --attr verity_recipe
             TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm build \
               tests/fixtures/native-tree/recipe.py --attr verity_recipe --profile "$profile"
             TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm verify latest
@@ -323,8 +329,9 @@ jobs:
           host: build
           doctor: build
 
-      - name: Build each cloud profile twice and compare
+      - name: Lock, then build each cloud profile twice and compare
         run: |
+          uv run tundravm lock tests/fixtures/native-tree/recipe.py
           for profile in azure gcp; do
             uv run tundravm build tests/fixtures/native-tree/recipe.py --profile "$profile" \
               --reproduce

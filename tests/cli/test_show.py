@@ -89,6 +89,7 @@ def test_a_build_records_and_shows_each_go_sources_toolchain(
         return "go: prefetched"
 
     monkeypatch.setattr(lifecycle, "prefetch_deps", prefetch)
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     (tdxs,) = json.loads(cli("show", "latest", "--json").out)["manifest"]["sources"]
     assert tdxs["name"] == "tdxs" and tdxs["go_toolchain"] == release

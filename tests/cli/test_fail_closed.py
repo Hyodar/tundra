@@ -175,6 +175,7 @@ def test_production_delivery_refuses_debug_attributes(tmp_path: Path) -> None:
 @pytest.fixture
 def production(prover: Path, cli: Cli) -> instances.Instance:
     """A simulated local instance of the prover's production build (no process runs)."""
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     build = Build.open((prover / "build/prover/latest-production").resolve())
     found = instances.create(
@@ -224,6 +225,7 @@ def test_attest_reads_the_guest_gate_mode_over_the_session(
 ) -> None:
     """``attest`` takes ``/run/tundravm/mode`` from the guest; ``simulated`` there makes a
     TDX instance's evidence simulated, which a production build never accepts."""
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     build = Build.open((prover / "build/prover/latest-production").resolve())
     found = instances.create(

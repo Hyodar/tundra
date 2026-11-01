@@ -56,7 +56,7 @@ def test_observations_are_not_identity(built: Build) -> None:
     observed = json.loads((built.path / mf.OBSERVATIONS).read_text())
     assert observed["schema"] == "tundravm.observations/1" and observed["id"] == built.id
     assert observed["runner"]["backend"] == "local_linux"
-    assert observed["lock_written"] is True and observed["reproduction"] is None
+    assert observed["lock_written"] is False and observed["reproduction"] is None
     assert "observations.json" not in built.manifest["artifacts"]
 
 
@@ -80,6 +80,7 @@ def test_the_summary_input_names_no_host_path(
     project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _SummaryWithPaths().install(monkeypatch.setattr)
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     built = Build.open((project / "build" / "demo" / "latest-production").resolve())
     text = (built.path / "inputs" / "summary.json").read_text()
@@ -237,6 +238,7 @@ def test_rebuild_of_narrowed_targets(project: Path, cli: Cli) -> None:
         .read_text()
         .replace("    dev=DevAccess", '    targets=("gcp",),\n    dev=DevAccess')
     )
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     result = cli("verify", "latest", "--rebuild")
     assert result.code == EXIT_OK, result.out + result.err
@@ -266,6 +268,7 @@ def test_a_signed_manifest_verifies_with_its_signer(
     project: Path, cli: Cli, tmp_path: Path
 ) -> None:
     key, public = _key(tmp_path, "release")
+    assert cli("lock").code == EXIT_OK
     result = cli("build", "--sign", key)
     assert result.code == EXIT_OK, result.err
     build = Build.open((project / "build/demo/latest-production").resolve())
@@ -289,6 +292,7 @@ def test_a_signature_survives_a_copy_to_another_checkout(
     project: Path, cli: Cli, tmp_path: Path
 ) -> None:
     key, public = _key(tmp_path, "release")
+    assert cli("lock").code == EXIT_OK
     assert cli("build", "--sign", key).code == EXIT_OK
     build = Build.open((project / "build/demo/latest-production").resolve())
     elsewhere = tmp_path / "second" / build.id

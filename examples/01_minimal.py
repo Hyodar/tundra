@@ -8,7 +8,7 @@ implied item with its one escape hatch. With no ``profiles`` it builds one
 ``production`` profile for QEMU.
 
     tundravm show examples/01_minimal.py
-    tundravm build examples/01_minimal.py --tree-only build/minimal/mkosi
+    tundravm lock examples/01_minimal.py
     tundravm build examples/01_minimal.py
 """
 

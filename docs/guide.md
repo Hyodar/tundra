@@ -659,7 +659,8 @@ distribution, release and snapshot, tundravm, the measurement tools). Commit it.
   that profile's finding: `error lock-changed [dev, production] files: files changed since
   the lock: ~/srv/www/index.html`.
 - A lockfile an older tundravm wrote is refused, never migrated: run `tundravm lock` again.
-- `build` refuses a stale lock and writes a missing one. A build never changes the lock.
+- A production build refuses a missing lock (`lock-missing`) and a stale one; a
+  development build writes a missing one. A build never changes the lock.
 - `build --offline` builds only what the lock pins.
 
 `check` reports a `source-unpinned` warning for each source the lock does not pin yet: one
@@ -689,7 +690,12 @@ $ tundravm build
 $ tundravm build --target gcp --reproduce --sign ~/.ssh/release-key
 ```
 
-`build` builds one profile: `production` by default, `--profile P` or `--dev`. It writes:
+`build` builds one profile: `production` by default, `--profile P` or `--dev`. A
+production build is always a locked build: it builds every source at the commit or
+sha256 `build/tundravm.lock` pins, so a second builder gets the same bytes, and the
+manifest records those pins. Without the lockfile it refuses with `lock-missing`: run
+`tundravm lock` and commit the lockfile first. A development build writes a missing
+lock itself. `build` writes:
 
 ```text
 build/demo/

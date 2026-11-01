@@ -153,8 +153,9 @@ non-production profile): payload.efi, qemu.raw and each --target's disk,
 measurements.json, sbom.spdx.json, inputs/, tree/, manifest.json (the identity;
 <id> is its digest), manifest.sig with --sign, observations.json. The directory
 appears atomically and is never written again; latest-production points at the
-newest. A stale lock is refused; a missing one is written first. --tree-only
-writes the standalone mkosi project instead and builds nothing.
+newest. A production build needs the lock (`tundravm lock`) and refuses a stale
+one; a development build writes a missing one. --tree-only writes the standalone
+mkosi project instead and builds nothing.
 
 positional arguments:
   IMAGE             The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).

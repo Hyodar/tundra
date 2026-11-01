@@ -97,7 +97,9 @@ DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 QUICKSTART = """\
 quickstart:
   tundravm new demo && cd demo           a project: demo.py, its tests, pyproject.toml
-  tundravm build                         lock, build, measure: build/demo/production/<id>/
+  tundravm lock                          pin every source: build/tundravm.lock
+  tundravm build                         build, measure: build/demo/production/<id>/
+  tundravm build --dev                   the dev profile: build/demo/development/<id>/
   tundravm run --mode simulated --dev    boot the dev build locally: instance demo-1
   tundravm run stop demo-1"""
 
@@ -335,8 +337,9 @@ def build_parser() -> argparse.ArgumentParser:
         "measurements.json, sbom.spdx.json, inputs/, tree/, manifest.json (the identity;\n"
         "<id> is its digest), manifest.sig with --sign, observations.json. The directory\n"
         "appears atomically and is never written again; latest-production points at the\n"
-        "newest. A stale lock is refused; a missing one is written first. --tree-only\n"
-        "writes the standalone mkosi project instead and builds nothing.",
+        "newest. A production build needs the lock (`tundravm lock`) and refuses a stale\n"
+        "one; a development build writes a missing one. --tree-only writes the standalone\n"
+        "mkosi project instead and builds nothing.",
         image,
     )
     which = build.add_mutually_exclusive_group()
@@ -826,7 +829,8 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     resolved = not any(d.severity == "error" for d in diagnostics)
     if locked is None:
         _err(
-            f"note: no lockfile at {found.lockfile}: `tundravm lock` (or the first build) writes it"
+            f"note: no lockfile at {found.lockfile}: a production build needs one (lock-missing); "
+            "`tundravm lock` writes it"
         )
     elif resolved:
         diagnostics.extend(lock_status(loaded.recipe, locked, variants=names))

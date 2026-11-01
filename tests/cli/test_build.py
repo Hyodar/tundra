@@ -67,11 +67,11 @@ def test_every_file_is_read_only(built: Build) -> None:
 
 
 def test_the_output_names_the_directory_and_what_it_does_not_check(project: Path, cli: Cli) -> None:
+    assert cli("lock").code == EXIT_OK
     result = cli("build")
     assert result.code == EXIT_OK, result.err
     lines = result.out.splitlines()
-    assert lines[0] == "lock written: build/tundravm.lock (commit it)"
-    assert lines[1].startswith("built build/demo/production/")
+    assert lines[0].startswith("built build/demo/production/")
     assert any(line.startswith("  qemu.raw ") for line in lines)
     assert "  unchecked: measurements qemu/uki: unknown" in lines  # the fake UKI is no PE
     assert "[production]" in result.err  # progress goes to stderr
@@ -126,6 +126,7 @@ def test_targets_add_the_cloud_disks(project: Path, cli: Cli) -> None:
     refused = cli("build", "--target", "gcp")  # the starter targets qemu only
     assert refused.code == EXIT_SDK_ERROR and "does not target gcp" in refused.err
     (project / "demo.py").write_text(EVERY_CLOUD, encoding="utf-8")
+    assert cli("lock").code == EXIT_OK
     result = cli("build", "--target", "azure,gcp")
     assert result.code == EXIT_OK, result.err
     build = Build.open((project / "build/demo/latest-production").resolve())
@@ -159,6 +160,7 @@ def test_tree_only_writes_a_tree_and_no_build(project: Path, cli: Cli) -> None:
 
 
 def test_reproduce_records_a_match(project: Path, cli: Cli) -> None:
+    assert cli("lock").code == EXIT_OK
     result = cli("build", "--reproduce")
     assert result.code == EXIT_OK, result.err
     assert "reproduction: matched" in result.out
@@ -184,6 +186,7 @@ def test_a_second_workspace_that_cannot_be_removed_is_kept_and_said(
         remove(path)
 
     monkeypatch.setattr(builds, "_remove", stubborn)
+    assert cli("lock").code == EXIT_OK
     result = cli("build", "--reproduce")
     assert result.code == EXIT_OK, result.err
     build = Build.open((project / "build/demo/latest-production").resolve())
@@ -207,6 +210,7 @@ def test_a_reproduction_that_differs_exits_1_and_is_still_published(
         return found
 
     monkeypatch.setattr(builds, "_digests", digests)
+    assert cli("lock").code == EXIT_OK
     result = cli("build", "--reproduce")
     assert result.code == EXIT_FAILURE
     assert "reproduction: different (qemu.raw)" in result.out
@@ -218,11 +222,22 @@ def test_a_reproduction_that_differs_exits_1_and_is_still_published(
     assert (project / "build" / "demo" / builds.REPRODUCE).is_dir()  # kept for comparison
 
 
-def test_offline_without_a_lock_is_refused(project: Path, cli: Cli) -> None:
-    result = cli("build", "--offline")
-    assert result.code == EXIT_SDK_ERROR
-    assert "an offline build builds only what the lock pins" in result.err
-    assert not (project / "build" / "tundravm.lock").exists()
+@pytest.mark.parametrize(
+    ("argv", "code", "said"),
+    [
+        (("build",), EXIT_SDK_ERROR, "a production build builds only what a lock pins"),
+        (("build", "--offline"), EXIT_SDK_ERROR, "a production build builds only what a lock"),
+        (("build", "--dev", "--offline"), EXIT_SDK_ERROR, "an offline build builds only what"),
+        (("build", "--dev"), EXIT_OK, "lock written: build/tundravm.lock (commit it)"),
+    ],
+    ids=["production", "production-offline", "dev-offline", "dev"],
+)
+def test_without_a_lock_production_is_refused_and_dev_writes_it(
+    project: Path, cli: Cli, argv: tuple[str, ...], code: int, said: str
+) -> None:
+    result = cli(*argv)
+    assert result.code == code and said in result.out + result.err, result.err
+    assert (project / "build" / "tundravm.lock").exists() == (code == EXIT_OK)
 
 
 def test_offline_builds_from_what_an_online_build_fetched(project: Path, cli: Cli) -> None:
@@ -239,6 +254,7 @@ def test_the_build_root_follows_the_environment(
     project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("TUNDRAVM_BUILD", "elsewhere")
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     assert (project / "elsewhere" / "tundravm.lock").is_file()
     assert (project / "elsewhere" / "demo" / "latest-production" / "manifest.json").is_file()
@@ -294,6 +310,7 @@ def test_the_payloads_package_manifest_is_bound(
         return result, artifacts
 
     monkeypatch.setattr("tundravm.builds.bake_image", baked)
+    assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     build = Build.open((project / "build/demo/latest-production").resolve())
     assert build.manifest["packages"]["count"] == 1
@@ -310,6 +327,7 @@ EVERY_CLOUD = STARTER.replace(
 
 def test_qemu_is_built_even_when_the_image_does_not_declare_it(project: Path, cli: Cli) -> None:
     (project / "demo.py").write_text(CLOUD_ONLY, encoding="utf-8")
+    assert cli("lock").code == EXIT_OK
     result = cli("build")
     assert result.code == EXIT_OK, result.err
     build = Build.open((project / "build/demo/latest-production").resolve())
