@@ -10,6 +10,7 @@ Generated from the `tundravm` argument parser by `uv run python -m tundravm._ref
 | [`build`](#tundravm-build) | Build into an immutable build directory, with its manifest. |
 | [`show`](#tundravm-show) | Show the resolved image or a build; --diff two builds. |
 | [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode\|probe. |
+| [`dev`](#tundravm-dev) | Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it. |
 | [`deploy`](#tundravm-deploy) | Deploy a build to Azure or GCP; status\|logs\|mode\|upgrade\|rollback. |
 | [`attest`](#tundravm-attest) | Verify an instance's evidence against a policy; delivers nothing. |
 | [`secrets`](#tundravm-secrets) | Deliver credentials or unlock a volume after a fresh attestation. |
@@ -32,6 +33,7 @@ positional arguments:
     build     Build into an immutable build directory, with its manifest.
     show      Show the resolved image or a build; --diff two builds.
     run       Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.
+    dev       Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it.
     deploy    Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.
     attest    Verify an instance's evidence against a policy; delivers nothing.
     secrets   Deliver credentials or unlock a volume after a fresh attestation.
@@ -267,6 +269,39 @@ options:
   --memory MEMORY       Guest memory (default: 2G).
   --cpus CPUS           Guest CPUs (default: 2).
   --identity KEY        SSH key for `run ssh`.
+```
+
+## tundravm dev
+
+Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it.
+
+```text
+usage: tundravm dev [-h] [--attr NAME] [--pythonpath DIR] [--traceback] [--mode {simulated,tdx}]
+                    [--no-follow]
+                    [IMAGE]
+
+The inner loop as one verb: `build --dev` (a missing lock written, changed Local
+sources re-pinned, the report printed), then `run --mode simulated --probe` on the
+build: the probe's table, then the console until Ctrl-C, which stops the instance
+and keeps the build. Exit 1 on a failed check, 0 after the stop. --no-follow
+returns right after the probe, the instance running
+(scripts, CI); --mode tdx boots with TDX where `doctor --for tdx` is ready.
+
+positional arguments:
+  IMAGE                 The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
+
+options:
+  -h, --help            show this help message and exit
+  --traceback           Raise errors with the Python traceback.
+  --mode {simulated,tdx}
+                        Security mode (default: simulated).
+  --no-follow           Return after the probe, the instance running (`tundravm run stop` ends
+                        it).
+
+loading the image file:
+  --attr NAME           The name the image (or a zero-argument factory) is bound to in the file.
+  --pythonpath DIR      Extra import directory for the file (repeatable); the working directory is
+                        one.
 ```
 
 ## tundravm deploy

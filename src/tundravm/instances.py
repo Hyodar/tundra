@@ -289,6 +289,24 @@ def tdx_refusal() -> str | None:
     return None if row.verdict == "ready" else row.detail
 
 
+def require_host(mode: Mode) -> None:
+    """Refuse *mode* where this host cannot run it: ``tdx`` unless ``doctor --for tdx`` is
+    ready, either mode without QEMU; ``dev`` asks before it builds."""
+    if mode == "tdx":
+        refused = tdx_refusal()
+        if refused is not None:
+            raise DeploymentError(
+                f"run --mode tdx cannot run here: {refused}.",
+                hint="Run `tundravm doctor --for tdx` for the missing prerequisite, or use "
+                "--mode simulated (no TDX, verdicts are `simulated`).",
+            )
+    if shutil.which(QEMU) is None:
+        raise DeploymentError(
+            f"{QEMU} is not installed.",
+            hint="Install qemu-system-x86 (`tundravm doctor --for run`).",
+        )
+
+
 def launch(
     root: Path,
     build: Build,
@@ -300,14 +318,7 @@ def launch(
     cpus: int = 2,
 ) -> Instance:
     """``run``: start *build*'s ``qemu.raw`` as a new instance; see the module docstring."""
-    if mode == "tdx":
-        refused = tdx_refusal()
-        if refused is not None:
-            raise DeploymentError(
-                f"run --mode tdx cannot run here: {refused}.",
-                hint="Run `tundravm doctor --for tdx` for the missing prerequisite, or use "
-                "--mode simulated (no TDX, verdicts are `simulated`).",
-            )
+    require_host(mode)
     if mode == "simulated" and build.production:
         print(
             "note: a production build in simulated mode is fail-closed: tdx-evidence.service "
@@ -316,11 +327,6 @@ def launch(
             file=sys.stderr,
         )
     disk = build.artifact("qemu")
-    if shutil.which(QEMU) is None:
-        raise DeploymentError(
-            f"{QEMU} is not installed.",
-            hint="Install qemu-system-x86 (`tundravm doctor --for run`).",
-        )
     instance = create(root, build, kind="run", platform="qemu", mode=mode)
     ports = forwards(build)
     volumes: list[tuple[str, Path]] = []
@@ -368,14 +374,22 @@ def launch(
     print(describe(instance), file=out)
     if detach:
         return instance
-    _follow(instance, process, out)
+    follow(instance, out, process=process)
     return instance
 
 
-def _follow(instance: Instance, process: subprocess.Popen[bytes], out: TextIO) -> None:
-    """Copy the console to *out* until QEMU exits; Ctrl-C stops the instance."""
+def follow(
+    instance: Instance,
+    out: TextIO,
+    *,
+    process: subprocess.Popen[bytes] | None = None,
+    tail: bool = False,
+) -> bool:
+    """Copy the console to *out* until QEMU exits (``False``) or Ctrl-C, which stops the
+    instance (``True``). *process* is QEMU as :func:`launch` started it, whose exit status
+    the receipt then records; *tail* starts at the console's end rather than at boot."""
     console = instance.path / CONSOLE
-    offset = 0
+    offset = console.stat().st_size if tail and console.is_file() else 0
     try:
         while True:
             if console.is_file():
@@ -386,15 +400,17 @@ def _follow(instance: Instance, process: subprocess.Popen[bytes], out: TextIO) -
                 if chunk:
                     out.write(chunk.decode("utf-8", errors="replace"))
                     out.flush()
-            if process.poll() is not None:
+            running = process.poll() is None if process is not None else alive(instance)
+            if not running:
                 break
             time.sleep(POLL)
     except KeyboardInterrupt:
         stop(instance)
-        return
+        return True
     instance.data["state"] = "exited"
     instance.save()
-    instance.event("exited", status=process.returncode)
+    instance.event("exited", status=None if process is None else process.returncode)
+    return False
 
 
 def describe(instance: Instance) -> str:
@@ -611,6 +627,7 @@ __all__ = [
     "create",
     "describe",
     "fail_closed",
+    "follow",
     "forwards",
     "free_port",
     "instance_key",
@@ -622,6 +639,7 @@ __all__ = [
     "qemu_command",
     "readiness",
     "reachable",
+    "require_host",
     "ssh_permitted",
     "status",
     "stop",

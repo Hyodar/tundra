@@ -41,7 +41,7 @@ def test_new_writes_a_project_whose_table_names_the_image(here: Path, cli: Cli) 
     assert "uv run tundravm build" in result.out
     assert "/.tundravm/" in (root / ".gitignore").read_text()
     readme = (root / "README.md").read_text()
-    assert "tundravm build --tree-only mkosi" in readme and "tundravm run" in readme
+    assert "tundravm build --tree-only mkosi" in readme and "tundravm dev" in readme
 
 
 def test_the_prover_template_with_ci(here: Path, cli: Cli) -> None:
@@ -58,7 +58,7 @@ def test_the_prover_template_with_ci(here: Path, cli: Cli) -> None:
     for verb in REMOVED:
         assert not re.search(rf"tundravm {verb}\b", workflow), verb
     header = (root / "vault.py").read_text().split('"""')[1]
-    assert "tundravm check vault.py" in header and "tundravm build vault.py" in header
+    assert "tundravm check vault.py" in header and "tundravm dev vault.py" in header
 
 
 def test_the_service_template_app_compiles(here: Path, cli: Cli) -> None:

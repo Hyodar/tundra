@@ -423,7 +423,7 @@ def _current_lock(
 
     The project lock is the image's as declared: a missing one refuses a production
     build and is written from *img* for a development one, which also re-pins in it the
-    Local sources whose directory changed (:func:`_repin_local`); a stale one is refused. The
+    Local sources whose directory changed (:func:`repin_local`); a stale one is refused. The
     outputs are part of the locked payload, so a build whose targets differ from the
     declared ones (``qemu`` is always built; ``--target``) freezes against a lock derived
     from the project's for *scoped*: every pin and the toolchain kept, nothing resolved,
@@ -454,7 +454,7 @@ def _current_lock(
         written = False
         repinned = ()
         if kind_of(img, profile) == "development":
-            locked, repinned = _repin_local(img, locked)
+            locked, repinned = repin_local(img, locked)
             if repinned:
                 write_lock(locked, lockfile)
         drift = img.select([profile]).lock_status(lockfile)
@@ -473,7 +473,7 @@ def _current_lock(
     return locked, written, repinned
 
 
-def _repin_local(img: Lowered, locked: Lock) -> tuple[Lock, tuple[str, ...]]:
+def repin_local(img: Lowered, locked: Lock) -> tuple[Lock, tuple[str, ...]]:
     """*locked* with each Local source whose directory changed pinned at its digest now,
     and their lockfile names; every other entry is kept as it is."""
     sources = img.select(img.profile_names).lock_sources()
@@ -1133,5 +1133,6 @@ __all__ = [
     "kind_of",
     "lock_missing",
     "parse_targets",
+    "repin_local",
     "resolve",
 ]

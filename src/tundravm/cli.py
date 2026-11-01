@@ -1,9 +1,10 @@
-"""The ``tundravm`` command line: the operator's loop in twelve commands.
+"""The ``tundravm`` command line: the operator's loop in thirteen commands.
 
 ``new`` scaffolds a project; ``check`` validates an image without building it; ``lock``
 pins its inputs; ``build`` makes an immutable build directory (``tundravm.builds``); ``show``
 reads an image or a build back, and diffs two builds; ``run`` starts a local instance and
-``deploy`` a cloud one, each with a receipt (``tundravm.instances``); ``attest`` checks an
+``deploy`` a cloud one, each with a receipt (``tundravm.instances``); ``dev`` is the inner
+loop as one verb, a dev build run with its probe; ``attest`` checks an
 instance's evidence and ``secrets`` delivers credentials and unlocks volumes after a fresh
 check (``tundravm.bootstrap``); ``verify`` checks a build directory against its manifest;
 ``convert`` turns an mkosi tree or unit files into source; ``doctor`` says what this host
@@ -106,6 +107,7 @@ COMMANDS = (
     "build",
     "show",
     "run",
+    "dev",
     "deploy",
     "attest",
     "secrets",
@@ -123,9 +125,8 @@ quickstart:
   tundravm new demo && cd demo           a project: demo.py, its tests, pyproject.toml
   tundravm lock                          pin every source: build/tundravm.lock
   tundravm build                         build, measure: build/demo/production/<id>/
-  tundravm build --dev                   the dev profile: build/demo/development/<id>/
-  tundravm run --mode simulated --dev    boot the dev build locally: instance demo-1
-  tundravm run stop demo-1"""
+  tundravm dev                           build the dev profile, boot it, probe it, follow
+                                         its console; Ctrl-C stops the instance"""
 
 
 def main(
@@ -525,6 +526,30 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cpus", type=int, default=2, help="Guest CPUs (default: %(default)s).")
     run.add_argument(
         "--identity", type=Path, default=None, metavar="KEY", help="SSH key for `run ssh`."
+    )
+
+    dev_cmd = command(
+        "dev",
+        _cmd_dev,
+        "Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it.",
+        "The inner loop as one verb: `build --dev` (a missing lock written, changed Local\n"
+        "sources re-pinned, the report printed), then `run --mode simulated --probe` on the\n"
+        "build: the probe's table, then the console until Ctrl-C, which stops the instance\n"
+        "and keeps the build. Exit 1 on a failed check, 0 after the stop. --no-follow\n"
+        "returns right after the probe, the instance running\n"
+        "(scripts, CI); --mode tdx boots with TDX where `doctor --for tdx` is ready.",
+        image,
+    )
+    dev_cmd.add_argument(
+        "--mode",
+        choices=instances.MODES,
+        default="simulated",
+        help="Security mode (default: %(default)s).",
+    )
+    dev_cmd.add_argument(
+        "--no-follow",
+        action="store_true",
+        help="Return after the probe, the instance running (`tundravm run stop` ends it).",
     )
 
     deploy = command(
@@ -1108,21 +1133,59 @@ def _cmd_build(args: argparse.Namespace, out: TextIO) -> int:
             print(f"  {name}: {' '.join(word for word in words if word)}", file=out)
         return EXIT_OK
     profile = builds.choose_profile(img, args.profile, dev=args.dev)
+    outcome = _build(
+        loaded,
+        img,
+        found,
+        profile,
+        out,
+        targets=targets,
+        offline=args.offline,
+        reproduce=args.reproduce,
+        sign=args.sign,
+        clean_cache=args.clean_cache,
+        verbose=args.verbose,
+    )
+    if outcome.reproduction is not None:
+        rec = outcome.reproduction
+        detail = ", ".join(rec.get("differ") or ()) or rec.get("error", "")
+        print(f"reproduction: {rec['state']}" + (f" ({detail})" if detail else ""), file=out)
+        if rec["state"] != "matched":
+            return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _build(
+    loaded: RecipeFile,
+    img: Lowered,
+    found: Settings,
+    profile: str,
+    out: TextIO,
+    *,
+    targets: Sequence[str] | None = None,
+    offline: bool = False,
+    reproduce: bool = False,
+    sign: Path | None = None,
+    clean_cache: bool = False,
+    verbose: bool = False,
+) -> builds.Outcome:
+    """Build *profile* with progress on stderr, then print what ``build`` prints: the lock
+    changes, the directory, its report and what it does not check."""
     if img.backend is None:
         raise ValidationError(
             "No build backend.", hint="Set TUNDRAVM_BACKEND or [tool.tundravm] backend."
         )
-    reporter = TextReporter(sys.stderr, verbose=args.verbose)
+    reporter = TextReporter(sys.stderr, verbose=verbose)
     try:
         outcome = builds.build(
             img,
             root=found.build,
             profile=profile,
             targets=targets,
-            offline=args.offline,
-            reproduce=args.reproduce,
-            sign_key=args.sign,
-            clean_cache=args.clean_cache,
+            offline=offline,
+            reproduce=reproduce,
+            sign_key=sign,
+            clean_cache=clean_cache,
             reporter=reporter,
             ports=_service_ports(loaded, profile),
         )
@@ -1139,13 +1202,7 @@ def _cmd_build(args: argparse.Namespace, out: TextIO) -> int:
         print(line, file=out)
     for item in result.manifest.get("unchecked", ()):
         print(f"  unchecked: {item}", file=out)
-    if outcome.reproduction is not None:
-        rec = outcome.reproduction
-        detail = ", ".join(rec.get("differ") or ()) or rec.get("error", "")
-        print(f"reproduction: {rec['state']}" + (f" ({detail})" if detail else ""), file=out)
-        if rec["state"] != "matched":
-            return EXIT_FAILURE
-    return EXIT_OK
+    return outcome
 
 
 # ── show ─────────────────────────────────────────────────────────────────
@@ -1315,7 +1372,7 @@ def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
         cpus=args.cpus,
     )
     if args.probe:
-        code = _probe(instance, args, out)
+        code = _probe(instance, out, timeout=args.timeout, as_json=args.json)
         print(f"stop it with `tundravm run stop {instance.id}`", file=out)
         return code
     if args.detach:
@@ -1323,17 +1380,17 @@ def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
-def _probe(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -> int:
+def _probe(instance: instances.Instance, out: TextIO, *, timeout: float, as_json: bool) -> int:
     """Wait for *instance*'s boot probe, print its table (or ``--json``); 0 only when every
     check printed and none failed."""
-    report = instances.probe(instance, timeout=args.timeout)
-    if args.json:
+    report = instances.probe(instance, timeout=timeout)
+    if as_json:
         print(json_report("run", {"id": instance.id, "probe": report.to_dict()}), file=out)
     else:
         print(report.table(), file=out)
         if report.done is None:
             print(
-                f"the probe did not finish within {args.timeout:g}s: `tundravm run logs "
+                f"the probe did not finish within {timeout:g}s: `tundravm run logs "
                 f"{instance.id}` shows where the boot stands (a volume waiting for "
                 "`tundravm secrets unlock` holds the services)",
                 file=out,
@@ -1368,7 +1425,7 @@ def _run_action(
     if action == "mode":
         return _mode(instance, args, out)
     if action == "probe":
-        return _probe(instance, args, out)
+        return _probe(instance, out, timeout=args.timeout, as_json=args.json)
     instances.ssh_permitted(instance)
     argv = bootstrap.ssh_argv(instance, bootstrap.identity_path(args.identity))
     if not instances.known_hosts(instance).is_file():
@@ -1408,6 +1465,37 @@ def _mode(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -
             file=out,
         )
     return EXIT_OK
+
+
+# ── dev ──────────────────────────────────────────────────────────────────
+
+
+def _cmd_dev(args: argparse.Namespace, out: TextIO) -> int:
+    found = _settings(args)
+    loaded = _loaded(args, found)
+    img = _lowered(loaded, found)
+    profile = builds.choose_profile(img, None, dev=True)
+    instances.require_host(args.mode)
+    build = _build(loaded, img, found, profile, out).build
+    instances.probe_checks(build.manifest, f"build {build.id}")
+    instance = instances.launch(found.instances, build, mode=args.mode, detach=True, out=out)
+    try:
+        code = _probe(instance, out, timeout=instances.PROBE_TIMEOUT, as_json=False)
+        if args.no_follow:
+            print(f"stop it with `tundravm run stop {instance.id}`", file=out)
+            return code
+        print(
+            f"following the console (`tundravm run logs {instance.id}` has it from boot); "
+            f"Ctrl-C stops {instance.id}",
+            file=out,
+        )
+        stopped = instances.follow(instance, out, tail=True)
+    except KeyboardInterrupt:
+        instances.stop(instance)
+        print(f"stopped {instance.id}", file=out)
+        raise
+    print(f"{'stopped' if stopped else 'exited:'} {instance.id}", file=out)
+    return code
 
 
 # ── deploy ───────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.cli.test_grammar import REMOVED, TWELVE
+from tests.cli.test_grammar import REMOVED, THIRTEEN
 from tundravm.cli import build_parser
 from tundravm.completion import SHELLS, Shell, main, render_completion
 
@@ -21,19 +21,19 @@ BASH = shutil.which("bash")
 def test_every_command_and_no_removed_one(shell: Shell) -> None:
     script = render_completion(build_parser(), shell)
     assert "python -m tundravm.completion" in script.splitlines()[1 if shell == "zsh" else 0]
-    for name in TWELVE:
+    for name in THIRTEEN:
         assert re.search(rf"\b{name}\b", script), name
     for choices in ("simulated tdx", "mkosi systemd", "service prover", "deliver unlock"):
         assert choices in script, choices
 
 
-def test_the_bash_command_list_is_the_twelve() -> None:
+def test_the_bash_command_list_is_the_thirteen() -> None:
     script = render_completion(build_parser(), "bash")
     [first] = re.findall(r'compgen -W "([^"]*)" -- "\$cur"\)\)\n        return 0', script)
     commands = [word for word in first.split() if not word.startswith("-")]
-    assert tuple(commands) == TWELVE
+    assert tuple(commands) == THIRTEEN
     cases = re.findall(r"^        ([a-z]+)\)$", script, re.MULTILINE)
-    assert tuple(cases) == TWELVE
+    assert tuple(cases) == THIRTEEN
     assert not set(cases) & set(REMOVED)
 
 

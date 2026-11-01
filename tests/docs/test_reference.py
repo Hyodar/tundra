@@ -76,10 +76,10 @@ def test_the_width_does_not_leak_into_the_environment(monkeypatch: pytest.Monkey
     assert os.environ["COLUMNS"] == "37"
 
 
-def test_the_parser_has_exactly_the_twelve_commands() -> None:
+def test_the_parser_has_exactly_the_thirteen_commands() -> None:
     from tundravm.cli import COMMANDS, build_parser
 
     parser = build_parser()
     sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
     assert tuple(sub.choices) == COMMANDS
-    assert len(COMMANDS) == 12
+    assert len(COMMANDS) == 13

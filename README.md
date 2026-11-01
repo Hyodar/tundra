@@ -52,8 +52,7 @@ image = Image(
 ```
 
 ```console
-$ uv run tundravm build --dev                   # lock, payload.efi, qemu.raw, measurements, manifest
-$ uv run tundravm run --mode simulated --dev    # instance my-image-1, ports forwarded to 127.0.0.1
+$ uv run tundravm dev                           # lock, build the dev profile, boot it, probe it, follow it
 $ uv run tundravm verify latest-development     # every artifact against the manifest, offline
 ```
 
@@ -62,8 +61,8 @@ volatile journal, hardened sysctls, no apt timers); a measured UKI with the TDX,
 NVMe, Hyper-V and gVNIC drivers; an nftables firewall that opens nothing; and the `tdxs`
 evidence service, whose quote `attest` checks. Each default has a typed escape hatch.
 
-The three commands build, boot and verify the `dev` profile. A production build is the
-same image without `DevAccess`, and it starts no service unless it runs under TDX.
+The two commands build, boot, probe and verify the `dev` profile. A production build is
+the same image without `DevAccess`, and it starts no service unless it runs under TDX.
 [The guide](docs/guide.md#the-attested-node-stage-by-stage) builds the node up from there
 in six stages under `examples/attested-node/stages/`: Nethermind as a component of your
 own, Lighthouse, a signing proxy built from Go source, attested TLS, and operating it.

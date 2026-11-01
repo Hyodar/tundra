@@ -50,8 +50,7 @@ _HEADER = r'''"""$title image ($template template).
 
 Check:  uv run tundravm check $filename
 Lock:   uv run tundravm lock $filename
-Build:  uv run tundravm build $filename --dev
-Run:    uv run tundravm run --mode simulated --dev
+Dev:    uv run tundravm dev $filename
 """
 
 '''
@@ -187,7 +186,7 @@ APP_PORT = 8080
 class App(Component):
     """The app: the Go program in app/, built from that directory, its readiness and a lint rule.
 
-    app/ is a Local source: `tundravm lock` pins its content. `build --dev` re-pins an edit,
+    app/ is a Local source: `tundravm lock` pins its content. `tundravm dev` re-pins an edit,
     a production build wants `tundravm lock` again, and both build it offline with the Go
     its go.mod names. `tundravm show` lists it as component ``app``.
     """
@@ -806,8 +805,7 @@ FIRST_STEPS: tuple[tuple[str, str], ...] = (
     ("uv run tundravm lock", "pin every source"),
     ("uv run tundravm build --tree-only mkosi", "the tree the tests and CI compare; commit it"),
     ("uv run pytest", "lint, compile and committed-tree tests"),
-    ("uv run tundravm build --dev", "build the dev profile"),
-    ("uv run tundravm run --mode simulated --dev", "boot it without TDX, its services up"),
+    ("uv run tundravm dev", "build the dev profile, boot it without TDX, probe it, follow it"),
 )
 """The loop after ``uv sync`` in a new project, as ``new`` prints it and its README lists."""
 

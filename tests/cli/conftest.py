@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
-from collections.abc import Callable
+import json
+import os
+import signal
+import sys
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from tests.helpers import fake_ovmf
+from tundravm import instances
 from tundravm.builds import Build
 from tundravm.cli import main
 from tundravm.templates import render_recipe_template
@@ -115,3 +122,62 @@ def dev_built(built: Build, cli: Cli) -> Build:
     result = cli("build", "--dev")
     assert result.code == 0, result.err
     return Build.open((Path("build") / "demo" / "latest-development").resolve())
+
+
+FAKE_QEMU = """\
+#!{python}
+import os, signal, socket, sys, time
+argv = sys.argv[1:]
+def value(flag):
+    return argv[argv.index(flag) + 1]
+console = value("-serial").removeprefix("file:")
+monitor = value("-monitor").removeprefix("unix:").split(",")[0]
+with open(value("-pidfile"), "w") as handle:
+    handle.write(str(os.getpid()))
+with open(console, "w") as handle:
+    handle.write("[    1.0] Kernel command line: console=ttyS0\\nReached target minimal.target\\n")
+    handle.write(os.environ.get("FAKE_QEMU_CONSOLE", ""))
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+server = socket.socket(socket.AF_UNIX)
+server.bind(monitor)
+server.listen(1)
+while True:
+    conn, _ = server.accept()
+    if b"quit" in conn.recv(64):
+        sys.exit(0)
+"""
+"""A ``qemu-system-x86_64`` that writes a console (then what ``$FAKE_QEMU_CONSOLE`` holds,
+the probe's lines in a test that waits for them), records its pid and quits on its
+monitor's ``quit``."""
+
+
+@pytest.fixture
+def qemu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The fake ``qemu-system-x86_64`` first on PATH, and fake OVMF images."""
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    script = bin_dir / "qemu-system-x86_64"
+    script.write_text(FAKE_QEMU.format(python=sys.executable))
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    fake_ovmf(tmp_path, monkeypatch)
+    started: list[int] = []
+    real = instances.launch
+
+    def launch(*args: object, **kwargs: object) -> instances.Instance:
+        found = real(*args, **kwargs)  # type: ignore[arg-type]
+        started.append(int(found.data["pid"]))
+        return found
+
+    monkeypatch.setattr(instances, "launch", launch)
+    yield script
+    for pid in started:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def receipt(project: Path, name: str) -> dict[str, object]:
+    """``instance.json`` of the instance *name* under *project*."""
+    path = project / ".tundravm" / "instances" / name / "instance.json"
+    payload: dict[str, object] = json.loads(path.read_text())
+    return payload

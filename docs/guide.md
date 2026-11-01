@@ -47,7 +47,7 @@ $ uv run tundravm build --tree-only mkosi
 $ uv run pytest
 ```
 
-`new` prints this loop, then `build --dev` and `run --mode simulated --dev`. `lock` pins
+`new` prints this loop, then `dev`. `lock` pins
 every source. The generated tests and the CI's
 `check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends on
 the lock: write the tree after locking and commit both.
@@ -984,12 +984,16 @@ it prints the build's report, provenance, unchecked guarantees and boot probe;
 ## Run
 
 ```console
+$ tundravm dev
 $ tundravm run --mode simulated --dev --probe
 $ tundravm run status demo-1
 $ tundravm run logs demo-1
 $ tundravm run stop demo-1
 ```
 
+`dev` is the inner loop as one verb: `build --dev`, then `run --mode simulated --probe`
+on the build, the probe's table, then the console until Ctrl-C stops the instance (the
+build stays); `--no-follow` returns after the probe, `--mode tdx` boots with TDX.
 `run` boots `qemu.raw` through OVMF from its ESP on a snapshot and
 forwards from `127.0.0.1` every TCP port the image accepts (8745 where the key delivery
 listens), on the same port when free and unprivileged. `--mode` is required:

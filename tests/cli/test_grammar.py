@@ -1,4 +1,4 @@
-"""The command surface: twelve commands, nothing else, and how a usage error reads."""
+"""The command surface: thirteen commands, nothing else, and how a usage error reads."""
 
 from __future__ import annotations
 
@@ -14,13 +14,14 @@ from tundravm import __version__
 from tundravm.cli import COMMANDS, EXIT_BROKEN_PIPE, EXIT_OK, EXIT_SDK_ERROR, build_parser
 from tundravm.completion import verbs_of
 
-TWELVE = (
+THIRTEEN = (
     "new",
     "check",
     "lock",
     "build",
     "show",
     "run",
+    "dev",
     "deploy",
     "attest",
     "secrets",
@@ -55,15 +56,15 @@ REMOVED = (
 )
 
 
-def test_the_parser_has_exactly_the_twelve_commands() -> None:
-    assert COMMANDS == TWELVE
-    assert tuple(verb.name for verb in verbs_of(build_parser())) == TWELVE
+def test_the_parser_has_exactly_the_thirteen_commands() -> None:
+    assert COMMANDS == THIRTEEN
+    assert tuple(verb.name for verb in verbs_of(build_parser())) == THIRTEEN
 
 
 def test_no_arguments_prints_help_and_the_quickstart(cli: Cli) -> None:
     result = cli()
     assert result.code == EXIT_OK
-    for name in TWELVE:
+    for name in THIRTEEN:
         assert f"    {name} " in result.out
     assert "quickstart:" in result.out and "tundravm new demo" in result.out
 
