@@ -655,6 +655,10 @@ distribution, release and snapshot, tundravm, the measurement tools). Commit it.
 - Pins already locked stay while their source is unchanged. `--update NAME` resolves the
   named inputs again; no name resolves all of them.
 - `--check` never writes and never touches the network. It prints the drift and exits 1.
+  A profile's sections are `profiles.<name>.<key>`, and `check` reports their drift as
+  that profile's finding: `error lock-changed [dev, production] files: files changed since
+  the lock: ~/srv/www/index.html`.
+- A lockfile an older tundravm wrote is refused, never migrated: run `tundravm lock` again.
 - `build` refuses a stale lock and writes a missing one. A build never changes the lock.
 - `build --offline` builds only what the lock pins.
 

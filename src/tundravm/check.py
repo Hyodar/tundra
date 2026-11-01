@@ -1554,8 +1554,7 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "lock-changed",
         "error",
-        "A section of the image (or a source's ref) changed since the lock, or the "
-        "lockfile is an older version.",
+        "A section of the image or of one profile (or a source's ref) changed since the lock.",
         _LOCK_AGAIN,
     ),
     Rule(

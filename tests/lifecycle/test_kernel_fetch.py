@@ -206,7 +206,7 @@ def test_drift_reports_a_moved_or_changed_kernel_ref(config: Path) -> None:
     ]
     bumped = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1.1"), config=config))
     assert [(d.code, d.subject) for d in lock_status(bumped, locked)] == [
-        ("lock-changed", "variants.default.kernel"),
+        ("lock-changed", "kernel"),
         ("lock-changed", "sources.kernel"),
     ]
     no_config = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1")))
@@ -214,7 +214,7 @@ def test_drift_reports_a_moved_or_changed_kernel_ref(config: Path) -> None:
     assert [(d.code, d.message) for d in lock_status(recipe, unlocked)] == [
         (
             "lock-changed",
-            "variants.default.kernel changed since the lock: ~config_sha256",
+            "kernel changed since the lock: ~config_sha256",
         ),
         ("lock-added", "source kernel is not pinned"),
     ]

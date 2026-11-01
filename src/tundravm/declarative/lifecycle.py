@@ -50,6 +50,8 @@ from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
     build_lockfile,
+    lock_variants,
+    section_profile,
     serialize_lockfile,
 )
 from tundravm.measure import derive_measurements
@@ -661,14 +663,6 @@ def lock(
     )
 
 
-def drift_diagnostics(drift_lines: Iterator[tuple[str, str, str]]) -> tuple[Diagnostic, ...]:
-    hint = "Review the change, then run `tundravm lock` to record it and commit the lockfile."
-    return tuple(
-        Diagnostic(code, "error", message, subject=section, hint=hint)
-        for code, section, message in drift_lines
-    )
-
-
 def image_lock_status(
     img: Lowered,
     locked: Lock,
@@ -679,39 +673,48 @@ def image_lock_status(
 ) -> tuple[Diagnostic, ...]:
     """Drift between *img*'s *profiles* and *locked*, one diagnostic per section.
 
-    *partial* compares only the selected profiles' sections
-    (see :func:`~tundravm.lockfile.compare_lock`).
+    A section one profile owns reports under that profile, its subject the section's
+    key there (``files``, ``sources.<name>``; see
+    :func:`~tundravm.lockfile.section_profile`). *partial* compares only the selected
+    profiles' sections (see :func:`~tundravm.lockfile.compare_lock`).
     """
     drift = img.select(profiles).drift(locked.lockfile, resolver=resolver, partial=partial)
     details = drift.details
+    known = (*img.state.profiles, *lock_variants(locked.lockfile))
 
     def lines() -> Iterator[tuple[str, str, str]]:
-        if drift.lock_version is not None:
-            yield (
-                "lock-changed",
-                "version",
-                f"the lockfile is version {drift.lock_version}: lock again to record the "
-                "distribution, compiler and kernel sections",
-            )
         for section in drift.changed:
-            detail = f": {details[section]}" if section in details else ""
-            yield "lock-changed", section, f"{section} changed since the lock{detail}"
+            yield "lock-changed", section, "changed since the lock"
         for section in drift.added:
-            yield "lock-added", section, details.get(section, f"{section} is not in the lock")
+            yield "lock-added", section, "is not in the lock"
         for section in drift.removed:
-            yield "lock-removed", section, f"{section} is only in the lock"
+            yield "lock-removed", section, "is only in the lock"
 
-    found = drift_diagnostics(lines())
+    found: list[Diagnostic] = []
+    for code, section, words in lines():
+        profile, subject = section_profile(section, known) or ("", section)
+        message = f"{subject} {words}"
+        detail = details.get(section)
+        if detail and code == "lock-changed":
+            message += f": {detail}"
+        elif detail:
+            message = detail
+        found.append(
+            Diagnostic(code, "error", message, subject=subject, variant=profile, hint=_DRIFT_HINT)
+        )
     if not found and not drift.digest_matches:
-        found = (
+        found.append(
             Diagnostic(
                 "lock-stale",
                 "error",
                 "the image digest differs from the lock",
                 hint="Run `tundravm lock` to record it and commit the lockfile.",
-            ),
+            )
         )
-    return found
+    return tuple(found)
+
+
+_DRIFT_HINT = "Review the change, then run `tundravm lock` to record it and commit the lockfile."
 
 
 def lock_status(

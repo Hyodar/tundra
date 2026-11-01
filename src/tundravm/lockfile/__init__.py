@@ -5,6 +5,7 @@ from .drift import (
     compare_lock,
     describe_change,
     lock_variants,
+    section_profile,
     unselected_sources,
 )
 from .io import parse_lockfile, read_lockfile, serialize_lockfile
@@ -24,6 +25,7 @@ __all__ = [
     "read_lockfile",
     "recipe_digest",
     "section_digests",
+    "section_profile",
     "section_values",
     "serialize_lockfile",
     "unselected_sources",

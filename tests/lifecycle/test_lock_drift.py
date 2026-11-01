@@ -82,28 +82,28 @@ def test_lockfile_records_section_digests_and_keeps_whole_digest() -> None:
     assert {
         "distribution",
         "compiler",
-        "variants.default.packages",
-        "variants.default.files",
-        "variants.default.kernel",
-        "variants.default.debloat",
+        "profiles.default.packages",
+        "profiles.default.files",
+        "profiles.default.kernel",
+        "profiles.default.debloat",
     } <= set(locked.lockfile.sections)
     assert lock_status(recipe, locked) == ()
     assert compare_lock(locked.lockfile, payload).render() == "lock is up to date"
 
 
 @pytest.mark.parametrize(
-    ("extra", "section", "detail"),
+    ("extra", "key", "detail"),
     [
-        (Package("htop"), "variants.default.packages", "+htop"),
-        (File("/etc/issue", "tundra\n"), "variants.default.files", "+/etc/issue"),
+        (Package("htop"), "packages", "+htop"),
+        (File("/etc/issue", "tundra\n"), "files", "+/etc/issue"),
     ],
     ids=["package", "file"],
 )
-def test_drift_names_the_section_and_the_change(
-    extra: Package | File, section: str, detail: str
+def test_drift_names_the_profile_the_section_and_the_change(
+    extra: Package | File, key: str, detail: str
 ) -> None:
-    """One more package or file changes exactly its section; the diagnostic and the drift
-    report name the section and what changed in it."""
+    """One more package or file changes exactly its profile's section: the finding is the
+    profile's, names the key and what changed, and the drift report names the section."""
     locked = lock(_recipe())
     recipe = _recipe(extra)
 
@@ -111,13 +111,14 @@ def test_drift_names_the_section_and_the_change(
     assert found == Diagnostic(
         "lock-changed",
         "error",
-        f"{section} changed since the lock: {detail}",
-        subject=section,
+        f"{key} changed since the lock: {detail}",
+        subject=key,
+        variant="default",
         hint=found.hint,
     )
     drift = compare_lock(locked.lockfile, _payload(recipe))
-    assert drift.changed == (section,)
-    assert drift.render() == f"~ {section}: {detail}"
+    assert drift.changed == (f"profiles.default.{key}",)
+    assert drift.render() == f"~ profiles.default.{key}: {detail}"
 
 
 def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:
@@ -128,9 +129,9 @@ def test_frozen_bake_error_carries_drift(tmp_path: Path) -> None:
 
     error = excinfo.value
     assert "stale" in str(error)
-    assert "~ variants.default.packages: +htop" in str(error)
+    assert "~ profiles.default.packages: +htop" in str(error)
     assert error.hint == "Run `tundravm lock IMAGE` to accept these changes, or revert them."
-    assert error.context["changed"] == "variants.default.packages"
+    assert error.context["changed"] == "profiles.default.packages"
     assert error.context["lock"].endswith("tundravm.lock")
 
 
@@ -141,7 +142,7 @@ def test_lock_status_missing_lockfile_raises(tmp_path: Path) -> None:
     assert "lock" in excinfo.value.hint
 
 
-@pytest.mark.parametrize("version", [1, 2, 4])
+@pytest.mark.parametrize("version", [1, 2, 5])
 def test_older_lockfile_versions_ask_to_lock_again(tmp_path: Path, version: int) -> None:
     recipe = _recipe()
     payload = _payload(recipe)
@@ -159,8 +160,7 @@ def test_older_lockfile_versions_ask_to_lock_again(tmp_path: Path, version: int)
         read_lock(lock_path)
 
     assert raised.value.code == "E_LOCKFILE"
-    assert raised.value.hint is not None and "tundravm lock IMAGE" in raised.value.hint
-    assert "toolchain" in raised.value.hint
+    assert raised.value.hint == "Run `tundravm lock IMAGE` to lock again, and commit the lockfile."
 
 
 def test_lockfile_without_toolchain_section_is_invalid() -> None:
@@ -178,10 +178,10 @@ def test_removed_profile_sections_and_scalar_detail() -> None:
     drift = compare_lock(build_lockfile(recipe=old), new)
 
     assert drift.changed == ("base",)
-    assert drift.removed == ("variants.b.packages",)
+    assert drift.removed == ("profiles.b.packages",)
     assert drift.render().splitlines() == [
         '~ base: "debian/bookworm" -> "ubuntu/noble"',
-        "- variants.b.packages",
+        "- profiles.b.packages",
     ]
 
 
@@ -209,7 +209,7 @@ def test_drift_ignores_embedded_recipe_that_does_not_match_section_digest() -> N
     drift = compare_lock(forged, {"profiles": {"default": {"packages": ["htop"]}}})
 
     assert drift == LockDrift(
-        changed=("variants.default.packages",), details={}, digest_matches=False
+        changed=("profiles.default.packages",), details={}, digest_matches=False
     )
 
 
@@ -226,17 +226,17 @@ def test_partial_comparison_skips_the_locks_other_variants() -> None:
 
     assert compare_lock(both, only_a, partial=True).is_clean
     full = compare_lock(both, only_a)
-    assert full.removed == ("variants.b.packages",) and not full.digest_matches
+    assert full.removed == ("profiles.b.packages",) and not full.digest_matches
 
     changed = compare_lock(both, _two_variants({"a": {"packages": ["htop"]}}), partial=True)
-    assert changed.changed == ("variants.a.packages",) and changed.removed == ()
+    assert changed.changed == ("profiles.a.packages",) and changed.removed == ()
 
 
 def test_partial_comparison_checks_the_digest_for_the_locks_full_set() -> None:
     lock_a = build_lockfile(recipe=_two_variants({"a": {"packages": []}}))
     wider = _two_variants({"a": {"packages": []}, "b": {"packages": []}})
 
-    assert compare_lock(lock_a, wider, partial=True).added == ("variants.b.packages",)
+    assert compare_lock(lock_a, wider, partial=True).added == ("profiles.b.packages",)
     forged = type(lock_a)(
         version=lock_a.version,
         recipe_digest="0" * 64,
@@ -253,5 +253,5 @@ def test_lockfile_round_trips_its_toolchain() -> None:
     parsed = parse_lockfile(serialize_lockfile(current))
 
     assert parsed == current
-    assert LOCKFILE_VERSION == 5
+    assert LOCKFILE_VERSION == 6
     assert parsed.toolchain is not None and parsed.toolchain.tundravm

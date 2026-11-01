@@ -21,7 +21,7 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
 
     lockfile = lock(recipe).lockfile
 
-    assert lockfile.version == 5
+    assert lockfile.version == 6
     assert lockfile.recipe["distribution"]["base"] == "debian/bookworm"
     assert "dialect" not in lockfile.recipe["compiler"]
     assert lockfile.recipe["profiles"]["default"]["outputs"] == ["qemu"]

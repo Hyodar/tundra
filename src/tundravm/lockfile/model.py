@@ -7,20 +7,19 @@ from typing import Any
 
 from tundravm.toolchain import Toolchain
 
-LOCKFILE_VERSION = 5
+LOCKFILE_VERSION = 6
 """Current lockfile schema version.
 
-Version 2 added per-section digests (``sections``); version 3 names the
-per-variant ones ``variants.<name>.<key>`` (version 2 said ``profiles.``, which
-:func:`~tundravm.lockfile.parse_lockfile` maps on read, as version 3). Version 4
-covers every image-defining input: the ``distribution`` and ``compiler``
-sections, ``variants.<name>.kernel`` and the complete ``variants.<name>.debloat``
-(``base`` and ``arch`` moved into ``distribution``), and pins a source build
-whose source differs between variants once per variant (``<variant>/<name>``).
-Version 5 records the build ``toolchain`` (tundravm, mkosi and its commit, the tools
-tree's distribution, release and snapshot, measurement tools; see
-:class:`~tundravm.toolchain.Toolchain`). Older lockfiles
-do not load: :func:`~tundravm.lockfile.parse_lockfile` asks to lock again.
+Version 2 added per-section digests (``sections``) and version 3 named the
+per-profile ones ``variants.<name>.<key>``. Version 4 covers every image-defining
+input: the ``distribution`` and ``compiler`` sections, each profile's ``kernel``
+and complete ``debloat``, and pins a source build whose source differs between
+profiles once per profile (``<profile>/<name>``). Version 5 records the build
+``toolchain`` (tundravm, mkosi and its commit, the tools tree's distribution,
+release and snapshot, measurement tools; see :class:`~tundravm.toolchain.Toolchain`).
+Version 6 names the per-profile sections ``profiles.<name>.<key>``, as the public
+API says. Older lockfiles do not load: :func:`~tundravm.lockfile.parse_lockfile`
+asks to lock again.
 """
 
 
@@ -29,7 +28,7 @@ class LockedFetch:
     """A resolved fetch: ``source`` url, ``kind`` (``git``/``http``) and its pin.
 
     ``digest`` is a commit sha for git and a sha256 for http. Source builds also
-    record their ``name`` (``<variant>/<name>`` for a build pinned per variant)
+    record their ``name`` (``<profile>/<name>`` for a build pinned per profile)
     and the git ``ref`` that was resolved, so a changed ref invalidates the pin.
     """
 
@@ -46,7 +45,7 @@ class Lockfile:
 
     ``recipe_digest`` is the sha256 of the whole canonical recipe payload (what
     frozen bakes enforce). ``sections`` maps dotted payload paths such as
-    ``base`` or ``variants.default.packages`` to the sha256 of that sub-payload,
+    ``base`` or ``profiles.default.packages`` to the sha256 of that sub-payload,
     so drift can be reported section by section. ``toolchain`` is the build
     toolchain recorded at lock time; it is not part of the recipe digest.
     """

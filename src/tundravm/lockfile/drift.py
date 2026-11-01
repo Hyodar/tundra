@@ -8,14 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tundravm.formats import annotation_path, md_cell, md_table, workflow_command
-from tundravm.lockfile.model import LOCKFILE_VERSION, Lockfile
-from tundravm.lockfile.resolve import (
-    VARIANTS_KEY,
-    VARIANTS_SECTION,
-    recipe_digest,
-    section_values,
-    value_digest,
-)
+from tundravm.lockfile.model import Lockfile
+from tundravm.lockfile.resolve import PROFILES_KEY, recipe_digest, section_values, value_digest
 
 DETAIL_LIMIT = 5
 """Maximum item entries shown per section detail before eliding the rest."""
@@ -34,10 +28,7 @@ class LockDrift:
     ``details`` holds a one-line item summary for some changed sections, such as
     ``+htop -jq`` for packages or ``~/etc/motd`` for files. ``digest_matches``
     reports whether the whole-recipe digest, which frozen bakes enforce, still
-    matches; it stays true when only some of the lock's variants were compared.
-    ``lock_version`` is the version of a lockfile older than
-    :data:`~tundravm.lockfile.LOCKFILE_VERSION` (``None``: current), which drifts
-    until it is locked again.
+    matches; it stays true when only some of the lock's profiles were compared.
     """
 
     changed: tuple[str, ...] = ()
@@ -45,16 +36,11 @@ class LockDrift:
     removed: tuple[str, ...] = ()
     details: dict[str, str] = field(default_factory=dict)
     digest_matches: bool = True
-    lock_version: int | None = None
 
     @property
     def is_clean(self) -> bool:
-        """True when the lockfile is current and matches the recipe and every section digest."""
-        return (
-            self.lock_version is None
-            and self.digest_matches
-            and not (self.changed or self.added or self.removed)
-        )
+        """True when the lockfile matches the recipe and every section digest."""
+        return self.digest_matches and not (self.changed or self.added or self.removed)
 
     @property
     def sections(self) -> tuple[str, ...]:
@@ -101,16 +87,6 @@ class LockDrift:
         markers.update({name: "+" for name in self.added})
         markers.update({name: "-" for name in self.removed})
         entries = [(markers[name], name, self.details.get(name)) for name in sorted(markers)]
-        if self.lock_version is not None:
-            entries.insert(
-                0,
-                (
-                    "~",
-                    "version",
-                    f"{self.lock_version} -> {LOCKFILE_VERSION}: lock again to record the "
-                    "distribution, compiler and kernel sections",
-                ),
-            )
         if not entries and not self.digest_matches:
             entries.append(
                 ("~", "recipe_digest", "every section matches; the lockfile digest was edited")
@@ -126,46 +102,60 @@ _DRIFT_WORDS = {
 
 
 def lock_variants(lock: Lockfile) -> tuple[str, ...]:
-    """The variants *lock* was written for, sorted."""
-    return _variants(lock.recipe)
+    """The profiles *lock* was written for, sorted."""
+    return _profiles(lock.recipe)
 
 
-def _variants(payload: Mapping[str, object]) -> tuple[str, ...]:
-    entries = payload.get(VARIANTS_KEY)
+def _profiles(payload: Mapping[str, object]) -> tuple[str, ...]:
+    entries = payload.get(PROFILES_KEY)
     return tuple(sorted(str(name) for name in entries)) if isinstance(entries, Mapping) else ()
 
 
 def unselected_variants(lock: Lockfile, payload: Mapping[str, object]) -> tuple[str, ...]:
-    """The variants *lock* holds that the recipe *payload* does not select."""
-    selected = set(_variants(payload))
+    """The profiles *lock* holds that the recipe *payload* does not select."""
+    selected = set(_profiles(payload))
     return tuple(name for name in lock_variants(lock) if name not in selected)
 
 
 def unselected_sources(lock: Lockfile, payload: Mapping[str, object]) -> frozenset[str]:
-    """Source keys the lock may record for variants the recipe *payload* does not select.
+    """Source keys the lock may record for profiles the recipe *payload* does not select.
 
-    Their source builds (by name, and as ``<variant>/<name>`` when pinned per
-    variant) and kernel sources: ``kernel-<variant>``, and the shared ``kernel``,
-    which an unselected variant may build too.
+    Their source builds (by name, and as ``<profile>/<name>`` when pinned per
+    profile) and kernel sources: ``kernel-<profile>``, and the shared ``kernel``,
+    which an unselected profile may build too.
     """
-    entries = lock.recipe.get(VARIANTS_KEY)
+    entries = lock.recipe.get(PROFILES_KEY)
     if not isinstance(entries, Mapping):
         return frozenset()
     names: set[str] = set()
-    for variant in unselected_variants(lock, payload):
-        names.update(("kernel", f"kernel-{variant}"))
-        entry = entries.get(variant)
+    for profile in unselected_variants(lock, payload):
+        names.update(("kernel", f"kernel-{profile}"))
+        entry = entries.get(profile)
         builds = entry.get("source_builds") if isinstance(entry, Mapping) else None
         if isinstance(builds, Mapping):
             names.update(str(name) for name in builds)
-            names.update(f"{variant}/{name}" for name in builds)
+            names.update(f"{profile}/{name}" for name in builds)
     return frozenset(names)
 
 
-def _section_variant(name: str, variants: Sequence[str]) -> str | None:
-    """The variant a ``variants.<name>.<key>`` section belongs to (longest name wins)."""
-    found = [v for v in variants if name.startswith(f"{VARIANTS_SECTION}.{v}.")]
-    return max(found, key=len, default=None)
+def section_profile(name: str, profiles: Sequence[str]) -> tuple[str, str] | None:
+    """``(profile, subject)`` of a drift section one profile owns; None for an image-wide one.
+
+    ``profiles.<profile>.<key>`` is that profile's ``<key>``, and a source pinned per
+    profile, ``sources.<profile>.<name>``, its ``sources.<name>``. The longest
+    profile name that fits wins.
+    """
+    found = [
+        (profile, prefix)
+        for profile in profiles
+        for prefix in (PROFILES_KEY, "sources")
+        if name.startswith(f"{prefix}.{profile}.")
+    ]
+    if not found:
+        return None
+    profile, prefix = max(found, key=lambda item: len(item[0]))
+    rest = name[len(prefix) + len(profile) + 2 :]
+    return profile, rest if prefix == PROFILES_KEY else f"sources.{rest}"
 
 
 def compare_lock(
@@ -177,20 +167,20 @@ def compare_lock(
     is only used when that embedded sub-payload still hashes to the section
     digest the lockfile recorded.
 
-    *partial* says *payload* holds a selection of the recipe's variants: the
-    lock's sections of variants outside it are not compared, and the
-    whole-recipe digest only when the selection is every variant the lock holds.
-    A lock written for more variants thus covers a bake or check of fewer.
+    *partial* says *payload* holds a selection of the recipe's profiles: the
+    lock's sections of profiles outside it are not compared, and the
+    whole-recipe digest only when the selection is every profile the lock holds.
+    A lock written for more profiles thus covers a build or check of fewer.
     """
     current = section_values(payload)
     locked = lock.sections
     others = unselected_variants(lock, payload) if partial else ()
     if others:
-        known = (*_variants(payload), *lock_variants(lock))
+        known = (*_profiles(payload), *lock_variants(lock))
         locked = {
             name: digest
             for name, digest in locked.items()
-            if _section_variant(name, known) not in others
+            if (section_profile(name, known) or ("",))[0] not in others
         }
     changed = tuple(
         name
@@ -213,7 +203,6 @@ def compare_lock(
         removed=removed,
         details=details,
         digest_matches=bool(others) or lock.recipe_digest == recipe_digest(payload),
-        lock_version=lock.version if lock.version < LOCKFILE_VERSION else None,
     )
 
 

@@ -506,7 +506,7 @@ class Lowered:
 
         Never writes. The returned :class:`~tundravm.lockfile.LockDrift` lists
         changed, added and removed sections; ``render()`` prints them (``~
-        variants.default.packages: +htop``) or ``lock is up to date``. A lockfile
+        profiles.default.packages: +htop``) or ``lock is up to date``. A lockfile
         written before section digests existed reports every section as added.
         Source builds report as ``+ sources.<name>: source <name> is not pinned`` or
         ``~ sources.<name>: <old> -> <new>`` (pinned for another ref, or, with

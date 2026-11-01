@@ -74,7 +74,7 @@ DENYLIST = {
     ),
     "variant for a profile (profile)": re.compile(
         r"\b[Uu]nknown variant|\bDeclared variants\b|\bin variant\b|\bvariant=(?:\{|\s*$)"
-        r"|\bInherits: "
+        r"|\bInherits: |\bvariants\.[a-z]"
     ),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
@@ -249,6 +249,7 @@ def test_removed_verbs_are_caught(text: str) -> None:
         ("Unknown variant(s): staging.", "variant for a profile (profile)"),
         ("Duplicate user name 'a' in variant 'dev'.", "variant for a profile (profile)"),
         ("  variant=", "variant for a profile (profile)"),
+        ("variants.dev.files changed since the lock", "variant for a profile (profile)"),
     ],
 )
 def test_internal_names_are_caught(text: str, what: str) -> None:

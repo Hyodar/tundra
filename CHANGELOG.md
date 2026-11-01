@@ -157,6 +157,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   finding about the whole image.
 - `check --tree DIR` reports a missing tree once, and says of each drifted file whether
   the tree misses it, has it extra or has it modified.
+- Lockfile version 6 names a profile's sections `profiles.<name>.<key>`, the word the API
+  uses; a lockfile an older tundravm wrote is refused, with `tundravm lock` as the fix.
+  `check` reports a profile's lock drift as that profile's finding
+  (`lock-changed [dev] files: files changed since the lock`).
 - `new` prints the first loop after `uv sync` (`lock`, `build --tree-only mkosi`, `pytest`,
   `build --dev`, `run --mode simulated --dev`), and the project README and the image's
   docstring list the same commands with `uv run`. The generated image is `ruff format`

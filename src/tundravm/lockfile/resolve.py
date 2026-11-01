@@ -10,13 +10,8 @@ from typing import Any
 from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, Lockfile
 from tundravm.toolchain import Toolchain, tundravm_identity
 
-VARIANTS_KEY = "profiles"
-"""The payload key holding one entry per variant (kept so recipe digests do not move)."""
-VARIANTS_SECTION = "variants"
-"""The section prefix of per-variant sections: ``variants.<name>.<key>``."""
-NESTED_SECTIONS = {VARIANTS_KEY: VARIANTS_SECTION}
-"""Top-level payload keys whose ``<name>.<section>`` children are digested individually,
-mapped to the prefix their section names use."""
+PROFILES_KEY = "profiles"
+"""The payload key holding one entry per profile; its sections are ``profiles.<name>.<key>``."""
 
 
 def value_digest(value: object) -> str:
@@ -33,19 +28,18 @@ def recipe_digest(recipe: Mapping[str, Any]) -> str:
 def section_values(payload: Mapping[str, object]) -> dict[str, object]:
     """Split *payload* into dotted sections.
 
-    Every top-level key is one section, except the per-variant ``profiles``
-    payload: each variant's own keys become ``variants.<name>.<key>`` sections.
+    Every top-level key is one section, except the per-profile ``profiles``
+    payload: each profile's own keys become ``profiles.<name>.<key>`` sections.
     """
     sections: dict[str, object] = {}
     for key, value in payload.items():
-        prefix = NESTED_SECTIONS.get(str(key))
-        if prefix is not None and isinstance(value, Mapping):
+        if key == PROFILES_KEY and isinstance(value, Mapping):
             for name, entry in value.items():
                 if isinstance(entry, Mapping):
                     for section, item in entry.items():
-                        sections[f"{prefix}.{name}.{section}"] = item
+                        sections[f"{PROFILES_KEY}.{name}.{section}"] = item
                 else:
-                    sections[f"{prefix}.{name}"] = entry
+                    sections[f"{PROFILES_KEY}.{name}"] = entry
             continue
         sections[str(key)] = value
     return dict(sorted(sections.items()))
@@ -64,7 +58,7 @@ def build_lockfile(
 ) -> Lockfile:
     """The lockfile for *recipe*; *toolchain* defaults to this tundravm alone (nothing probed)."""
     dependencies: dict[str, list[str]] = {}
-    profiles = recipe.get("profiles", {})
+    profiles = recipe.get(PROFILES_KEY, {})
     if isinstance(profiles, dict):
         for profile_name, profile_data in profiles.items():
             if not isinstance(profile_name, str) or not isinstance(profile_data, dict):
