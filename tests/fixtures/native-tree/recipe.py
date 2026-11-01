@@ -130,10 +130,9 @@ DEV_SLIM = (
     "/usr/share/locale",
     "/usr/share/man",
 )
-"""What the ``dev`` profile removes so its UKI, the whole OS in the initramfs layout, still
-fits the 126 MiB the ESP holds with Prometheus, promtool and the node exporter in it: the
-hardware database, documentation, translations and the web assets the loopback-only agent
-never serves."""
+"""What the ``dev`` profile removes to keep its UKI, the whole OS in the initramfs layout,
+small with Prometheus, promtool and the node exporter in it: the hardware database,
+documentation, translations and the web assets the loopback-only agent never serves."""
 
 
 def lowered(observability: Observability) -> Fragment:

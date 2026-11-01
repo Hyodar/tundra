@@ -72,6 +72,7 @@ def recipe_of(image: Image) -> dm.Recipe:
         mkosi=dm.Mkosi(
             root=image.rootfs.layout,
             root_size=image.rootfs.max_size,
+            uki_max_size=image.rootfs.uki_max_size,
             build_network=state.build_network(),
         ),
     )

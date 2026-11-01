@@ -162,36 +162,64 @@ ARCH_TO_MKOSI: dict[str, str] = {
 # Minimal systemd target the systemd debloat makes the default target
 MINIMAL_TARGET_UNIT = v1.MINIMAL_TARGET
 
-ESP_SIZE = "128M"
-"""The ESP of every disk, fixed: FAT32 with 512-byte sectors and clusters holds 258078
-clusters and 126 MiB of data at this size, room for a UKI up to about 125 MiB (the
-fixture's initramfs UKI is about 65 MiB, its verity one 43 MiB, the templates' at most
-72 MiB). A larger UKI fails the disk's build (``mcopy``: disk full), which the local
-backend reports with both sizes (:data:`UKI_CAPACITY`); ``RootFS.verity()`` keeps the OS
-out of the UKI."""
 ESP_BYTES = 128 << 20
-""":data:`ESP_SIZE` in bytes."""
-ESP_CLUSTERS = 258078
-"""The data clusters (512 bytes each) mkfs.fat makes of :data:`ESP_SIZE` with
-:data:`ESP_MKFS_ENVIRONMENT`'s options."""
-UKI_CAPACITY = (ESP_CLUSTERS - 3) * 512
-"""The largest UKI the ESP holds: every cluster but the three of the root directory,
-``EFI/`` and ``EFI/BOOT/``."""
-ESP_PARTITION = f"""\
-[Partition]
-Type=esp
-Format=vfat
-CopyFiles=/efi:/
-SizeMinBytes={ESP_SIZE}
-SizeMaxBytes={ESP_SIZE}
-"""
-"""The ESP of every disk around the payload: the UKI at ``/EFI/BOOT/BOOTX64.EFI``.
+"""The ESP of a verity disk, and the smallest of any: systemd-stub, the kernel and an initrd
+that carries no OS (the fixture's verity UKI is about 43 MiB, the templates' at most 73
+MiB) in the 126 MiB it holds."""
+UKI_MAX_SIZE = "256M"
+"""The UKI an initramfs root may grow to unless ``Mkosi(uki_max_size=)`` says otherwise: the
+fixture's dev UKI, the whole OS with the attested endpoint, the evidence service and the
+export path, is 132.4 MiB."""
+ESP_ALIGN = 16 << 20
+"""What an initramfs disk's ESP is rounded up to, from :data:`ESP_BYTES`."""
 
-Not ``Minimize=guess``: repart (systemd 257) sizes a vfat it minimizes by formatting a 1 TiB
-sparse file, copying the files in and taking 1.5 times the bytes written, and on 1 TiB
-mkfs.fat writes 256 MiB of FATs (512-byte sectors), so a 65 MiB UKI got a 481 MiB ESP and
-``azure.vhd``, a fixed VHD, carried all of it. A fixed size is also the same on every
-build, whatever the UKI's."""
+
+def esp_bytes(root: RootLayout, uki_max_size: str | None = None) -> int:
+    """The ESP of every disk of a tree whose root is *root*: :data:`ESP_BYTES` for verity,
+    else the smallest multiple of :data:`ESP_ALIGN` from it that holds a UKI of
+    *uki_max_size* (:data:`UKI_MAX_SIZE`). Declared values only, never the built UKI's
+    size, so it is the same on every build."""
+    if root == "verity":
+        return ESP_BYTES
+    text = uki_max_size or UKI_MAX_SIZE
+    ceiling = int(text[:-1]) << (20 if text[-1] == "M" else 30)
+    size = ESP_BYTES
+    while uki_capacity(size) < ceiling:
+        size += ESP_ALIGN
+    return size
+
+
+def uki_capacity(esp: int) -> int:
+    """The largest UKI an ESP of *esp* bytes holds, as mkfs.fat 4.2 formats it with
+    :data:`ESP_MKFS_ENVIRONMENT`'s options: 512-byte sectors and clusters, past 256 MiB the
+    sectors cut to a multiple of its 63 sectors a track, 32 reserved, two FATs of 4 bytes a
+    cluster, and every cluster but the three of the root directory, ``EFI/`` and
+    ``EFI/BOOT/``. 132134400 bytes (126.0 MiB) of :data:`ESP_BYTES`."""
+    sectors = esp // 512
+    if sectors > 1 << 19:
+        sectors -= sectors % 63
+    data = sectors - 32
+    clusters = (data * 512 + 16) // 520
+    fat = -(-(clusters + 2) * 4 // 512)
+    return (data - 2 * fat - 3) * 512
+
+
+def esp_partition(esp: int) -> str:
+    """The ESP of every disk around the payload, *esp* bytes: the UKI at
+    ``/EFI/BOOT/BOOTX64.EFI``.
+
+    Not ``Minimize=guess``: repart (systemd 257) sizes a vfat it minimizes by formatting a
+    1 TiB sparse file, copying the files in and taking 1.5 times the bytes written, and on
+    1 TiB mkfs.fat writes 256 MiB of FATs (512-byte sectors), so a 65 MiB UKI got a 481 MiB
+    ESP and ``azure.vhd``, a fixed VHD, carried all of it. A declared size is also the same
+    on every build, whatever the UKI's."""
+    size = f"{esp >> 20}M"
+    return (
+        "[Partition]\nType=esp\nFormat=vfat\nCopyFiles=/efi:/\n"
+        f"SizeMinBytes={size}\nSizeMaxBytes={size}\n"
+    )
+
+
 ESP_MKFS_ENVIRONMENT = 'Environment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"'
 """Every disk image's ``[Build]``: the ESP's FAT32 in 512-byte sectors (the disk's own; repart
 passes 4096 offline, and mkfs.vfat takes the last ``-S``) and one sector per cluster. UEFI
@@ -420,6 +448,9 @@ class EmitConfig:
     """``False`` writes ``Bootable=no`` and a disk payload, and no disk around it."""
     root: RootLayout = "initramfs"
     """The payload's root layout: the UKI's ``.initrd``, or erofs + dm-verity partitions."""
+    uki_max_size: str | None = None
+    """``Mkosi(uki_max_size=)``: the initramfs UKI's ceiling, which sizes the ESP
+    (:func:`esp_bytes`)."""
     kernel_pin: str | None = None
     """The kernel source's pin (commit or sha256); ``None`` while unpinned."""
     kernel_checkout: str | None = None
@@ -1325,7 +1356,8 @@ class DeterministicMkosiEmitter:
     def _emit_repart(self, directory: Path, config: EmitConfig) -> None:
         """The partitions of a disk around the payload: the ESP, and with the verity layout
         the payload's root and hash partitions (copied block for block)."""
-        _write(directory / "00-esp.conf", ESP_PARTITION, FILE_MODE)
+        esp = esp_partition(esp_bytes(config.root, config.uki_max_size))
+        _write(directory / "00-esp.conf", esp, FILE_MODE)
         if config.root != "verity":
             return
         data, hashes = verity_uuids(config.seed)

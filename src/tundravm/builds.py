@@ -60,6 +60,7 @@ from ._source import (
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
 from .compiler.emit_mkosi import KERNEL_RECORDS as emitted_kernel_records
+from .compiler.emit_mkosi import esp_bytes
 from .declarative._compile import emit, mkosi_argv
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
@@ -703,6 +704,7 @@ def _assemble(
         "ports": sorted(set(ports)),
         "rootfs": img.mkosi.root,
         "rootfs_max_size": img.mkosi.root_size,
+        "esp_bytes": esp_bytes(img.mkosi.root, img.mkosi.uki_max_size),
         "image_digest": locked.image_digest,
         "artifacts": mf.artifact_index(out),
         "uki": {

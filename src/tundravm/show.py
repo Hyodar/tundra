@@ -40,7 +40,7 @@ from ._location import display_location
 from ._reporting import format_duration, format_size
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME
 from .builds import Build
-from .compiler.emit_mkosi import ESP_BYTES, UKI_CAPACITY
+from .compiler.emit_mkosi import ESP_BYTES, uki_capacity
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
 from .declarative.lower import declared_firewall
@@ -297,7 +297,7 @@ def report(build: Build) -> dict[str, Any]:
     """What *build* fetched, made and took, read from its manifest and ``observations.json``.
 
     ``artifacts``: the UKI and each target's disk with its size and sha256, the UKI with the
-    room the fixed ESP leaves it. ``sources``: each locked source with its ref, pin and the
+    room the build's ESP leaves it. ``sources``: each locked source with its ref, pin and the
     Go or Rust toolchain its prefetch recorded, and whether this build fetched its checkout
     and dependencies or found them (``-`` where the build directory does not say). ``time``:
     seconds per phase and in total (``None`` for a phase that did not run).
@@ -322,7 +322,8 @@ def report(build: Build) -> dict[str, Any]:
             continue
         row: dict[str, Any] = {"name": name, "size": record["size"], "sha256": record["sha256"]}
         if name == BOOT_PAYLOAD_NAME:
-            row["esp"] = {"size": ESP_BYTES, "left": UKI_CAPACITY - int(record["size"])}
+            esp = int(m.get("esp_bytes") or ESP_BYTES)
+            row["esp"] = {"size": esp, "left": uki_capacity(esp) - int(record["size"])}
         artifacts.append(row)
     sources = []
     for source in m.get("sources") or []:

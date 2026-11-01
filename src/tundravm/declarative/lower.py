@@ -787,6 +787,7 @@ def _typed_options(recipe: Recipe) -> dict[str, Any]:
         "with_network": config.build_network,
         "root": config.root,
         "root_size": config.root_size,
+        "uki_max_size": config.uki_max_size,
         "clean_package_metadata": getattr(recipe.platform, "clean_package_metadata", True),
         "kernel_modules": getattr(recipe.platform, "kernel_modules", ()),
         "kernel_cmdline": getattr(recipe.platform, "kernel_cmdline", ()),

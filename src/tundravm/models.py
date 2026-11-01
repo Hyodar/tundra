@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Literal, get_args
 
+from ._options import RootLayout
 from .errors import ValidationError
 from .toolchain import Toolchain
 
@@ -735,6 +736,11 @@ class BakeRequest:
     ``--profile=``, ``--dependency=``); backends pass them before the verb."""
     toolchain: Toolchain | None = None
     """The lockfile's toolchain (mkosi, the tools tree); ``None`` without a lockfile."""
+    root: RootLayout = "initramfs"
+    """The tree's root layout, which with ``uki_max_size`` sized its ESP
+    (``emit_mkosi.esp_bytes``)."""
+    uki_max_size: str | None = None
+    """``Mkosi(uki_max_size=)``: the initramfs UKI's ceiling."""
 
     def notice(self, level: str, message: str) -> None:
         """Pass *message* to ``on_notice``, if set."""

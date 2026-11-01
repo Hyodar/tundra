@@ -167,6 +167,7 @@ def _emit_config(lowered: Lowered, pins: Mapping[str, LockedFetch]) -> EmitConfi
         "settings": options.settings,
         "bootable": options.bootable,
         "root": options.root,
+        "uki_max_size": options.uki_max_size,
         "targets": tuple(targets),
         "overlays": tuple(name for name in lowered.overlays if name in lowered.active),
         "payload_overlays": lowered.overlays,

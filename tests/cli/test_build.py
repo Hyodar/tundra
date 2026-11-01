@@ -70,7 +70,7 @@ def test_every_file_is_read_only(built: Build) -> None:
 
 REPORT = """\
 built build/demo/production/<hex>
-  payload.efi     4.5 KiB  sha256 <hex>  ESP 128.0 MiB, 126.0 MiB left
+  payload.efi     4.5 KiB  sha256 <hex>  ESP 272.0 MiB, 267.8 MiB left
   qemu.raw       17.0 KiB  sha256 <hex>
   azure.vhd      17.0 KiB  sha256 <hex>
   gcp.tar.gz      <size>  sha256 <hex>

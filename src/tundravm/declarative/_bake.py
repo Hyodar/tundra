@@ -126,6 +126,8 @@ def bake(
                 else None,
                 mkosi_args=(*mkosi_argv(lowered, name), *releases),
                 toolchain=locked_toolchain,
+                root=lowered.mkosi.root,
+                uki_max_size=lowered.mkosi.uki_max_size,
             )
             logger.log(
                 operation="bake_profile_start",

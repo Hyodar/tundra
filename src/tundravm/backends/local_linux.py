@@ -43,7 +43,7 @@ from tundravm.backends.base import (
     mkosi_project,
     run_streaming,
 )
-from tundravm.compiler.emit_mkosi import ESP_BYTES, UKI_CAPACITY
+from tundravm.compiler.emit_mkosi import UKI_MAX_SIZE, esp_bytes, uki_capacity
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 from tundravm.toolchain import MkosiTool, ToolsTree, installed_mkosi
@@ -158,7 +158,9 @@ class LocalLinuxBackend:
                     sudo=sudo,
                 )
             except BackendExecutionError as exc:
-                overflow = esp_overflow(output_dir / BOOT_PAYLOAD_NAME, profile_dir / LOG_FILENAME)
+                overflow = esp_overflow(
+                    output_dir / BOOT_PAYLOAD_NAME, profile_dir / LOG_FILENAME, request
+                )
                 if overflow is None:
                     raise
                 raise overflow from exc
@@ -337,25 +339,38 @@ class LocalLinuxBackend:
             )
 
 
-def esp_overflow(uki: Path, log: Path) -> BackendExecutionError | None:
+def esp_overflow(uki: Path, log: Path, request: BakeRequest) -> BackendExecutionError | None:
     """The error a failed ``mkosi build`` is when the payload subimage left a UKI *uki* larger
-    than the fixed ESP of every disk holds (``UKI_CAPACITY``): mkosi got as far as copying
-    it onto the disk, which failed. ``None`` for any other failure."""
+    than the ESP every disk of *request*'s tree holds (``emit_mkosi.esp_bytes``): mkosi got
+    as far as copying it onto the disk, which failed. ``None`` for any other failure."""
     try:
         size = uki.stat().st_size
     except OSError:
         return None
-    if size <= UKI_CAPACITY:
+    esp = esp_bytes(request.root, request.uki_max_size)
+    capacity = uki_capacity(esp)
+    if size <= capacity:
         return None
+    if request.root == "verity":
+        hint = (
+            "The verity ESP is a fixed size for the stub, the kernel and the initrd: make the "
+            "UKI smaller with fewer kernel modules or initrd contents."
+        )
+    else:
+        hint = (
+            f"Raise the UKI's ceiling with RootFS.initramfs(uki_max_size=...) (now "
+            f"{request.uki_max_size or UKI_MAX_SIZE}), which sizes the ESP; or keep the OS out "
+            'of the UKI with rootfs=RootFS.verity(filesystem="erofs"), or make the payload '
+            "smaller with fewer packages in Image(packages=...)."
+        )
     return BackendExecutionError(
-        f"The UKI is {format_size(size)}: the {format_size(ESP_BYTES)} ESP every disk boots "
-        f"it from holds {format_size(UKI_CAPACITY)}, so mkosi could not copy it onto the disk.",
-        hint='Keep the OS out of the UKI with rootfs=RootFS.verity(filesystem="erofs"), or '
-        "make the payload smaller with fewer packages in Image(packages=...).",
+        f"The UKI is {format_size(size)}: the {format_size(esp)} ESP every disk boots "
+        f"it from holds {format_size(capacity)}, so mkosi could not copy it onto the disk.",
+        hint=hint,
         context={
             "uki_bytes": str(size),
-            "esp_bytes": str(ESP_BYTES),
-            "capacity_bytes": str(UKI_CAPACITY),
+            "esp_bytes": str(esp),
+            "capacity_bytes": str(capacity),
             "log": str(log),
         },
     )
