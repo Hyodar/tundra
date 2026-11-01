@@ -747,9 +747,8 @@ recorded `Mkosi(scripts=)` escape, since nothing could say what it changed.
 
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
-by sha256. `Git(url, ref, subdir="tools")` builds one directory of the repository, with the
-toolchain its `go.mod` names. Your own program is a `Local` source, as the
-[signer](#4-the-signer) is.
+by sha256. `Git(url, ref, subdir="tools")` builds one directory of the repository. Your own
+program is a `Local` source, as the [signer](#4-the-signer) is.
 
 The path stays inside the project (the nearest `pyproject.toml`). The digest covers the
 path, sha256, exec bit and symlink target of what `git ls-files --cached --others
@@ -758,24 +757,25 @@ path, sha256, exec bit and symlink target of what `git ls-files --cached --other
 
 The build sandbox never fetches a source. `build` checks each one out on the host, as you,
 into `build/<image>/.work/`, verifies a reused checkout against its pin, and mounts the
-checkouts into the build. Go, Cargo and .NET dependencies are prefetched there too, so
-`build --offline` can run on a machine without network once a connected build filled the
-workspace. A modified checkout fails with `E_SOURCE`; `build --clean-cache` starts the
-workspace afresh. The manifest records each Go and Cargo source's toolchain, and
-`show BUILD` prints it.
+checkouts into the build. Dependencies are prefetched there, so `build --offline` runs
+without network. A modified checkout is `E_SOURCE`; `build --clean-cache` starts
+the workspace afresh. The manifest records each source's toolchain; `show BUILD` prints it.
 
-A Go source builds with the toolchain its `go.mod` names: the `toolchain` line, else the
-`go` line (`go 1.22` is `go1.22.0`). The host's `go`, any 1.21 or newer, fetches that
-release with the modules, and the offline build runs it; Debian's `golang` only bootstraps
-it. A release the host cannot fetch is `E_SOURCE`; a `go.mod` older than Go 1.21 builds
-with Debian's `go`.
+A Go source builds with the toolchain its `go.mod` names (the `toolchain` line, else the
+`go` line: `go 1.22` is `go1.22.0`), fetched with the modules by the host's `go` 1.21+;
+Debian's `golang` only bootstraps it. A release the host cannot fetch is `E_SOURCE`; a
+`go.mod` older than 1.21 builds with Debian's `go`.
 
-A Cargo source builds with the toolchain its `rust-toolchain.toml` (or `rust-toolchain`)
-pins, found as `rustup` finds it. The host's `rustup` installs that channel, with the
-file's components and targets, into the workspace; its `cargo` fetches the crates, and the
-offline build runs its `cargo` and `rustc` over Debian's linker. The channel must be a
-release (`1.91.0`) or a dated one (`nightly-2026-09-01`); a moving one is `E_SOURCE`. Without a toolchain file, Debian's `cargo` builds it.
-`build:rustup` blocks only for an image with a pinned source.
+A Cargo source builds with the channel its `rust-toolchain.toml` (or `rust-toolchain`)
+pins, installed into the workspace by the host's `rustup`; its `cargo` fetches the crates,
+and the offline build runs it over Debian's linker. The channel must be a release
+(`1.91.0`) or dated (`nightly-2026-09-01`): a moving one is `E_SOURCE`, and no file means
+Debian's `cargo`. `build:rustup` blocks only with a pinned source.
+
+A Dotnet source builds with the SDK its `global.json` names: `lock` resolves it under its
+`rollForward` policy, within that .NET release, and pins its tarball's sha512; `build`
+downloads it; its `dotnet` restores the packages and builds offline over Debian's ICU,
+OpenSSL and libstdc++. The host needs no `dotnet`; no `global.json` is `E_SOURCE`.
 
 ## The lock
 
