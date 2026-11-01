@@ -17,6 +17,17 @@ from tundravm._units.render import service_unit
 from tundravm.errors import ValidationError
 from tundravm.models import ALL_STEPS, FileEntry, InitScriptEntry, ProfileState, ServiceSpec
 
+OWNERS_STEP = "owners"
+"""The step that gives each ``File(owner=...)`` and ``Tree(owner=...)`` path its owner
+(``owners-<profile>`` for a profile's own paths), before the services that wait for it. It
+orders after ``local-fs.target`` alone: no owned path is on a volume (the image refuses a
+file under a volume's mount, which hides it), and a ``chown`` needs no network. Not at
+build: mkosi builds unprivileged in a user namespace with one user, where a chown to another
+fails and every file is root's in the image; not by systemd-tmpfiles, whose boot service the
+debloat masks."""
+
+_LOCAL = "After=local-fs.target"
+
 
 def order_steps(nodes: Sequence[tuple[str, Iterable[str], Iterable[str]]]) -> list[str]:
     """The step names of *nodes* (``(name, after, before)``) in a deterministic run order.
@@ -149,7 +160,8 @@ class Init:
             script = "\n".join([SCRIPT_HEADER, *(entry.script for entry in entries)])
             self._add(profile, f"{STEP_DIRECTORY}/{step}", script, "0755")
             deps = [step_unit(dep) for dep in _direct_deps(step, nodes, steps)]
-            unit = _step_unit_text(step, network, deps)
+            local = step.partition("-")[0] == OWNERS_STEP
+            unit = _step_unit_text(step, _LOCAL if local else network, deps)
             self._add(profile, f"{UNIT_DIRECTORY}/{step_unit(step)}", unit, "0644")
         units = " ".join(step_unit(step) for step in steps)
         aggregate = f"After={units}\nRequires={units}"

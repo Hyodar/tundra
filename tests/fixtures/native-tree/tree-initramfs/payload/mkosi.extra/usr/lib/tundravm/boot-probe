@@ -1,7 +1,8 @@
 #!/bin/sh
 # What the boot tests assert, one "boot-probe:" line each: the command line, the mounts
 # stacked on / (fstype, source, options), each device-mapper device, where a write to
-# /usr/bin lands, and the first line the Go and the Rust program print.
+# /usr/bin lands, the owner and mode of the web service's private page, and the first line
+# the Go and the Rust program print.
 say() { echo "boot-probe: $*"; }
 say "cmdline $(cat /proc/cmdline)"
 while read -r line; do
@@ -18,6 +19,7 @@ if touch /usr/bin/.boot-probe 2>/dev/null; then
 else
     say "usr-bin write=refused"
 fi
+say "owner /srv/www/private.html $(stat -c '%U:%G %a' /srv/www/private.html)"
 say "go $(/usr/bin/git-codereview help | head -n 1)"
 say "rust $(/usr/bin/rust-probe)"
 say done

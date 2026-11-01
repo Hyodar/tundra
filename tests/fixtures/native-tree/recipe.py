@@ -31,10 +31,11 @@ from typing import Literal
 import tundravm
 from tundravm import Image
 from tundravm._image import recipe_of
-from tundravm._image._lower import OWNED_FILES
+from tundravm._image._lower import OWNERS_STEP
 from tundravm.components import JournalExport, Observability, PrometheusRemoteWrite
 from tundravm.components._base import egress_rules
 from tundravm.declarative import (
+    BootStep,
     Debian,
     Declaration,
     Every,
@@ -142,12 +143,21 @@ def lowered(observability: Observability) -> Fragment:
     return next(i for i in items if isinstance(i, Fragment) and i.name == observability.name)
 
 
+WWW = "/srv/www"
+PRIVATE = f"{WWW}/private.html"
+"""A page only its owner may read (``0600``), declared ``owner="web"``: httpd, running as
+``web``, serves it only when the image applied that owner, which the probe's ``owner:``
+check and ``BootProbe`` read back: on the verity root the ``chown`` lands in the
+volatile overlay's tmpfs, as any write there does."""
+
+
 PROBE = "/usr/lib/tundravm/boot-probe"
 PROBE_SCRIPT = f"""\
 #!/bin/sh
 # What the boot tests assert, one "boot-probe:" line each: the command line, the mounts
 # stacked on / (fstype, source, options), each device-mapper device, where a write to
-# /usr/bin lands, and the first line the Go and the Rust program print.
+# /usr/bin lands, the owner and mode of the web service's private page, and the first line
+# the Go and the Rust program print.
 say() {{ echo "boot-probe: $*"; }}
 say "cmdline $(cat /proc/cmdline)"
 while read -r line; do
@@ -164,6 +174,7 @@ if touch /usr/bin/.boot-probe 2>/dev/null; then
 else
     say "usr-bin write=refused"
 fi
+say "owner {PRIVATE} $(stat -c '%U:%G %a' {PRIVATE})"
 say "go $({REVIEW.executable} help | head -n 1)"
 say "rust $({RUST_PROBE.executable})"
 say done
@@ -171,7 +182,6 @@ say done
 """The probe ``BootProbe`` installs; ``/bin/sh``, coreutils, :data:`REVIEW` and
 :data:`RUST_PROBE`."""
 
-WWW = "/srv/www"
 WEB_PORT = 8080
 PAGE = "<!doctype html>\n<title>fixture</title>\n<h1>fixture</h1>\n"
 
@@ -192,19 +202,14 @@ class BootProbe(Composite):
         )
 
 
-PRIVATE = f"{WWW}/private.html"
-"""A page only its owner may read (``0600``), declared ``owner="web"``: httpd, running as
-``web``, serves it only when the image applied that owner, which the probe's ``owner:``
-check reads back."""
-
-
 def owned(file: tundravm.File) -> tuple[Declaration, ...]:
-    """*file* as an ``Image`` lowers it: the file, and the line that applies its owner."""
+    """*file* as an ``Image`` lowers it: the file, and the boot step that applies its owner."""
     items = recipe_of(Image("fixture", files=[file])).items
     return tuple(
         item
         for item in items
-        if isinstance(item, File) and (item.path == file.path or item.path == OWNED_FILES)
+        if (isinstance(item, File) and item.path == file.path)
+        or (isinstance(item, BootStep) and item.name == OWNERS_STEP)
     )
 
 

@@ -21,6 +21,7 @@ from typing import cast
 from tundravm._location import anchored, declared_at, display_location
 from tundravm._modules import tdxs as _tdxs
 from tundravm._modules.execution import GATE_UNIT
+from tundravm._modules.init import OWNERS_STEP
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
@@ -56,17 +57,7 @@ from ._values import (
     mkosi_section,
 )
 
-__all__ = ["OWNED_FILES", "component_classes", "recipe_of"]
-
-OWNED_FILES = "/etc/tmpfiles.d/50-tundravm-owned.conf"
-"""Where the ownership of ``File(owner=...)`` files is applied, at boot, by
-systemd-tmpfiles: the users exist by then, which they do not while the image is built. A
-profile's own files are owned by ``50-tundravm-owned-<profile>.conf`` beside it."""
-
-_TMPFILES_HEADER = (
-    "# tundravm: the owners File(owner=...) and Tree(owner=...) asked for.\n"
-    "# systemd-tmpfiles applies them at boot, once the users exist.\n"
-)
+__all__ = ["OWNERS_STEP", "component_classes", "recipe_of"]
 
 
 def recipe_of(image: Image) -> dm.Recipe:
@@ -92,6 +83,7 @@ class _Lowering:
 
     image: Image
     owned: list[tuple[str, str]] = field(default_factory=list)
+    owner_steps: tuple[dm.Ready, ...] = ()
     curl: bool = False
     curl_shipped: bool = False
     """Whether the image itself ships curl, which an HTTP probe runs."""
@@ -205,7 +197,7 @@ class _Lowering:
             body.append(self.kernel())
         body.extend(self.repositories())
         body.extend(self.mkosi())
-        return (*self.baseline(), *body, *self.owned_files())
+        return (*self.baseline(), *self.owners(body))
 
     def baseline(self) -> tuple[dm.Declaration | dm.Fragment, ...]:
         """What every image gets: the TEE baseline, the network, the firewall and the
@@ -352,15 +344,24 @@ class _Lowering:
             found.append(dm.Hook(f"mkosi-{stage}-{index}", stage, script))  # type: ignore[arg-type]
         return tuple(found)
 
-    def owned_files(self, profile: str | None = None) -> tuple[dm.Declaration, ...]:
-        """The tmpfiles file that applies every ``owner=`` collected so far (the image's, or
-        *profile*'s own), and forgets them."""
+    def owners(
+        self, items: Sequence[dm.Declaration | dm.Fragment], profile: str | None = None
+    ) -> list[dm.Declaration | dm.Fragment]:
+        """*items* and the :data:`OWNERS_STEP` that applies every ``owner=`` collected so far
+        (the image's, or *profile*'s own), which forgets them; every service and task in
+        *items* waits for it and for the image's."""
         owned, self.owned = self.owned, []
-        if not owned:
-            return ()
-        path = OWNED_FILES if profile is None else f"{OWNED_FILES[:-5]}-{profile}.conf"
-        lines = "".join(f"{line}\n" for line in sorted(dict.fromkeys(_owned_lines(owned))))
-        return (dm.File.text(path, _TMPFILES_HEADER + lines),)
+        found = list(items)
+        if owned:
+            name = OWNERS_STEP if profile is None else f"{OWNERS_STEP}-{profile}"
+            lines = sorted(dict.fromkeys(_owned_lines(owned)))
+            found.append(dm.BootStep(name, "".join(f"{line}\n" for line in lines)))
+            if profile is None:
+                self.owner_steps = (dm.Ready(name),)
+            steps = (*self.owner_steps, *(() if profile is None else (dm.Ready(name),)))
+        else:
+            steps = self.owner_steps
+        return [_waiting(item, steps) for item in found] if steps else found
 
     def variants(self) -> tuple[dm.Variant, ...]:
         """The base variant the image is, then its profiles, then ``dev=``."""
@@ -386,7 +387,7 @@ class _Lowering:
         if self.curl and not self.curl_shipped:
             items.append(dm.Package("curl"))
         self.curl = curl
-        items.extend(self.owned_files(name))
+        items = self.owners(items, name)
         inherited = [item for ancestor in self.ancestors(profile) for item in ancestor.add]
         with _at(profile):
             egress = self.profile_egress(profile.add, inherited)
@@ -593,7 +594,7 @@ class _Lowering:
                 items.append(tool)
         else:
             items.append(self.component(dev))
-        items.extend(self.owned_files(DEV_PROFILE))
+        items = self.owners(items, DEV_PROFILE)
         with _at(dev):
             egress = self.profile_egress([dev])
         return dm.Variant(
@@ -640,15 +641,29 @@ class _Lowering:
 
     def file(self, item: File) -> Iterator[dm.Declaration]:
         """A ``File`` as the declaration that ships it, plus its ownership line."""
+        self.unmounted(item, item.path)
         if item.owner is not None:
             self.owned.append((item.path, item.owner))
         yield self.declaration(item)
 
     def tree(self, item: Tree) -> Iterator[dm.Declaration]:
         """A ``Tree`` as the host directory it ships."""
+        self.unmounted(item, item.dst)
         if item.owner is not None:
             self.owned.append((item.dst + "/", item.owner))
         yield self.declaration(item)
+
+    def unmounted(self, item: File | Tree, path: str) -> None:
+        """Refuse *item* at *path* under a volume's mount, which hides what the image ships."""
+        for volume in self.runtime.volumes:
+            if path == volume.mount or path.startswith(volume.mount.rstrip("/") + "/"):
+                with _at(item):
+                    raise ValidationError(
+                        f"{type(item).__name__} {path!r} is under Volume {volume.name!r}, "
+                        f"whose mount at {volume.mount} hides what the image ships there.",
+                        hint="Ship it outside the volume; a service writes the volume at run "
+                        f"time, from its state=, such as {volume.name}.directory(...).",
+                    )
 
     def component(self, item: Component) -> dm.Fragment:
         """A ``Component`` as the fragment it is, nested components included."""
@@ -909,12 +924,24 @@ def _differing(old: dm.Declaration, new: dm.Declaration) -> dict[str, object]:
     }
 
 
+def _waiting(
+    item: dm.Declaration | dm.Fragment, steps: tuple[dm.Ready, ...]
+) -> dm.Declaration | dm.Fragment:
+    """*item*, a service or task in it waiting for *steps* as well (``needs=``)."""
+    if isinstance(item, dm.Fragment):
+        return replace(item, items=tuple(_waiting(child, steps) for child in item.items))
+    if isinstance(item, (dm.Service, dm.Task)) and dm.RUNTIME_INIT not in item.needs:
+        missing = tuple(step for step in steps if step not in item.needs)
+        return replace(item, needs=(*item.needs, *missing)) if missing else item
+    return item
+
+
 def _owned_lines(owned: Sequence[tuple[str, str]]) -> Iterator[str]:
-    """One ``z``/``Z`` line per owned path."""
+    """One ``chown`` line per owned path, ``-R`` for a tree's."""
     for path, owner in owned:
         user, _, group = owner.partition(":")
-        kind = "Z" if path.endswith("/") else "z"
-        yield f"{kind} {path.rstrip('/')} - {user} {group or user} -"
+        recursive = ["-R"] if path.endswith("/") else []
+        yield shlex.join(["chown", *recursive, f"{user}:{group or user}", path.rstrip("/")])
 
 
 def _directives(item: Service) -> dict[str, str | tuple[str, ...]]:

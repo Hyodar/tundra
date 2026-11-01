@@ -17,7 +17,6 @@ mkosi-chroot systemctl enable tdxs.socket
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable tundravm-probe.service
-mkosi-chroot systemctl enable runtime-init.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -30,5 +29,4 @@ ln -sf "/etc/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/minimal.
 ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkosi-chroot systemctl mask systemd-journal-upload.service prometheus.service

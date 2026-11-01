@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+
+chown web:web /srv/www/private.html

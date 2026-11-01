@@ -1,0 +1,12 @@
+[Unit]
+Description=Runtime Init
+After=runtime-init-owners.service
+Requires=runtime-init-owners.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=yes
+
+[Install]
+WantedBy=minimal.target

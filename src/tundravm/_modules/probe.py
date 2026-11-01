@@ -44,9 +44,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   root is a tmpfs or erofs, which carry no ``chattr +i``);
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
   ``root:root 0600`` and its public key file holds its public key;
-- ``owner:PATH``: each path a ``tmpfiles.d`` line of the image gives an owner (``z``/``Z``,
-  what ``File(owner=)`` and ``Tree(owner=)`` lower to) is owned by it, with the mode its
-  ``File`` declares.
+- ``owner:PATH``: each path a ``File(owner=)`` or ``Tree(owner=)`` declares is owned by
+  that user and group once the ``owners`` runtime-init step ran, with the mode its ``File``
+  declares.
 
 The probe runs inside the guest it checks: it proves what the guest says of itself, which a
 compromised guest could fake. It is a development aid, not evidence.
@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import shlex
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,7 +68,7 @@ from tundravm.models import ServiceSpec, unit_name
 from . import execution, instance_key
 
 if TYPE_CHECKING:
-    from tundravm.declarative.model import Declaration, EgressRule, File, Firewall
+    from tundravm.declarative.model import Declaration, EgressRule, Firewall
 
 UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
@@ -81,8 +82,6 @@ DENIED_ADDRESSES = ("192.0.2.1", "198.51.100.1", "203.0.113.1")
 """Documentation addresses (RFC 5737) the egress check sends to, the first no rule accepts."""
 DENIED_PORTS = (9, 7, 13, 19, 37)
 """Ports the egress check sends to (discard first), the first no rule accepts."""
-TMPFILES = ("/etc/tmpfiles.d/", "/usr/lib/tmpfiles.d/")
-"""Where a tmpfiles.d line the ``owner:`` checks read is shipped."""
 
 SYMBOLS: dict[str, str] = {
     "CONFIG_MAGIC_SYSRQ": "handle_sysrq",
@@ -329,7 +328,7 @@ def derive(
         )
     )
     files = {item.path: item for item in items if isinstance(item, File)}
-    for path, owner in _owned(files.values()):
+    for step, path, owner in _owned(items):
         file = files.get(path)
         mode = [] if file is None or file.mode is None else [f"{file.mode:o}"]
         checks.append(
@@ -338,19 +337,24 @@ def derive(
                 " ".join([f"{path} is {owner}", *mode]),
                 " ".join(["probe_owner", _quote(path), owner, *mode]),
                 "owner",
+                (f"runtime-init-{step}.service",),
             )
         )
     return Probe(tuple(checks))
 
 
-def _owned(files: Iterable[File]) -> Iterator[tuple[str, str]]:
-    """``(path, user:group)`` of each ``z``/``Z`` line of the tmpfiles.d files in *files*."""
-    for file in files:
-        if file.path.startswith(TMPFILES) and isinstance(file.content, str):
-            for line in file.content.splitlines():
-                fields = line.split()
-                if len(fields) >= 5 and fields[0] in ("z", "Z"):
-                    yield fields[1], f"{fields[3]}:{fields[4]}"
+def _owned(items: Iterable[Declaration]) -> Iterator[tuple[str, str, str]]:
+    """``(step, path, user:group)`` of each ``chown`` line of the ``owners`` steps in
+    *items*, what ``File(owner=)`` and ``Tree(owner=)`` lower to."""
+    from tundravm._image._lower import OWNERS_STEP
+    from tundravm.declarative.model import BootStep
+
+    for item in items:
+        if isinstance(item, BootStep) and item.name.partition("-")[0] == OWNERS_STEP:
+            for line in item.script.splitlines():
+                words = shlex.split(line)
+                if words[:1] == ["chown"]:
+                    yield item.name, words[-1], words[-2]
 
 
 def _service(item: object) -> list[Check]:

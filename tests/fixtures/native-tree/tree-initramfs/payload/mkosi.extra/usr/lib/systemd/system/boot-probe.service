@@ -1,5 +1,7 @@
 [Unit]
 Description=Print where the root file system comes from
+After=runtime-init.service
+Requires=runtime-init.service
 
 [Service]
 Type=oneshot

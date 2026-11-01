@@ -452,8 +452,8 @@ any other by `sha256=` of its `dists/SUITE/InRelease`, which `lock` records with
 date and the build checks first.
 
 `File.copy` and `Tree` read host files when the image lowers: build their paths from
-`Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise;
-systemd-tmpfiles applies the owner at boot.
+`Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise; the
+runtime-init step `owners` applies it at boot.
 
 `cmdline=` on either `Kernel` appends parameters (`name` or `name=value`) to the UKI's
 measured command line, after the image's own: `Kernel.default(cmdline=["nospectre_v2"])`.

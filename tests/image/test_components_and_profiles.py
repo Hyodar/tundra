@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
-from tundravm import File, Image, Mkosi, Package, Profile, Service
+from tundravm import File, Image, Mkosi, Package, Profile, Service, Tree
 from tundravm._image import recipe_of
 from tundravm._image._values import RESERVED_SETTINGS
 from tundravm.components import (
@@ -192,20 +193,48 @@ def test_a_profile_adds_and_changes_by_reference() -> None:
     assert "strace" not in plan(image, "production").packages
 
 
-def test_a_profile_owns_the_files_it_adds() -> None:
+@pytest.mark.parametrize(
+    ("profile", "steps"),
+    [
+        ("production", {"owners": "chown -R app:app /srv/www\nchown nobody:nogroup /etc/a\n"}),
+        (
+            "staging",
+            {
+                "owners": "chown -R app:app /srv/www\nchown nobody:nogroup /etc/a\n",
+                "owners-staging": "chown app:app '/etc/b c'\n",
+            },
+        ),
+    ],
+)
+def test_owner_is_a_boot_step_per_profile(
+    tmp_path: Path, profile: str, steps: dict[str, str]
+) -> None:
+    (tmp_path / "index.html").write_text("x\n")
     image = Image(
         "x",
-        files=[File.text("/etc/a", "a\n", owner="nobody")],
-        profiles={"staging": Profile(add=[File.text("/etc/b", "b\n", owner="nobody")])},
+        files=[
+            File.text("/etc/a", "a\n", owner="nobody:nogroup"),
+            Tree(tmp_path, "/srv/www", owner="app"),
+        ],
+        services=[Service("app", ["/usr/bin/app"])],
+        profiles={"staging": Profile(add=[File.text("/etc/b c", "b\n", owner="app")])},
     )
-    owned = "/etc/tmpfiles.d/50-tundravm-owned"
-    assert "z /etc/a - nobody nobody -" in plan(image, "staging").file(f"{owned}.conf").text
-    assert (
-        plan(image, "staging")
-        .file(f"{owned}-staging.conf")
-        .text.endswith("z /etc/b - nobody nobody -\n")
+    planned = plan(image, profile)
+    found = {s.name: s.script for s in planned.init_steps if s.name.startswith("owners")}
+    assert found == steps
+    assert "runtime-init-owners.service" in (planned.service("app").get("Unit", "After") or "")
+    assert planned.unit("runtime-init-owners.service").get("Unit", "After") == "local-fs.target"
+
+
+def test_a_file_under_a_volume_is_refused() -> None:
+    data = Volume("data", unlock=OperatorKey())
+    image = Image(
+        "x",
+        services=[Service("app", ["/usr/bin/app"], state=data.directory("app"))],
+        files=[File.text("/persistent/data/x", "x\n", owner="app")],
     )
-    assert f"{owned}-staging.conf" not in plan(image, "production").files
+    with pytest.raises(ValidationError, match="hides what the image ships"):
+        recipe_of(image)
 
 
 def test_a_profile_removes_a_service_by_reference() -> None:

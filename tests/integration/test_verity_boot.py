@@ -178,8 +178,10 @@ def test_root_is_erofs_on_dm_verity_under_a_volatile_overlay(verity_boot: BootRe
 
 def test_usr_bin_writes_land_in_the_volatile_overlay(verity_boot: BootResult) -> None:
     """``systemd.volatile=overlay`` is in effect: a write under ``/usr/bin`` goes to the
-    tmpfs upper layer (the verity root below it stays read-only, as above)."""
+    tmpfs upper layer (the verity root below it stays read-only, as above), and so does the
+    ``chown`` of the ``owners`` step: the private page is ``web``'s."""
     assert probe_lines(verity_boot.console, "usr-bin") == ["write=accepted"]
+    assert probe_lines(verity_boot.console, "owner") == ["/srv/www/private.html web:web 600"]
 
 
 def test_the_production_build_carries_no_boot_probe(verity_boot: BootResult) -> None:

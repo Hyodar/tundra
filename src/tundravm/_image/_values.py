@@ -151,8 +151,9 @@ class Package(Located):
 class File(Located):
     """A file in the image: ``File.text(path, text)`` or ``File.copy(src, dst)``.
 
-    *owner* (``"app"`` or ``"app:app"``) is applied at boot by systemd-tmpfiles, after the
-    users exist; without it the file is root-owned, as everything the image ships is.
+    *owner* (``"app"`` or ``"app:app"``) is applied at boot by the runtime-init step
+    ``owners``, before the services that wait for runtime-init start: an unprivileged build
+    ships every file root-owned. Without it the file stays root's. *mode* is the image's.
     """
 
     path: str
@@ -217,7 +218,9 @@ class File(Located):
 
 @dataclass(frozen=True, slots=True)
 class Tree(Located):
-    """The host directory *src* shipped at *dst*, keeping each file's permission bits."""
+    """The host directory *src* shipped at *dst*, keeping each file's permission bits.
+
+    *owner* is applied to the whole tree at boot (``chown -R``), as :class:`File`'s is."""
 
     src: str | Path
     dst: str

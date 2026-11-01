@@ -1,6 +1,6 @@
 [Unit]
 Description=Check what this profile's declarations promise
-After=tdx-evidence.service greeter.service greeter-ready.service web.service web-ready.service tick.timer sink.service sink-ready.service tdxs.socket nftables.service tundravm-endpoint.service journal-export.service metrics-export.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service tundravm-instance-key.service
+After=tdx-evidence.service greeter.service greeter-ready.service web.service web-ready.service tick.timer sink.service sink-ready.service tdxs.socket nftables.service tundravm-endpoint.service journal-export.service metrics-export.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service tundravm-instance-key.service runtime-init-owners.service
 
 [Service]
 Type=oneshot
