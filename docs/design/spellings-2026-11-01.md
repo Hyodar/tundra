@@ -81,7 +81,7 @@ changes the build's repositories.
 in_image=False)`, because an image never runs apt. A `Path` key adds `File.copy` at its
 path, which the sandbox tree copies too. A `sha256=` adds a `sync` hook. It fetches the
 InRelease before mkosi runs apt and fails the build, naming both digests, when the
-repository has moved. `convert --from mkosi` writes an `AptRepository` for each signed,
+repository has moved; an offline build passes it the digest `lock` recorded instead. `convert --from mkosi` writes an `AptRepository` for each signed,
 dated deb822 source of a `SandboxTrees=` tree; an undated one is unsupported, with the
 command that prints its digest.
 
@@ -117,3 +117,16 @@ it did. `update-ca-certificates` runs from the `ca-certificates` trigger anyway.
 fingerprint and the cache see it as they see `script=`. A `Build` in `files=` lowers to
 itself. `convert --from mkosi` still writes `BuildScripts=` as `Mkosi(scripts=)`: a tree's
 build script names no source and no outputs, so nothing maps it onto a `Build`.
+
+## Open items
+
+- ~~`Build(command=[...])` failed mypy: its fields were tuples.~~ Every public value whose
+  docs show a list takes a `Sequence` and keeps a tuple.
+- ~~`build --offline` failed on a digest-pinned repository's `curl`.~~ `lock` records each
+  `InRelease` digest and date (lockfile v7 `repositories`); the offline build hands the
+  recorded digest to the `sync` step.
+- ~~A packaged unit that needs a capability had no working spelling.~~
+  `Hardening.preset("static", capabilities=["CAP_SYS_TIME"])` also lifts `ProtectClock=` and
+  `@clock`; a capability still missing shows as the probe's `service:` failure.
+- ~~A snapshot repository assumed the tools tree ships `debian-archive-keyring`.~~ The tree
+  names it in `ToolsTreePackages=`.
