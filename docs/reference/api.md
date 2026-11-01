@@ -1725,6 +1725,36 @@ One recorded `invoke`: mkosi's *argv*, the directory it ran in and its log.
 | `FakeCall.options(name: str) -> list[str]` | Every `--name=value` value in `argv`, in order. |
 | `FakeCall.verb` | The mkosi verb (`build`, `summary`…): the last non-option before `--json`. |
 
+### `FakeEndpoint`
+
+*dataclass*
+
+```python
+FakeEndpoint(
+    platform: Literal['simulator', 'tdx'] = 'simulator',
+    registers: Mapping[str, bytes] = dict(),
+    debug: bool = False,
+    mode: str = 'simulated',
+    credentials: tuple[str, ...] = ('api-token',),
+    volumes: tuple[str, ...] = ('data',),
+    ssh_key: bool = True,
+    misbehave: Misbehaviour | None = None,
+    received: dict[str, bytes] = dict(),
+    unlocked: dict[str, bytes] = dict(),
+    ssh_keys: list[str] = list(),
+    sessions: list[FakeSession] = list(),
+    first_nonce: bytes | None = None,
+)
+```
+
+The endpoint of one boot: what it accepts, what it received.
+
+| Member | Does |
+|---|---|
+| `FakeEndpoint.connect(host: str, port: int) -> FakeSession` | A new TLS session (the `connect=` the operator commands take). |
+| `FakeEndpoint.evidence(session: FakeSession, nonce: bytes) -> dict[str, object]` |  |
+| `FakeEndpoint.write(session: FakeSession, path: str, body: Mapping[str, object]) -> int` |  |
+
 ### `FakeFetch`
 
 *dataclass*

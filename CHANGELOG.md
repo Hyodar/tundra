@@ -5,8 +5,8 @@
 tundravm v2 makes mkosi accessible for confidential VMs by making the choices: Debian
 trixie, systemd, a measured UKI, Intel TDX. You declare one Python `Image`, the compiler
 writes one plain mkosi 27.1 tree, and twelve commands take it to a locked, reproducible,
-signed build that runs, deploys and attests. No compatibility alias is kept. Until real TDX
-quotes and the attested channel land, `attest` and `secrets` say `unverified first contact`.
+signed build that runs, deploys and attests. No compatibility alias is kept. The attested
+endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### SDK
 
@@ -18,7 +18,8 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - **Breaking:** a profile edit sets any `Service` keyword but `name=` (`readiness=`, `credentials=`, `unit=`, `timer=` and `quotes=` included) and builds what it implies, its probe, credential waits, drop-in, timer and firewall rule and its dependents' ordering; a credential bound through argv or `environment=`, another built binary, another `user=` for a directory on a volume and dropping a readiness another service requires are refused.
 - A profile's `service.ref.remove()` drops everything the service lowers to: its unit and user, probe, drop-in, timer and firewall rules; removing a service another one requires is refused.
 - **Breaking:** `tundravm.bake` is `tundravm.build`, the command's verb, without an alias; its directory keyword is `into=` (was `build=`).
-- `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports (and 8745 where the SSH key delivery listens), one hardened user per service, and `tdxs`.
+- **Breaking:** a `Secrets` block and every `Image` with a volume or a secret run the attested endpoint (`tools/cmd/attested-endpoint`, `tundravm-endpoint.service`) instead of `secret-delivery`, which is gone with `tools/pkg/secrets`: its quote binds the nonce, its TLS key, the SSH host keys and the instance public key, and it writes `SecretFile` targets, an operator-key volume's passphrase and the operator's SSH key only on the session that fetched that evidence, once per boot; the built-in provider writes files, `secrets.ready` waits for the required ones, and `sshd` waits only for its host keys.
+- `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports (and 8745 where the attested endpoint listens), one hardened user per service, and `tdxs`.
 - `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)` or a component's `self.service(name).endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `hardening="python"` names the sandbox per runtime (`static`, `jit`, `node`, `python`, `dotnet`, `relaxed`), `Hardening.preset(NAME, ...)` a deviation; `quotes=True` joins the `tdx` group and requires the evidence service.
 - `Service.packaged(unit, package=, hardening=)` runs a Debian package's unit under the image's sandbox, which replaces the package's own; `convert --from systemd` writes it for drop-ins whose unit is not in the set.
 - `Debian(repositories=[AptRepository(url, suite, key=)])` adds a signed archive, dated by the base's snapshot on snapshot.debian.org or pinned by `sha256=` of its `InRelease`, which the build checks; `convert --from mkosi` writes one for each signed, dated deb822 source of a `SandboxTrees=` tree.
@@ -36,7 +37,6 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks, peers and collateral, `TaikoClient(l1=)` and `Raiko(l1=)` name their L1, and `Observability(proxy=)` sends through one proxy.
 - `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
-- The SSH key delivery on 8745 takes one key once per boot, then the firewall drops the port.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.
 
 ### CLI
@@ -51,7 +51,8 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded.
 - `run` forwards, and `deploy`'s firewall line names, 8745 only where the image's firewall opens it.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
-- `attest` verifies fresh evidence and delivers nothing; `secrets` attests again first.
+- **Breaking:** `attest`, `secrets deliver` and `secrets unlock` speak TLS to the attested endpoint instead of relaying over SSH: a fresh nonce, evidence for another nonce or TLS key refused, a simulator's quote checked by its tag (`simulated`, registers never compared), `known_hosts` from the bound host keys, the instance key printed as bound to the quote; `secrets` verifies again on its own session and writes on it alone, and loses `--identity`.
+- `tundravm.testing.FakeEndpoint` plays the endpoint, with `relay`, `replay` and `wrong-key` misbehaviours.
 - `doctor` prints one row per capability with its fix; `build:go` blocks without `go`.
 - **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset; `convert --from mkosi` converts a tundravm tree's payload and its cloud wrappers into `targets=`, dropping the packages every image implies; both write double-quoted Python.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".

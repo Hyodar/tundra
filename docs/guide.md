@@ -16,7 +16,7 @@ says what the image defends against and how to recover.
 ## What is proven today
 
 The work follows the gates of the v2 plan. Gates 1, 4, 5 and 6 are implemented, and so
-is gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
+are gate 3's `run --mode` separation and attested endpoint. Gate 2 is not.
 
 | Area | State |
 |---|---|
@@ -28,11 +28,8 @@ is gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 | The fail-closed production profile | CI boots the production fixture without TDX: `tdx-evidence.service` refuses and its services never start |
 | `Kernel.build` | a weekly CI workflow compiles Debian's 6.12 with every target's drivers built in and boots it |
 | A real TDX quote, raw-disk measurements matched against it (gate 2) | not done |
-| The attested endpoint, channel-bound delivery, `OperatorKey` unlock over it, `BrokerKey` (gate 3) | not done in `tools/` |
-| `deploy` to GCP or Azure, `attest` against a real quote | unit-tested against fake `gcloud`, `az` and SSH only |
-
-Until gate 3, `attest` and `secrets` reach an instance over an SSH session that is not bound
-to the quote. Every command that uses it prints `unverified first contact`.
+| The attested endpoint: quote-bound TLS, channel-bound delivery and unlock | CI attests the fixture's dev build (simulated) and delivers to it; `BrokerKey`'s pull client is not built |
+| `deploy` to GCP or Azure, `attest` against a real quote | tested against fakes only |
 
 ## A project
 
@@ -231,7 +228,7 @@ valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
 
 Every image generates an instance key at boot: a fresh ECDSA secp256k1 key in
 `/run/tundravm/instance-key.pem`, on tmpfs and readable by root only. A service that signs
-with it says `credentials=[InstanceKey()]` (from `tundravm.secrets`) or passes
+with it says `credentials=[InstanceKey()]` or passes
 `InstanceKey()` in argv, and reads `$CREDENTIALS_DIRECTORY/instance-key`; nothing else may
 name the path. `run status`, `attest` and `show` print the public key and who takes it.
 
@@ -345,19 +342,16 @@ image = Image("site", components=[App()])
 
 The rules:
 
-- Fields are configuration. The subclass becomes a frozen, keyword-only dataclass, so two
-  components with the same fields are equal.
+- Fields are configuration: the subclass becomes a frozen, keyword-only dataclass.
 - `compose()` yields declarations and nested components.
 - Exports are properties returning an `Endpoint` (`self.service("app").endpoint(port)`), a
-  `ServiceRef` or a `ServiceReady`. A caller writes `requires=[app.http]` or puts `app.http`
-  in an argv, where it renders as its URL.
-- `check(resolved)` returns diagnostics. It becomes a lint rule that `tundravm check` runs,
-  once per profile: `resolved.profile` names it, and a finding without `profile=` is that
-  profile's.
-- `class X(Component, build_network=True)` says its builds fetch dependencies, so the
-  tree builds with `WithNetwork=yes`.
-- `outbound()` returns the `Egress` its fields imply; a filtered image accepts it, and
-  the rule's comment names the component.
+  `ServiceRef` or a `ServiceReady`. `requires=[app.http]` waits on one; in an argv it renders
+  as its URL.
+- `check(resolved)` returns diagnostics: a lint rule `tundravm check` runs once per profile
+  (`resolved.profile`).
+- `class X(Component, build_network=True)` says its builds fetch dependencies
+  (`WithNetwork=yes`).
+- `outbound()` returns the `Egress` a filtered image accepts for it.
 
 Each code `check()` reports is declared in `rules`, as `App` declares
 `app-privileged-port`: `--explain` prints it, and an undeclared code is a
@@ -466,8 +460,8 @@ A change names a declaration that exists, or the image does not resolve. Removin
 service removes its unit, its user, its firewall rule and the dependencies nothing else
 uses. A component's service is `component.service("name").ref`. An edit takes the keywords
 of the value's own constructor and is checked like a new value. Editing any `Service`
-keyword but `name=` builds what the service declared so would (probe, credential waits,
-drop-in, timer, firewall rule, dependents' ordering) and drops what it no longer needs.
+keyword but `name=` regenerates what the service implies and drops what it no longer
+needs.
 Refused: another built binary, a credential bound through argv or `environment=` (bind it
 in `credentials=`), another `user=` for a directory on a volume, dropping a required
 readiness.
@@ -517,9 +511,9 @@ carries no initialisation token: an unlock failure never permits formatting.
 
 | Unlock | Means | State |
 |---|---|---|
-| `OperatorKey()` | an operator sends a passphrase each boot with `secrets unlock` | works over today's unverified SSH channel; the attested path is gate 3 |
+| `OperatorKey()` | an operator sends a passphrase each boot with `secrets unlock` | over the attested endpoint, which hands it to `key-gen` |
 | `TpmSeal(platform=, pcrs=, recovery="none")` | a random key sealed to one stated vTPM: `azure`, `gcp` or `swtpm` | `key-gen` seals without a PCR policy today; `pcrs` is recorded, enforced in gate 3 |
-| `BrokerKey(url, audience=)` | a key broker releases the key after attestation | the pull client is gate 3; until then the image waits as for an operator |
+| `BrokerKey(url, audience=)` | a key broker releases the key after attestation | no pull client yet: the image waits as for an operator |
 
 `TpmSeal` is refused for `targets=` that boot with another vTPM: one payload boots on every
 target, and a key sealed on one platform does not open on another. On a cloud it is a
@@ -550,7 +544,7 @@ systemd copies it into the unit's read-only `$CREDENTIALS_DIRECTORY` at start.
 | `required=False` | the service starts without it and reads an empty credential |
 | `rotation="restart"` | a new delivery restarts the bound units (default) |
 | `rotation="none"` | bound units keep the old value until they restart |
-| `source=BrokerKey(...)` | a broker delivers it instead of an operator (gate 3) |
+| `source=BrokerKey(...)` | a broker delivers it instead of an operator (no pull client yet) |
 
 There is no `reload` rotation: systemd's credential copy is per start.
 
@@ -563,8 +557,8 @@ hex to `/run/tundravm/secrets/<name>`, which every service binding it reads.
 nothing else. The upstream must listen on the loopback and expose no port of its own, or
 the image is refused, so the ingress is the only path to it. Today the relay is `socat`'s
 OpenSSL listener, as its own user with only `CAP_NET_BIND_SERVICE`, with a self-signed
-certificate generated in the guest at every start. Binding its key into the quote's
-`report_data` is gate 3; until then a client pins it on first contact.
+certificate generated in the guest at every start, which no quote binds yet: a client
+pins it on first contact.
 
 `TLS(port, upstream=, certificate=secret)` is ordinary HTTPS with a certificate you deliver
 as a secret. Nothing about it is attested.
@@ -594,12 +588,10 @@ through that one address.
 exports the volatile journal and node metrics with secret credentials. An `http://` sink
 is a lint warning: it carries the logs in the clear.
 
-### The control plane today
+### The control plane
 
-An image with a volume or a secret runs `secret-delivery` (from `tools/`) on the management
-port 8745: it takes one SSH public key once per boot, then the firewall drops the port.
-`attest` and `secrets` use that SSH session, which nothing binds to the quote
-yet ([trust](trust.md#the-channel-is-not-attested-yet)).
+An image with a volume or a secret runs the attested endpoint on port 8745,
+which needs nothing on a volume ([trust](trust.md#what-first-contact-proves)).
 `/etc/tundravm/runtime.json` records every volume, secret and ingress.
 
 ## Sources and toolchains
@@ -656,8 +648,7 @@ A Cargo source builds with the toolchain its `rust-toolchain.toml` (or `rust-too
 pins, found as `rustup` finds it. The host's `rustup` installs that channel, with the
 file's components and targets, into the workspace; its `cargo` fetches the crates, and the
 offline build runs its `cargo` and `rustc` over Debian's linker. The channel must be a
-release (`1.91.0`) or a dated one (`nightly-2026-09-01`): `stable`, `1.91` or a bare
-`nightly` move, and are `E_SOURCE`. Without a toolchain file, Debian's `cargo` builds it.
+release (`1.91.0`) or a dated one (`nightly-2026-09-01`); a moving one is `E_SOURCE`. Without a toolchain file, Debian's `cargo` builds it.
 `build:rustup` blocks only for an image with a pinned source.
 
 ## The lock
@@ -675,15 +666,12 @@ snapshot this release pins; `Debian(snapshot=)` overrides it.
 
 - Pins already locked stay while their source is unchanged. `--update NAME` resolves the
   named inputs again; no name resolves all of them.
-- `--check` never writes or fetches. It prints the drift and exits 1;
-  a missing lockfile is drift too.
-- A profile's sections are `profiles.<name>.<key>`, and `check` reports their drift as
-  that profile's finding: `error lock-changed [dev, production] files: files changed since
-  the lock: ~/srv/www/index.html`.
+- `--check` never writes or fetches; it prints the drift (a missing lock too) and exits 1.
+- A profile's sections are `profiles.<name>.<key>`; `check` reports their drift as that
+  profile's finding (`lock-changed`).
 - An older tundravm's lockfile is refused, never migrated: lock again.
-- A production build is a locked build: it refuses a missing (`lock-missing`) or stale
-  lock, and builds every source at its pin, so a second builder gets the same bytes. A
-  development build writes a missing lock and re-pins changed `Local` sources.
+- A production build refuses a missing (`lock-missing`) or stale lock and builds every
+  source at its pin. A development build writes a missing lock and re-pins `Local` sources.
 - `build --offline` builds only what the lock pins.
 
 `check` warns `source-unpinned` once per source the lock does not pin yet, naming the
@@ -717,9 +705,8 @@ payload/mkosi.profiles/dev/    the dev overlay (public keys only)
 
 How to read it as an mkosi user:
 
-- The OS is the `payload` subimage. mkosi builds subimages first, so `payload.efi` exists
-  when the main image copies it into the ESP with `ExtraTrees=%O/payload.efi:...`.
-- The main image is the QEMU raw disk, so `mkosi vm` boots it.
+- The OS is the `payload` subimage, built first and copied into the ESP.
+- The main image is the QEMU raw disk `mkosi vm` boots.
 - `targets=` adds `mkosi.images/azure/` and `mkosi.images/gcp/`. Each depends on the
   payload, carries the same ESP and converts the disk in `mkosi.postoutput.d/`. tundravm
   selects them with `--dependency=`.
@@ -859,11 +846,11 @@ hex digits of the sha256 of the document without `id`. It binds:
 | Key | Binds |
 |---|---|
 | `artifacts` | every file's sha256 and size |
-| `uki` | the UKI's sha256, command line and SHA-384 Authenticode digest (`authenticode_sha384`, what RTMR1's event log records for it) |
+| `uki` | the UKI's sha256, command line and SHA-384 Authenticode digest |
 | `root_hash`, `rootfs` | the verity root hash (or `null`) and the layout |
 | `tree` | a digest over the tree's paths, modes, contents and symlink targets |
 | `lock` | the lock it was built against and the committed one it was checked against |
-| `sources`, `packages`, `sbom`, `summary` | the source pins and each Go and Cargo source's toolchain, the package manifest, the SBOM, mkosi's resolved summary |
+| `sources`, `packages`, `sbom`, `summary` | source pins and toolchains, packages, the SBOM, mkosi's summary |
 | `measurements` | the state of each measurement record |
 | `toolchain` | the backend, mkosi, the tools tree, tundravm, the measurement tools |
 | `kind`, `profile`, `targets`, `ports` | what the build is |
@@ -899,14 +886,13 @@ $ tundravm show latest --measurements
 $ tundravm show --diff OLD NEW
 ```
 
-Without a build, `show` prints the image as it resolves, the production profile first,
-each with the components the file wrote; `--profile P` picks some (`--profile dev` the dev
+Without a build, `show` prints the image as it resolves, the production profile first;
+`--profile P` picks some (`--profile dev` the dev
 profile), and `--json` adds where each declaration came from.
 With a build (a directory, an id prefix, `latest`; `--dev` the latest development one, as
 `latest-development`),
-it prints the build's report, the manifest's provenance, its unchecked guarantees and its
-boot probe's checks; `--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds: packages, files, units, boot payload,
-measurements and policy coverage.
+it prints the build's report, provenance, unchecked guarantees and boot probe;
+`--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds.
 
 ## Run
 
@@ -951,6 +937,7 @@ check; a `fail` says what to do:
 | `hardening:` | a preset's `systemd-analyze security` score is under its ceiling |
 | `kernel:` | no disabled symbol in `/proc/kallsyms` (`Kernel.build`), else no uncurated module |
 | `host-keys` | with SSH, the host key is root-owned, read-only to others |
+| `endpoint:` | the attested endpoint answers evidence for the nonce it was sent |
 | `rtmr` | skipped: only `attest` reads registers, from a quote |
 
 `--probe` waits for it (up to `--timeout`), prints the table, writes `probe.json`,
@@ -983,12 +970,13 @@ tundravm does not create cloud firewall rules.
 $ tundravm attest prover-1 --policy policies/prover-gcp.json --output attest-1.json
 ```
 
-`attest` asks the instance's `tdxs` for a quote bound to a fresh nonce and checks MRTD and
-RTMR0 to RTMR2 against the policy. It delivers nothing. The policy is a build's
-`measurements.json`, or a `tundravm.policy/2` file: one of its records copied into
-`policies/` with the platform registers you approve from a quote of a host you trust
-(`platform_approval`: MRTD, RTMR0), committed. The prover template's `policies/README.md`
-has the `jq` line.
+`attest` asks the endpoint for a quote binding a fresh nonce, the TLS session's
+key, the SSH host keys and the instance public key, and checks MRTD and RTMR0 to RTMR2
+against the policy. On success it writes `known_hosts`, prints the instance key and hands
+over your SSH key (`--identity`). The policy is a build's `measurements.json`, or a
+`tundravm.policy/2` record copied into `policies/` with the platform registers you approve
+(`platform_approval`: MRTD, RTMR0); the prover template's `policies/README.md` has the `jq`
+line.
 
 | Verdict | Means |
 |---|---|
@@ -996,7 +984,7 @@ has the `jq` line.
 | `partial` | nothing disagreed, but one of the four had no accepted value |
 | `measurements-match` | the registers matched; no validator checked the signature |
 | `measurements-mismatch` | a register or the nonce did not match; no validator checked |
-| `simulated` | a simulated instance; accepted only for one |
+| `simulated` | the simulator: binding checked, registers not; simulated instances only |
 | `untrusted` | the validator rejected the quote, a validated quote did not match, or a production build's TD has the `DEBUG` attribute |
 
 An Azure policy is refused: the TDX quote on Azure measures its paravisor, and the image is
@@ -1009,11 +997,10 @@ $ tundravm secrets unlock prover-1 data
 $ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json raiko-config=@raiko.json
 ```
 
-Both attest again first. `deliver` then writes each value to
-`/run/tundravm/credentials/NAME`. `unlock` re-attests with the policy of the last `attest`,
-asks for the passphrase (or reads stdin) and writes it into the volume's FIFO. Values
-travel on the SSH command's stdin only: never on argv, in a log, a tree, a manifest or a
-receipt.
+Both verify again on a session of their own and write on it only, once per name per
+boot. `deliver` writes each value to `/run/tundravm/credentials/NAME`; `unlock` uses the
+last `attest`'s policy and hands the passphrase (stdin, else a prompt) to the volume. Values
+never go on argv, in a log, a tree or a receipt.
 
 | Instance | Releases on |
 |---|---|
@@ -1045,12 +1032,10 @@ $ tundravm convert ./units --from systemd > image.py
 ```
 
 reads a unit file or a directory of them and prints an `Image` file: one `Service` per
-service unit, its drop-ins and the timer or socket that starts it folded in (`ExecStart=`
-as the argv, `Type=notify` as `readiness=Notify()`, cgroup limits as `resources=`, the
-schedule as `timer=`), every other directive in `unit=DropIn(...)`. A `# note:` says where
+service unit, its drop-ins and the timer or socket that starts it folded in, every other
+directive in `unit=DropIn(...)`. A `# note:` says where
 the unit differs from what the image implies (`Type=exec`, the generated user, the
-`static` sandbox); a `# unsupported:` names what no slot holds (a mount, a path unit, a
-second `ExecStart=`). `check` passes once the image ships each program a unit runs:
+`static` sandbox); a `# unsupported:` names what no slot holds. `check` passes once the image ships each program a unit runs:
 `service-program-missing` names the rest (`packages=["python3"]`).
 
 ### An mkosi tree
@@ -1062,9 +1047,8 @@ $ tundravm convert ./old-tree --from mkosi
 prints an `Image` file for a tree mkosi itself resolves, each setting it cannot carry
 listed as `# unsupported:`. Save it beside the tree: its `Tree(...)` and script paths are
 relative to the file. Implied packages are dropped, with a note. A tree tundravm wrote
-(`mkosi.images/payload/`) converts its payload; the QEMU disk, the cloud wrappers and the
-payload's trees and scripts are what tundravm generates, so notes name them and nothing is
-copied; the wrappers become `targets=`.
+converts its payload; what tundravm generates is named in notes, and the wrappers become
+`targets=`.
 A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
 `--allow-scripts`, since parsing would run it.
 
@@ -1100,7 +1084,7 @@ with the Python traceback.
 | `E_ARTIFACT_CHANGED` | an artifact's bytes changed | `tundravm verify BUILD` names the file |
 | `E_REPRODUCIBILITY` | two builds that should match did not | compare `observations.json` |
 | `E_MEASUREMENT` | an artifact that is not a UKI or a disk booting one | rebuild it with `tundravm build` |
-| `E_ATTESTATION` | the issuer or validator was unreachable or failed | `run logs`, `journalctl -u tdxs` |
+| `E_ATTESTATION` | the endpoint, issuer or validator failed, or evidence was not bound to the session | `run logs`, `journalctl -u tundravm-endpoint -u tdxs` |
 | `E_DEPLOYMENT` | a missing tool, no TDX for `--mode tdx`, a refused upgrade | the hint names it |
 
 A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint, where
