@@ -1,0 +1,13 @@
+== staging/mkosi.conf
+[Output]
+ImageId=%i-staging
+== staging/mkosi.extra/usr/lib/systemd/system/tick.timer
+[Unit]
+Description=tick
+
+[Timer]
+OnBootSec=15m
+OnUnitActiveSec=15m
+
+[Install]
+WantedBy=timers.target

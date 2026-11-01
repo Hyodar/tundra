@@ -1,0 +1,6 @@
+== staging/mkosi.conf
+[Output]
+ImageId=%i-staging
+== staging/mkosi.extra/usr/lib/systemd/system/api.service.d/20-tundravm.conf
+[Service]
+Restart=always

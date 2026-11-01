@@ -3,8 +3,9 @@
 ``value.ref`` names a :class:`~tundravm.Service`, :class:`~tundravm.File`,
 :class:`~tundravm.Tree` or :class:`~tundravm.Package`; ``ref.edit(...)`` takes the keyword
 names of that value's own constructor, and ``ref.remove()`` drops it. An edit is applied to
-the value at once, so the edited value is checked like any other; the lowering then changes
-the declaration the value lowers to by exactly what the edit changed.
+the value at once, so the edited value is checked like any other; the lowering then lowers
+the profile's services as edited, so the profile builds what the edited value would have
+built had the image declared it so, and nothing it no longer needs.
 """
 
 from __future__ import annotations
@@ -25,15 +26,19 @@ EDITABLE: Mapping[str, tuple[str, ...]] = {
     "Service": (
         "argv",
         "requires",
+        "readiness",
         "state",
+        "credentials",
         "expose",
         "resources",
         "shutdown",
         "hardening",
         "timer",
         "socket",
+        "unit",
         "user",
         "groups",
+        "quotes",
         "working_directory",
         "environment",
         "logs",
@@ -48,9 +53,6 @@ EDITABLE: Mapping[str, tuple[str, ...]] = {
 _FIXED: Mapping[str, Mapping[str, str]] = {
     "Service": {
         "name": "it names the service",
-        "readiness": "it decides the unit's type and its probe unit",
-        "credentials": "each binding adds the delivery units the service waits for",
-        "unit": "it is a drop-in of its own",
     },
     "File": {
         "path": "it names the file",
@@ -181,8 +183,7 @@ def _listing(kind: str) -> str:
 
 def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
     """What a service edit cannot carry: a different built binary, a credential bound or
-    unbound, a timer switched on or off, another user for a directory on a volume, a state
-    moved onto or off a volume."""
+    unbound by argv or environment, another user for a directory on a volume."""
     from ._storage import VolumeDirectory
 
     if edited.binaries() != value.binaries():
@@ -191,23 +192,16 @@ def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
             "already declares.",
             hint="Remove the service and add one that runs the new binary in add=.",
         )
-    before = {binding.name: binding for binding in value.bindings}
-    after = {binding.name: binding for binding in edited.bindings}
+    before = {binding.name: binding for binding in value._references()}
+    after = {binding.name: binding for binding in edited._references()}
     if after != before:
         changed = sorted(
             name for name in before.keys() | after.keys() if before.get(name) != after.get(name)
         )
         raise ValidationError(
-            f"The edit of {ref} changes the credentials it binds ({', '.join(changed)}), and "
-            "each binding adds the delivery units the service waits for.",
-            hint="Name the secret in the image's own Service (argv=[..., secret]), or remove "
-            "the service and add one that reads it in add=.",
-        )
-    if (edited.timer is None) != (value.timer is None):
-        raise ValidationError(
-            f"The edit of {ref} turns its timer {'on' if value.timer is None else 'off'}, "
-            "which makes it another kind of unit.",
-            hint="Remove the service and add the new one in add=.",
+            f"The edit of {ref} binds or unbinds {', '.join(changed)} through argv= or "
+            "environment=: what a profile binds, it says in credentials=.",
+            hint="Set credentials=[...] in the edit, with secret.path in the word that reads it.",
         )
     state = value.state
     if (
@@ -220,12 +214,4 @@ def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
             f"directory on volume {state.volume.name!r} at boot for {value.user or value.stem!r}.",
             hint="Share the directory through a group (volume.directory(name, group=...)), or "
             "remove the service and add one with the new user= in add=.",
-        )
-    if edited.state != value.state and (
-        isinstance(edited.state, VolumeDirectory) or isinstance(value.state, VolumeDirectory)
-    ):
-        raise ValidationError(
-            f"The edit of {ref} moves its state onto or off a volume, whose directories the "
-            "image prepares at boot.",
-            hint="Remove the service and add one with the new state in add=.",
         )

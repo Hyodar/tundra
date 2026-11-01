@@ -22,6 +22,7 @@ from tundravm.components import (
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
+from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import Resources, TcpProbe
 from tundravm.testing import plan
@@ -226,22 +227,16 @@ def test_a_profile_removes_a_service_by_reference() -> None:
         ("app", {"argv": ["/usr/bin/app", "--verbose"]}, ("ExecStart", "/usr/bin/app --verbose")),
         ("app", {"resources": Resources(memory_max="1G")}, ("MemoryMax", "1G")),
         ("db", {"user": "postgres"}, ("User", "postgres")),
-        ("app", {"env": {"STAGE": "staging"}}, "sets: argv, requires, state, expose"),
-        ("app", {"exec_start": ["/usr/bin/app"]}, "sets: argv, requires, state, expose"),
-        ("app", {"readiness": TcpProbe(8080)}, "cannot set Service readiness="),
+        ("app", {"env": {"STAGE": "staging"}}, "sets: argv, requires, readiness, state"),
+        ("app", {"exec_start": ["/usr/bin/app"]}, "sets: argv, requires, readiness, state"),
         ("app", {"expose": [TCP(8080)]}, "changes nothing"),
-        ("app", {"argv": ["/usr/bin/app", Secret("jwt")]}, "changes the credentials it binds"),
-        ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
     ],
 )
 def test_a_profile_edits_a_service_by_its_public_keywords(
     target: str, fields: dict[str, object], expected: tuple[str, str] | str
 ) -> None:
     app = Service("app", ["/usr/bin/app"], expose=[TCP(8080)])
-    vol = Service(
-        "vol", ["/usr/bin/vol"], state=Volume("data", unlock=OperatorKey()).directory("vol")
-    )
-    refs = {"app": app.ref, "db": Database().service("db").ref, "vol": vol.ref}
+    refs = {"app": app.ref, "db": Database().service("db").ref}
     ref = refs[target]
     if isinstance(expected, str):
         with pytest.raises(ValidationError) as caught:
@@ -258,6 +253,36 @@ def test_a_profile_edits_a_service_by_its_public_keywords(
     key, value = expected
     assert value in plan(image, "staging").service(target).values("Service", key)
     assert value not in plan(image, "production").service(target).values("Service", key)
+
+
+@pytest.mark.parametrize(
+    ("target", "fields", "expected"),
+    [
+        ("app", {"name": "web"}, "cannot set Service name=: it names the service"),
+        ("bin", {"argv": [GoBinary("other", Local("."))]}, "changes the built binary"),
+        ("app", {"argv": ["/usr/bin/app", Secret("jwt")]}, "unbinds jwt through argv="),
+        ("app", {"environment": {"JWT": Secret("jwt")}}, "unbinds jwt through argv="),
+        ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
+        ("db", {"readiness": None}, "requires 'db.service', which declares no readiness"),
+    ],
+)
+def test_what_a_service_edit_still_refuses(
+    target: str, fields: dict[str, object], expected: str
+) -> None:
+    db = Service("db", ["/usr/bin/db"], readiness=TcpProbe(5432))
+    api = Service("api", ["/usr/bin/api"], requires=[db.ready])
+    vol = Service(
+        "vol", ["/usr/bin/vol"], state=Volume("data", unlock=OperatorKey()).directory("vol")
+    )
+    app = Service("app", ["/usr/bin/app"])
+    built = Service("bin", [GoBinary("bin", Local("."))])
+    ref = {"app": app.ref, "bin": built.ref, "db": db.ref, "vol": vol.ref}[target]
+    with pytest.raises(ValidationError) as caught:
+        change = ref.edit(**fields)
+        recipe_of(
+            Image("x", services=[db, api, vol, app], profiles={"s": Profile(changes=[change])})
+        )
+    assert expected in str(caught.value)
 
 
 def test_a_profile_that_is_not_production_is_marked() -> None:

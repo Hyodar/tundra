@@ -46,6 +46,7 @@ from ._values import (
     Credential,
     Egress,
     File,
+    HttpProbe,
     Notify,
     Package,
     Tree,
@@ -341,6 +342,8 @@ class _Lowering:
             items.extend(self.content(item))
         self.world = {}
         items.extend(regenerated)
+        if any(isinstance(service.readiness, HttpProbe) for service in world.values()):
+            self.curl = True
         if self.curl and not self.curl_shipped:
             items.append(dm.Package("curl"))
         self.curl = curl
@@ -591,8 +594,6 @@ class _Lowering:
 
     def service(self, item: Service) -> Iterator[dm.Declaration | dm.Fragment]:
         """A ``Service`` as the builds its argv pulls in and its units."""
-        from ._values import HttpProbe
-
         if isinstance(item.readiness, HttpProbe):
             self.curl = True
         yield from item.binaries()
