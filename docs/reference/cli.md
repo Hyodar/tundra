@@ -122,7 +122,9 @@ Write BUILD/tundravm.lock: the image's section digests, a pin per source, the
 toolchain. Pins already locked are kept while their source is unchanged; --update
 resolves the named inputs again (every one when none is named; `toolchain` records
 the running toolchain). --check never writes and never touches the network: it
-prints the drift and exits 1 when the lock is stale. A build never changes the lock.
+prints the drift and exits 1 when the lock is stale or missing. A production build
+never changes the lock; a development build writes a missing one and re-pins
+changed Local sources.
 
 positional arguments:
   IMAGE                 The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
@@ -156,8 +158,8 @@ measurements.json, sbom.spdx.json, inputs/, tree/, manifest.json (the identity;
 <id> is its digest), manifest.sig with --sign, observations.json. The directory
 appears atomically and is never written again; latest-production points at the
 newest. A production build needs the lock (`tundravm lock`) and refuses a stale
-one; a development build writes a missing one. --tree-only writes the standalone
-mkosi project instead and builds nothing.
+one; a development build writes a missing one and re-pins changed Local sources.
+--tree-only writes the standalone mkosi project instead and builds nothing.
 
 positional arguments:
   IMAGE             The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
@@ -194,9 +196,10 @@ usage: tundravm show [-h] [--json] [--traceback]
                      [--attr NAME]
                      [BUILD]
 
-Without BUILD: the image as it resolves (every profile's packages, files, units,
-sources, kernel, and where each declaration came from). With BUILD (a build
-directory, an id prefix, or `latest`): its manifest, provenance and unchecked
+Without BUILD: the image as it resolves, its name and file first, then each
+profile's packages, files, units, sources and kernel (--json adds where each
+declaration came from). With BUILD (a build directory, an id prefix, or `latest`):
+the report `build` printed, then the manifest's provenance and unchecked
 guarantees. --units, --tree and --measurements narrow it. --diff OLD NEW compares
 two builds: packages, files, units, boot payload, measurements, policy coverage.
 
@@ -211,8 +214,9 @@ options:
   --tree          The tree's files.
   --measurements  The measurement records (a build).
   --diff OLD NEW  Compare two builds.
-  --profile P     Profiles of an image (repeatable; default: all).
-  --dev           The latest development build; with an image file, its dev profile.
+  --profile P     Profiles of the image (repeatable; default: all); --profile dev is its dev
+                  profile.
+  --dev           The latest development build (`show IMAGE --dev`: the image's dev profile).
   --attr NAME     The image's name in its file.
 ```
 

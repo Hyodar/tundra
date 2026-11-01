@@ -355,7 +355,9 @@ def build_parser() -> argparse.ArgumentParser:
         "toolchain. Pins already locked are kept while their source is unchanged; --update\n"
         "resolves the named inputs again (every one when none is named; `toolchain` records\n"
         "the running toolchain). --check never writes and never touches the network: it\n"
-        "prints the drift and exits 1 when the lock is stale. A build never changes the lock.",
+        "prints the drift and exits 1 when the lock is stale or missing. A production build\n"
+        "never changes the lock; a development build writes a missing one and re-pins\n"
+        "changed Local sources.",
         image,
         as_json,
     )
@@ -379,8 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
         "<id> is its digest), manifest.sig with --sign, observations.json. The directory\n"
         "appears atomically and is never written again; latest-production points at the\n"
         "newest. A production build needs the lock (`tundravm lock`) and refuses a stale\n"
-        "one; a development build writes a missing one. --tree-only writes the standalone\n"
-        "mkosi project instead and builds nothing.",
+        "one; a development build writes a missing one and re-pins changed Local sources.\n"
+        "--tree-only writes the standalone mkosi project instead and builds nothing.",
         image,
     )
     which = build.add_mutually_exclusive_group()
@@ -431,9 +433,10 @@ def build_parser() -> argparse.ArgumentParser:
         "show",
         _cmd_show,
         "Show the resolved image or a build; --diff two builds.",
-        "Without BUILD: the image as it resolves (every profile's packages, files, units,\n"
-        "sources, kernel, and where each declaration came from). With BUILD (a build\n"
-        "directory, an id prefix, or `latest`): its manifest, provenance and unchecked\n"
+        "Without BUILD: the image as it resolves, its name and file first, then each\n"
+        "profile's packages, files, units, sources and kernel (--json adds where each\n"
+        "declaration came from). With BUILD (a build directory, an id prefix, or `latest`):\n"
+        "the report `build` printed, then the manifest's provenance and unchecked\n"
         "guarantees. --units, --tree and --measurements narrow it. --diff OLD NEW compares\n"
         "two builds: packages, files, units, boot payload, measurements, policy coverage.",
         as_json,
@@ -455,12 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="P",
-        help="Profiles of an image (repeatable; default: all).",
+        help="Profiles of the image (repeatable; default: all); --profile dev is its dev profile.",
     )
     show_cmd.add_argument(
         "--dev",
         action="store_true",
-        help="The latest development build; with an image file, its dev profile.",
+        help="The latest development build (`show IMAGE --dev`: the image's dev profile).",
     )
     show_cmd.add_argument(
         "--attr", default=None, metavar="NAME", help="The image's name in its file."
