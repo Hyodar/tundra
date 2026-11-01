@@ -274,7 +274,7 @@ Service(
     expose: Sequence[PortValue] = (),
     resources: Resources | None = None,
     shutdown: Shutdown | None = None,
-    hardening: Hardening = Hardening.preset("static"),
+    hardening: Sandbox = 'static',
     timer: Every | Calendar | None = None,
     socket: Listen | None = None,
     unit: DropIn | None = None,

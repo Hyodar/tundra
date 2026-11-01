@@ -1153,9 +1153,9 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             message=f"unit {name!r} runs without a sandbox (Hardening.none())",
             subject=name,
             profile=variant,
-            hint="Pick the preset for its runtime (Hardening.preset(NAME)), relax one knob "
-            'of it (Hardening.preset("static", devices=(...), capabilities=(...))) or use '
-            "Hardening.relaxed(), instead of dropping them all.",
+            hint='Pick the preset for its runtime (hardening="NAME"), relax one knob of it '
+            '(Hardening.preset("static", devices=(...), capabilities=(...))) or use '
+            'hardening="relaxed", instead of dropping them all.',
         )
         return
     keys = {key for key, _ in entries}
@@ -1777,9 +1777,9 @@ _REGISTRY: tuple[Rule, ...] = (
         "hardening-disabled",
         "warning",
         "A unit runs without a sandbox (Hardening.none()).",
-        "Pick the preset for its runtime (Hardening.preset(NAME)), relax one knob of it "
+        'Pick the preset for its runtime (hardening="NAME"), relax one knob of it '
         '(Hardening.preset("static", devices=(...), capabilities=(...))) or use '
-        "Hardening.relaxed(), instead of dropping them all.",
+        'hardening="relaxed", instead of dropping them all.',
     ),
     Rule(
         "hardening-relaxed",

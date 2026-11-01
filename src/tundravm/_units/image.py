@@ -61,6 +61,21 @@ _TARGETS = ("multi-user.target", "default.target", "minimal.target")
 """``WantedBy=`` targets a generated service is enabled into anyway."""
 
 
+def _preset(entries: list[tuple[str, str]]) -> str | None:
+    """The preset whose directives are exactly *entries*, if one is."""
+    from tundravm.declarative.systemd import Hardening, ceiling
+
+    from .parse import hardening_of
+
+    if not entries:
+        return None
+    sandbox = hardening_of(entries)
+    exact = ceiling(sandbox) if isinstance(sandbox, Hardening) else None
+    if exact is None or sorted(sandbox.entries()) != sorted(entries):
+        return None
+    return exact[0]
+
+
 def _yes(value: str | None) -> bool:
     """A systemd boolean (``yes``, ``true``, ``on``, ``1``) that is true."""
     return value is not None and value.lower() in ("yes", "true", "on", "1")
@@ -354,12 +369,18 @@ class _Service:
         sandbox = sorted(
             {key for (section, key) in d.values if section == "Service"} & set(HARDENING_KEYS)
         )
-        for key in sandbox:
-            d.pop("Service", key)
+        entries = [(key, value) for key in sandbox for value in d.pop("Service", key) or [""]]
+        preset = _preset(entries)
+        if preset is not None:
+            if preset != "static":
+                self.kw["hardening"] = preset
+            same = " ('node' and 'python' render the same)" if preset == "jit" else ""
+            self.notes.append(f"the unit's sandbox is exactly the {preset!r} preset{same}")
+            return
         self.notes.append(
-            "the sandbox is Hardening.preset('static')"
+            "the sandbox is the 'static' preset"
             + (f", in place of the unit's {', '.join(sandbox)}" if sandbox else "")
-            + ": pick another preset for a runtime that needs one"
+            + ": name another (hardening='python') for a runtime that needs one"
         )
 
     def install(self) -> None:

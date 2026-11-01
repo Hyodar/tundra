@@ -124,7 +124,7 @@ def test_an_endpoint_without_readiness_cannot_be_required() -> None:
 @pytest.mark.parametrize("preset", sorted(PRESETS))
 def test_every_preset_renders_its_directives(preset: str) -> None:
     planned = _plan(
-        Service("app", ["/usr/bin/app"], hardening=Hardening.preset(preset))  # type: ignore[arg-type]
+        Service("app", ["/usr/bin/app"], hardening=preset)  # type: ignore[arg-type]
     )
     unit = planned.service("app")
     assert unit.get("Service", "ProtectSystem") == "strict"
@@ -160,10 +160,25 @@ def test_a_preset_takes_explicit_deviations() -> None:
     assert unit.get("Service", "MemoryDenyWriteExecute") is None
 
 
-def test_an_unknown_preset_lists_the_runtime_classes() -> None:
-    with pytest.raises(ValidationError) as caught:
-        Hardening.preset("rust")  # type: ignore[arg-type]
-    assert "dotnet" in str(caught.value) and "static" in str(caught.value)
+KVM = Hardening.preset("jit", devices=["/dev/kvm"])
+
+
+@pytest.mark.parametrize(
+    ("hardening", "expected"),
+    [
+        ("dotnet", Hardening.preset("dotnet")),
+        ("relaxed", Hardening.relaxed()),
+        (KVM, KVM),
+        ("rust", "Name a preset ('static', 'jit', 'node', 'python', 'dotnet', 'relaxed')"),
+    ],
+)
+def test_hardening_takes_a_preset_by_name(hardening: object, expected: Hardening | str) -> None:
+    if isinstance(expected, str):
+        with pytest.raises(ValidationError) as caught:
+            Service("app", ["/usr/bin/app"], hardening=hardening)  # type: ignore[arg-type]
+        assert expected in str(caught.value)
+        return
+    assert Service("app", ["/usr/bin/app"], hardening=hardening).hardening == expected  # type: ignore[arg-type]
 
 
 # ── the grouped options ─────────────────────────────────────────────────

@@ -199,7 +199,7 @@ def _call(value: Any, imports: set[str], *, lists: bool = False) -> str:
         required = item.default is MISSING and item.default_factory is MISSING
         if not required:
             default = item.default if item.default is not MISSING else item.default_factory()  # type: ignore[misc]
-            if current == default:
+            if current == default or _source(current, set()) == _source(default, set()):
                 continue
         text = _source(current, imports, lists=lists)
         args.append(text if required and not item.kw_only else f"{item.name}={text}")
@@ -207,6 +207,11 @@ def _call(value: Any, imports: set[str], *, lists: bool = False) -> str:
 
 
 def _source(value: object, imports: set[str], *, lists: bool = False) -> str:
+    from .declarative.systemd import Hardening, ceiling
+
+    preset = ceiling(value) if isinstance(value, Hardening) else None
+    if preset is not None:
+        return _quoted(preset[0])
     if isinstance(value, tuple):
         parts = [_source(item, imports) for item in value]
         if lists:

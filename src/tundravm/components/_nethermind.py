@@ -10,7 +10,6 @@ from tundravm._image._service import Service
 from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import TCP, UDP, Egress, Resources, TcpProbe
 from tundravm.declarative import model as dm
-from tundravm.declarative.systemd import Hardening
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
@@ -146,7 +145,7 @@ class Nethermind(Component, build_network=True):
             state="nethermind" if self.state is None else self.state,
             credentials=[self.jwt],
             resources=self.resources,
-            hardening=Hardening.preset("dotnet"),
+            hardening="dotnet",
         )
 
     rules = (

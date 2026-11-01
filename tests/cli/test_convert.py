@@ -12,7 +12,7 @@ import tundravm
 from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
-from tundravm.systemd import Calendar
+from tundravm.systemd import Calendar, Hardening
 
 pytestmark = pytest.mark.boundary  # convert reads the tree through mkosi's own parser
 
@@ -191,6 +191,25 @@ def _missing(report: str) -> list[str]:
     return [
         line for line in report.splitlines() if line.startswith("error service-program-missing")
     ]
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "written"),
+    [
+        (Hardening.preset("dotnet"), 'hardening="dotnet"'),
+        (Hardening.preset("static"), "exactly the 'static' preset"),
+        (Hardening.preset("jit", devices=["/dev/kvm"]), "in place of the unit's"),
+    ],
+)
+def test_a_sandbox_that_is_exactly_a_preset_converts_to_its_name(
+    cli: Cli, tmp_path: Path, sandbox: Hardening, written: str
+) -> None:
+    lines = "".join(f"{key}={value}\n" for key, value in sandbox.entries())
+    (tmp_path / "app.service").write_text(f"[Service]\nExecStart=/usr/bin/app\n{lines}")
+    result = cli("convert", tmp_path / "app.service", "--from", "systemd")
+    assert result.code == EXIT_OK, result.err
+    assert written in result.out
+    assert ('hardening="' in result.out) == written.startswith("hardening=")
 
 
 def test_a_directory_without_units_is_refused(cli: Cli, tmp_path: Path) -> None:

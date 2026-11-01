@@ -11,13 +11,13 @@ import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.declarative.model import Calendar, DropIn, Every, Listen, UnitOutput
-from tundravm.declarative.systemd import Hardening
+from tundravm.declarative.systemd import CEILINGS, Hardening
 from tundravm.errors import ValidationError
 
 from ._change import Ref
@@ -37,7 +37,7 @@ from ._values import (
     TcpProbe,
 )
 
-__all__ = ["Argument", "Requirement", "Service", "executable_of"]
+__all__ = ["Argument", "Requirement", "Sandbox", "Service", "executable_of"]
 
 _UNIT_STEM = re.compile(r"[A-Za-z0-9:_.\\@-]+")
 _DIRECTORY = re.compile(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
@@ -63,6 +63,10 @@ task's ``task.output(path)`` (start after it, and only if it wrote *path*)."""
 
 type Binding = Credential | Secret
 """What ``credentials=`` takes: a delivered :class:`Secret`, or a fixed-path credential."""
+
+type Sandbox = Hardening | Literal["static", "jit", "node", "python", "dotnet", "relaxed"]
+"""What ``hardening=`` takes: a preset by name (``Hardening.preset(name)``, or
+``Hardening.relaxed()`` for ``"relaxed"``), or a :class:`Hardening` with deviations."""
 
 _REQUIREMENTS: tuple[type, ...] = (
     ServiceReady,
@@ -91,6 +95,22 @@ def executable_of(value: object) -> str | None:
     return None
 
 
+def _sandbox(value: object) -> Hardening:
+    """``hardening=`` as the :class:`Hardening` it names."""
+    if isinstance(value, Hardening):
+        return value
+    names = ", ".join(repr(name) for name in CEILINGS)
+    if value == "relaxed":
+        return Hardening.relaxed()
+    if isinstance(value, str) and value in CEILINGS:
+        return Hardening.preset(value)  # type: ignore[arg-type]
+    raise _fail(
+        value,
+        f"hardening={value!r} is not a sandbox.",
+        hint=f"Name a preset ({names}), or pass Hardening.preset(name, ...) with deviations.",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Service(Located):
     """A program the image runs, as its own user, in a tested sandbox.
@@ -101,9 +121,9 @@ class Service(Located):
     exception is the shell escape, ``["/bin/sh", "-eu", "-c", script]``.
 
     Implied, with no further words: ``Type=exec``, ``Restart=on-failure`` with
-    ``RestartSec=5s``, a dedicated system user named after the service, and
-    ``Hardening.preset("static")``. The escape hatch for anything systemd knows and no
-    field covers is ``unit=DropIn(...)``.
+    ``RestartSec=5s``, a dedicated system user named after the service, and the
+    ``"static"`` sandbox; ``hardening="python"`` names another preset. The escape hatch
+    for anything systemd knows and no field covers is ``unit=DropIn(...)``.
 
     ``requires=[other.ready]`` is a real dependency: ``Requires=`` and ``After=`` on
     whatever proves the other service ready (its ``Type=notify``, or its probe unit).
@@ -135,7 +155,7 @@ class Service(Located):
     expose: Sequence[PortValue] = ()
     resources: Resources | None = None
     shutdown: Shutdown | None = None
-    hardening: Hardening = field(default_factory=lambda: Hardening.preset("static"))
+    hardening: Sandbox = "static"
     timer: Every | Calendar | None = None
     socket: Listen | None = None
     unit: DropIn | None = None
@@ -148,6 +168,7 @@ class Service(Located):
 
     def __post_init__(self) -> None:
         self._freeze()
+        object.__setattr__(self, "hardening", _sandbox(self.hardening))
         if not isinstance(self.name, str) or not _UNIT_STEM.fullmatch(self.name):
             raise _fail(self, f"{self.name!r} is not a service name.")
         if "." in self.name and not self.name.endswith(".service"):
@@ -263,12 +284,6 @@ class Service(Located):
         for name, value, kinds in checks:
             if value is not None and not isinstance(value, kinds):
                 raise _fail(self, f"{name}= holds {value!r}, which is not the expected value.")
-        if not isinstance(self.hardening, Hardening):
-            raise _fail(
-                self,
-                f"hardening= holds {self.hardening!r}, not a Hardening.",
-                hint="Use Hardening.preset('static') or another runtime class.",
-            )
         names: set[str] = set()
         for credential in self.credentials:
             if not isinstance(credential, (Credential, Secret)):
