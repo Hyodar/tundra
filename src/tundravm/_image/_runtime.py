@@ -10,6 +10,8 @@ values become the declarations the tools and systemd already understand:
 - the secrets are entries of one ``Secrets`` block whose targets are files under
   ``/run/tundravm/credentials``, written by the operator (an ``ExternalDelivery``), plus
   one boot unit per secret that finishes once it has arrived;
+- a :class:`~tundravm.secrets.Generated` secret is a root boot oneshot that writes random
+  hex under ``/run/tundravm/secrets``, which every service binding it requires;
 - a volume an operator unlocks, or any secret, brings today's control-plane bootstrap:
   that ``Secrets`` block listens on the management port for the operator's SSH public
   key, and ``SshAccess(from_delivery=True)`` lets only that key in;
@@ -28,12 +30,19 @@ from dataclasses import dataclass
 
 from tundravm._location import declared_at, display_location
 from tundravm.declarative import model as dm
-from tundravm.declarative.systemd import Dynamic, Hardening
+from tundravm.declarative.systemd import Dynamic, Hardening, Root
 from tundravm.errors import ValidationError
 
 from ._component import Component, composed
 from ._ingress import TLS, AttestedTLS
-from ._secrets import CREDENTIALS_DIRECTORY, RUNTIME_DIRECTORY, BrokerKey, Secret
+from ._secrets import (
+    CREDENTIALS_DIRECTORY,
+    GENERATED_DIRECTORY,
+    RUNTIME_DIRECTORY,
+    BrokerKey,
+    Generated,
+    Secret,
+)
 from ._service import Service
 from ._storage import TPM_PLATFORMS, OperatorKey, TpmSeal, Volume, VolumeDirectory
 from ._values import MANAGEMENT_PORT
@@ -220,8 +229,10 @@ class Runtime:
     # ── Per service ──────────────────────────────────────────────────
 
     def waits(self, service: Service) -> tuple[str, ...]:
-        """The boot units *service* waits for: its required secrets and its volume."""
+        """The boot units *service* waits for: its required secrets, the generated ones and
+        its volume."""
         units = [secret.ready.unit for secret in service.secrets if secret.required]
+        units += [item.unit for item in service.bindings if isinstance(item, Generated)]
         if isinstance(service.state, VolumeDirectory):
             units.append(service.state.ready.unit)
         return tuple(units)
@@ -232,6 +243,23 @@ class Runtime:
 
     # ── The image ────────────────────────────────────────────────────
 
+    def generated(self) -> tuple[Generated, ...]:
+        """The generated secrets the services bind, one per name, in order of first use."""
+        found: dict[str, Generated] = {}
+        for service in self.services:
+            for item in service.bindings:
+                if not isinstance(item, Generated):
+                    continue
+                known = found.setdefault(item.name, item)
+                if known != item:
+                    raise ValidationError(
+                        f"Image: two different generated secrets are called {item.name!r}: "
+                        f"{known!r} and {item!r}.",
+                        hint="Declare the Generated once and pass that value to every "
+                        "service that reads it.",
+                    )
+        return tuple(found.values())
+
     def declarations(self) -> tuple[dm.Declaration | Component, ...]:
         """Everything the contracts add to the image (a component is lowered as one)."""
         found: list[dm.Declaration | Component] = []
@@ -240,6 +268,7 @@ class Runtime:
             found.append(dm.RuntimeTools(self.tools))
         for volume in self.volumes:
             found.extend(self.volume(volume))
+        found.extend(_generate(item) for item in self.generated())
         if self.control_plane:
             found.extend(self.delivery())
         for way in self.ingress:
@@ -419,6 +448,26 @@ class Runtime:
             "ingress": [way.manifest() for way in self.ingress],
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def _generate(secret: Generated) -> dm.Task:
+    """The root oneshot that writes *secret* once per boot, on tmpfs only."""
+    path = shlex.quote(secret.source)
+    script = (
+        f"mkdir -p -m 0711 {RUNTIME_DIRECTORY} && mkdir -p -m 0700 {GENERATED_DIRECTORY} && "
+        f"if [ ! -s {path} ]; then "
+        f"od -An -v -N{secret.bytes} -tx1 /dev/urandom | tr -d ' \\n' > {path}.tmp && "
+        f"[ -s {path}.tmp ] && mv {path}.tmp {path}; fi"
+    )
+    return dm.Task(
+        secret.unit.removesuffix(".service"),
+        ("/bin/sh", "-c", script),
+        description=f"Generate this boot's secret {secret.name}",
+        user=Root(),
+        timeout="60s",
+        needs=(),
+        hardening=Hardening.strict(protect_system="full", network="none"),
+    )
 
 
 def _wait(unit: str, description: str, script: str) -> dm.Task:

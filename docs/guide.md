@@ -180,8 +180,7 @@ Passing a baseline component in `components=` replaces the implied one.
 
 `File.copy` and `Tree` read host files when the image lowers: build their paths from
 `Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise;
-systemd-tmpfiles applies the owner at boot. Build dependencies are not image packages: they
-belong to the `GoBinary`, `CargoBinary` or `Build` that needs them.
+systemd-tmpfiles applies the owner at boot.
 
 `cmdline=` on either `Kernel` appends parameters (`name` or `name=value`) to the UKI's
 measured command line, after the image's own: `Kernel.default(cmdline=["nospectre_v2"])`.
@@ -332,12 +331,10 @@ The rules:
 
 - Fields are configuration. The subclass becomes a frozen, keyword-only dataclass, so two
   components with the same fields are equal.
-- `compose()` yields declarations and nested components. They resolve before validation,
-  so a component never hides in `services=`.
+- `compose()` yields declarations and nested components.
 - Exports are properties returning an `Endpoint` (`self.service("app").endpoint(port)`), a
   `ServiceRef` or a `ServiceReady`. A caller writes `requires=[app.http]` or puts `app.http`
-  in an argv, where it renders as its URL. Nobody outside names a unit, a port or a path
-  inside it.
+  in an argv, where it renders as its URL.
 - `check(resolved)` returns diagnostics. It becomes a lint rule that `tundravm check` runs,
   once per profile: `resolved.profile` names it, and a finding without `profile=` is that
   profile's.
@@ -539,6 +536,9 @@ systemd copies it into the unit's read-only `$CREDENTIALS_DIRECTORY` at start.
 | `source=BrokerKey(...)` | a broker delivers it instead of an operator (gate 3) |
 
 There is no `reload` rotation: systemd's credential copy is per start.
+
+`Generated(name)` needs no delivery: each boot a root oneshot writes 32 random bytes as
+hex to `/run/tundravm/secrets/<name>`, which every service binding it reads.
 
 ### Ingress
 

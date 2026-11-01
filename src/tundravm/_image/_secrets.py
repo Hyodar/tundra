@@ -1,5 +1,5 @@
 """Delivered secrets: :class:`Secret` requirements and the :class:`BrokerKey` that may
-release them.
+release them; :class:`Generated` secrets the image makes at boot instead.
 
 A secret is a requirement of the image, never a value in it: the value arrives at run
 time in ``/run/tundravm/credentials/<name>`` and a service reads it as a systemd
@@ -23,8 +23,10 @@ from ._values import Credential
 __all__ = [
     "CREDENTIALS_DIRECTORY",
     "CREDENTIAL_REFERENCE",
+    "GENERATED_DIRECTORY",
     "RUNTIME_DIRECTORY",
     "BrokerKey",
+    "Generated",
     "Secret",
     "credential_wait_unit",
 ]
@@ -35,6 +37,9 @@ RUNTIME_DIRECTORY = "/run/tundravm"
 CREDENTIALS_DIRECTORY = f"{RUNTIME_DIRECTORY}/credentials"
 """Where a delivered secret lands, one file per name, mode 0600, before systemd copies it
 into the bound unit's own credential directory."""
+
+GENERATED_DIRECTORY = f"{RUNTIME_DIRECTORY}/secrets"
+"""Where a :class:`Generated` secret is written at boot, one file per name, mode 0600."""
 
 CREDENTIAL_REFERENCE = re.compile(r"\$\{CREDENTIALS_DIRECTORY\}/([A-Za-z0-9_.-]+)")
 """How an argv names a credential it reads: ``secret.path``, systemd's
@@ -158,3 +163,55 @@ class Secret(Located):
     def ready(self) -> BootReady:
         """ "It has been delivered": what ``requires=`` takes for a secret."""
         return BootReady(credential_wait_unit(self.name))
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class Generated(Credential):
+    """A secret the image makes at boot instead of having it delivered: ``Generated("jwt")``.
+
+    For a value only the image's own services share, such as the Engine API secret an
+    execution client and its consensus client authenticate with, so nobody has to deliver
+    it. A root oneshot (``tundravm-generated-<name>.service``, no network, no capabilities)
+    writes *bytes* random bytes as one line of lower-case hex, without a newline, to
+    ``/run/tundravm/secrets/<name>`` (root-owned tmpfs, mode 0600), fresh every boot and
+    kept if the unit runs again. A service binds it as it binds a :class:`Secret` (in argv,
+    in ``environment=`` or with ``credentials=``), renders
+    ``LoadCredential=<name>:/run/tundravm/secrets/<name>`` and requires the oneshot, so
+    every service bound to one name reads the same value. Nothing outside the image ever
+    holds it.
+    """
+
+    bytes: int = 32
+
+    def __init__(self, name: str, *, bytes: int = 32) -> None:
+        object.__setattr__(self, "bytes", bytes)
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise ValidationError(
+                f"Generated: {name!r} is not a secret name.",
+                hint="Use lower-case letters, digits, '-', '_' and '.': Generated('jwt').",
+            )
+        if isinstance(bytes, bool) or not isinstance(bytes, int) or not 16 <= bytes <= 4096:
+            raise ValidationError(
+                f"Generated: bytes={bytes!r} is not a length in 16..4096.",
+                hint="Leave the default, 32 random bytes (64 hex characters).",
+            )
+        Credential.__init__(self, name, f"{GENERATED_DIRECTORY}/{name}")
+
+    def __repr__(self) -> str:
+        extra = "" if self.bytes == 32 else f", bytes={self.bytes}"
+        return f"Generated({self.name!r}{extra})"
+
+    @property
+    def unit(self) -> str:
+        """The oneshot that writes it."""
+        return f"tundravm-generated-{self.name}.service"
+
+    @property
+    def path(self) -> str:
+        """Where a bound service reads it: ``${CREDENTIALS_DIRECTORY}/<name>``, an argv word."""
+        return "${CREDENTIALS_DIRECTORY}/" + self.name
+
+    @property
+    def ready(self) -> BootReady:
+        """ "This boot's value exists": what a bound service requires."""
+        return BootReady(self.unit)

@@ -773,7 +773,7 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 ```python
 Nethermind(
     *,
-    jwt: Secret,
+    jwt: Secret | Generated,
     state: VolumeDirectory | None = None,
     config: str = 'surge-hoodi',
     source: dm.Git = Git(url='https://github.com/NethermindEth/nethermind.git', ref='1.32.3', subdir=None, submodules=False),
@@ -1157,6 +1157,22 @@ Credential(name: str, source: str)
 ```
 
 A systemd credential a service reads: `Credential("jwt", "/etc/app/jwt")`.
+
+### `Generated`
+
+*dataclass*
+
+```python
+Generated(name: str, *, bytes: int = 32)
+```
+
+A secret the image makes at boot instead of having it delivered: `Generated("jwt")`.
+
+| Member | Does |
+|---|---|
+| `Generated.path` | Where a bound service reads it: `${CREDENTIALS_DIRECTORY}/<name>`, an argv word. |
+| `Generated.ready` | "This boot's value exists": what a bound service requires. |
+| `Generated.unit` | The oneshot that writes it. |
 
 ### `Secret`
 

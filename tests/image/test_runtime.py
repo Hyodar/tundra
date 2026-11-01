@@ -20,7 +20,7 @@ from tundravm.components import Egress, Endpoint, Network
 from tundravm.declarative import Disk, Key, Secrets
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, TLS, AttestedTLS
-from tundravm.secrets import Secret
+from tundravm.secrets import Generated, Secret
 from tundravm.sources import Git
 from tundravm.storage import BrokerKey, OperatorKey, TpmSeal, Volume
 from tundravm.systemd import TcpProbe
@@ -304,6 +304,27 @@ def test_secret_values_are_checked() -> None:
         Secret("x", rotation="reload")  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="https://"):
         BrokerKey("http://kbs", audience="x")
+
+
+def test_a_generated_secret_is_written_at_boot_for_the_services_that_share_it() -> None:
+    shared = Generated("jwt")
+    services = [Service(name, [f"/usr/bin/{name}", "--jwt", shared]) for name in ("el", "cl")]
+    image = Image("pair", services=services)
+    assert not image.secrets  # nothing to deliver, so no control plane
+    planned = plan(image, "production")
+    for name in ("el", "cl"):
+        unit = planned.service(name)
+        assert unit.values("Service", "LoadCredential") == ("jwt:/run/tundravm/secrets/jwt",)
+        assert "tundravm-generated-jwt.service" in _after(planned, f"{name}.service")
+    writer = planned.unit("tundravm-generated-jwt.service")
+    assert writer.get("Service", "User") is None  # root, without capabilities
+    assert writer.get("Service", "RestrictAddressFamilies") == "none"
+    assert "-N32 -tx1 /dev/urandom" in (writer.get("Service", "ExecStart") or "")
+    twin = Service("cl", ["/usr/bin/cl", "--jwt", Generated("jwt", bytes=64)])
+    with pytest.raises(ValidationError, match="two different generated secrets"):
+        plan(Image("pair", services=[services[0], twin]), "production")
+    with pytest.raises(ValidationError, match="16..4096"):
+        Generated("jwt", bytes=8)
 
 
 def test_a_broker_is_recorded_and_waited_for_like_an_operator() -> None:

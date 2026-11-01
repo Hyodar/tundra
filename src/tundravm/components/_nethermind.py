@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from tundravm._image._component import Component, Endpoint
-from tundravm._image._secrets import Secret
+from tundravm._image._secrets import Generated, Secret
 from tundravm._image._service import Service
 from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import TCP, UDP, Egress, Resources, TcpProbe
@@ -59,17 +59,19 @@ class Nethermind(Component, build_network=True):
     properties and the restore it needs (the build reaches NuGet, so the image builds
     with the network on), installed under ``/usr/lib/nethermind`` with its plugins; the
     network configuration *config* is one Nethermind ships (``surge-hoodi``,
-    ``taiko-alethia``...). It reads the Engine API secret *jwt* as a credential, keeps its
-    database in *state* (a volume directory; ``None`` keeps it on the volatile root, so
-    it resyncs at every boot, which :meth:`check` reports), and runs under the ``dotnet``
-    hardening preset. It sends to its peers on the p2p port, 30303 over TCP and UDP
-    (:meth:`outbound`), so behind an ``Egress`` it reaches the peers that use that port.
+    ``taiko-alethia``...). It reads the Engine API secret *jwt* as a credential (a
+    delivered :class:`~tundravm.secrets.Secret`, or ``Generated("jwt")`` when only the
+    image's own consensus client calls the Engine API), keeps its database in *state* (a
+    volume directory; ``None`` keeps it on the volatile root, so it resyncs at every boot,
+    which :meth:`check` reports), and runs under the ``dotnet`` hardening preset. It sends
+    to its peers on the p2p port, 30303 over TCP and UDP (:meth:`outbound`), so behind an
+    ``Egress`` it reaches the peers that use that port.
 
     Exports :attr:`rpc` (JSON-RPC over HTTP), :attr:`ws` (the same port over WebSocket)
     and :attr:`engine_api`, each ready once the RPC port accepts connections.
     """
 
-    jwt: Secret
+    jwt: Secret | Generated
     state: VolumeDirectory | None = None
     config: str = "surge-hoodi"
     source: dm.Git = NETHERMIND_SOURCE
@@ -78,10 +80,11 @@ class Nethermind(Component, build_network=True):
     resources: Resources | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.jwt, Secret):
+        if not isinstance(self.jwt, (Secret, Generated)):
             raise ValidationError(
-                "Nethermind: jwt= must be the Secret the image declares.",
-                hint="Declare jwt = Secret('jwt') and pass it to both the image and Nethermind.",
+                "Nethermind: jwt= must be the Secret the image declares, or a Generated one.",
+                hint="Declare jwt = Generated('jwt') (or Secret('jwt')) and pass it to "
+                "Nethermind and its consensus client.",
             )
         if not isinstance(self.config, str) or not self.config or "/" in self.config:
             raise ValidationError(
