@@ -1050,7 +1050,6 @@ Rule(
     checks: Sequence[RuleCheck] = (),
     *,
     when: Sequence[str] = (),
-    internal: bool = False,
 )
 ```
 

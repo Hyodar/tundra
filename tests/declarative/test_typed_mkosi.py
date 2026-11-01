@@ -4,9 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.check import TYPED_SETTINGS
 from tundravm.declarative import Debian, Mkosi, Package, Recipe, Setting, compile
-from tundravm.declarative.lower import _BOOL_SETTINGS, _SINGLE_SETTINGS
 from tundravm.errors import ValidationError
 
 SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
@@ -64,7 +62,3 @@ def test_a_setting_overrides_the_typed_field(tmp_path: Path) -> None:
 def test_mkosi_rejects_invalid_values(fields: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         Mkosi(**fields)  # type: ignore[arg-type]
-
-
-def test_every_compiler_mapped_setting_names_its_typed_field() -> None:
-    assert set(_SINGLE_SETTINGS) | set(_BOOL_SETTINGS) == set(TYPED_SETTINGS)

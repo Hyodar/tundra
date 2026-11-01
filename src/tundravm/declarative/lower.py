@@ -38,7 +38,6 @@ from tundravm._modules.probe import Probe
 from tundravm._options import MkosiOptions
 from tundravm._platforms import metadata_units
 from tundravm._source import DebFile, HttpSource
-from tundravm.check import CONFIGURE_SCRIPT_HINT, ENVIRONMENT_HINT
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import VERITY_MODULES, module_selection
@@ -765,39 +764,27 @@ def _setting_bool(setting: Setting, value: str) -> bool:
 
 
 CONFIGURE_SCRIPTS = "ConfigureScripts"
-"""The setting ``Mkosi`` refuses (lint ``mkosi-configure-script``): configure scripts run
-after ``mkosi summary``, so the resolved configuration would not be what mkosi builds."""
+"""The setting ``Mkosi`` refuses at construction: configure scripts run after ``mkosi
+summary``, so the resolved configuration would not be what mkosi builds."""
 
 
 def _refuse_unreproducible(setting: Setting) -> None:
-    """Raise for a *setting* that makes the tree's resolved configuration lie or leak.
+    """A *setting* that would make the tree's resolved configuration lie or leak is refused
+    before it reaches here (``Mkosi(settings=)`` names the slot), so one is a lowering bug.
 
     ``ConfigureScripts=`` rewrites the configuration after ``summary`` reads it; an
     ``Environment=`` name without a value, and ``PassEnvironment=``, pass the host's
     variables into the build.
     """
-    if setting.key == CONFIGURE_SCRIPTS:
-        raise ValidationError(
-            f"Mkosi: settings= sets {setting.key}=, whose scripts rewrite the configuration "
-            "after `mkosi summary` resolved it.",
-            hint=CONFIGURE_SCRIPT_HINT,
-            context={
-                "setting": f"{setting.section}.{setting.key}",
-                "code": "mkosi-configure-script",
-            },
-        )
+    assert setting.key != CONFIGURE_SCRIPTS, (
+        f"{setting.section}.{setting.key} rewrites the configuration after mkosi summary "
+        "resolved it; Mkosi(settings=) refuses it"
+    )
     passed = [v for v in setting.values if "=" not in v]
-    if setting.key == "PassEnvironment" or (setting.key == "Environment" and passed):
-        names = ", ".join(passed or setting.values)
-        raise ValidationError(
-            f"Mkosi: settings= sets {setting.key}=, which passes the host's {names} into the "
-            "build.",
-            hint=ENVIRONMENT_HINT,
-            context={
-                "setting": f"{setting.section}.{setting.key}",
-                "code": "mkosi-environment-passthrough",
-            },
-        )
+    assert not (setting.key == "PassEnvironment" or (setting.key == "Environment" and passed)), (
+        f"{setting.section}.{setting.key} passes the host's {', '.join(passed or setting.values)} "
+        "into the build; Mkosi(settings=) refuses it"
+    )
 
 
 def _typed_options(recipe: Recipe) -> dict[str, Any]:
@@ -832,7 +819,7 @@ def _mkosi_options(
 
     Settings without a compiler field are written verbatim, unless the compiler
     writes that key itself, or the key would make ``mkosi summary`` disagree with the
-    build (``ConfigureScripts=``, lint ``mkosi-configure-script``) or let the host's
+    build (``ConfigureScripts=``) or let the host's
     environment in (an ``Environment=`` name without a value, ``PassEnvironment=``,
     lint ``mkosi-environment-passthrough``). *sandbox_files* are written under
     ``mkosi.sandbox/``.

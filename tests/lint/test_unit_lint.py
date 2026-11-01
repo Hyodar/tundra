@@ -52,7 +52,6 @@ def found(*items: object, code: str) -> list[Diagnostic]:
             "requires-without-after",
             "info",
         ),
-        (service("ExecStart=/usr/bin/x"), "unit-raw", "info"),
     ],
 )
 def test_each_code_fires_on_raw_unit_text(text: str, code: str, severity: str) -> None:
@@ -62,7 +61,7 @@ def test_each_code_fires_on_raw_unit_text(text: str, code: str, severity: str) -
 
 def test_clean_unit_text_has_no_unit_findings() -> None:
     text = service("Type=oneshot\nExecStart=/usr/bin/x\nRemainAfterExit=yes\nUser=app")
-    assert [d.code for d in report(recipe(Unit("x.service", text, enabled=True)))] == ["unit-raw"]
+    assert [d.code for d in report(recipe(Unit("x.service", text, enabled=True)))] == []
 
 
 def test_drop_ins_are_checked_against_their_units_sections() -> None:
@@ -165,7 +164,6 @@ UNIT_CODES = frozenset(
         "relation-conflict",
         "requires-without-after",
         "state-dir-mkdir",
-        "unit-raw",
         "unit-as-file",
     }
 )
@@ -177,14 +175,16 @@ node and the nethermind-tdx base included, emits typed units only."""
 def test_repository_recipes_report_only_the_expected_unit_findings() -> None:
     from tests.helpers import REPO_ROOT
     from tests.unit_corpus import recipe_paths
-    from tundravm.declarative import load
     from tundravm.declarative.lifecycle import check_report
+    from tundravm.recipe import load_file
 
     paths = recipe_paths()
     seen = {
         name: {
             d.code
-            for d in check_report(load(path, extra_paths=[REPO_ROOT]), None, variants=None)
+            for d in check_report(
+                load_file(path, extra_paths=[REPO_ROOT]).recipe, None, variants=None
+            )
             if d.code in UNIT_CODES
         }
         for name, path in paths.items()

@@ -294,16 +294,6 @@ def test_compile_version_script(tmp_path: Path) -> None:
     assert version_path.stat().st_mode & 0o755 == 0o755
 
 
-@pytest.mark.parametrize(
-    "values", [("KERNEL_IMAGE", "KERNEL_VERSION"), ("SOURCE_DATE_EPOCH=0", "KERNEL_IMAGE")]
-)
-def test_compile_refuses_environment_passthrough(values: tuple[str, ...]) -> None:
-    """Environment=KEY (the host's value) never enters the build."""
-    recipe = _recipe(Package("curl"), Setting("Build", "Environment", values), epoch=None)
-    with pytest.raises(ValidationError, match="mkosi-environment-passthrough"):
-        compile(recipe)
-
-
 def test_compile_user_epoch_variable_does_not_change_the_source_date(tmp_path: Path) -> None:
     """A user SOURCE_DATE_EPOCH reaches the payload's scripts; SourceDateEpoch= is the
     platform's."""

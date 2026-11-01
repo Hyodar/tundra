@@ -13,7 +13,8 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import ATTESTED_NODE, REPO_ROOT
-from tundravm.declarative import Recipe, compile, load
+from tundravm.declarative import Recipe, compile
+from tundravm.recipe import load_file
 from tundravm.testing import assert_tree
 from tundravm.testing._model import assert_tree_matches
 
@@ -23,7 +24,7 @@ PROFILES = ("production", "staging", "bench", "dev")
 
 @pytest.fixture(scope="module")
 def node() -> Recipe:
-    return load(ATTESTED_NODE / "image.py", extra_paths=[REPO_ROOT])
+    return load_file(ATTESTED_NODE / "image.py", extra_paths=[REPO_ROOT]).recipe
 
 
 def test_the_attested_node_declares_the_golden_profiles(node: Recipe) -> None:

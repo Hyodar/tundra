@@ -6,28 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import write_recipe_file
 from tundravm import declarative as tv
 from tundravm.declarative import Declaration, File, Fragment, Package, Recipe, Variant, lower
 from tundravm.diff import FileChange, TreeDiff, diff_against, diff_trees
-
-RECIPE = """
-from tundravm.declarative import File, Fragment, Package, Recipe, Service, User, Variant
-from tundravm.backends.local_linux import LocalLinuxBackend
-
-backend = LocalLinuxBackend()
-recipe = Recipe(
-    "diff",
-    items=(
-        Package("curl"),
-        Package("jq"),
-        File("/etc/motd", "hello\\n"),
-        User("app", system=True),
-        Service("app", "/usr/bin/app"),
-    ),
-    variants=(Variant("default", outputs=("qemu",)), Variant("azure", outputs=("azure",))),
-)
-"""
 
 
 def write(root: Path, rel: str, data: str | bytes, mode: int = 0o644) -> Path:
@@ -179,9 +160,3 @@ def test_diff_leaves_the_tree_alone_until_written(tmp_path: Path) -> None:
     changed.write(tree)
     assert "    extra\n" in conf.read_text(encoding="utf-8")
     assert diff_against(lower(extra), tree).is_clean
-
-
-@pytest.fixture
-def recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The recipe file, run from *tmp_path* so its build dir is ``tmp_path / "build"``."""
-    return write_recipe_file(tmp_path, RECIPE, monkeypatch)

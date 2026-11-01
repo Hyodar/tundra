@@ -6,16 +6,14 @@
 the rules its class declares (``Component.rules``). ``tundravm check --explain CODE``
 prints one, and ``docs/reference/lint.md`` lists them.
 A compiler rule's ``checks`` are small functions
-``(image, profile_name, state) -> Iterator[Diagnostic]``; ``_rule_module_checks`` adds
-each applied module's own ``Module.check()`` findings. They read each profile's effective
-state (``RecipeState.effective_profile``): what the compiler emits for it, i.e. the
-profile merged over the default profile it extends.
+``(image, profile_name, state) -> Iterator[Diagnostic]``. They read each profile's
+effective state (``RecipeState.effective_profile``): what the compiler emits for it, i.e.
+the profile merged over the default profile it extends.
 """
 
 from __future__ import annotations
 
 import difflib
-import fnmatch
 import posixpath
 import re
 import shlex
@@ -23,24 +21,21 @@ import textwrap
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ._modules.init import is_init_path
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
-from .diagnostics import Diagnostic, Rule, RuleCheck, Severity, tundravm_sets
+from .diagnostics import Diagnostic, Rule, RuleCheck, Severity
 from .errors import ValidationError
 from .formats import annotation_path, workflow_command
 from .kernel_modules import (
     NO_MODULES,
-    ModuleSelection,
     debloat_paths_remove,
-    installs_kernel_package,
-    module_selection,
     removes_path,
 )
-from .models import MODULES_PATH, ProfileState, ServiceSpec, debloat_units_keep, unit_name
+from .models import ProfileState, ServiceSpec, debloat_units_keep, unit_name
 from .project import lock_command
 
 if TYPE_CHECKING:
@@ -361,26 +356,6 @@ def _rule_file_path_duplicate(
             )
 
 
-def _rule_file_path_relative(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    entries = [
-        *(("file", f.path) for f in state.files),
-        *(("template", t.path) for t in state.templates),
-        *(("skeleton", f.path) for f in state.skeleton_files),
-    ]
-    for kind, path in entries:
-        if ".." in path.split("/"):
-            yield Diagnostic(
-                severity="error",
-                code="file-path-relative",
-                message=f"{kind} path contains '..' and may escape the image root",
-                hint=f"Write the normalized absolute path instead, e.g. {_norm(path)!r}.",
-                profile=profile_name,
-                subject=path,
-            )
-
-
 def _program(command: tuple[str, ...]) -> str | None:
     """The program *command* runs (systemd's lookup for a bare name), ``None`` when it
     is a variable only the running unit expands."""
@@ -643,25 +618,6 @@ def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
     )
 
 
-def _rule_kernel_missing(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    if not image.mkosi.bootable or image.kernel is not None:
-        return
-    if installs_kernel_package(state.packages):
-        return
-    yield Diagnostic(
-        severity="error",
-        code="kernel-missing",
-        message=(
-            "profile builds a bootable UKI but installs no kernel, so mkosi stops with "
-            "'A kernel must be installed in the image to build a UKI'"
-        ),
-        hint=tundravm_sets("the kernel package"),
-        profile=profile_name,
-    )
-
-
 _UNHARDENED_FIX = (
     "Drop hardening=False from Kernel.build(...); to keep one option it turns off, set that "
     'option in a fragment: fragments=[KernelFragment({"CONFIG_IO_URING": "y"})].'
@@ -707,121 +663,6 @@ def _rule_kernel_cmdline_repeated(
                 subject=parameter,
                 hint=f"Drop {parameter!r} from Kernel(cmdline=): every image boots with it.",
             )
-
-
-def _removes(patterns: Iterable[str], path: str) -> str | None:
-    """The first of *patterns* (debloat removal paths or globs) that deletes *path*."""
-    for pattern in patterns:
-        if path == pattern or path.startswith(pattern.rstrip("/") + "/"):
-            return pattern
-        if fnmatch.fnmatch(path, pattern):
-            return pattern
-    return None
-
-
-def _rule_built_kernel_modules(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    """A built kernel's modules: ``kernel_modules`` it cannot have, or a debloat deleting them."""
-    kernel = image.kernel
-    if kernel is None or not kernel.built:
-        return
-    loadable = kernel.composed and kernel.modules
-    selected = image.mkosi.kernel_modules
-    if selected and not loadable:
-        yield Diagnostic(
-            severity="warning",
-            code="kernel-modules-ignored",
-            message=(
-                "Debian(kernel_modules=...) selects modules, but the built kernel has no "
-                "loadable modules (Kernel(modules=False) or a whole config=)"
-            ),
-            hint=tundravm_sets("a built kernel's modules"),
-            profile=profile_name,
-            subject="kernel_modules",
-        )
-    config = state.debloat
-    if loadable and config.enabled and config.keep_modules is not True:
-        # The implicit debloat keeps them (module_selection); a declared list may not.
-        kept = ModuleSelection(modular=True)
-        pattern = _removes(debloat_paths_remove(config, kept), MODULES_PATH)
-        if pattern is not None and config.keep_modules is None:
-            yield Diagnostic(
-                severity="error",
-                code="debloat-removes-modules",
-                message=(
-                    f"debloat removes {pattern} but the built kernel installs its loadable "
-                    "modules there (Kernel(modules=True))"
-                ),
-                hint=tundravm_sets("whether the debloat keeps the kernel's modules"),
-                profile=profile_name,
-                subject=MODULES_PATH,
-            )
-
-
-def _rule_debloat_removes_modules(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    config = state.debloat
-    if not config.enabled or config.keep_modules is False:
-        return
-    # A built Kernel installs only its vmlinuz: nothing under /usr/lib/modules loads.
-    selection = module_selection(
-        state,
-        image.mkosi.kernel_modules,
-        built_kernel=image.kernel is not None,
-    )
-    if not selection.modular:
-        return
-    # What finalize removes: the implicit default already keeps the modules mkosi selected.
-    pattern = _removes(debloat_paths_remove(config, selection), MODULES_PATH)
-    if pattern is None:
-        return
-    yield Diagnostic(
-        severity="error",
-        code="debloat-removes-modules",
-        message=(
-            f"debloat removes {pattern} but the profile boots the distribution's modular "
-            "kernel, whose drivers (virtio, tdx_guest, cloud NICs) then never load"
-        ),
-        hint=tundravm_sets("whether the debloat keeps the kernel's modules"),
-        profile=profile_name,
-        subject=MODULES_PATH,
-    )
-
-
-_EFI_STUB_DEB = re.compile(r"systemd-boot-efi_\S*_amd64\.deb")
-
-
-def _rule_recipe_arch_unsupported(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    if image.arch != "aarch64":
-        return
-    if _EFI_STUB_DEB.search(_command_text(state)):
-        yield Diagnostic(
-            severity="error",
-            code="image-arch-unsupported",
-            message=(
-                "the platform's arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
-                "package, whose x86-64 EFI stub cannot boot an arm64 UKI"
-            ),
-            hint=tundravm_sets("the architecture"),
-            profile=profile_name,
-            subject="EfiStub",
-        )
-    if "qemu" in state.output_targets:
-        yield Diagnostic(
-            severity="error",
-            code="image-arch-unsupported",
-            message=(
-                "the platform's arch is aarch64 but the profile targets qemu, whose deploy adapter "
-                "boots images with qemu-system-x86_64"
-            ),
-            hint=tundravm_sets("the architecture"),
-            profile=profile_name,
-            subject="qemu",
-        )
 
 
 SECRET_HINT = (
@@ -1148,7 +989,7 @@ def _rule_unit_written_at_runtime(
 def unit_declaration_check(
     recipe: Recipe, *, variants: Sequence[str] | None = None
 ) -> list[Diagnostic]:
-    """``unit-raw``, ``unit-as-file``, ``unit-extra``, ``hardening-*`` and
+    """``unit-as-file``, ``unit-extra``, ``hardening-*`` and
     ``service-runs-as-root`` findings of *recipe*'s own declarations.
 
     The first two are style codes; the others describe typed units.
@@ -1179,10 +1020,7 @@ def unit_declaration_check(
                     covered = _keyword_covered(dropin.extra, _dropin_keywords(dropin))
                     if covered:
                         found.append(_located(_unit_extra(item.name, covered, variant, True), item))
-            if isinstance(item, Unit) and item.content is not None:
-                if unit_name(item.name).endswith(".service"):
-                    found.append(_located(_unit_raw(item.name, variant), item))
-            elif isinstance(item, File) and is_unit_path(_norm(item.path)):
+            if isinstance(item, File) and is_unit_path(_norm(item.path)):
                 found.append(_located(_unit_as_file(item.path, variant), item))
     return found
 
@@ -1336,20 +1174,6 @@ def _unit_extra(name: str, covered: Mapping[str, str], variant: str, dropin: boo
     )
 
 
-def _unit_raw(name: str, variant: str) -> Diagnostic:
-    return Diagnostic(
-        code="unit-raw",
-        severity="info",
-        message=f"unit {name!r} is hand-written unit text",
-        subject=name,
-        profile=variant,
-        hint=(
-            f"Declare Service({posixpath.splitext(name)[0]!r}, argv, ...) instead: the "
-            "compiler renders the unit, its ordering after requires= and its enablement."
-        ),
-    )
-
-
 def _unit_as_file(path: str, variant: str) -> Diagnostic:
     return Diagnostic(
         code="unit-as-file",
@@ -1365,37 +1189,14 @@ def _unit_as_file(path: str, variant: str) -> Diagnostic:
     )
 
 
-def _rule_module_checks(
-    image: Lowered, profile_name: str, state: ProfileState
-) -> Iterator[Diagnostic]:
-    for module in image.applied_modules(profile_name, inherited=True):
-        yield from module.check(image, profile_name)
-
-
 _UNIT_TEXT = (_rule_unit_text,)
-_MODULES = (_rule_module_checks,)
 _LOCK_AGAIN = (
     "Review the change, then run `tundravm lock` to record it and commit the lockfile; "
     "`tundravm lock --check` shows the same drift without writing."
 )
 
-CONFIGURE_SCRIPT_HINT = (
-    "Drop it: set what the script would set through the Image keywords or Mkosi(settings=)."
-)
-"""The fix of ``mkosi-configure-script``."""
-ENVIRONMENT_HINT = "Drop it from Mkosi(settings=): the build sees no host variable."
-"""The fix of ``mkosi-environment-passthrough``."""
-
 _REGISTRY: tuple[Rule, ...] = (
     # ── resolution: the declarations of each profile ──
-    Rule(
-        "edit-invalid",
-        "error",
-        "A profile's edit sets a field to a value the declaration refuses.",
-        "Fix the field values in the profile's changes=; the message carries the "
-        "declaration's own error.",
-        internal=True,
-    ),
     Rule(
         "edit-missing",
         "error",
@@ -1437,97 +1238,12 @@ _REGISTRY: tuple[Rule, ...] = (
         "the one that holds it.",
     ),
     Rule(
-        "target-inconsistent",
-        "error",
-        "A profile targets outputs that drop the cloud platform integration it inherits, "
-        "so its UKI carries glue for a cloud it never boots on.",
-        tundravm_sets("each profile's targets"),
-        internal=True,
-    ),
-    Rule(
         "unit-collision",
         "error",
         'Two services write one unit file (Service("app", argv) and Service("app", argv, '
         "timer=...)), so one silently replaces the other.",
         "Give each its own name; what a service's unit says changes through its keywords "
         "and unit=DropIn(...), never through a second Service.",
-    ),
-    Rule(
-        "port-unreachable",
-        "warning",
-        "A service listens on a port the firewall drops, so nothing outside reaches it.",
-        tundravm_sets("the ports the firewall opens: each service's expose="),
-        internal=True,
-    ),
-    Rule(
-        "network-missing",
-        "warning",
-        "The profile serves ports or syncs time but brings up no network interface.",
-        tundravm_sets("the network: every image implies Network()"),
-        internal=True,
-    ),
-    Rule(
-        "step-undefined",
-        "error",
-        "A boot step orders itself after or before a step the profile does not declare.",
-        tundravm_sets("the boot steps and their order"),
-        internal=True,
-    ),
-    Rule(
-        "step-cycle",
-        "error",
-        "The boot steps' after= and before= form a cycle, so runtime-init has no order to "
-        "run them in.",
-        tundravm_sets("the boot steps and their order"),
-        internal=True,
-    ),
-    Rule(
-        "needs-undefined",
-        "error",
-        "A unit waits for a boot step or boot task the profile does not declare, so it "
-        "would wait forever.",
-        tundravm_sets("what a unit waits for: a service's requires="),
-        internal=True,
-    ),
-    Rule(
-        "needs-without-init",
-        "warning",
-        "A unit waits for runtime-init, but the profile declares no runtime-init step, so "
-        "it waits for nothing.",
-        tundravm_sets("what a unit waits for: a service's requires="),
-        internal=True,
-    ),
-    Rule(
-        "hook-after-undefined",
-        "error",
-        "A build hook runs after a hook the profile does not declare.",
-        tundravm_sets("the build hooks and their order"),
-        internal=True,
-    ),
-    Rule(
-        "hook-order",
-        "error",
-        "A build hook is ordered after a hook of a later phase, which only runs after it.",
-        tundravm_sets("the build hooks and their order"),
-        internal=True,
-    ),
-    Rule(
-        "disk-key-undefined",
-        "error",
-        "A volume is encrypted with a key the profile does not declare, so it cannot be "
-        "unlocked at boot.",
-        tundravm_sets("a volume's key"),
-        _MODULES,
-        internal=True,
-    ),
-    Rule(
-        "secret-store-undefined",
-        ("error", "warning"),
-        "The secrets are stored on a disk the profile does not declare.",
-        tundravm_sets("where the secrets are stored"),
-        _MODULES,
-        when=("when the compiled profile, not its declarations, lacks the disk",),
-        internal=True,
     ),
     Rule(
         "export-stale",
@@ -1550,14 +1266,6 @@ _REGISTRY: tuple[Rule, ...] = (
         "edit the service's argv in the same profile.",
     ),
     Rule(
-        "external-delivery-unwired",
-        "warning",
-        "Nothing in the image can tell when the secret delivery has written the secrets, "
-        "so services start without them.",
-        tundravm_sets("the secret delivery"),
-        internal=True,
-    ),
-    Rule(
         "volume-tpm-on-cloud",
         "info",
         "A Volume(unlock=TpmSeal(...)) seals its key to a cloud's vTPM (Azure's paravisor, "
@@ -1575,61 +1283,6 @@ _REGISTRY: tuple[Rule, ...] = (
         "what it checks or how to fix it.",
         "Declare the code on the component class: rules = (Rule(CODE, SEVERITY, SUMMARY, "
         "FIX),), with Rule from tundravm.components.",
-    ),
-    # ── modules ──
-    Rule(
-        "disk-key-path-mismatch",
-        "warning",
-        "A disk reads its key from a path other than the one its key is written to, so the "
-        "unlock finds no key.",
-        tundravm_sets("where a volume's key is written"),
-        _MODULES,
-        internal=True,
-    ),
-    Rule(
-        "disk-device-guessed",
-        ("error", "warning"),
-        "A disk that is formatted names no device, and automatic selection can pick the "
-        "boot disk and format it.",
-        tundravm_sets("each volume's device"),
-        _MODULES,
-        when=("under Policy(storage_safety='warn')",),
-        internal=True,
-    ),
-    Rule(
-        "disk-device-unstable",
-        "warning",
-        "A disk is formatted through a kernel name (/dev/sdb), which follows probe order "
-        "and can point at another disk on the next boot.",
-        tundravm_sets("each volume's device"),
-        _MODULES,
-        internal=True,
-    ),
-    Rule(
-        "secret-target-unsupported",
-        "error",
-        "A secret goes to a target its delivery does not write at boot, so it never arrives.",
-        tundravm_sets("where each secret is delivered"),
-        _MODULES,
-        internal=True,
-    ),
-    Rule(
-        "secret-env-service-unknown",
-        "error",
-        "A secret is delivered into the environment of a service the profile neither "
-        "generates, ships nor enables.",
-        tundravm_sets("which service a secret is delivered to"),
-        _MODULES,
-        internal=True,
-    ),
-    Rule(
-        "key-pipe-outside-run",
-        "info",
-        "A key reads its pipe outside /run, where a FIFO survives reboots and can be "
-        "replaced by a regular file.",
-        tundravm_sets("where a volume's key pipe is"),
-        _MODULES,
-        internal=True,
     ),
     # ── the compiler: each profile's lowered state ──
     Rule(
@@ -1659,14 +1312,6 @@ _REGISTRY: tuple[Rule, ...] = (
         "Keep one: drop the File, or leave the path out of the Tree with Tree(exclude=[...]); "
         "if two components write it, drop one or merge their content into one File.",
         (_rule_file_path_duplicate,),
-    ),
-    Rule(
-        "file-path-relative",
-        "error",
-        "A file path contains '..' and may escape the image root.",
-        "Write the normalized absolute path instead.",
-        (_rule_file_path_relative,),
-        internal=True,
     ),
     Rule(
         "service-program-missing",
@@ -1722,14 +1367,6 @@ _REGISTRY: tuple[Rule, ...] = (
         ),
     ),
     Rule(
-        "kernel-missing",
-        "error",
-        "A bootable image installs no kernel, so mkosi cannot build its UKI.",
-        tundravm_sets("the kernel package"),
-        (_rule_kernel_missing,),
-        internal=True,
-    ),
-    Rule(
         "kernel-unhardened",
         ("error", "warning"),
         "A built kernel without Tundra's hardening fragment keeps every subsystem of its "
@@ -1746,33 +1383,6 @@ _REGISTRY: tuple[Rule, ...] = (
         "Drop it from Kernel(cmdline=): every image boots with mitigations=auto,nosmt "
         "spec_store_bypass_disable=on.",
         (_rule_kernel_cmdline_repeated,),
-    ),
-    Rule(
-        "kernel-modules-ignored",
-        "warning",
-        "Kernel modules are selected, but the built kernel has no loadable modules, so the "
-        "selection does nothing.",
-        tundravm_sets("a built kernel's modules"),
-        (_rule_built_kernel_modules,),
-        internal=True,
-    ),
-    Rule(
-        "debloat-removes-modules",
-        "error",
-        "The debloat removes /usr/lib/modules while the kernel loads its drivers (virtio, "
-        "tdx_guest, cloud NICs) from there, so they never load.",
-        tundravm_sets("whether the debloat keeps the kernel's modules"),
-        (_rule_debloat_removes_modules, _rule_built_kernel_modules),
-        internal=True,
-    ),
-    Rule(
-        "image-arch-unsupported",
-        "error",
-        "An aarch64 image uses what only boots x86-64: the amd64 EFI stub or the qemu "
-        "target. TDX guests are x86-64.",
-        tundravm_sets("the architecture"),
-        (_rule_recipe_arch_unsupported,),
-        internal=True,
     ),
     Rule(
         "secret-in-file",
@@ -1967,14 +1577,6 @@ _REGISTRY: tuple[Rule, ...] = (
         "unit=DropIn(...) for what no keyword covers.",
     ),
     Rule(
-        "unit-raw",
-        "info",
-        "A service is hand-written unit text instead of a typed Service.",
-        "Declare Service(NAME, argv, ...): the compiler renders the unit, its ordering "
-        "after requires= and its enablement.",
-        internal=True,
-    ),
-    Rule(
         "unit-as-file",
         "info",
         "A unit file is shipped as a File under a systemd unit directory, so tundravm "
@@ -1983,35 +1585,12 @@ _REGISTRY: tuple[Rule, ...] = (
         "render those units, and Service.packaged(NAME) runs a package's own.",
     ),
     Rule(
-        "setting-raw",
-        "info",
-        "An mkosi setting sets a key tundravm already sets itself.",
-        "Drop it from Mkosi(settings=); it is for keys tundravm does not set.",
-        internal=True,
-    ),
-    Rule(
         "hook-covered",
         "info",
         "A Mkosi(scripts=[...]) script runs a command a declaration already covers (useradd, "
         "groupadd, usermod, systemctl enable).",
         "Declare what the message names (User(...), Group(...), Service(...)) instead of "
         "running the command.",
-    ),
-    Rule(
-        "mkosi-configure-script",
-        "error",
-        "An mkosi setting adds ConfigureScripts, which rewrite the configuration after "
-        "`mkosi summary` resolved it, so the summary would not describe the build.",
-        CONFIGURE_SCRIPT_HINT,
-        internal=True,
-    ),
-    Rule(
-        "mkosi-environment-passthrough",
-        "error",
-        "An mkosi setting passes the host's environment into the build, so the build "
-        "depends on the machine it runs on.",
-        ENVIRONMENT_HINT,
-        internal=True,
     ),
     # ── the lock, the toolchain, the host and the committed tree ──
     Rule(
@@ -2206,8 +1785,8 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
     """What each of *codes* checks and how to fix it, as ``tundravm check --explain`` prints it.
 
     A code is looked up in :data:`RULES`, then in *declared* (default: the shipped
-    components' rules), and a component's rule says which class declares it; an internal
-    rule says an image file cannot reach it. An unknown code is a
+    components' rules), and a component's rule says which class declares it. An unknown
+    code is a
     :class:`~tundravm.errors.ValidationError` whose hint names the closest code and the
     lint reference.
     """
@@ -2234,8 +1813,6 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
             for text in (rule.summary, f"fix: {rule.fix}")
         )
         by = "" if origin is None else f"\n    declared by {origin}"
-        if rule.internal:
-            by = "\n    internal: an image file cannot reach it; one that does is a bug to report"
         heading = textwrap.fill(
             f"{rule.code}: {rule.severity_text}",
             88,
@@ -2339,19 +1916,6 @@ _GITHUB_COMMANDS: dict[str, str] = {"error": "error", "warning": "warning", "inf
 # Declarations composed by tundravm's shipped fragments are skipped (the recipe
 # cannot change them).
 
-_SETS_IT = "Drop it: tundravm sets it, so a build reproduces."
-TYPED_SETTINGS: dict[tuple[str, str], str] = {
-    ("Output", "Seed"): "Drop it: tundravm sets a fixed seed, so the partition UUIDs reproduce.",
-    ("Output", "OutputDirectory"): "Drop it: `tundravm build` publishes under build/.",
-    ("Output", "CompressOutput"): _SETS_IT,
-    ("Output", "ManifestFormat"): _SETS_IT,
-    ("Build", "PackageCacheDirectory"): _SETS_IT,
-    ("Build", "WithNetwork"): "Drop it: the build runs offline; a component whose builds fetch "
-    "dependencies says class X(Component, build_network=True).",
-    ("Content", "CleanPackageMetadata"): _SETS_IT,
-}
-"""mkosi keys the compiler sets from a typed field, each with the sentence the public
-``Mkosi(settings=)`` refuses it with (``RESERVED_SETTINGS``): the hint of ``setting-raw``."""
 _CHROOT = "mkosi-chroot "
 _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"groupadd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'Group("{name}")'),
@@ -2371,7 +1935,7 @@ _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
 
 
 def declaration_check(recipe: Recipe, *, variants: Sequence[str] | None = None) -> list[Diagnostic]:
-    """``setting-raw`` and ``hook-covered`` findings of *recipe*'s own declarations.
+    """``hook-covered`` findings of *recipe*'s own declarations.
 
     Declarations of ``Recipe.items`` and the platform report with variant ``""``,
     a variant's ``add`` with its name (only when *variants* selects it).
@@ -2402,53 +1966,10 @@ def _own_declarations(items: Iterable[object]) -> Iterator[object]:
             yield item
 
 
-def _unreproducible_setting(setting: Any, variant: str) -> Iterator[Diagnostic]:
-    """``mkosi-configure-script`` and ``mkosi-environment-passthrough``: a ``Setting`` the
-    compiler refuses, since ``mkosi summary`` would not describe the build, or the host's
-    environment would enter it."""
-    subject = f"{setting.section}.{setting.key}"
-    if setting.key == "ConfigureScripts":
-        yield Diagnostic(
-            code="mkosi-configure-script",
-            severity="error",
-            message=f"Setting {subject} rewrites the configuration after `mkosi summary` "
-            "resolved it",
-            subject=subject,
-            profile=variant,
-            hint=CONFIGURE_SCRIPT_HINT,
-        )
-    passed = [v for v in setting.values if "=" not in v]
-    if setting.key == "PassEnvironment" or (setting.key == "Environment" and passed):
-        yield Diagnostic(
-            code="mkosi-environment-passthrough",
-            severity="error",
-            message=f"Setting {subject} passes the host's {', '.join(passed or setting.values)} "
-            "into the build",
-            subject=subject,
-            profile=variant,
-            hint=ENVIRONMENT_HINT,
-        )
-
-
 def _declaration_findings(item: object, variant: str) -> Iterator[Diagnostic]:
-    from .declarative.model import BootStep, Hook, Setting
+    from .declarative.model import BootStep, Hook
 
-    if isinstance(item, Setting):
-        yield from (_located(d, item) for d in _unreproducible_setting(item, variant))
-        typed = TYPED_SETTINGS.get((item.section, item.key))
-        if typed is not None:
-            yield _located(
-                Diagnostic(
-                    code="setting-raw",
-                    severity="info",
-                    message=f"Setting {item.section}.{item.key} sets what tundravm writes itself",
-                    subject=f"{item.section}.{item.key}",
-                    profile=variant,
-                    hint=typed,
-                ),
-                item,
-            )
-    elif isinstance(item, Hook | BootStep):
+    if isinstance(item, Hook | BootStep):
         chroot = isinstance(item, Hook)
         for declaration in _covered(item.script, chroot=chroot):
             yield _located(
@@ -2495,7 +2016,6 @@ def _located(diagnostic: Diagnostic, item: object) -> Diagnostic:
 
 __all__ = [
     "RULES",
-    "TYPED_SETTINGS",
     "Declared",
     "Diagnostic",
     "Rule",

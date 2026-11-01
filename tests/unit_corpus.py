@@ -50,11 +50,12 @@ def recipe_paths() -> dict[str, Path]:
 @cache
 def emitted_units() -> tuple[tuple[str, str], ...]:
     """``(recipe:path, text)`` for every unit file of every recipe's emitted tree."""
-    from tundravm.declarative import compile, load
+    from tundravm.declarative import compile
+    from tundravm.recipe import load_file
 
     found: list[tuple[str, str]] = []
     for name, path in sorted(recipe_paths().items()):
-        tree = compile(load(path, extra_paths=[REPO_ROOT]))
+        tree = compile(load_file(path, extra_paths=[REPO_ROOT]).recipe)
         for entry in tree.entries:
             if entry.content is not None and entry.symlink is None and is_unit_file(entry.path):
                 found.append((f"{name}:{entry.path}", entry.content.decode("utf-8")))

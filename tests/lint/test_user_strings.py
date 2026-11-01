@@ -85,7 +85,8 @@ DENYLIST = {
         r"\b(?:network_mode|mutable_ref_policy|require_frozen_lock)\b"
     ),
     "Recipe for the image file (image file, Image)": re.compile(
-        r"\bRecipe (?:file|has|factory|factories|attribute|defines)\b|\bbinds a Recipe\b"
+        r"\b(?:an?|the|your|no) Recipe\b|\bRecipe (?:files?|has|factory|factories|attribute|"
+        r"defines|objects?)\b|\bbinds a Recipe\b|\brecipe\.py\b"
     ),
     "removed workload (Raiko) or example (surge; examples/attested-node)": re.compile(
         r"(?i)\braiko\b|\bsurge\b(?!-taiko-mono\b)"
@@ -221,8 +222,8 @@ INTERNAL_MODEL = {
 }
 """The internal model's names, which no lint fix or finding hint names: an image file cannot
 write them (a fix it cannot express says tundravm sets it)."""
-PUBLIC_RULES = sorted(code for code, rule in RULES.items() if not rule.internal)
-"""The codes an image file can hit: every rule of the registry but the internal model's."""
+PUBLIC_RULES = sorted(RULES)
+"""The codes an image file can hit: every rule of the registry."""
 DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
 """The current docs; ``docs/design`` keeps the dated design records as written."""
 CLI_DOCS = [
@@ -333,6 +334,8 @@ def test_removed_verbs_are_caught(text: str) -> None:
         ),
         ("Recipe file not found: x.py", "Recipe for the image file (image file, Image)"),
         ("Recipe factory build() returned None.", "Recipe for the image file (image file, Image)"),
+        ("Pass the path of a Recipe.", "Recipe for the image file (image file, Image)"),
+        ("Run `python recipe.py`.", "Recipe for the image file (image file, Image)"),
         ("Unknown variant(s): staging.", "variant for a profile (profile)"),
         ("Duplicate user name 'a' in variant 'dev'.", "variant for a profile (profile)"),
         ("  variant=", "variant for a profile (profile)"),

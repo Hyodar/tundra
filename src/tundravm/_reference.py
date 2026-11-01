@@ -415,17 +415,7 @@ def lint_markdown() -> str:
         "",
         "| Code | Severity | What it checks | How to fix |",
         "|---|---|---|---|",
-        *(f"| {_rule_row(rule)} |" for rule in rules if not rule.internal),
-        "",
-        "## Internal model",
-        "",
-        "These codes check what only the internal model declares: an `Image` file cannot "
-        "write it, and tundravm's own lowering keeps it clean. One reported for an image "
-        "file is a bug: report it with the file. `--explain` marks them `internal`.",
-        "",
-        "| Code | Severity | What it checks | How to fix |",
-        "|---|---|---|---|",
-        *(f"| {_rule_row(rule)} |" for rule in rules if rule.internal),
+        *(f"| {_rule_row(rule)} |" for rule in rules),
         "",
         "## Shipped components",
         "",

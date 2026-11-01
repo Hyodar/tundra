@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import write_recipe_file
 from tundravm.declarative import (
     Backend,
     Diagnostic,
@@ -34,22 +33,6 @@ from tundravm.lockfile import (
     serialize_lockfile,
 )
 
-RECIPE = """
-from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import File, Fragment, Package, Recipe
-
-recipe = Recipe(
-    "drift",
-    items=(
-        Package("curl"),
-        Package("linux-image-amd64"),
-        Package("jq"),
-        File("/etc/motd", "hello\\n"),
-    ),
-)
-backend = LocalLinuxBackend()
-"""
-
 
 def _recipe(*extra: Package | File) -> Recipe:
     items = (
@@ -64,11 +47,6 @@ def _recipe(*extra: Package | File) -> Recipe:
 
 def _payload(recipe: Recipe) -> dict[str, object]:
     return lower(recipe).payload()
-
-
-@pytest.fixture
-def recipe(tmp_path: Path) -> Path:
-    return write_recipe_file(tmp_path, RECIPE)
 
 
 def test_lockfile_records_section_digests_and_keeps_whole_digest() -> None:

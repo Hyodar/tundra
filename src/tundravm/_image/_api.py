@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 from tundravm.declarative import lifecycle
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from tundravm.declarative._lowered import Lowered
     from tundravm.declarative.lifecycle import Artifact, Backend, Lock, Tree
 
-__all__ = ["IMAGE_OBJECT_NAMES", "build", "compile", "load", "lower"]
+__all__ = ["IMAGE_OBJECT_NAMES", "build", "compile", "image_of", "load", "lower"]
 
 IMAGE_OBJECT_NAMES: tuple[str, ...] = ("image", "IMAGE")
 """The module-level names an image file binds its :class:`Image` to."""
@@ -50,28 +51,62 @@ def load(
             context={"image": str(source)},
         )
     module = import_recipe_module(source, extra_paths=extra_paths)
-    names = (attribute,) if attribute is not None else IMAGE_OBJECT_NAMES
-    for name in names:
-        value = getattr(module, name, None)
-        if isinstance(value, Image):
-            return value
-        if value is not None and callable(value) and not isinstance(value, type):
-            result = value()
-            if isinstance(result, Image):
-                return result
-    found = [name for name, value in vars(module).items() if isinstance(value, Image)]
-    if len(found) == 1:
-        value = getattr(module, found[0])
+    return image_of(module, source, attribute=attribute)
+
+
+def image_of(module: ModuleType, source: Path, *, attribute: str | None = None) -> Image:
+    """The :class:`Image` *module* (the image file at *source*, run) binds.
+
+    *attribute* names it; without one it is ``image`` (or ``IMAGE``), else the only
+    ``Image`` the file binds. A zero-argument function bound to the name counts when it
+    returns one. Anything else is refused with what to bind.
+    """
+    if attribute is not None:
+        if not hasattr(module, attribute):
+            bound = [name for name, value in vars(module).items() if isinstance(value, Image)]
+            raise ValidationError(
+                f"{source.name} binds nothing to {attribute!r}.",
+                hint="Pass --attr NAME where NAME binds an Image"
+                + (f": {', '.join(sorted(bound))}." if bound else " in the file."),
+                context={"image": str(source), "attr": attribute},
+            )
+        value = getattr(module, attribute)
+        found = _image_value(value)
+        if found is None:
+            raise ValidationError(
+                f"{source.name} binds {attribute!r} to a {type(value).__name__}, not an Image.",
+                hint="Bind an Image to it, or a function of no arguments that returns one.",
+                context={"image": str(source), "attr": attribute},
+            )
+        return found
+    for name in IMAGE_OBJECT_NAMES:
+        found = _image_value(getattr(module, name, None))
+        if found is not None:
+            return found
+    images = [name for name, value in vars(module).items() if isinstance(value, Image)]
+    if len(images) == 1:
+        value = getattr(module, images[0])
         assert isinstance(value, Image)
         return value
-    raise _no_image(source, module_names=vars(module), several=found)
+    raise _no_image(source, module_names=vars(module), several=images)
+
+
+def _image_value(value: object) -> Image | None:
+    """*value* as the ``Image`` it is or returns; ``None`` for anything else."""
+    if isinstance(value, Image):
+        return value
+    if value is not None and callable(value) and not isinstance(value, type):
+        result = value()
+        if isinstance(result, Image):
+            return result
+    return None
 
 
 def _no_image(source: Path, *, module_names: dict[str, object], several: list[str]) -> Exception:
     if several:
         return ValidationError(
             f"{source.name} defines several images: {', '.join(sorted(several))}.",
-            hint="Name one of them `image`, or pass the attribute explicitly.",
+            hint="Name one of them `image`, or pass --attr NAME.",
             context={"image": str(source)},
         )
     from tundravm.declarative.model import Recipe

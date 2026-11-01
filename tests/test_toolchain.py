@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import write_recipe_file
+from tests.helpers import write_image_file
+from tundravm._image._values import LOCKED_SNAPSHOT
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
 from tundravm.cli import EXIT_OK, main
 from tundravm.measure import MEASURE_VERSION
@@ -93,14 +94,14 @@ def test_compare_names_each_differing_field() -> None:
 
 
 def image_file(tmp_path: Path) -> Path:
-    return write_recipe_file(
+    return write_image_file(
         tmp_path,
         """
+from tundravm import Image
 from tundravm.backends import LocalLinuxBackend
-from tundravm.declarative import Package, Recipe
 
 backend = LocalLinuxBackend()
-recipe = Recipe("app", items=(Package("linux-image-amd64"),))
+image = Image("app")
 """,
     )
 
@@ -127,10 +128,10 @@ def test_lock_records_the_toolchain_and_check_reports_drift(
 
     code, text = cli("lock", str(recipe))
     assert code == EXIT_OK
-    # the tools tree is the one the tree pins: the platform's release (no snapshot here)
+    # the tools tree is the one the tree pins: the image's release and locked snapshot
     assert (
         f"toolchain: mkosi {MKOSI_PIN.version} @{MKOSI_PIN.commit[:12]}, "
-        "tools debian/trixie (unpinned snapshot), gcp-firmware"
+        f"tools debian/trixie@{LOCKED_SNAPSHOT}, gcp-firmware"
     ) in text
     assert f"tundravm-measure {MEASURE_VERSION}" in text
     recorded = json.loads(lock.read_text(encoding="utf-8"))
@@ -139,7 +140,7 @@ def test_lock_records_the_toolchain_and_check_reports_drift(
     assert recorded["toolchain"]["tools_tree"] == {
         "distribution": "debian",
         "release": "trixie",
-        "snapshot": None,
+        "snapshot": LOCKED_SNAPSHOT,
     }
 
     _other_mkosi(monkeypatch)

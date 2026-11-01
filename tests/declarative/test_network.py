@@ -130,35 +130,6 @@ def test_firewall_expands_into_a_file_a_package_and_an_enabled_unit() -> None:
     assert "identity-collision" in _codes(Network(), Firewall(), clash)
 
 
-def test_port_unreachable_when_the_firewall_does_not_collect() -> None:
-    app = Service("app", "/usr/bin/app", ports=(8080,))
-    assert _codes(Network(), app, Firewall()) == []
-    [found] = lint(_recipe(Network(), app, Firewall(collect=False)))
-    assert (found.code, found.severity, found.subject) == (
-        "port-unreachable",
-        "warning",
-        "app.service",
-    )
-    assert "8080/tcp" in found.message
-    assert _codes(Network(), app, Firewall(allow=(8080,), collect=False)) == []
-
-
-def test_network_missing_for_listeners_and_time_sync_without_an_interface() -> None:
-    app = Service("app", "/usr/bin/app", ports=(8080,))
-    [found] = lint(_recipe(app))
-    assert (found.code, found.severity) == ("network-missing", "warning")
-    assert "app.service listens on 8080/tcp" in found.message and "Network()" in (found.hint or "")
-    assert _codes(Package("chrony")) == ["network-missing"]
-    assert _codes(Service("admin", "/usr/bin/a", socket=Listen("127.0.0.1:9090"))) == []
-    for network in (
-        Network(),
-        File("/etc/systemd/network/10-eth.network", "[Match]\nName=eth0\n"),
-        Unit("network-setup.service", "[Service]\nExecStart=/usr/bin/true\n", enabled=True),
-        Package("ifupdown"),
-    ):
-        assert _codes(app, network) == [], network
-
-
 def test_a_firewall_keeps_the_nftables_kernel_modules() -> None:
     def kept(*items: object) -> str:
         tree = compile(_recipe(Network(), *items))

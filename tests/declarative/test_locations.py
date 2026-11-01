@@ -6,36 +6,34 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import write_recipe_file
+from tests.helpers import write_image_file
 from tundravm import _location
 from tundravm.check import render, render_github
-from tundravm.declarative import Diagnostic, Recipe, lint, lower
+from tundravm.declarative import Diagnostic, Recipe, Service, lint, lower
 from tundravm.declarative.resolve import provenance, resolve
 from tundravm.errors import ValidationError
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file
 
-RECIPE = """
-from tundravm.declarative import BootStep, Debian, Package, Recipe, Service, Unit, Variant
+IMAGE = """
+from tundravm import File, Image, Profile, Service
 
-app = Service("app", "/usr/bin/app", user="ghost")
-recipe = Recipe(
-    "located", platform=Debian("bookworm"),
-    items=(
-        Package("curl"),
-        app,
-    ),
-    variants=(
-        Variant("prod", outputs=("qemu",)),
-        Variant("dev", inherits="prod", changes=(Unit.ref("gone.service").remove(),)),
-    ),
+app = Service("app", ["/usr/bin/app"], user="ghost")
+image = Image(
+    "located",
+    services=[app],
+    profiles={"dev": Profile(changes=[File.text("/etc/gone", "x\\n").ref.remove()])},
 )
 """
-VALID = RECIPE.replace('Unit.ref("gone.service")', 'Package.ref("curl")')
-"""The same recipe, every variant resolving (lowering resolves every variant)."""
+VALID = IMAGE.replace('File.text("/etc/gone", "x\\n").ref.remove()', "app.ref.edit(user=None)")
+"""The same image, every profile resolving (lowering resolves every profile)."""
 
 
 def _finding(recipe: Recipe, code: str) -> Diagnostic:
-    return next(d for d in lint(recipe, variants=["prod"]) if d.code == code)
+    return next(d for d in lint(recipe, variants=["production"]) if d.code == code)
+
+
+def _app(recipe: Recipe) -> Service:
+    return next(i for i in recipe.items if isinstance(i, Service) and i.name == "app.service")
 
 
 def _write(path: Path, source: str) -> Path:
@@ -44,66 +42,53 @@ def _write(path: Path, source: str) -> Path:
 
 
 @pytest.fixture
-def recipe_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    return write_recipe_file(tmp_path, RECIPE, monkeypatch)
+def image_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    return write_image_file(tmp_path, IMAGE, monkeypatch)
 
 
-def test_resolution_and_compiler_diagnostics_carry_the_recipe_line(recipe_path: Path) -> None:
-    recipe = load_recipe(recipe_path)
-    (missing,) = lint(recipe, variants=["dev"])
-    assert (missing.code, missing.location) == ("remove-missing", "recipe.py:13")
-    with pytest.raises(ValidationError, match=r"which it does not inherit at recipe\.py:13"):
+def test_resolution_and_compiler_diagnostics_carry_the_line(image_path: Path) -> None:
+    recipe = load_file(image_path).recipe
+    missing = next(d for d in lint(recipe, variants=["dev"]) if d.code == "remove-missing")
+    assert missing.location == "image.py:8"
+    with pytest.raises(ValidationError, match=r"which it does not inherit at image\.py:8"):
         resolve(recipe, variant="dev")
-    # the dev variant shapes the tree prod builds too: its error stops prod's lint
-    assert [d.code for d in lint(recipe, variants=["prod"])] == ["remove-missing"]
-    (recipe_path.parent / "valid").mkdir()
-    valid = load_recipe(_write(recipe_path.parent / "valid" / "recipe.py", VALID))
+    # the dev profile shapes the tree production builds too: its error stops production's lint
+    assert "remove-missing" in [d.code for d in lint(recipe, variants=["production"])]
+    (image_path.parent / "valid").mkdir()
+    valid = load_file(_write(image_path.parent / "valid" / "image.py", VALID)).recipe
     ghost = _finding(valid, "service-user-missing")
-    assert (ghost.code, ghost.location) == ("service-user-missing", "valid/recipe.py:4")
-    assert "    at: valid/recipe.py:4\n" in render([ghost])
-
-
-def test_github_annotations_name_the_file_and_line(recipe_path: Path) -> None:
-    path = _write(recipe_path.parent / "recipe.py", VALID)
-    ghost = _finding(load_recipe(path), "service-user-missing")
-    first = render_github([ghost], recipe_path).splitlines()[0]
-    assert first.startswith("::error file=recipe.py,line=4,title=service-user-missing::")
+    assert (ghost.code, ghost.location) == ("service-user-missing", "valid/image.py:4")
+    assert "    at: valid/image.py:4\n" in render([ghost])
+    first = render_github([ghost], image_path).splitlines()[0]
+    assert first.startswith("::error file=valid/image.py,line=4,title=service-user-missing::")
 
 
 def test_moving_a_declaration_keeps_equality_and_digests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    here = load_recipe(write_recipe_file(tmp_path, VALID, monkeypatch))
+    here = load_file(write_image_file(tmp_path, VALID, monkeypatch)).recipe
     moved_source = VALID.replace("app = Service(", "\n\n\napp = Service(")
-    moved = load_recipe(_write(tmp_path / "moved.py", moved_source))
-    assert here.items[1].declared_at.endswith(":4")
-    assert moved.items[1].declared_at.endswith(":7")
-    assert here == moved and hash(here.items[1]) == hash(moved.items[1])
-    assert repr(here.items[1]) == repr(moved.items[1])
-    assert lower(here, variants=["prod"]).digest() == lower(moved, variants=["prod"]).digest()
+    moved = load_file(_write(tmp_path / "moved.py", moved_source)).recipe
+    assert _app(here).declared_at.endswith(":4")
+    assert _app(moved).declared_at.endswith(":7")
+    assert _app(here) == _app(moved) and hash(_app(here)) == hash(_app(moved))
+    assert repr(_app(here)) == repr(_app(moved))
+    digests = (lower(r, variants=["production"]).digest() for r in (here, moved))
+    assert len(set(digests)) == 1
 
 
-def test_edits_keep_the_declaration_line_and_record_their_own(recipe_path: Path) -> None:
-    source = RECIPE.replace(
-        'changes=(Unit.ref("gone.service").remove(),)', "changes=(app.ref.edit(user=None),)"
+def test_edits_keep_the_declaration_line_and_record_their_own(image_path: Path) -> None:
+    edited_path = _write(image_path.parent / "edited.py", VALID)
+    recipe = load_file(edited_path).recipe
+    (item,) = (
+        i
+        for i in resolve(recipe, variant="dev").items
+        if isinstance(i, Service) and i.name == "app.service"
     )
-    edited_path = _write(recipe_path.parent / "edited.py", source)
-    recipe = load_recipe(edited_path)
-    (item,) = (i for i in resolve(recipe, variant="dev").items if i.ref.kind == "Service")
     assert item.declared_at == f"{edited_path}:4"
     declared, edited = provenance(recipe, variant="dev")[("Service", "app.service")]
     assert declared.describe() == "declared at edited.py:4 in the image"
-    assert edited.describe() == "user edited at edited.py:13 in profile dev"
-
-
-def test_a_step_cycle_points_at_a_step_in_it(tmp_path: Path) -> None:
-    source = RECIPE.replace(
-        "        app,\n",
-        '        BootStep("a", "true", after=["b"]),\n'
-        '        BootStep("b", "true", after=["a"]),\n',
-    )
-    cycle = _finding(load_recipe(_write(tmp_path / "cycle.py", source)), "step-cycle")
-    assert cycle.location == f"{tmp_path}/cycle.py:9"  # outside the working directory
+    assert edited.describe() == "user edited at edited.py:8 in profile dev"
 
 
 def test_a_skipped_frame_reached_through_dotdot_stays_skipped() -> None:

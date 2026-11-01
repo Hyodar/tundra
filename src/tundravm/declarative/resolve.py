@@ -18,15 +18,11 @@ from tundravm._modules.init import order_steps
 from tundravm._platforms import metadata_units
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
-from tundravm.models import NETWORK_SETUP_UNIT, unit_name
+from tundravm.models import unit_name
 
 from ._component import exports
 from ._network import (
-    NETWORK_CONFIG_PACKAGES,
-    NETWORKD_DIRS,
-    allowed_ports,
     expand_firewall,
-    listening,
 )
 from .model import (
     ALL_STEPS,
@@ -42,14 +38,11 @@ from .model import (
     Disk,
     Edit,
     File,
-    FileTree,
     Firewall,
     Fragment,
     Hook,
     Key,
     Mount,
-    Package,
-    Port,
     Recipe,
     Ref,
     Resolved,
@@ -297,16 +290,7 @@ class _Resolution:
                     at=change,
                 )
             elif isinstance(change, Edit):
-                try:
-                    edited = replace(cast(Any, current), **change.fields)
-                except ValidationError as exc:
-                    self.report(
-                        "edit-invalid",
-                        f"profile {variant.name!r} edits {describe(key)}: {exc.args[0]}",
-                        subject=describe(key),
-                        at=change,
-                    )
-                    continue
+                edited = replace(cast(Any, current), **change.fields)
                 self.items[key] = located(edited, current.declared_at)
                 fields = tuple(change.fields)
                 self.record(
@@ -364,23 +348,6 @@ def recipe_targets(recipe: Recipe) -> tuple[Target, ...]:
         except ValidationError:
             continue
     return tuple(target for target in TARGETS if target in found)  # type: ignore[misc]
-
-
-def _check_targets(state: _Resolution, chain: Sequence[Variant]) -> None:
-    inherited: tuple[Target, ...] = (DEFAULT_TARGET,)
-    for variant in chain:
-        own = variant.outputs
-        clouds = [t for t in inherited if t in CLOUD_TARGETS]
-        if own and clouds and not set(clouds) <= set(own):
-            state.report(
-                "target-inconsistent",
-                f"profile {variant.name!r} targets {', '.join(own)} but inherits the "
-                f"{', '.join(clouds)} platform integration of the profile it extends",
-                subject=variant.name,
-                at=variant,
-            )
-        if own:
-            inherited = own
 
 
 type StepNode = tuple[str, tuple[str, ...], tuple[str, ...]]
@@ -496,97 +463,36 @@ def order_hooks(hooks: Sequence[Hook]) -> list[Hook]:
     return result
 
 
-def _references(item: Declaration) -> Iterable[tuple[str, Ref]]:
-    """The refs *item* holds, each with the diagnostic code of a dangling one."""
-    match item:
-        case Disk(key=Ref() as ref):
-            yield "disk-key-undefined", ref
-        case Secrets(store=Ref() as ref):
-            yield "secret-store-undefined", ref
-
-
-def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
-    present = {identity(item) for item in items}
-    for item in items:
-        for code, ref in _references(item):
-            if ref_identity(ref) not in present:
-                state.report(
-                    code,
-                    f"{describe(identity(item))} references {describe(ref_identity(ref))}, "
-                    f"which profile {state.variant!r} does not declare",
-                    subject=item.ref.identity[-1],
-                    at=item,
-                )
-
-    nodes = step_nodes(items)
-    step_names = {name for name, _, _ in nodes}
+def _check_references(items: Sequence[Declaration]) -> None:
+    """Every boot step, boot task and build hook a declaration orders itself against is
+    declared: an image file cannot name one, so a missing one is a lowering bug (ordering
+    silently ignores an unknown name)."""
+    step_names = {name for name, _, _ in step_nodes(items)}
     for step in (item for item in items if isinstance(item, BootStep)):
         for edge, refs in (("after", step.after), ("before", step.before)):
             for handle in refs:
-                if handle.step not in step_names:
-                    state.report(
-                        "step-undefined",
-                        f"boot step {step.name!r} runs {edge} {handle.step!r}, which this profile "
-                        "does not declare",
-                        subject=step.name,
-                        at=step,
-                    )
-    try:
-        order_steps(nodes)
-    except ValidationError as exc:
-        steps = (item for item in items if isinstance(item, BootStep))
-        culprit = next((step for step in steps if repr(step.name) in str(exc)), None)
-        state.report("step-cycle", str(exc), subject=culprit.name if culprit else "", at=culprit)
+                assert handle.step in step_names, (
+                    f"boot step {step.name!r} runs {edge} {handle.step!r}, which the lowering "
+                    "did not declare"
+                )
     finished = {item.unit for item in items if isinstance(item, Task) and item.schedule is None}
     for unit in (item for item in items if isinstance(item, (Unit, Service, Task, Mount))):
         for handle in unit.needs:
             if isinstance(handle, UnitReady):
-                if handle.unit not in finished:
-                    state.report(
-                        "needs-undefined",
-                        f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs boot task "
-                        f"{handle.unit!r}, which this profile does not declare",
-                        subject=unit_label(unit),
-                        at=unit,
-                    )
-                continue
-            if handle.step != ALL_STEPS and handle.step not in step_names:
-                state.report(
-                    "needs-undefined",
+                assert handle.unit in finished, (
+                    f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs boot task "
+                    f"{handle.unit!r}, which the lowering did not declare"
+                )
+            else:
+                assert handle.step == ALL_STEPS or handle.step in step_names, (
                     f"{type(unit).__name__.lower()} {unit_label(unit)!r} needs step "
-                    f"{handle.step!r}, which this profile does not declare",
-                    subject=unit_label(unit),
-                    at=unit,
+                    f"{handle.step!r}, which the lowering did not declare"
                 )
-
-    hooks = [item for item in items if isinstance(item, Hook)]
-    hook_names = {hook.name for hook in hooks}
-    for hook in hooks:
+    hook_names = {item.name for item in items if isinstance(item, Hook)}
+    for hook in (item for item in items if isinstance(item, Hook)):
         for dep in hook.after:
-            if dep not in hook_names:
-                state.report(
-                    "hook-after-undefined",
-                    f"hook {hook.name!r} runs after {dep!r}, which this profile does not declare",
-                    subject=hook.name,
-                    at=hook,
-                )
-    try:
-        order_hooks(hooks)
-    except ValidationError as exc:
-        late = next((hook for hook in hooks if repr(hook.name) in str(exc)), None)
-        state.report("hook-order", str(exc), subject=late.name if late else "", at=late)
-
-    if not nodes:
-        # a task.ready handle waits for a unit, not for runtime-init
-        waiting = (i for i in items if isinstance(i, Unit) and i.needs)
-        for unit in (u for u in waiting if not all(isinstance(n, UnitReady) for n in u.needs)):
-            state.report(
-                "needs-without-init",
-                f"unit {unit.name!r} waits for runtime-init, but this profile declares no "
-                "runtime-init step",
-                subject=unit.name,
-                at=unit,
-                severity="warning",
+            assert dep in hook_names, (
+                f"hook {hook.name!r} runs after {dep!r}, which the lowering did not declare"
             )
 
 
@@ -611,15 +517,12 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
             state.add_level(
                 state.expand(variant.add), where=f"profile {variant.name!r}", level=variant.name
             )
-    _check_targets(state, chain)
     _expand_firewall(state, metadata_units(recipe_targets(recipe)), production=chain[-1].release)
     items = tuple(state.items.values())
     _check_unit_files(state, items)
-    _check_network(state, items)
-    _check_references(state, items)
+    _check_references(items)
     _check_exports(state)
     _check_executables(state, items)
-    _check_deliveries(state, items)
     resolved = Resolved(
         profile=name,
         targets=_targets(chain),
@@ -692,17 +595,6 @@ def _expand_firewall(state: _Resolution, glue: Sequence[Declaration], *, product
     if not isinstance(firewall, Firewall):
         return
     del state.items[key]
-    for port, units in listening(state.items.values()).items():
-        if port not in allowed_ports(firewall, state.items.values()):
-            state.report(
-                "port-unreachable",
-                f"{', '.join(units)} listens on {port}, which the firewall does not allow",
-                subject=units[0],
-                severity="warning",
-                at=firewall,
-                hint=f"Open it with the service's expose=[{_spelled(port)}], or "
-                f"Firewall(allow=[{_spelled(port)}]) for a program no Service runs.",
-            )
     expanded = expand_firewall(firewall, (*state.items.values(), *glue), production=production)
     for item in expanded:
         rendered = located(item, firewall.declared_at)
@@ -719,51 +611,6 @@ def _expand_firewall(state: _Resolution, glue: Sequence[Declaration], *, product
         state.items.setdefault(ident, rendered)
         state.declared.setdefault(ident, rendered)
         state.trace.setdefault(ident, []).extend(state.trace.get(key, ()))
-
-
-def _spelled(port: Port) -> str:
-    """*port* as an Image file writes it: ``TCP(8080)``, ``UDP(53)``."""
-    return f"{port.protocol.upper()}({port.number})"
-
-
-def _configures_network(items: Sequence[Declaration]) -> bool:
-    """Whether *items* bring interfaces up: a ``.network`` file, a network-setup unit, a tree
-    that may hold either, or a package that configures interfaces itself."""
-    for item in items:
-        if isinstance(item, File) and (
-            any(item.path.startswith(d + "/") for d in NETWORKD_DIRS)
-            or item.path == "/etc/network/interfaces"
-        ):
-            return True
-        if isinstance(item, FileTree) and any(
-            d == item.path.rstrip("/") or d.startswith(item.path.rstrip("/") + "/")
-            for d in NETWORKD_DIRS
-        ):
-            return True
-        if isinstance(item, Unit | Service | Task) and unit_name(item.name) == NETWORK_SETUP_UNIT:
-            return True
-        if isinstance(item, Package) and item.name in NETWORK_CONFIG_PACKAGES:
-            return True
-    return False
-
-
-def _check_network(state: _Resolution, items: Sequence[Declaration]) -> None:
-    """``network-missing``: the variant serves ports or syncs time but brings up no interface."""
-    if _configures_network(items):
-        return
-    needs = [f"{units[0]} listens on {port}" for port, units in listening(items).items()]
-    if any(isinstance(item, Package) and item.name == "chrony" for item in items):
-        needs.append("chrony syncs time from network servers")
-    if not needs:
-        return
-    state.report(
-        "network-missing",
-        f"{needs[0]}{f' (and {len(needs) - 1} more)' if len(needs) > 1 else ''}, but the "
-        "profile configures no network interface",
-        subject=state.variant,
-        severity="warning",
-        hint="Add network=Network() to the Image, or ship a .network file.",
-    )
 
 
 def _check_exports(state: _Resolution) -> None:
@@ -838,22 +685,6 @@ def _check_executables(state: _Resolution, items: Sequence[Declaration]) -> None
                 at=service,
             )
             break
-
-
-def _check_deliveries(state: _Resolution, items: Sequence[Declaration]) -> None:
-    """Warn about an ``ExternalDelivery`` the image cannot wait for (no unit, no ready path)."""
-    for entry in (item for item in items if isinstance(item, Secrets)):
-        delivery = entry.delivery
-        if delivery is None or delivery.waits:
-            continue
-        state.report(
-            "external-delivery-unwired",
-            f"secrets {entry.name!r} are delivered by {delivery.name!r}, but nothing in the "
-            "image can wait for it: services start without their secrets",
-            subject=entry.name,
-            severity="warning",
-            at=entry,
-        )
 
 
 def _command_words(service: Service) -> list[str]:

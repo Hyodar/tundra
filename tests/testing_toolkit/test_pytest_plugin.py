@@ -36,7 +36,7 @@ def test_fake_mkosi_fixture_builds_with_nothing_forked(
 
 
 def test_run_cli_fixture(run_cli: CliRunner, tmp_path: Path) -> None:
-    source = 'from tundravm.declarative import Fragment, Recipe\nrecipe = Recipe(name="t")\n'
+    source = 'from tundravm import Image\nimage = Image("t")\n'
     path = image_file(tmp_path, source)
     code, out, err = run_cli("show", path, "--json")
     assert code == 0

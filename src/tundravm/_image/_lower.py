@@ -226,11 +226,11 @@ class _Lowering:
             if isinstance(component, SshAccess) and self.runtime.control_plane:
                 continue  # the control plane runs it, accepting the operator's key too
             if not isinstance(component, self.baseline_types):
-                body.append(self.component(component))
+                body.extend(self.content(component))
         if image.observability is not None:
-            body.append(self.component(image.observability))
+            body.extend(self.content(image.observability))
         for service in image.services:
-            body.extend(self.service(service))
+            body.extend(self.content(service))
         for group in self.shared_groups():
             body.append(dm.Group(group))
         runtime = [

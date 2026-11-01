@@ -365,7 +365,7 @@ class Mkosi:
     (``None``: when ``Platform.epoch`` is set).
 
     The build mechanics below have defaults a recipe rarely changes; each is one
-    mkosi key, which ``Setting`` must not repeat (lint ``setting-raw``).
+    mkosi key, which ``Setting`` must not repeat.
     """
 
     root: Literal["initramfs", "verity"] = "initramfs"
@@ -2196,11 +2196,10 @@ class Secrets(Declared):
 
     ``delivery=None`` is the built-in provider, the attested endpoint on *host*:*port*,
     which takes the operator's SSH key and writes ``SecretFile`` targets, each only on the
-    TLS session a fresh quote bound (``BUILTIN_SECRET_CAPABILITIES``): a ``SecretEnv``
-    entry needs an :class:`ExternalDelivery` that writes it (lint:
-    ``secret-target-unsupported``). *attested_tls* names the attested TLS ports whose
-    certificate key, made at boot under ``/run/tundravm/attested-tls/<port>``, every quote
-    binds after the instance key, in port order.
+    TLS session a fresh quote bound: a ``SecretEnv`` entry needs an
+    :class:`ExternalDelivery` that writes it. *attested_tls* names the attested TLS ports
+    whose certificate key, made at boot under ``/run/tundravm/attested-tls/<port>``, every
+    quote binds after the instance key, in port order.
     """
 
     name: str = "secrets"

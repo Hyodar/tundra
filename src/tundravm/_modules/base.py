@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 import functools
-from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from tundravm._source import GitSource, LocalSource
 from tundravm.errors import ValidationError
-
-if TYPE_CHECKING:
-    from tundravm.declarative._lowered import Lowered
-    from tundravm.diagnostics import Diagnostic
 
 TOOLS_SUBDIR = "tools"
 """The directory of this repository that holds the Go module the runtime tools build from."""
@@ -81,10 +75,6 @@ class Module:
     """
 
     __slots__ = ()
-
-    def check(self, image: Lowered, profile: str) -> Iterable[Diagnostic]:
-        """Module-specific diagnostics for *profile*, surfaced by ``check()``."""
-        return ()
 
 
 __all__ = [

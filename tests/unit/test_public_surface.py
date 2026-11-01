@@ -319,6 +319,9 @@ def test_the_internal_model_is_not_exported() -> None:
         assert name not in exported, name
         assert not hasattr(tundravm, name), name
         assert hasattr(declarative, name), f"{name} must stay importable from the internals"
+    # tundravm.load is the one loader, of Image files; the internal model has none.
+    assert not hasattr(declarative, "load")
+    assert not hasattr(importlib.import_module("tundravm.recipe"), "load_recipe")
 
 
 def test_the_public_surface_says_profile() -> None:

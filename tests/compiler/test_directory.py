@@ -137,10 +137,7 @@ def test_inspect_lists_modes_links_and_directories(tmp_path: Path) -> None:
     _private_tree(tmp_path / "app")
     recipe = tmp_path / "image.py"
     recipe.write_text(
-        "from pathlib import Path\n"
-        "from tundravm.declarative import FileTree, Fragment, Package, Recipe\n"
-        "recipe = Recipe('t', items=(Package('linux-image-amd64'), "
-        "FileTree('/etc/app', Path(__file__).parent / 'app')))\n",
+        "from tundravm import Image, Tree\nimage = Image('t', files=[Tree('app', '/etc/app')])\n",
         encoding="utf-8",
     )
     code, out = run_main("show", str(recipe))

@@ -21,7 +21,7 @@ from tundravm._reporting import (
 )
 from tundravm.backends.base import StreamResult, failure_message, run_streaming
 from tundravm.backends.local_linux import LocalLinuxBackend
-from tundravm.declarative import File, Package, Recipe, lower
+from tundravm.declarative import Declaration, Package, Recipe, Service, lower
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.errors import LintError
 from tundravm.models import BakeRequest, BakeResult
@@ -182,7 +182,7 @@ def test_failure_message_includes_tail_only_when_not_streamed() -> None:
 # -- bake events ----------------------------------------------------------------
 
 
-def _recipe(*items: File) -> Recipe:
+def _recipe(*items: Declaration) -> Recipe:
     return Recipe("bake", items=(Package("linux-image-amd64"), *items))
 
 
@@ -242,7 +242,7 @@ def test_bake_emits_phases_output_artifacts_and_done(tmp_path: Path) -> None:
 def test_bake_lint_failure_emits_failed_phase_and_done(tmp_path: Path) -> None:
     capture = Capture()
     with pytest.raises(LintError):
-        _bake(tmp_path, _recipe(File("/etc/../../escape", "x")), capture)
+        _bake(tmp_path, _recipe(Service("ghost", "/usr/bin/ghost", user="ghost")), capture)
     assert capture.phases() == [("lint", "start"), ("lint", "fail")]
     warnings = [e for e in capture.events if e.kind == "warning"]
     assert any(e.extra["level"] == "error" for e in warnings)

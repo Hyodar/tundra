@@ -49,7 +49,7 @@ from tundravm.declarative.utils import Tdxs
 from tundravm.errors import LockfileError, PolicyError, ValidationError
 from tundravm.lockfile import LockedFetch, build_lockfile, parse_lockfile, serialize_lockfile
 from tundravm.policy import MutableRefPolicy
-from tundravm.recipe import load_recipe
+from tundravm.recipe import load_file
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
@@ -68,20 +68,12 @@ TOOL_MARKER = (
     '"submodules":false,"url":"https://example.com/acme/tool.git"}}'
 )
 
-RECIPE_FILE = """
-from tundravm.declarative import Build, Fragment, Git, Install, Recipe
+IMAGE_FILE = """
+from tundravm import Image
+from tundravm.sources import Build, Git, Install
 
-recipe = Recipe(
-    "tool",
-    items=(
-        Build(
-            "tool",
-            Git({repo!r}, "main"),
-            script="make",
-            install=(Install("tool", "/usr/bin/tool"),),
-        ),
-    ),
-)
+install = [Install("tool", "/usr/bin/tool")]
+image = Image("tool", files=[Build("tool", Git({repo!r}, "main"), script="make", install=install)])
 """
 
 
@@ -435,26 +427,25 @@ def _inspect(recipe: Path, *flags: str) -> str:
 def test_show_lists_sources_at_their_pins(
     tmp_path: Path, locked: bool, pinned: str | None, column: str
 ) -> None:
-    path = tmp_path / "recipe.py"
-    path.write_text(RECIPE_FILE.format(repo=REPO), encoding="utf-8")
+    path = tmp_path / "image.py"
+    path.write_text(IMAGE_FILE.format(repo=REPO), encoding="utf-8")
     if locked:
-        pins = lock(load_recipe(path), resolver=_Fixed(SHA_A))
+        pins = lock(load_file(path).recipe, resolver=_Fixed(SHA_A))
         write_lock(pins, tmp_path / "build" / "tundravm.lock")  # the one lockfile the CLI reads
-    info = json.loads(_inspect(path, "--json"))["resolved"]["default"]
-    assert info["sources"] == [
-        {
-            "build": "script",
-            "install": ["/usr/bin/tool"],
-            "kind": "git",
-            "name": "tool",
-            "pinned": pinned,
-            "ref": "main",
-            "url": REPO,
-        }
-    ]
-    assert info["build_steps"][0] == "builds tool from source"
+    info = json.loads(_inspect(path, "--json"))["resolved"]["production"]
+    (tool,) = [source for source in info["sources"] if source["name"] == "tool"]
+    assert tool == {
+        "build": "script",
+        "install": ["/usr/bin/tool"],
+        "kind": "git",
+        "name": "tool",
+        "pinned": pinned,
+        "ref": "main",
+        "url": REPO,
+    }
+    assert "builds tdxs and tool from source" in info["build_steps"]
     text = _inspect(path)
-    assert f"Sources (1):\n    tool  git {REPO}  ref=main  pinned={column}\n" in text
+    assert f"\n    tool  git {REPO}  ref=main  pinned={column}\n" in text
 
 
 def test_check_rule_source_unpinned() -> None:
