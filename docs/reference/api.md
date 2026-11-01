@@ -1433,7 +1433,7 @@ Persisted state (a build directory, an instance receipt, a checkout) is missing 
 class TdxError(Exception)
 ```
 
-Base error class that carries code, optional hint, and context.
+Base error class: what is wrong (`args[0]`), the fix (`hint`), and context.
 
 ### `ValidationError`
 

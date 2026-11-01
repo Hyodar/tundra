@@ -40,6 +40,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it, such as the Engine API JWT an execution client and its consensus client share.
 - An image file imports modules from its own directory and its project's (the nearest `pyproject.toml`), from any working directory: a project carries its own components.
 - `Mkosi(settings=)` writes each key in its mkosi section, and a key tundravm writes is refused with the public slot that sets it.
+- **Breaking:** every error is one shape in the image file's words: what is wrong, naming the public object and keyword (`Service("app"): argv= is empty`), then a `fix:` line; `tundravm` prints it as one block with the image file's line and exits 2, as a crash or a usage error does, while a failed check exits 1; a misspelt keyword, a missing argument or a positional too many is a `ValidationError` with the closest keyword, and two services exposing one port and two services with one name are refused.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
 
 ### Network and clouds
