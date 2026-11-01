@@ -481,13 +481,35 @@ def tundravm_source() -> TundravmSource:
     A ``git+`` install (``uv add``/``uvx``/``pip`` from the repository) records its
     commit in ``direct_url.json``; an editable install of a git checkout pins the
     checkout's ``HEAD`` when a remote-tracking branch contains it (so a fresh machine
-    can fetch it). Anything else follows :data:`TUNDRAVM_FALLBACK_REV`.
+    can fetch it). A release wheel pins the commit it was built from
+    (:func:`release_source`). Anything else follows :data:`TUNDRAVM_FALLBACK_REV`.
     """
+    from . import _version
+
     try:
         raw = metadata.distribution("tundravm").read_text("direct_url.json")
     except metadata.PackageNotFoundError:
         raw = None
-    return source_from_direct_url(raw)
+    source = source_from_direct_url(raw)
+    if source.pinned:
+        return source
+    return release_source(_version.version, _version.commit) or source
+
+
+def release_source(version: str, commit: str | None) -> TundravmSource | None:
+    """The commit a wheel of *version* built from *commit* pins, or ``None``.
+
+    The build hook records both in ``tundravm/_version.py``. A release (``2.0.0``) and a
+    build between tags (``2.0.0.post1.dev3+gabc1234``) pin *commit*; a build of an edited
+    tree (a ``.d<date>`` local part) or one that recorded no commit pins nothing, since no
+    commit holds what it was built from.
+    """
+    if commit is None or not _COMMIT.fullmatch(commit):
+        return None
+    local = version.partition("+")[2]
+    if any(re.fullmatch(r"d\d{8}", part) for part in local.split(".")):
+        return None
+    return TundravmSource(TUNDRAVM_REPOSITORY, commit, pinned=True)
 
 
 def source_from_direct_url(raw: str | None) -> TundravmSource:
@@ -864,6 +886,7 @@ __all__ = [
     "render_recipe_template",
     "render_test_module",
     "render_workflow",
+    "release_source",
     "source_from_direct_url",
     "tundravm_source",
 ]

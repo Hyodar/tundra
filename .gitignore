@@ -210,3 +210,6 @@ __marimo__/
 !examples/attested-node/mkosi/**/lib/
 !tests/fixtures/native-tree/**/lib/
 !tests/fixtures/mkosi-trees/**/lib/
+
+# Written by hatch_build.py when tundravm is built
+/src/tundravm/_version.py

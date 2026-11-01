@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.27.0"]
+requires = ["hatchling>=1.27.0", "hatch-vcs>=0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "tundravm"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python SDK for declarative TDX-enabled VM image workflows."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,11 +21,13 @@ tundravm = "tundravm.cli:main"
 tundravm = "tundravm.testing.pytest_plugin"
 
 [project.urls]
-Homepage = "https://github.com/Hyodar/tundravm"
-Repository = "https://github.com/Hyodar/tundravm"
+Homepage = "https://github.com/Hyodar/tundra"
+Repository = "https://github.com/Hyodar/tundra"
+Changelog = "https://github.com/Hyodar/tundra/blob/master/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
+  "hatchling>=1.27.0",
   "mypy>=1.11.2",
   "pytest>=8.3.3",
   "ruff>=0.6.9",
@@ -63,6 +65,14 @@ mypy_path = ["src"]
 packages = ["tundravm"]
 strict = true
 
+[tool.hatch.version]
+# The release tag (v2.0.0) is the version; between tags, <last tag>.post1.dev<n>+g<sha>.
+source = "vcs"
+raw-options = { version_scheme = "no-guess-dev" }
+
+[tool.hatch.build.hooks.custom]
+# hatch_build.py writes src/tundravm/_version.py: the version and the commit it was built from.
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/tundravm"]
 exclude = ["/tools"]
@@ -70,6 +80,10 @@ exclude = ["/tools"]
 [tool.hatch.build.targets.sdist]
 # tools/ is the Go module images build from this repository, never part of the package
 exclude = ["/tools"]
+
+[tool.uv]
+# A commit or a tag changes the version, so uv reinstalls the editable checkout on either.
+cache-keys = [{ file = "pyproject.toml" }, { file = "hatch_build.py" }, { git = { commit = true, tags = true } }]
 
 [tool.uv.sources]
 mkosi = { git = "https://github.com/systemd/mkosi", rev = "v27.1" }

@@ -341,6 +341,8 @@ def _error_code(cls: type) -> str | None:
 def _entry(name: str, obj: object) -> list[str]:
     kind = _kind(obj)
     lines = [f"### `{name}`", "", f"*{kind}*", ""]
+    if name == "__version__":
+        return [*lines, "The installed release, from its git tag; `tundravm --version`.", ""]
     if kind == "value":
         return [*lines, "```python", f"{name} = {_repr(obj)[:300]}", "```", ""]
     assert callable(obj)

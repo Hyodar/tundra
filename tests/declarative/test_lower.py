@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import tundravm
 from tests.helpers import own_files
 from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
@@ -144,10 +145,14 @@ EQUIVALENCE_RECIPE = "290a1036f03d40a938e4a314ebc2ef2a0b35f4fd45329aad4609120f70
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
 overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned
 build scripts' hint named ``tundravm build`` instead of the removed ``fetch``, and when
-every profile gained the execution gate, then the instance key."""
+every profile gained the execution gate, then the instance key. The recipe digest covers the
+compiler version, recorded as ``0.1.0``."""
 
 
-def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
+def test_lowered_recipe_compiles_to_the_recorded_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tundravm, "__version__", "0.1.0")
     lowered = lower(declarative_recipe())
 
     assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE

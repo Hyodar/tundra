@@ -251,10 +251,14 @@ def _vcs_commit(distribution: str) -> str | None:
 
 @functools.cache
 def tundravm_identity() -> str:
-    """``<version>+<commit>``: the commit from a VCS install or this source checkout's HEAD."""
-    from . import __version__
+    """``<version>+<commit>`` for a release: the commit from a VCS install, the one the wheel
+    was built from or this source checkout's HEAD. A version between tags already names its
+    commit (``2.0.0.post1.dev3+gabc1234``) and is the identity as it is."""
+    from . import __version__, _version
 
-    commit = _vcs_commit("tundravm")
+    if "+" in __version__:
+        return __version__
+    commit = _vcs_commit("tundravm") or _version.commit
     root = Path(__file__).resolve().parents[2]
     if commit is None and (root / ".git").exists():
         commit = _git_head(root)

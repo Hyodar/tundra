@@ -20,9 +20,7 @@ tundravm: confidential VM images declared as one `Image`.
 
 *value*
 
-```python
-__version__ = '0.1.0'
-```
+The installed release, from its git tag; `tundravm --version`.
 
 ### `AptRepository`
 

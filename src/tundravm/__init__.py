@@ -18,8 +18,6 @@ name has one home: :mod:`tundravm.ports`, :mod:`tundravm.systemd`,
 :mod:`tundravm.declarative` is the internal model those lower onto; it is not the API.
 """
 
-__version__ = "0.1.0"
-
 from ._image import (
     AptRepository,
     Debian,
@@ -39,6 +37,7 @@ from ._image import (
     load,
     lower,
 )
+from ._version import version as __version__
 from .declarative.lifecycle import doctor
 
 __all__ = [

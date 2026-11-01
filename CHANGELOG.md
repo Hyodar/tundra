@@ -84,6 +84,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
 - `GoBinary` builds the module root unless `package=` names a sub-command.
 - **Breaking:** `Tdxs` and the volume and delivery tools build from `tools/` of this repository (`Git(url, sdk_commit, subdir="tools")`, or the checkout's `tools/` as a `Local`), not `Hyodar/tundra-tools` master; `Git(subdir=)` must name a directory of the commit.
+- The version is the release tag (`tundravm --version`; `<tag>.post1.dev<n>+g<sha>` between tags), and a wheel records the commit it was built from, so an installed release builds `tools/` at its tag's commit; the lock's compiler section records that version, so another tundravm is lock drift.
 - Go builds with the toolchain `go.mod` names, fetched by the host's `go` 1.21+, which every image needs (`Tdxs` is Go); Cargo with the one `rust-toolchain.toml` pins, installed by the host's `rustup`, and an unpinned channel is refused.
 
 ### Lint

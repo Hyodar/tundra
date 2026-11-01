@@ -47,5 +47,33 @@ def test_the_tools_build_from_this_repository(
         assert source.directory == Path("/x/tools")
 
 
+@pytest.mark.parametrize(
+    ("version", "commit", "ref"),
+    [
+        ("2.0.0", COMMIT, COMMIT),
+        ("2.0.0.post1.dev3+gccccccc", COMMIT, COMMIT),
+        ("2.0.0.post1.dev3+gccccccc.d20261101", COMMIT, None),
+        ("2.0.0", None, None),
+    ],
+    ids=["a-release", "between-tags", "an-edited-tree", "no-recorded-commit"],
+)
+def test_an_installed_wheel_builds_the_tools_at_its_commit(
+    monkeypatch: pytest.MonkeyPatch, version: str, commit: str | None, ref: str | None
+) -> None:
+    monkeypatch.setattr(base, "tools_checkout", lambda: None)
+    monkeypatch.setattr(
+        templates,
+        "tundravm_source",
+        lambda: templates.release_source(version, commit) or templates.source_from_direct_url(None),
+    )
+    if ref is None:
+        with pytest.raises(ValidationError):
+            base.tools_source.__wrapped__()
+        return
+    assert base.tools_source.__wrapped__() == GitSource(
+        templates.TUNDRAVM_REPOSITORY, ref, subdir="tools"
+    )
+
+
 def test_this_checkout_builds_its_own_tools() -> None:
     assert base.tools_checkout() == Path(__file__).resolve().parents[2] / "tools"

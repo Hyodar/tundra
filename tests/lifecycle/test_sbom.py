@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tundravm import __version__
 from tundravm._source import Source
 from tundravm.declarative import (
     Artifact,
@@ -235,7 +236,7 @@ def test_spdx_document_structure(tmp_path: Path, locked: Lock) -> None:
     for key in ("spdxVersion", "dataLicense", "SPDXID", "name", "documentNamespace"):
         assert document[key]
     assert document["spdxVersion"] == "SPDX-2.3" and document["SPDXID"] == "SPDXRef-DOCUMENT"
-    assert document["creationInfo"]["creators"] == ["Tool: tundravm-0.1.0"]
+    assert document["creationInfo"]["creators"] == [f"Tool: tundravm-{__version__}"]
     assert document["creationInfo"]["created"].endswith("Z")
     packages = document["packages"]
     ids = [p["SPDXID"] for p in packages]
