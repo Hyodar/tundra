@@ -181,7 +181,8 @@ def _listing(kind: str) -> str:
 
 def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
     """What a service edit cannot carry: a different built binary, a credential bound or
-    unbound, a timer switched on or off, a state moved onto or off a volume."""
+    unbound, a timer switched on or off, another user for a directory on a volume, a state
+    moved onto or off a volume."""
     from ._storage import VolumeDirectory
 
     if edited.binaries() != value.binaries():
@@ -207,6 +208,18 @@ def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
             f"The edit of {ref} turns its timer {'on' if value.timer is None else 'off'}, "
             "which makes it another kind of unit.",
             hint="Remove the service and add the new one in add=.",
+        )
+    state = value.state
+    if (
+        isinstance(state, VolumeDirectory)
+        and state.group is None
+        and (edited.user or edited.stem) != (value.user or value.stem)
+    ):
+        raise ValidationError(
+            f"The edit of {ref} runs it as another user, but the image prepares its "
+            f"directory on volume {state.volume.name!r} at boot for {value.user or value.stem!r}.",
+            hint="Share the directory through a group (volume.directory(name, group=...)), or "
+            "remove the service and add one with the new user= in add=.",
         )
     if edited.state != value.state and (
         isinstance(edited.state, VolumeDirectory) or isinstance(value.state, VolumeDirectory)

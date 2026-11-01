@@ -22,6 +22,7 @@ from tundravm.components import (
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import Resources, TcpProbe
 from tundravm.testing import plan
 
@@ -230,13 +231,18 @@ def test_a_profile_removes_a_service_by_reference() -> None:
         ("app", {"readiness": TcpProbe(8080)}, "cannot set Service readiness="),
         ("app", {"expose": [TCP(8080)]}, "changes nothing"),
         ("app", {"argv": ["/usr/bin/app", Secret("jwt")]}, "changes the credentials it binds"),
+        ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
     ],
 )
 def test_a_profile_edits_a_service_by_its_public_keywords(
     target: str, fields: dict[str, object], expected: tuple[str, str] | str
 ) -> None:
     app = Service("app", ["/usr/bin/app"], expose=[TCP(8080)])
-    ref = app.ref if target == "app" else Database().service("db").ref
+    vol = Service(
+        "vol", ["/usr/bin/vol"], state=Volume("data", unlock=OperatorKey()).directory("vol")
+    )
+    refs = {"app": app.ref, "db": Database().service("db").ref, "vol": vol.ref}
+    ref = refs[target]
     if isinstance(expected, str):
         with pytest.raises(ValidationError) as caught:
             ref.edit(**fields)
