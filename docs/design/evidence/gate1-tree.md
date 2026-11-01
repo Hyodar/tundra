@@ -957,25 +957,46 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
 
 ### A built kernel (plan 5.2 item 1, the `kernel` workflow)
 
-`.github/workflows/kernel.yml` builds `tests/fixtures/kernel/recipe.py`: gregkh/linux
-`v6.12.111` (`b819bf73ee69`) with `config.amd64_none_cloud-amd64` of Debian's
-`linux-config-6.12` 6.12.111-1 from the default snapshot's pool, `CONFIG_MODULES=n` and a
-fragment that only drops debug info (`DEBUG_INFO_NONE=y`, no BTF), the composed kernel
-`Kernel.build` lowers to. Run
-41299630516 (head `12e91cf`, platform snapshot `20261018T082309Z`) took 21m30s: 1m11s to
-fetch the source and the config, 19m14s for the mkosi build that compiles it on the
-runner's 4 cores without ccache (the build script has none), 11s to boot. Run 41299024098,
-on the earlier snapshot `20251113T083151Z`, took 27m42s. The tree took 5 GB of disk.
+`.github/workflows/kernel.yml` builds two fixtures, one matrix entry each, both at the default
+snapshot `20261018T082309Z` with `CONFIG_MODULES=n`, the composed kernel `Kernel.build`
+lowers to:
 
-- **The config diff**: Debian's config has 1136 `=m` options; after `olddefconfig` all
-  1136 are `=y` and none dropped, so Kconfig promotes `m` to `y` under `CONFIG_MODULES=n`
-  for this config and `mod2yesconfig` is not needed. Beyond that, only module-only options
-  leave (`MODULE_SIG_*`, `MODPROBE_PATH`), and the toolchain lines change.
+- `recipe` (`tests/fixtures/kernel/recipe.py`): gregkh/linux `v6.12.111` (`b819bf73ee69`)
+  with `config.amd64_none_cloud-amd64` of Debian's `linux-config-6.12` 6.12.111-1 from the
+  snapshot's pool (6.12.113-1 is in the security pool only) and a fragment that only drops
+  debug info (`DEBUG_INFO_NONE=y`, no BTF).
+- `example` (`tests/fixtures/kernel/example.py`): what `examples/nethermind_base.py`'s
+  `Kernel.build` lowers to, gregkh/linux `v6.13.12` (`6b3a0b164a4a`) with the example's 6.6.35
+  yocto config as its base and no other fragment. The example's `Image` cannot build in CI
+  (the evidence service needs tundra-tools), so the fixture is a `Recipe`; its kernel inputs
+  hash the same as the image's.
+
+Run 41305248253 (head `e375aab`) passed both. `recipe` took 27m31s: 1m12s to fetch the
+source and the config, 25m09s for the mkosi build on the runner's 4 cores without ccache,
+12s to boot. `example` took 16m10s: 1m12s, 13m49s (it keeps DWARF debug info, but builds in
+1331 options to Debian's 2917), 13s. Run 41307682145 (head `c5f19bf`, the label fix on top)
+passed both again in 27m43s and 16m02s with the same counts. Earlier runs built 6.12.57
+from the old snapshot `20251113T083151Z`: 41299630516 in 21m30s, 41299024098 in 27m42s.
+Each tree took about 5 GB of disk.
+
+- **The config diff**: Debian's 6.12.111 config has 1138 `=m` options; after `olddefconfig`
+  all 1138 are `=y` and none dropped, so Kconfig promotes `m` to `y` under
+  `CONFIG_MODULES=n` and `mod2yesconfig` is not needed. Besides those, what leaves is
+  module-only (`MODULE_*`, `MODVERSIONS`, `MODPROBE_PATH`, `LIVEPATCH`), the debug info and
+  BTF the fragment drops, the toolchain lines, and options of Debian's own patches that the
+  upstream source lacks (`LOCK_DOWN_IN_EFI_SECURE_BOOT`, `SECURITY_PERF_EVENTS_RESTRICT`,
+  `INTEL_IOMMU_DEFAULT_ON_INTGPU_OFF`). The example's config has 105: 104 became `=y`, and
+  `BT_CMTP` dropped (6.13 puts it behind `DEPRECATED`, which is off); the rest that leaves is
+  module-only or a symbol 6.13 renamed or removed.
 - **The drivers check**: all 30 required options (`CloudDrivers` of qemu, azure and gcp,
   the encrypted volume, the firewall and the verity root) are `=y` from Debian's config
-  alone; none needed a fragment. `BLK_DEV_PCIESSD_MTIP32XX`, the denied one, is unset
-  there already.
-- **The boot**: `qemu.raw` boots through its ESP and the probe prints `release 6.12.57`,
+  alone, and `BLK_DEV_PCIESSD_MTIP32XX`, the denied one, is unset there already. The
+  example's config missed 8 of them; it now sets `NF_TABLES`, `NF_TABLES_INET`, `NFT_CT`
+  and `NFT_REJECT` (which gives `NFT_REJECT_INET`), `DM_VERITY`, `MISC_FILESYSTEMS` and
+  `EROFS_FS`, `NET_VENDOR_GOOGLE` and `GVE`, `NET_VENDOR_MICROSOFT` and `MICROSOFT_MANA`, and
+  `CRYPTO_CRC32C_INTEL`, 12 lines in all.
+- **The boot**: each `qemu.raw` boots through its ESP and the probe prints `release
+  6.12.111` (`6.13.12-yocto-tiny` for the example, its `CONFIG_LOCALVERSION`),
   `module-files 0`, `drivers virtio_net virtio_blk virtio_scsi nvme gve mana` and
   `filesystems ext4 erofs overlay`. The Hyper-V drivers register only on Hyper-V, so no
   boot here shows them.
