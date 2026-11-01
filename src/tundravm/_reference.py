@@ -219,7 +219,9 @@ def _parameter(param: inspect.Parameter, factories: Mapping[str, str]) -> str:
     annotation = _annotation(param.annotation)
     default: object = param.default
     if default is not param.empty:
-        default = _Literal(factories.get(param.name) or _repr(default))
+        mode = param.name == "mode" and type(default) is int
+        text = oct(default) if mode and isinstance(default, int) else _repr(default)
+        default = _Literal(factories.get(param.name) or text)
     shown = _Literal(annotation) if annotation else param.empty
     return str(param.replace(annotation=shown, default=default))
 

@@ -120,7 +120,7 @@ File(
     path: str,
     content: str | bytes | Path,
     *,
-    mode: int | None = 420,
+    mode: int | None = 0o644,
     owner: str | None = None,
 )
 ```
@@ -131,7 +131,7 @@ A file in the image: `File.text(path, text)` or `File.copy(src, dst)`.
 |---|---|
 | `File.copy(src: str \| Path, dst: str, *, mode: int \| None = None, owner: str \| None = None) -> File` | The host file *src*, read when the image lowers, shipped at *dst*. A relative *src* is beside the file that declares it, as `Local` is, not the working directory. |
 | `File.ref` | What a `Profile` change targets. |
-| `File.text(path: str, text: str, *, mode: int = 420, owner: str \| None = None) -> File` | The UTF-8 text *text* at *path*. |
+| `File.text(path: str, text: str, *, mode: int = 0o644, owner: str \| None = None) -> File` | The UTF-8 text *text* at *path*. |
 
 ### `Group`
 
@@ -1097,7 +1097,7 @@ A persistent, encrypted volume: `Volume("data", unlock=...)`.
 | Member | Does |
 |---|---|
 | `Volume.device` | The `/dev/disk/by-id/` glob that finds the attachment on every target. |
-| `Volume.directory(name: str, *, mode: int = 488, group: str \| None = None) -> VolumeDirectory` | The directory *name* on this volume, for a service's (or component's) state. |
+| `Volume.directory(name: str, *, mode: int = 0o750, group: str \| None = None) -> VolumeDirectory` | The directory *name* on this volume, for a service's (or component's) state. |
 | `Volume.manifest() -> dict[str, object]` | The volume as the runtime manifest records it. |
 | `Volume.pipe` | The FIFO an operator (or a broker client) writes the passphrase into. |
 | `Volume.ready` | "It is open, mounted, and its directories exist". |
@@ -1109,7 +1109,13 @@ A persistent, encrypted volume: `Volume("data", unlock=...)`.
 *dataclass*
 
 ```python
-VolumeDirectory(volume: Volume, name: str, *, mode: int = 488, group: str | None = None)
+VolumeDirectory(
+    volume: Volume,
+    name: str,
+    *,
+    mode: int = 0o750,
+    group: str | None = None,
+)
 ```
 
 A directory on a `Volume`: `data.directory("app")`, bound as a state.
@@ -1286,7 +1292,7 @@ Http(url: str, sha256: str | None = None)
 Install(
     source: str,
     destination: str,
-    mode: int | None = 493,
+    mode: int | None = 0o755,
     directory: bool = False,
     artifact: bool = False,
 )

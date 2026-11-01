@@ -116,6 +116,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Docs
 
 - `README.md`, `docs/guide.md` in the order of the loop, `docs/trust.md` for the threat model and recovery, and `docs/reference/` generated from the code; the prose's examples run in the tests.
+- The API reference prints a file mode default in octal (`mode: int = 0o644`), as an image file writes it, not as `420`.
 - **Breaking:** one example, `examples/attested-node/`, built in six stages the guide walks through: Nethermind on Hoodi as a component the example writes, Lighthouse, a Go proxy signing block responses with the instance key behind attested TLS that serves a quote over that key (`quotes=True`), and operating it, an hourly sync-status timer included. The six small examples and `examples/app/` are gone.
 - The guide's stage section follows the stage files, and says why the example leaves out `TpmSeal`, `AptRepository`, `Kernel.build`, `Tdxs.from_policy` and `Service.packaged`.
 - `docs/release.md`: a `v*` tag tests, builds, installs and releases tundravm on GitHub, with the wheel and the sdist; install a release with `uv tool install git+https://github.com/Hyodar/tundra@vX.Y.Z`.

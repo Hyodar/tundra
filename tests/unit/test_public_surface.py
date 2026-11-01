@@ -324,3 +324,16 @@ def test_the_api_reference_names_no_internal_model() -> None:
         r".{0,30}\b(?:[Rr]ecipes?|[Ff]ragments?|[Vv]ariants?)\b.{0,30}", _reference.api_markdown()
     )
     assert found == []
+
+
+@pytest.mark.parametrize(
+    ("shown", "not_shown"),
+    [
+        ("mode: int = 0o644", "mode: int = 420"),
+        ("mode: int = 0o750", "mode: int = 488"),
+        ("mode: int | None = 0o755", "mode: int | None = 493"),
+    ],
+)
+def test_the_api_reference_prints_a_file_mode_in_octal(shown: str, not_shown: str) -> None:
+    text = _reference.api_markdown()
+    assert shown in text and not_shown not in text
