@@ -1,15 +1,14 @@
 [Unit]
 Description=journal-export.service
-After=credential-logs-client.service tdx-evidence.service
-Requires=credential-logs-client.service tdx-evidence.service
+After=journal-sink-ready.service tdx-evidence.service
+Requires=journal-sink-ready.service tdx-evidence.service
 
 [Service]
 Type=exec
-ExecStart=/usr/lib/systemd/systemd-journal-upload --url=https://logs.example:19532 --save-state=/var/lib/journal-export/state --key=${CREDENTIALS_DIRECTORY}/logs-client --cert=${CREDENTIALS_DIRECTORY}/logs-client
+ExecStart=/usr/lib/systemd/systemd-journal-upload --url=http://127.0.0.1:19532 --save-state=/var/lib/journal-export/state
 User=journal-export
 SupplementaryGroups=systemd-journal
 WorkingDirectory=/var/lib/journal-export
-LoadCredential=logs-client:/run/tundravm/credentials/logs-client
 StateDirectory=journal-export
 Restart=on-failure
 RestartSec=5s

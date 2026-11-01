@@ -1,11 +1,14 @@
 [Unit]
-Description=Wait for secret logs-client
+Description=Wait until journal-sink.service is ready
+After=journal-sink.service
+Requires=journal-sink.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c "until [ -e /run/tundravm/credentials/logs-client ]; do sleep 1; done"
-DynamicUser=yes
+ExecStart=/bin/bash -c "until (exec 3<>/dev/tcp/127.0.0.1/19532) 2>/dev/null; do sleep 0.5; done"
+User=journal-sink-ready
+TimeoutStartSec=90s
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

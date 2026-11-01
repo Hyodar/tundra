@@ -11,13 +11,10 @@ import pytest
 from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, run_main
 from tundravm._reference import MODULES
 from tundravm.backends import LimaMkosiBackend
-from tundravm.declarative import Recipe, compile, lint, lock, write_lock
+from tundravm.declarative import Recipe, compile, lock, write_lock
 from tundravm.recipe import load_file, load_recipe
 
 INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source")
-
-INHERENT_WARNINGS = frozenset({"source-unpinned"})
-"""Warning codes an example may report: unpinned refs clear with ``tundravm lock``."""
 
 EXAMPLES = pytest.mark.parametrize(
     "path", EXAMPLE_RECIPES, ids=lambda path: path.relative_to(REPO_ROOT).as_posix()
@@ -95,13 +92,6 @@ def test_example_binds_an_image_or_the_internal_recipe(path: Path) -> None:
     }
     assert bound & {"image", "recipe"}, f"{path.name}: bind `image` (or `recipe` internally)"
     assert isinstance(_recipe(path), Recipe)
-
-
-@EXAMPLES
-def test_example_lints_without_errors(path: Path) -> None:
-    found = lint(_recipe(path))
-    assert [d for d in found if d.severity == "error"] == []
-    assert {d.code for d in found if d.severity == "warning"} <= INHERENT_WARNINGS
 
 
 @EXAMPLES

@@ -283,6 +283,26 @@ def test_the_exporters_reach_their_sinks_through_the_proxy(
     assert (found.text if found else None) == hosts
 
 
+@pytest.mark.parametrize(("profile", "reported"), [("production", True), ("dev", False)])
+def test_a_journal_export_without_a_url_ships_to_the_in_guest_receiver(
+    profile: str, reported: bool
+) -> None:
+    """The uploader reaches journal-sink on the loopback once it is ready, binds no
+    credential and opens no egress; only a production profile reports the unset sink."""
+    logs = JournalExport(credential=Secret("logs-client"))
+    observability = Observability(logs=logs)
+    image = Image("x", observability=observability, dev=DevAccess(password="tdx"))
+    planned = plan(image, profile)
+    upload = planned.service("journal-export")
+    assert "--url=http://127.0.0.1:19532 " in (upload.exec_start or "")
+    assert "journal-sink-ready.service" in _after(planned, "journal-export.service")
+    assert "--listen-http=127.0.0.1:19532" in (planned.service("journal-sink").exec_start or "")
+    assert image.secrets == () and observability.outbound().hosts == ()
+    codes = {d.code for d in planned.lint()}
+    assert ("observability-sink-unset" in codes) == reported
+    assert "observability-plaintext" not in codes
+
+
 def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     logs_key = Secret("logs-key")
     token = Secret("metrics-token")

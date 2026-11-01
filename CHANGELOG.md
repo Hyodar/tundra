@@ -47,6 +47,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks and collateral, and `Observability(proxy=)` sends through one proxy.
+- `JournalExport()` without `url=` ships the journal to `journal-sink`, Debian's `systemd-journal-remote` on the loopback in the guest, so a dev boot shows the export working; a production profile reports `observability-sink-unset` until `url=` names the deployment's receiver, and the credential binds then.
 - `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.
 
@@ -101,7 +102,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces `service-command-not-shipped`: a service's program must be something the image ships.
 - **Breaking:** `source-unpinned` is image-wide, subject `sources.NAME`.
-- New: `egress-unfiltered`, `volume-tpm-on-cloud`, `unit-written-at-runtime`.
+- New: `egress-unfiltered`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.
 
 ### Docs

@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from tundravm._image._component import Component
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
-from tundravm._image._values import Egress, File, Package, egress_host
+from tundravm._image._values import Egress, File, Package, TcpProbe, egress_host
 from tundravm.declarative import model as dm
 from tundravm.declarative.config import ConfigFile
 from tundravm.diagnostics import Rule
@@ -39,6 +39,15 @@ METRICS_SERVICE = "metrics-export"
 
 METRICS_CONFIG = "/etc/tundravm/metrics-export.yml"
 """The Prometheus agent's configuration."""
+
+SINK_SERVICE = "journal-sink"
+"""The in-guest receiver a :class:`JournalExport` without a URL uploads to."""
+
+SINK_PORT = 19532
+"""The loopback port :data:`SINK_SERVICE` listens on: ``systemd-journal-remote``'s own."""
+
+SINK_URL = f"http://127.0.0.1:{SINK_PORT}"
+"""Where the uploader reaches the in-guest receiver."""
 
 _NODE_EXPORTER_DEFAULTS = "/etc/default/prometheus-node-exporter"
 
@@ -209,33 +218,57 @@ class JournalExport(Keywords):
     certificate, which the receiver authenticates; without it the upload is anonymous.
     The upload's cursor lives in its state directory, so a restart resumes rather than
     resends, and journald's volatile, capped storage is the buffer.
+
+    Without *url* the receiver is in the guest: ``journal-sink``, Debian's
+    ``systemd-journal-remote`` on the loopback, writing under ``/var/lib/journal-sink``. A
+    dev boot shows the export working, nothing leaves the VM, *credential* waits unbound
+    for a receiver to present it to, and a production profile reports
+    ``observability-sink-unset`` until *url* names the deployment's receiver.
     """
 
-    url: str
+    url: str | None = None
     credential: Secret | None = None
 
     def __post_init__(self) -> None:
-        _check_url(self, self.url)
+        if self.url is not None:
+            _check_url(self, self.url)
         _check_credential(self, self.credential)
 
     def service(self, proxy: Proxy | None = None) -> Service:
-        """The ``journal-export`` service, through *proxy* when given."""
+        """The ``journal-export`` service, through *proxy* when given; without *url*, to
+        the in-guest :meth:`sink`, never through a proxy."""
+        local = self.url is None
         argv = [
             "/usr/lib/systemd/systemd-journal-upload",
-            f"--url={self.url}",
+            f"--url={SINK_URL if local else self.url}",
             "--save-state=/var/lib/journal-export/state",
         ]
-        if self.credential is not None:
-            argv += [f"--key={self.credential.path}", f"--cert={self.credential.path}"]
-        url = None if proxy is None else proxy.url
+        credential = None if local else self.credential
+        if credential is not None:
+            argv += [f"--key={credential.path}", f"--cert={credential.path}"]
+        url = None if proxy is None or local else proxy.url
         return Service(
             LOGS_SERVICE,
             argv,
-            credentials=[] if self.credential is None else [self.credential],
+            requires=[self.sink().endpoint(SINK_PORT)] if local else [],
+            credentials=[] if credential is None else [credential],
             state="journal-export",
             groups=["systemd-journal"],
             environment={} if url is None else {"https_proxy": url, "http_proxy": url},
             unit=dm.DropIn(exec_start_pre=(*_start_steps(proxy), f"+/bin/sh {JOURNAL_ACCESS}")),
+        )
+
+    def sink(self) -> Service:
+        """``journal-sink``: the in-guest receiver, plain HTTP on the loopback."""
+        return Service(
+            SINK_SERVICE,
+            [
+                "/usr/lib/systemd/systemd-journal-remote",
+                f"--listen-http=127.0.0.1:{SINK_PORT}",
+                f"--output=/var/lib/{SINK_SERVICE}/",
+            ],
+            state=SINK_SERVICE,
+            readiness=TcpProbe(SINK_PORT),
         )
 
 
@@ -360,8 +393,8 @@ class Observability(Component):
         proxy = _as_proxy(self, self.proxy)
         if proxy is not None:
             return Egress(hosts=[proxy.endpoint])
-        sinks = (sink for sink in (self.logs, self.metrics) if sink is not None)
-        return Egress(hosts=list(dict.fromkeys(_destination(sink.url) for sink in sinks)))
+        urls = (sink.url for sink in (self.logs, self.metrics) if sink is not None)
+        return Egress(hosts=list(dict.fromkeys(_destination(url) for url in urls if url)))
 
     def compose(self) -> Iterator[object]:
         proxy = _as_proxy(self, self.proxy)
@@ -373,6 +406,11 @@ class Observability(Component):
             yield File(JOURNAL_ACCESS, _JOURNAL_ACCESS_SCRIPT, mode=0o755)
             # The packaged uploader reads /etc; ours runs from its own unit and arguments.
             yield dm.Unit("systemd-journal-upload.service", masked=True)
+            if self.logs.url is None:
+                # The packaged receiver's socket would take the port, on every address.
+                yield dm.Unit("systemd-journal-remote.socket", masked=True)
+                yield dm.Unit("systemd-journal-remote.service", masked=True)
+                yield self.logs.sink()
             yield self.logs.service(proxy)
         if self.metrics is not None:
             yield Package("prometheus")
@@ -394,13 +432,30 @@ class Observability(Component):
             "An Observability sink is http://, so the host and every hop read what the guest logs.",
             "Point the sink at an https:// URL.",
         ),
+        Rule(
+            "observability-sink-unset",
+            "warning",
+            "A production profile ships the journal to the in-guest receiver, so no log "
+            "leaves the VM.",
+            "Pass JournalExport(url=) your systemd-journal-remote receiver's https:// URL.",
+        ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
-        """``observability-plaintext``: an http:// sink sees what the TD logs in the clear."""
+        """``observability-plaintext``: an http:// sink sees what the TD logs in the clear;
+        ``observability-sink-unset``: a production profile's journal never leaves the VM."""
         found: list[dm.Diagnostic] = []
+        if resolved.production and self.logs is not None and self.logs.url is None:
+            found.append(
+                dm.Diagnostic(
+                    "observability-sink-unset",
+                    "warning",
+                    "JournalExport names no url: the journal goes to the in-guest receiver "
+                    "and never leaves the VM",
+                )
+            )
         for name, sink in (("logs", self.logs), ("metrics", self.metrics)):
-            if sink is not None and sink.url.startswith("http://"):
+            if sink is not None and sink.url is not None and sink.url.startswith("http://"):
                 found.append(
                     dm.Diagnostic(
                         "observability-plaintext",

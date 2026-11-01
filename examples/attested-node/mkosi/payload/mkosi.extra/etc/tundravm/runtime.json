@@ -12,18 +12,7 @@
   "management_port": 8745,
   "rootfs": "verity",
   "schema": 1,
-  "secrets": [
-    {
-      "location": "/run/tundravm/credentials/logs-client",
-      "name": "logs-client",
-      "required": true,
-      "rotation": "restart",
-      "source": null,
-      "units": [
-        "journal-export.service"
-      ]
-    }
-  ],
+  "secrets": [],
   "volumes": [
     {
       "device": "/dev/disk/by-id/*-tundravm-data",

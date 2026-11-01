@@ -395,7 +395,7 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
 +    requires=[lighthouse.http],
 +    timer=Every("1h"),
 +)
-+logs = JournalExport("https://logs.example:19532", credential=Secret("logs-client"))
++logs = JournalExport(credential=Secret("logs-client"))
  
 @@
      base=Debian("trixie", snapshot="20261018T082309Z"),
@@ -417,7 +417,10 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
      dev=DevAccess(password="tdx"),
 ```
 
-The journal ships to a sink, authenticated by a delivered certificate. `sync-status`
+`JournalExport` names no `url=`, which is the deployment's: the journal goes to
+`journal-sink`, a receiver in the guest, so a dev boot shows the export working. A production
+profile reports `observability-sink-unset` until `url=` names your receiver, which the
+delivered certificate then authenticates to. `sync-status`
 runs hourly (`timer=Every("1h")`) and puts Lighthouse's sync status in it. `staging` edits one
 file, and `bench` adds `fio` and is never shipped. `targets=` adds the cloud disks of the
 same payload.
@@ -426,7 +429,8 @@ same payload.
 
 An image file binds an `Image` to the name `image`, as each stage does.
 `Image` is a frozen dataclass. Every slot is optional and takes small typed values.
-`tundravm show` prints the image as written, then what each profile builds.
+`tundravm show` prints the image as written, then what each profile builds. Every public name
+has one home, without aliases: the [API reference](reference/api.md) lists each namespace.
 
 ### What is implied
 
@@ -480,11 +484,6 @@ measured command line, after the image's own: `Kernel.default(cmdline=["nospectr
 The ones tundravm sets are refused, each naming what sets it: `rootfs=` (`root=`,
 `roothash=`, `usrhash=`, `systemd.verity*`, `systemd.volatile=`), `minimal.target`
 (`init=`, `rdinit=`, `systemd.unit=`) and `run` (`console=`).
-
-### Imports
-
-Every public name has one home, without aliases, so an image file's imports say what it
-uses, as the stages' do. The [API reference](reference/api.md) lists each namespace.
 
 ## Services
 
@@ -755,8 +754,7 @@ A Go source builds with the toolchain its `go.mod` names: the `toolchain` line, 
 `go` line (`go 1.22` is `go1.22.0`). The host's `go`, any 1.21 or newer, fetches that
 release with the modules, and the offline build runs it; Debian's `golang` only bootstraps
 it. A release the host cannot fetch is `E_SOURCE`; a `go.mod` older than Go 1.21 builds
-with Debian's `go`. Every image's `Tdxs` is a Go source, so `build` stops before fetching
-anything without a host `go`, and `doctor`'s `build:go` row blocks.
+with Debian's `go`.
 
 A Cargo source builds with the toolchain its `rust-toolchain.toml` (or `rust-toolchain`)
 pins, found as `rustup` finds it. The host's `rustup` installs that channel, with the

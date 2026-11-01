@@ -1,0 +1,40 @@
+[Unit]
+Description=journal-sink.service
+After=tdx-evidence.service
+Requires=tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/systemd/systemd-journal-remote --listen-http=127.0.0.1:19532 --output=/var/lib/journal-sink/
+User=journal-sink
+WorkingDirectory=/var/lib/journal-sink
+StateDirectory=journal-sink
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target

@@ -18,8 +18,9 @@ from tundravm.recipe import load_recipe
 from tundravm.templates import render_recipe_template
 from tundravm.testing import plan
 
-ALLOWED = frozenset({"source-unpinned"})
-"""The only warning a stage reports: ``tundravm lock`` pins its sources."""
+ALLOWED = frozenset({"source-unpinned", "observability-sink-unset"})
+"""The warnings a stage reports: ``tundravm lock`` pins its sources, and stage 6's
+production profiles ship the journal nowhere until the operator passes ``url=``."""
 
 
 def _names(path: Path) -> tuple[set[str], set[str]]:

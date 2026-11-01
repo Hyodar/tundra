@@ -784,14 +784,15 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 *dataclass*
 
 ```python
-JournalExport(url: str, credential: Secret | None = None)
+JournalExport(url: str | None = None, credential: Secret | None = None)
 ```
 
 Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 
 | Member | Does |
 |---|---|
-| `JournalExport.service(proxy: Proxy \| None = None) -> Service` | The `journal-export` service, through *proxy* when given. |
+| `JournalExport.service(proxy: Proxy \| None = None) -> Service` | The `journal-export` service, through *proxy* when given; without *url*, to the in-guest `sink`, never through a proxy. |
+| `JournalExport.sink() -> Service` | `journal-sink`: the in-guest receiver, plain HTTP on the loopback. |
 
 ### `Network`
 
@@ -831,7 +832,7 @@ The export path for logs and metrics: `image.observability` takes it.
 
 | Member | Does |
 |---|---|
-| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear. |
+| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's journal never leaves the VM. |
 | `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one. |
 
 ### `PrometheusRemoteWrite`

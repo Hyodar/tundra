@@ -7,6 +7,8 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind
 mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse
 mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse-ready
+mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-sink
+mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-sink-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-export
 mkosi-chroot useradd --system --shell /usr/sbin/nologin signer
 mkosi-chroot useradd --system --shell /usr/sbin/nologin signer-ready
@@ -25,6 +27,8 @@ mkosi-chroot systemctl enable nethermind.service
 mkosi-chroot systemctl enable nethermind-ready.service
 mkosi-chroot systemctl enable lighthouse.service
 mkosi-chroot systemctl enable lighthouse-ready.service
+mkosi-chroot systemctl enable journal-sink.service
+mkosi-chroot systemctl enable journal-sink-ready.service
 mkosi-chroot systemctl enable journal-export.service
 mkosi-chroot systemctl enable signer.service
 mkosi-chroot systemctl enable signer-ready.service
@@ -33,7 +37,6 @@ mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
-mkosi-chroot systemctl enable credential-logs-client.service
 mkosi-chroot systemctl enable attested-tls-8546.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable tdx-evidence.service
@@ -53,6 +56,8 @@ ln -sf "/etc/systemd/system/nethermind.service" "$BUILDROOT/etc/systemd/system/m
 ln -sf "/etc/systemd/system/nethermind-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/lighthouse.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/lighthouse-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/journal-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/journal-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/journal-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -61,7 +66,6 @@ ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/s
 ln -sf "/etc/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/credential-logs-client.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-8546.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -69,7 +73,7 @@ ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/syste
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
 
-mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service systemd-journal-upload.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
+mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service systemd-journal-upload.service systemd-journal-remote.socket systemd-journal-remote.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")

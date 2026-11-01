@@ -1,9 +1,10 @@
 """attested-node: operating it, stage 6 of the guide and image.py.
 
-Adds what running it takes: the journal shipped with a delivered client certificate,
-Lighthouse's sync status in it every hour, a staging profile that edits one file, a bench
-profile that is never shipped, and the Azure and GCP disks of the same payload. The dev
-profile's boot probe checks it all.
+Adds what running it takes: the journal shipped (to an in-guest receiver until url= names
+the deployment's, which then takes a delivered client certificate), Lighthouse's sync
+status in it every hour, a staging profile that edits one file, a bench profile that is
+never shipped, and the Azure and GCP disks of the same payload. The dev profile's boot
+probe checks it all.
 """
 
 from components.lighthouse import Lighthouse
@@ -44,7 +45,7 @@ sync = Service(
     requires=[lighthouse.http],
     timer=Every("1h"),
 )
-logs = JournalExport("https://logs.example:19532", credential=Secret("logs-client"))
+logs = JournalExport(credential=Secret("logs-client"))
 
 image = Image(
     "attested-node",
