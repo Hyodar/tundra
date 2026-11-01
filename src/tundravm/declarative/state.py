@@ -456,8 +456,8 @@ class StateBuilder:
                 _runtime_init(profile, _delivery_wait(external), external.step, after)
 
     def _azure(self, profile: ProfileState) -> None:
-        """The Azure integration: dmidecode, the provisioning script, its enabled unit."""
-        profile.packages.add("dmidecode")
+        """The Azure integration: its packages, the provisioning script, its enabled unit."""
+        profile.packages.update(azure.AZURE_PACKAGES)
         _add_file(
             profile, "/usr/bin/azure-complete-provisioning", azure.AZURE_PROVISIONING_SCRIPT, "0755"
         )

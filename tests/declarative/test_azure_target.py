@@ -18,3 +18,5 @@ def test_azure_unit_requires_network_setup_when_the_payload_ships_it(tmp_path: P
     tree = compile_tree(recipe, path=tmp_path / "tree")
     unit = tree.unit(SERVICE, profile="azure")
     assert "After=network-setup.service network.target\nRequires=network-setup.service\n" in unit
+    # the provisioning script posts to the wireserver with curl
+    assert "    curl\n" in tree.conf(profile="azure")

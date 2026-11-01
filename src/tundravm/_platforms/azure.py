@@ -1,6 +1,6 @@
 """The Azure integration's files: what lowering adds to an ``azure`` target variant.
 
-``tundravm.declarative.state`` installs ``dmidecode``, ships the provisioning
+``tundravm.declarative.state`` installs :data:`AZURE_PACKAGES`, ships the provisioning
 script and its unit and enables the unit in every payload of a recipe that targets
 ``azure`` (the unit is inert elsewhere); the ``azure`` wrapper image converts the disk.
 """
@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tundravm.declarative.model import Task
+
+AZURE_PACKAGES = ("curl", "dmidecode")
+"""What the provisioning script runs: ``dmidecode`` to tell Azure from elsewhere, ``curl``
+for the wireserver. Without ``curl`` the VM never reports ready and Azure fails it."""
 
 # ---------------------------------------------------------------------------
 # Azure provisioning completion script
