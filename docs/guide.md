@@ -23,7 +23,7 @@ are gate 3's `run --mode` separation and attested endpoint. Gate 2 is not.
 | The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds give identical digests, both layouts' `azure.vhd` included |
 | Building an `Image` in CI | the `templates` and `boot` jobs build and boot the templates |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
-| The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
+| The thirteen commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
 | `run --mode simulated --probe` | CI runs the fixture's dev build: every probe check passes and its page is fetched |
 | The fail-closed production profile | CI boots the production fixture without TDX: `tdx-evidence.service` refuses and its services never start |
 | `Kernel.build` | a weekly CI workflow compiles Debian's 6.12 with every target's drivers built in and boots it |
@@ -987,31 +987,22 @@ it prints the build's report, provenance, unchecked guarantees and boot probe;
 $ tundravm dev
 $ tundravm run --mode simulated --dev --probe
 $ tundravm run status demo-1
-$ tundravm run logs demo-1
 $ tundravm run stop demo-1
 ```
 
-`dev` is the inner loop as one verb: `build --dev`, then `run --mode simulated --probe`
-on the build, the probe's table, then the console until Ctrl-C stops the instance (the
-build stays). It builds only when the image, the lock or a `Local` source's content
-changed since the latest development build, and says which; else it reuses that build.
-`--no-follow` returns after the probe, `--mode tdx` boots with TDX.
-`run` boots `qemu.raw` through OVMF from its ESP on a snapshot and
-forwards from `127.0.0.1` every TCP port the image accepts (8745 where the key delivery
-listens), on the same port when free and unprivileged. `--mode` is required:
+`dev` is `build --dev` then `run --mode simulated --probe`: the probe's table, then the
+console until Ctrl-C stops the instance. It reuses the latest development build while the
+image, the lock and its `Local` sources are unchanged, and says why it builds;
+`--no-follow` returns after the probe. `run` boots `qemu.raw` through OVMF from its ESP on
+a snapshot and forwards from `127.0.0.1` every TCP port the image accepts (8745 where the
+key delivery listens). `--mode simulated` boots without TDX (KVM when
+usable, else TCG), verdicts `simulated`; `--mode tdx` boots TDVF with a `tdx-guest`
+object, refused unless `doctor --for tdx` is ready. A production build boots `simulated`
+fail-closed: no service starts, and `run status` says so; a dev build runs its services.
 
-| Mode | Boots | Evidence |
-|---|---|---|
-| `simulated` | no TDX; KVM when `/dev/kvm` is usable, TCG otherwise | verdicts are `simulated` |
-| `tdx` | TDVF with a `tdx-guest` object | real quotes; refused unless `doctor --for tdx` is ready |
-
-A production build boots `simulated` fail-closed: no service starts, and `run status`
-says so. Run the dev build (`--dev`) to use the services without TDX.
-
-The instance is `.tundravm/instances/<image>-<n>/`: `instance.json` (build, mode, QEMU
-argv, ports), `events.jsonl` (one record per action, never a value), `console.log`, and a
-sparse 16 GiB `volume-<name>.img` per volume. `run ssh` opens a shell on a dev build with
-SSH; `run mode` explains the mode.
+The instance is `.tundravm/instances/<image>-<n>/`: `instance.json`,
+`events.jsonl` (one record per action, never a value), `console.log`, a sparse 16 GiB disk
+per volume. `run ssh` opens a shell on a dev build with SSH; `run mode` explains the mode.
 
 ### The boot probe
 

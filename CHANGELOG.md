@@ -4,7 +4,7 @@
 
 tundravm v2 makes mkosi accessible for confidential VMs by making the choices: Debian
 trixie, systemd, a measured UKI, Intel TDX. You declare one Python `Image`, the compiler
-writes one plain mkosi 27.1 tree, and twelve commands take it to a locked, reproducible,
+writes one plain mkosi 27.1 tree, and thirteen commands take it to a locked, reproducible,
 signed build that runs, deploys and attests. No compatibility alias is kept. The attested
 endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
@@ -45,12 +45,13 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### CLI
 
-- **Breaking:** twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - `new NAME [--template node|service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; `node`, the default, is the example's first stage, the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
+- **Breaking:** thirteen commands: `new`, `check`, `lock`, `build`, `show`, `run`, `dev`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds when `TUNDRAVM_BACKEND` is set.
 - **Breaking:** `show IMAGE` lists the components the image file wrote, each with what it composed (`--json`: `{"name", "components"}`), and a source build only under sources.
 - **Breaking:** `show --dev` is always the latest development build; an image file's dev profile is `--profile dev`, and `show IMAGE --dev` is refused.
 - `show` leads with the image, then production; with a build, its report and boot probe checks; `--diff` compares two builds.
+- `dev [IMAGE]` is the inner loop as one verb: `build --dev` when the image, the lock or a `Local` source's content changed since the latest development build (it says which, else reuses that build), then `run --mode simulated --probe` on it and the console until Ctrl-C stops the instance; `--no-follow` returns after the probe; `new`, the quickstart and the README print it.
 - `run --mode simulated|tdx` is explicit, and a production build boots fail-closed without TDX; `run --probe` and `run probe INSTANCE` read the boot probe every development profile carries, write `probe.json` and exit 1 on a failed check.
 - With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded.
 - `run` forwards, and `deploy`'s firewall line names, 8745 only where the image's firewall opens it.
