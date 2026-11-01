@@ -39,7 +39,7 @@ from ._reporting import TextReporter
 from .attestation import render_attestation
 from .backends.base import BuildBackend
 from .capabilities import AREAS, Capability, Host, capabilities, failed
-from .check import failing, render_as, render_summary
+from .check import explain, explain_command, failing, render_as, render_summary
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
     NO_LOCK,
@@ -281,7 +281,8 @@ def build_parser() -> argparse.ArgumentParser:
         "drift from BUILD/tundravm.lock when it exists, the toolchain against the lock's,\n"
         "and with --tree a committed mkosi tree against what the image compiles to.\n"
         "Exit 1 on an error (or a drifted lock or tree); warnings are reported only.\n"
-        "In GitHub Actions the findings are workflow annotations.",
+        "In GitHub Actions the findings are workflow annotations. --explain CODE says what\n"
+        "a finding's code checks and how to fix it (docs/reference/lint.md lists them all).",
         image,
         as_json,
     )
@@ -294,6 +295,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument(
         "--tree", type=Path, default=None, metavar="DIR", help="A committed tree to compare."
+    )
+    check.add_argument(
+        "--explain",
+        nargs="+",
+        default=None,
+        metavar="CODE",
+        help="Print what each finding code checks and how to fix it; checks nothing.",
     )
 
     lock = command(
@@ -796,6 +804,9 @@ Review it, add the platform registers you approve from a quote of a host you tru
 
 
 def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
+    if args.explain:
+        print(explain(args.explain), file=out)
+        return EXIT_OK
     found = _settings(args)
     loaded = _loaded(args, found)
     names = loaded.variants
@@ -846,6 +857,8 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     print(render_as(diagnostics, fmt, recipe_path=found.image or ""), file=out)
     if drift is not None and drift.is_clean:
         print(f"tree {args.tree} is up to date", file=out)
+    if fmt == "text" and (explained := explain_command(diagnostics)):
+        print(explained, file=out)
     return EXIT_FAILURE if bad else EXIT_OK
 
 

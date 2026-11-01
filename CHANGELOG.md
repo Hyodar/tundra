@@ -137,6 +137,9 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `trusted`. Values travel on the SSH command's stdin only.
 - `[tool.tundravm]` keeps `image`, `build` and `backend`, under `TUNDRAVM_IMAGE`,
   `TUNDRAVM_BUILD` and `TUNDRAVM_BACKEND`.
+- Every code `check` reports is a registered rule with a severity, what it checks and how
+  to fix it. `check --explain CODE ...` prints them, and a text report ends with the
+  `--explain` command naming its codes.
 - Where each removed verb went:
 
   | Removed | Now |
@@ -209,6 +212,8 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `python -m tundravm._reference docs/reference` from the parser and the `__all__` of each
   public namespace, one section each; `tests/docs/test_reference.py` fails when they are
   stale.
+- `docs/reference/lint.md` is generated the same way from the rule registry: every code
+  `tundravm check` reports, its severity, what it checks and how to fix it.
 - `tests/docs/test_docs.py` runs every Python block of the prose pages, parses every
   documented command with the real parser, and resolves every relative link and anchor.
 - Deleted: `docs/tutorial.md`, `docs/api.md`, `docs/cli.md`, `docs/concepts.md`,

@@ -1,12 +1,14 @@
-"""The generated reference: ``python -m tundravm._reference DIR`` writes ``DIR/cli.md``
-and ``DIR/api.md``.
+"""The generated reference: ``python -m tundravm._reference DIR`` writes ``DIR/cli.md``,
+``DIR/api.md`` and ``DIR/lint.md``.
 
 ``cli.md`` is every command's ``--help`` (and every ``secrets`` action's) exactly as the
 parser prints it at a fixed width. ``api.md`` has one section per public namespace
 (:data:`MODULES`), each listing every name of its ``__all__``: its signature (a
 dataclass's is its fields with their defaults), the first paragraph of its docstring, and
 a class's public methods and properties. A name has one home, so an object exported by
-two namespaces is an error, not a cross-reference. Both are pure functions of the installed tundravm
+two namespaces is an error, not a cross-reference. ``lint.md`` is every code of the
+registry ``tundravm check`` explains (``tundravm.check.RULES``). All are pure functions of
+the installed tundravm
 and the Python minor version (argparse's layout changes between them), so a committed copy
 is compared with a fresh one the way ``check --tree`` compares an mkosi tree.
 """
@@ -33,6 +35,7 @@ __all__ = [
     "REGENERATE",
     "api_markdown",
     "cli_markdown",
+    "lint_markdown",
     "main",
     "render",
     "slug",
@@ -375,9 +378,38 @@ def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
     return "\n".join(lines)
 
 
+# ── lint.md ──────────────────────────────────────────────────────────────
+
+
+def lint_markdown() -> str:
+    """``lint.md``: every code ``tundravm check`` reports, sorted, with what it checks and
+    how to fix it."""
+    from tundravm.check import RULES
+
+    lines = _header("Lint reference", "the `tundravm check` rule registry")
+    lines += [
+        "Every code `tundravm check` reports. `tundravm check --explain CODE` prints one "
+        "row. The severity is the default; the row says when it differs. A component an "
+        "image file writes reports its own codes, which are not listed here.",
+        "",
+        "| Code | Severity | What it checks | How to fix |",
+        "|---|---|---|---|",
+    ]
+    lines += [
+        f"| `{rule.code}` | {rule.severity} | {_cell(_markup(rule.summary))} "
+        f"| {_cell(_markup(rule.fix))} |"
+        for rule in sorted(RULES.values(), key=lambda rule: rule.code)
+    ]
+    return "\n".join(lines)
+
+
 # ── writing ──────────────────────────────────────────────────────────────
 
-FILES: Mapping[str, Callable[[], str]] = {"cli.md": cli_markdown, "api.md": api_markdown}
+FILES: Mapping[str, Callable[[], str]] = {
+    "cli.md": cli_markdown,
+    "api.md": api_markdown,
+    "lint.md": lint_markdown,
+}
 """What :func:`write` puts in the directory, and what renders each."""
 
 

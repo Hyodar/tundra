@@ -46,7 +46,7 @@ def test_the_generation_is_deterministic(tmp_path: Path) -> None:
     first = {path.name: path.read_text() for path in _reference.write(tmp_path / "a")}
     second = {path.name: path.read_text() for path in _reference.write(tmp_path / "b")}
     assert first == second
-    assert set(first) == {"cli.md", "api.md"}
+    assert set(first) == {"cli.md", "api.md", "lint.md"}
 
 
 def test_every_command_and_action_has_a_section() -> None:

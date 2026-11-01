@@ -39,12 +39,24 @@ def test_errors_exit_1_in_text_and_json(
     result = cli("check", "broken.py")
     assert result.code == EXIT_FAILURE
     assert "error disk-key-undefined [default]" in result.out
+    assert result.out.splitlines()[-1] == "explain: tundravm check --explain disk-key-undefined"
     result = cli("check", "broken.py", "--json")
     assert result.code == EXIT_FAILURE
     payload = json.loads(result.out)
     assert payload["schema"] == "tundravm.check/1" and payload["passed"] is False
     assert payload["summary"]["errors"] >= 1 and payload["tree"] is None
     assert [d["code"] for d in payload["diagnostics"]][0] == "disk-key-undefined"
+
+
+def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
+    result = cli("check", "--explain", "source-unpinned", "tree-drift")
+    assert result.code == EXIT_OK, result.err
+    assert result.out.startswith("source-unpinned (warning)\n    A source build")
+    assert "\n    fix: Run `tundravm lock IMAGE`" in result.out
+    assert "\n\ntree-drift (error)\n" in result.out
+    unknown = cli("check", "--explain", "source-unpined")
+    assert unknown.code == EXIT_SDK_ERROR
+    assert "Did you mean 'source-unpinned'? Codes: cloud-glue-unconditional," in unknown.err
 
 
 def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:

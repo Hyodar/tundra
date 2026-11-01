@@ -3,6 +3,7 @@
 ``RULES`` registers every code ``tundravm check`` reports, wherever it comes from
 (resolution, a component, a module, the compiler, unit text, the lock, the host,
 ``--tree``), as a :class:`Rule`: its severity, what it checks and how to fix it.
+``tundravm check --explain CODE`` prints one, and ``docs/reference/lint.md`` lists them.
 A compiler rule's ``checks`` are small functions
 ``(image, profile_name, state) -> Iterator[Diagnostic]``; ``_rule_module_checks`` adds
 each applied module's own ``Module.check()`` findings. They read each profile's effective
@@ -12,10 +13,12 @@ profile merged over the default profile it extends.
 
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import json
 import posixpath
 import re
+import textwrap
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -27,6 +30,7 @@ from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
+from .errors import ValidationError
 from .formats import annotation_path, md_cell, md_table, workflow_command
 from .kernel_modules import (
     NO_MODULES,
@@ -1654,6 +1658,40 @@ def render(diagnostics: Sequence[Diagnostic]) -> str:
     return "\n".join(lines)
 
 
+def explain(codes: Sequence[str]) -> str:
+    """What each of *codes* checks and how to fix it, as ``tundravm check --explain`` prints it.
+
+    A code :data:`RULES` does not register is a :class:`~tundravm.errors.ValidationError`
+    whose hint lists the codes.
+    """
+    unknown = [code for code in codes if code not in RULES]
+    if unknown:
+        close = difflib.get_close_matches(unknown[0], list(RULES), n=1)
+        guess = f"Did you mean {close[0]!r}? " if close else ""
+        raise ValidationError(
+            f"Unknown check code(s): {', '.join(unknown)}.",
+            hint=f"{guess}Codes: {', '.join(sorted(RULES))}.",
+        )
+    blocks = []
+    for code in dict.fromkeys(codes):
+        rule = RULES[code]
+        summary, fix = (
+            textwrap.fill(
+                text, 88, initial_indent="    ", subsequent_indent="    ", break_on_hyphens=False
+            )
+            for text in (rule.summary, f"fix: {rule.fix}")
+        )
+        blocks.append(f"{rule.code} ({rule.severity})\n{summary}\n{fix}")
+    return "\n\n".join(blocks)
+
+
+def explain_command(diagnostics: Sequence[Diagnostic]) -> str:
+    """``explain: tundravm check --explain CODE ...`` naming each registered code of
+    *diagnostics* once; ``""`` when none is registered."""
+    codes = [code for code in dict.fromkeys(d.code for d in diagnostics) if code in RULES]
+    return f"explain: tundravm check --explain {' '.join(codes)}" if codes else ""
+
+
 def render_summary(diagnostics: Sequence[Diagnostic]) -> str:
     """``no findings`` or ``N errors, N warnings, N infos``."""
     if not diagnostics:
@@ -1923,6 +1961,8 @@ __all__ = [
     "RuleCheck",
     "check",
     "declaration_check",
+    "explain",
+    "explain_command",
     "unit_declaration_check",
     "failing",
     "render",

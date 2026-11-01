@@ -7,9 +7,10 @@ attests the build. The choices are made for you: Debian trixie, systemd, a measu
 Intel TDX. Each default below has one escape hatch, and the hatch is a typed value, not a
 string.
 
-This guide is task-ordered. The [command reference](reference/cli.md) and the
-[API reference](reference/api.md) are generated from the code. The
-[trust page](trust.md) says what the image defends against and how to recover.
+This guide is task-ordered. The [command reference](reference/cli.md), the
+[API reference](reference/api.md) and the [lint reference](reference/lint.md) are
+generated from the code. The [trust page](trust.md) says what the image defends against
+and how to recover.
 
 ## What is proven today
 
@@ -963,3 +964,24 @@ A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did
 | `E_MEASUREMENT` | an artifact that is not a UKI or a disk booting one | rebuild it with `tundravm build` |
 | `E_ATTESTATION` | the issuer or validator was unreachable or failed | `run logs`, `journalctl -u tdxs` |
 | `E_DEPLOYMENT` | a missing tool, no TDX for `--mode tdx`, a refused upgrade | the hint names it |
+
+A `check` finding is `SEVERITY CODE [PROFILE] SUBJECT: message` and its hint. The report
+ends with the command that explains its codes:
+
+```console
+$ tundravm check --explain source-unpinned
+```
+
+```text
+source-unpinned (warning)
+    A source build, built kernel or downloaded package has no pin in the lockfile, so a
+    moving ref builds different bytes (the image's policy can make it an error or an
+    info).
+    fix: Run `tundravm lock IMAGE` to pin every source at once (`tundravm build` then
+    fetches each on the host), or declare an immutable source: Git(url, ref) with a
+    40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, with
+    every other source it cannot resolve, before anything is written.
+```
+
+The [lint reference](reference/lint.md) lists every code with what it checks and how to
+fix it.
