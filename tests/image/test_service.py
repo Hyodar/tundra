@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 
 from tundravm import Image, Service
-from tundravm.components import Component, Endpoint
+from tundravm.components import EVIDENCE, Component, Endpoint
 from tundravm.declarative import Root, Task
 from tundravm.declarative.systemd import PRESETS
 from tundravm.errors import ValidationError
@@ -95,6 +95,26 @@ def test_a_service_endpoint_is_its_loopback_address_with_its_readiness() -> None
     endpoint = api.endpoint(8080, path="/health")
     assert (endpoint.url, endpoint.ready) == ("http://127.0.0.1:8080/health", api.ready)
     assert Service("app", ["/usr/bin/app"], requires=[endpoint]).requires == (endpoint,)
+
+
+@pytest.mark.parametrize(
+    ("given", "spelled"),
+    [
+        ({}, {"requires": [EVIDENCE], "groups": ["tdx"]}),
+        ({"groups": ["disk"]}, {"requires": [EVIDENCE], "groups": ["tdx", "disk"]}),
+        ({"timer": Every("1h")}, {"requires": [EVIDENCE], "groups": ["tdx"], "timer": Every("1h")}),
+    ],
+    ids=["service", "with its own group", "timer"],
+)
+def test_quotes_is_the_evidence_requirement_and_the_tdx_group(
+    given: dict[str, object], spelled: dict[str, object]
+) -> None:
+    quoting = _plan(Service("app", ["/usr/bin/app"], quotes=True, **given))  # type: ignore[arg-type]
+    written = _plan(Service("app", ["/usr/bin/app"], **spelled))  # type: ignore[arg-type]
+    assert quoting.service("app").text == written.service("app").text
+    assert "Requires=tdxs.service" in quoting.service("app").text
+    with pytest.raises(ValidationError, match="quotes= holds 'yes'"):
+        Service("app", ["/usr/bin/app"], quotes="yes")  # type: ignore[arg-type]
 
 
 def test_requiring_a_service_without_readiness_is_refused_where_it_is_written() -> None:

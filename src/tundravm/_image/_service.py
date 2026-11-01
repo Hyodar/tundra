@@ -132,6 +132,8 @@ class Service(Located):
     ``Wants=`` on the setup task, ``ConditionPathExists=`` on what it writes, so a failed
     setup skips this service instead of failing it.
     ``expose=[TCP(8080)]`` opens that port in the image's firewall and nothing else does.
+    ``quotes=True`` says it asks the evidence service for TDX quotes: it joins the ``tdx``
+    group and requires :data:`~tundravm.components.EVIDENCE`.
 
     ``state=`` is a ``StateDirectory=`` name under ``/var/lib`` (volatile, like the rest
     of the root) or a directory on a persistent volume (``data.directory("app")``), which
@@ -164,6 +166,9 @@ class Service(Located):
     unit: DropIn | None = None
     user: str | None = None
     groups: Sequence[str] = ()
+    quotes: bool = False
+    """It asks the evidence service for quotes: ``groups=["tdx"]`` and
+    ``requires=[EVIDENCE]``, said once."""
     working_directory: str | None = None
     environment: Mapping[str, str | Binding] = field(default_factory=FrozenMap)
     """Each value one line of text, or a :class:`Secret` (or :class:`Credential`), which
@@ -316,6 +321,10 @@ class Service(Located):
         for group in self.groups:
             if not isinstance(group, str) or not group:
                 raise _fail(self, f"groups= holds {group!r}, not a group name.")
+        if not isinstance(self.quotes, bool):
+            raise _fail(
+                self, f"quotes= holds {self.quotes!r}.", hint="Pass quotes=True or drop it."
+            )
         for key, value in self.environment.items():
             if isinstance(key, str) and isinstance(value, (Secret, Credential)):
                 continue

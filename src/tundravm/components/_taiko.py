@@ -14,7 +14,7 @@ from tundravm.declarative.systemd import Hardening
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
-from ._base import EVIDENCE, INTEL_PCS
+from ._base import INTEL_PCS
 
 __all__ = ["RAIKO_SOURCE", "TAIKO_CLIENT_SOURCE", "Raiko", "TaikoClient"]
 
@@ -209,11 +209,11 @@ class Raiko(Component, build_network=True):
         yield Service(
             "raiko",
             ["/usr/bin/raiko", f"--address={self.listen}", f"--config-path={self.config.path}"],
-            requires=[EVIDENCE] if self.l2_rpc is None else [EVIDENCE, self.l2_rpc],
+            requires=[] if self.l2_rpc is None else [self.l2_rpc],
             readiness=TcpProbe(int(port), host=host),
             state="raiko" if self.state is None else self.state,
             credentials=[self.config],
-            groups=["tdx"],
+            quotes=True,
             hardening=Hardening.preset("static", devices=["/dev/tdx_guest"]),
         )
 

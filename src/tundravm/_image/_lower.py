@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import cast
 
 from tundravm._location import anchored, declared_at, display_location
+from tundravm._modules import tdxs as _tdxs
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
@@ -514,7 +515,7 @@ class _Lowering:
         shutdown = item.shutdown
         state = item.state
         environment = item.variables()
-        groups = list(item.groups)
+        groups = _groups(item)
         working = item.working_directory
         write: tuple[str, ...] = ()
         if isinstance(state, VolumeDirectory):
@@ -558,7 +559,7 @@ class _Lowering:
             item.command(),
             schedule=item.timer,
             user=item.user,
-            groups=tuple(item.groups),
+            groups=tuple(_groups(item)),
             state=item.state,
             working_dir=item.working_directory,
             env=item.variables(),
@@ -596,12 +597,25 @@ class _Lowering:
     def required_units(self, item: Service) -> tuple[str, ...]:
         """The units ``requires=`` means: what proves each dependency ready."""
         units: list[str] = []
-        for requirement in item.requires:
+        for requirement in (*_evidence(item), *item.requires):
             if isinstance(requirement, dm.UnitOutput):
                 continue
             for handle in _handles(requirement):
                 units.append(_ready_unit(item, handle))
         return tuple(dict.fromkeys(units))
+
+
+def _evidence(item: Service) -> tuple[ServiceReady, ...]:
+    """The evidence service's readiness, which a service that asks for quotes requires."""
+    from tundravm.components import EVIDENCE
+
+    return (EVIDENCE,) if item.quotes else ()
+
+
+def _groups(item: Service) -> list[str]:
+    """*item*'s groups, the evidence service's first when it asks for quotes."""
+    quoting = [_tdxs.Tdxs().group] if item.quotes else []
+    return list(dict.fromkeys([*quoting, *item.groups]))
 
 
 def _outputs(item: Service) -> tuple[dm.UnitOutput, ...]:

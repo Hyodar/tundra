@@ -280,6 +280,7 @@ Service(
     unit: DropIn | None = None,
     user: str | None = None,
     groups: Sequence[str] = (),
+    quotes: bool = False,
     working_directory: str | None = None,
     environment: Mapping[str, str | Binding] = FrozenMap(),
     logs: str | None = None,

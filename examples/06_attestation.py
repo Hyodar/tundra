@@ -9,8 +9,8 @@ Teaches:
   (``Tdxs.from_policy()``; a build's ``measurements.json`` holds one). The same
   component's ``source=`` points the build at a mirror or a vendored checkout of
   tundra-tools.
-- a service that asks for quotes joins the ``tdx`` group and requires ``EVIDENCE``, the
-  evidence service's readiness.
+- ``quotes=True``: a service that asks for quotes joins the ``tdx`` group and requires
+  ``EVIDENCE``, the evidence service's readiness.
 - ``AttestedTLS(443, upstream=...)``: TLS relayed to a service that listens on the
   loopback, the only way requests reach it; gate 3 binds its key to the quote.
 
@@ -24,7 +24,7 @@ reproduces its registers), and the verifier below accepts it only because it pas
 """
 
 from tundravm import Image, Package, Service
-from tundravm.components import EVIDENCE, Egress, Network, Tdxs
+from tundravm.components import Egress, Network, Tdxs
 from tundravm.declarative import Resources
 from tundravm.ports import TCP, AttestedTLS
 from tundravm.sources import GoBinary, Local
@@ -44,9 +44,8 @@ app = Service(
         "--listen",
         "127.0.0.1:8080",
     ],
-    requires=[EVIDENCE],
     readiness=TcpProbe(8080),
-    groups=["tdx"],
+    quotes=True,
     state="app",
 )
 
