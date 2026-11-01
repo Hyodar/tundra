@@ -1042,8 +1042,9 @@ $ tundravm deploy gcp --build build/prover/production/<id> --volume data=create:
 $ tundravm deploy status prover-1
 ```
 
-`deploy` publishes the build's disk, starts a TDX VM from it and writes a receipt. `BUILD`
-is never guessed. Settings come from `pyproject.toml` or the environment:
+`deploy` publishes the build's disk, starts a TDX VM from it and writes a receipt; `BUILD`
+is never guessed. `--plan` prints every step and cloud call in order, and runs none.
+Settings come from `pyproject.toml` or the environment:
 
 | Cloud | Table | Keys | Environment |
 |---|---|---|---|
@@ -1053,8 +1054,8 @@ is never guessed. Settings come from `pyproject.toml` or the environment:
 Every volume the image declares needs `--volume NAME=create:SIZE` or
 `--volume NAME=existing:ID`. GCP attaches each as device `tundravm-NAME`. Azure with a
 volume is refused: its data disks are named by LUN, which the image cannot match. The
-receipt records the VM, its address and the firewall rule the management port needs;
-tundravm does not create cloud firewall rules.
+receipt records the VM, its address and the firewall rule the management port needs,
+which tundravm does not create.
 
 ### Attest
 
