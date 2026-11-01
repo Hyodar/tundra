@@ -28,20 +28,6 @@ scratch project:
 
 ## 2. Findings not fixed, ranked
 
-### 2.2 `convert --from mkosi` writes Python that does not parse (S)
-
-`convert.py:237` wraps the package list with `textwrap.wrap`, which breaks on hyphens
-inside a quoted name: `'systemd-` / `cryptsetup'` is a `SyntaxError`, so the converted
-surge tree cannot be loaded. Fix: `break_on_hyphens=False, break_long_words=False`, and
-double quotes as `ruff format` writes them. Off-limits here (`convert.py`).
-
-### 2.3 `convert --from mkosi` converts the wrong image of a tundravm tree (M)
-
-On a tree tundravm wrote, it converts the root QEMU disk (the initrd-ish package list with
-regexes such as `'^libtss2-rc0(t64)?$'`) and reports the OS as `subimage payload
-(Format=disk): no Image slot`. A tree with `mkosi.images/payload/` should convert the
-payload and recognise the main image as the disk tundravm builds itself. `convert.py`.
-
 ### 2.4 `convert --from systemd` keeps the most common unit as text (M)
 
 A unit with `ExecStart=`, `User=`, `Restart=always` and no `Type=` is "kept as text,
@@ -49,13 +35,6 @@ blocked by Service.Type": the implied `Type=simple` blocks the typed shape. The 
 a `tundravm.declarative.Unit`, which no `Image` slot takes. Proposal: treat a missing
 `Type=` as `simple`, and print a `Service(...)` sketch beside the text for what maps.
 `_units/parse.py`, `convert.py`.
-
-### 2.5 `show` leads with the dev profile and never names the image (S)
-
-`show` prints `Image: debian/trixie (x86_64)  profile=dev` first and production second,
-and the image's name appears nowhere in the text; `show BUILD` says
-`demo production (production)`. Proposal: production first, then the other profiles in
-declaration order; the first line `demo  profile=production  debian/trixie x86_64`. `show.py`.
 
 ### 2.8 Left as is
 
@@ -115,6 +94,16 @@ declaration order; the first line `demo  profile=production  debian/trixie x86_6
   for a password unless `sudo -n true` succeeds.
 - `lock --check` without a lockfile was `E_LOCKFILE` (exit 2): it is drift, exit 1, naming
   `tundravm lock`, and the guide's CI section says so.
+- Fixed later on `sdk-truth`, through the end of this list: `convert --from mkosi` broke a
+  quoted package name at its hyphen (2.2); names never break and strings are double-quoted.
+- On a tundravm tree it converted mkosi's `default-initrd` (2.3); it converts the payload and
+  notes the QEMU disk, the cloud wrappers and the generated trees, and surge passes `check`.
+- `show` led with the dev profile and never named the image (2.5); its first line is the image
+  and its file, then production, then the rest as declared.
+- `Service(resources=...)` was reported as set "through the extra= escape hatch": typed
+  keywords are quiet, and `unit-extra` names the keyword a drop-in or raw directive duplicates.
+- A `Service(timer=...)` dropped `environment=`, `resources=`, `shutdown=`, `unit=` and more:
+  it keeps them, and refuses `readiness=`, `expose=`, `credentials=` and a volume `state=`.
 
 ## 4. What held up
 
