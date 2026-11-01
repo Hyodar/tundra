@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 from typing import ClassVar, Literal
+from urllib.parse import urlsplit
 
 from tundravm._location import Located, caller_location
 from tundravm._modules.instance_key import KEY as INSTANCE_KEY
@@ -1022,6 +1023,13 @@ class HttpProbe(Keywords):
                 self,
                 f"url= {self.url!r} holds spaces or quotes.",
                 hint='HttpProbe("http://127.0.0.1:8080/health"): one word, escaped as a URL.',
+            )
+        if not urlsplit(self.url).hostname:
+            raise _fail(
+                self,
+                f"url= {self.url!r} names no host.",
+                hint='HttpProbe("http://127.0.0.1:8080/health"): the address the service '
+                "listens on.",
             )
         _check_span(self, self.timeout, self.interval)
 

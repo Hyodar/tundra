@@ -64,6 +64,26 @@ def test_an_http_probe_polls_the_url_and_brings_curl_in() -> None:
 
 
 @pytest.mark.parametrize(
+    ("url", "refused"),
+    [
+        ("http://127.0.0.1:8080/health", None),
+        ("http://[::1]/", None),
+        ("127.0.0.1:8080/health", "is not an http:// or https:// URL"),
+        ("http://", "names no host"),
+        ("https://:8443/health", "names no host"),
+        ("http://127.0.0.1/a b", "holds spaces or quotes"),
+    ],
+)
+def test_an_http_probe_url_is_one_http_url_with_a_host(url: str, refused: str | None) -> None:
+    if refused is None:
+        assert url in HttpProbe(url).command()[-1]
+        return
+    with pytest.raises(ValidationError, match=refused) as caught:
+        HttpProbe(url)
+    assert "\nfix: " in str(caught.value)
+
+
+@pytest.mark.parametrize(
     ("spans", "sleeps"),
     [
         ({}, "sleep 0.5;"),
