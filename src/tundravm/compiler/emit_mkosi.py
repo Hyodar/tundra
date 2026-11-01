@@ -41,6 +41,9 @@ from tundravm.compiler._split import is_empty, split_profiles
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
     MODULE_SETS_VERSION,
+    TARGET_MODULES,
+    VERITY_MODULES,
+    CloudDrivers,
     ModuleSelection,
     debloat_paths_remove,
     module_selection,
@@ -210,19 +213,6 @@ VerityMatchKey=root
 SplitName=root
 Minimize=best
 """
-VERITY_MODULES: tuple[str, ...] = (
-    # The initrd opens the root through dm-verity (pulls dm_mod, dm_bufio).
-    "dm_verity",
-    # The root file system.
-    "erofs",
-    # systemd.volatile=overlay: the initrd stacks a tmpfs over the read-only root.
-    "overlay",
-    # erofs pulls libcrc32c, whose init fails without a crc32c implementation: its softdep
-    # names the alias, which mkosi skips (as for nftables in the firewall set).
-    "crc32c_generic",
-)
-"""What the verity layout's initrd mounts the root with: Debian builds each as a module, and
-mkosi's kernel-modules initrd holds only the ``KernelModules=`` the payload keeps."""
 VERITY_ROOT_DEVICE = "/dev/mapper/root"
 """The root the verity UKI names (``root=``): the device systemd-veritysetup-generator opens
 for ``roothash=``, so the initrd never waits on ``gpt-auto`` or mounts the bare partition."""
@@ -701,6 +691,84 @@ kconfig_check() {
 }
 dropped=0"""
 
+_DRIVERS_CHECK = """\
+# A built kernel loads no module: every driver a target boots with must be built in
+drivers_report="$KERNEL_CACHE/kernel-drivers.txt"
+: > "$drivers_report"
+driver_required() {
+    local final
+    final=$(sed -n "s/^$1=//p" .config)
+    echo "$1=${final:-n} required by $2" >> "$drivers_report"
+    if [ "${final:-n}" != y ]; then
+        echo "tundravm: kernel-driver-missing: $1 is ${final:-n}, $2 needs it built in:" \\
+            "add $1=y to the kernel's config (Kernel.build(config=...))" >&2
+        return 1
+    fi
+}
+driver_denied() {
+    local final
+    final=$(sed -n "s/^$1=//p" .config)
+    echo "$1=${final:-n} denied" >> "$drivers_report"
+    if [ -n "$final" ]; then
+        echo "tundravm: kernel-driver-denied: $1 is $final, no target offers the device:" \\
+            "add '# $1 is not set' to the kernel's config (Kernel.build(config=...))" >&2
+        return 1
+    fi
+}"""
+
+KERNEL_RECORDS: tuple[str, ...] = (
+    "kernel-config.before",
+    "kernel-config.after",
+    "kernel-drivers.txt",
+)
+"""What a composed kernel's build leaves in mkosi's output directory: its base config before
+the patches, the fragment and ``olddefconfig``, the config it builds with, and the drivers
+check's report (a built kernel's; one with loadable modules has none)."""
+KERNEL_RECORDS_DIRECTORY = "io.tundravm.kernel"
+"""Where under ``$ARTIFACTDIR`` the build script leaves :data:`KERNEL_RECORDS`: mkosi gives a
+build script no ``$OUTPUTDIR``, so a postinst script copies them there."""
+
+
+def kernel_records(kernel: Kernel) -> tuple[str, ...]:
+    """The :data:`KERNEL_RECORDS` *kernel*'s build writes: none unless it is composed."""
+    if not kernel.composed:
+        return ()
+    return KERNEL_RECORDS[:2] if kernel.modules else KERNEL_RECORDS
+
+
+def _render_kernel_records_script(kernel: Kernel) -> str:
+    """The postinst script that copies *kernel*'s records to ``$OUTPUTDIR``."""
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        "# The kernel build's configs and drivers report, for the build directory",
+        *(
+            f'cp "$ARTIFACTDIR/{KERNEL_RECORDS_DIRECTORY}/{name}" "$OUTPUTDIR/{name}"'
+            for name in kernel_records(kernel)
+        ),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def drivers_check(drivers: CloudDrivers) -> str:
+    """The shell lines that assert *drivers* on ``.config``: each required option ``=y``,
+    each denied one unset, one report line each; ``missing=1`` on a miss."""
+    lines = [_DRIVERS_CHECK, "missing=0"]
+    lines += [
+        f"driver_required {option} {shlex.quote(needs)} || missing=1"
+        for option, needs in drivers.required
+    ]
+    lines += [f"driver_denied {option} || missing=1" for option in drivers.denied]
+    return "\n".join(lines)
+
+
+def _built_kernel_check(kernel: Kernel) -> str:
+    """The drivers check of a kernel without loadable modules: every target's
+    :class:`CloudDrivers`, since the payload it boots is every target's; ``""`` with modules.
+    """
+    return "" if kernel.modules else drivers_check(CloudDrivers(tuple(TARGET_MODULES)))
+
 
 def kernel_patch_file(index: int, name: str) -> str:
     """Where a local kernel patch lands in the tree, under ``kernel/patches``."""
@@ -739,6 +807,7 @@ def _composed_configure(kernel: Kernel, files: Sequence[tuple[str, str, tuple[st
         ]
     else:
         lines.append('cp payload/kernel/base.config "$KERNEL_CACHE/src/.config"')
+    lines.append('cp "$KERNEL_CACHE/src/.config" "$KERNEL_CACHE/kernel-config.before"')
     for index, patch in enumerate(kernel.patches, 1):
         if patch.url is not None:
             path, check = _kernel_file(files, patch.url)
@@ -760,14 +829,18 @@ def _composed_configure(kernel: Kernel, files: Sequence[tuple[str, str, tuple[st
         "",
         './scripts/kconfig/merge_config.sh -m .config "$KERNEL_TREE/fragment.config"',
         "make olddefconfig",
+        'cp .config "$KERNEL_CACHE/kernel-config.after"',
         _KCONFIG_CHECK,
         *(
             f"kconfig_check {key} {shlex.quote(value)} || dropped=1"
             for key, value in kernel.options
         ),
-        '[ "$dropped" -eq 0 ] || exit 1',
-        f'make -j"$(nproc)" bzImage{" modules" if kernel.modules else ""} ARCH=x86_64',
     ]
+    if kernel.modules:
+        lines.append('[ "$dropped" -eq 0 ] || exit 1')
+    else:
+        lines += [_built_kernel_check(kernel), '[ "$dropped$missing" = 00 ] || exit 1']
+    lines.append(f'make -j"$(nproc)" bzImage{" modules" if kernel.modules else ""} ARCH=x86_64')
     return "\n".join(lines)
 
 
@@ -791,6 +864,7 @@ def _composed_identity(kernel: Kernel, files: Sequence[tuple[str, str, tuple[str
             for p in kernel.patches
         ),
         f"modules:{kernel.modules}",
+        "drivers:" + _built_kernel_check(kernel),
     ]
     return "\n".join(parts)
 
@@ -858,6 +932,19 @@ def _render_kernel_build_script(
     modules_install = ""
     if kernel.composed and kernel.modules:
         modules_install = ("\n" + " " * 8).join(("", *_MODULES_INSTALL.split("\n")))
+    if kernel.composed:
+        modules_install += ("\n" + " " * 8).join(
+            (
+                "",
+                "",
+                "# The records the postinst script hands to the output directory",
+                f'mkdir -p "$ARTIFACTDIR/{KERNEL_RECORDS_DIRECTORY}"',
+                *(
+                    f'cp "$KERNEL_CACHE/{name}" "$ARTIFACTDIR/{KERNEL_RECORDS_DIRECTORY}/"'
+                    for name in kernel_records(kernel)
+                ),
+            )
+        )
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
         set -euo pipefail
@@ -1482,6 +1569,8 @@ class DeterministicMkosiEmitter:
                 continue
             if commands:
                 write(phase, f"50-{phase}.sh", self._render_script(commands))
+        if kernel and config.kernel and kernel_records(config.kernel):
+            write("postinst", "90-kernel-records.sh", _render_kernel_records_script(config.kernel))
         return {phase: found[phase] for phase in PHASE_ORDER if phase in found}
 
     def _synthetic_postinst_commands(self, profile: ProfileState) -> list[CommandSpec]:

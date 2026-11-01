@@ -8,35 +8,40 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from tundravm.errors import ValidationError
+from tundravm.kernel_modules import DENIED_DRIVERS
 
 from ._component import Composite, component
 from .model import KernelConfig
 
-ATTACK_SURFACE: tuple[str, ...] = tuple(
-    f"CONFIG_{name}"
-    for name in (
-        "AF_KCM BLK_DEV_RBD BONDING BTRFS_FS CEPH_FS CIFS DUMMY EQUALIZER FS_DAX "
-        "FS_ENCRYPTION FS_VERITY FUSE_FS HIBERNATION IA32_EMULATION INET6_AH INET6_ESP "
-        "INET6_IPCOMP INET_AH INET_ESP INET_IPCOMP INFINIBAND IO_URING IO_URING_ZCRX "
-        "IPV6_ILA IPV6_MIP6 IPV6_MROUTE IPV6_MULTIPLE_TABLES IPV6_SEG6_HMAC "
-        "IPV6_SEG6_LWTUNNEL IPV6_SIT IPV6_TUNNEL IPV6_VTI IP_ADVANCED_ROUTER IP_MROUTE "
-        "IP_SCTP ISO9660_FS KVM_XEN L2TP NET_DEVMEM NET_FOU NET_IPGRE_DEMUX NET_IPIP "
-        "NET_IPVTI NET_KEY NFSD NFS_FS NTFS3_FS RDS SMB_SERVER SURFACE_PLATFORMS SUSPEND "
-        "TCP_CONG_BIC TCP_CONG_CDG TCP_CONG_DCTCP TCP_CONG_HSTCP TCP_CONG_HTCP "
-        "TCP_CONG_HYBLA TCP_CONG_ILLINOIS TCP_CONG_LP TCP_CONG_NV TCP_CONG_SCALABLE "
-        "TCP_CONG_VEGAS TCP_CONG_VENO TCP_CONG_WESTWOOD TCP_CONG_YEAH TCP_MD5SIG TIPC "
-        "UDF_FS USERFAULTFD VDPA VHOST VHOST_NET VHOST_SCSI VHOST_VDPA VHOST_VSOCK "
-        "X86_ACPI_CPUFREQ_CPB X86_P4_CLOCKMOD X86_POWERNOW_K8 X86_SPEEDSTEP_CENTRINO "
-        "XDP_SOCKETS XEN XFRM XFRM_ALGO XFRM_USER ZONEFS_FS "
-        # flashbots-images modules/flashbox/common/kernel/config.d/10-bob: AF_ALG
-        # beyond what cryptsetup needs, authencesn (CVE-2026-31431) and unused block devices
-        "CRYPTO_USER_API_RNG CRYPTO_USER_API_AEAD CRYPTO_AUTHENCESN BLK_DEV_DRBD "
-        "BLK_DEV_NBD BLK_DEV_NULL_BLK BLK_DEV_UBLK NET_SCH_TEQL ZRAM"
-    ).split()
+ATTACK_SURFACE: tuple[str, ...] = (
+    tuple(
+        f"CONFIG_{name}"
+        for name in (
+            "AF_KCM BLK_DEV_RBD BONDING BTRFS_FS CEPH_FS CIFS DUMMY EQUALIZER FS_DAX "
+            "FS_ENCRYPTION FS_VERITY FUSE_FS HIBERNATION IA32_EMULATION INET6_AH INET6_ESP "
+            "INET6_IPCOMP INET_AH INET_ESP INET_IPCOMP INFINIBAND IO_URING IO_URING_ZCRX "
+            "IPV6_ILA IPV6_MIP6 IPV6_MROUTE IPV6_MULTIPLE_TABLES IPV6_SEG6_HMAC "
+            "IPV6_SEG6_LWTUNNEL IPV6_SIT IPV6_TUNNEL IPV6_VTI IP_ADVANCED_ROUTER IP_MROUTE "
+            "IP_SCTP ISO9660_FS KVM_XEN L2TP NET_DEVMEM NET_FOU NET_IPGRE_DEMUX NET_IPIP "
+            "NET_IPVTI NET_KEY NFSD NFS_FS NTFS3_FS RDS SMB_SERVER SURFACE_PLATFORMS SUSPEND "
+            "TCP_CONG_BIC TCP_CONG_CDG TCP_CONG_DCTCP TCP_CONG_HSTCP TCP_CONG_HTCP "
+            "TCP_CONG_HYBLA TCP_CONG_ILLINOIS TCP_CONG_LP TCP_CONG_NV TCP_CONG_SCALABLE "
+            "TCP_CONG_VEGAS TCP_CONG_VENO TCP_CONG_WESTWOOD TCP_CONG_YEAH TCP_MD5SIG TIPC "
+            "UDF_FS USERFAULTFD VDPA VHOST VHOST_NET VHOST_SCSI VHOST_VDPA VHOST_VSOCK "
+            "X86_ACPI_CPUFREQ_CPB X86_P4_CLOCKMOD X86_POWERNOW_K8 X86_SPEEDSTEP_CENTRINO "
+            "XDP_SOCKETS XEN XFRM XFRM_ALGO XFRM_USER ZONEFS_FS "
+            # flashbots-images modules/flashbox/common/kernel/config.d/10-bob: AF_ALG
+            # beyond what cryptsetup needs, authencesn (CVE-2026-31431) and unused block devices
+            "CRYPTO_USER_API_RNG CRYPTO_USER_API_AEAD CRYPTO_AUTHENCESN BLK_DEV_DRBD "
+            "BLK_DEV_NBD BLK_DEV_NULL_BLK BLK_DEV_UBLK NET_SCH_TEQL ZRAM"
+        ).split()
+    )
+    + DENIED_DRIVERS
 )
 """Subsystems a confidential VM does not need, turned off: flashbots-images'
 deny list (``shared/kernel/config.d/01-sane-defaults:135-219``, ``02-disable-unneeded``
-and ``modules/flashbox/common/kernel/config.d/10-bob:39-65``)."""
+and ``modules/flashbox/common/kernel/config.d/10-bob:39-65``), and the drivers every built
+kernel's check denies (:data:`tundravm.kernel_modules.DENIED_DRIVERS`)."""
 
 HARDENING: tuple[tuple[str, str, str], ...] = (
     ("CONFIG_SECURITY_LOCKDOWN_LSM", "y", "lockdown: root cannot read or patch kernel memory"),

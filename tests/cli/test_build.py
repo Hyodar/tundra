@@ -16,6 +16,7 @@ from tests.cli.conftest import STARTER, Cli
 from tundravm import builds
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.compiler.emit_mkosi import KERNEL_RECORDS
 from tundravm.declarative import lifecycle
 from tundravm.errors import StateError
 from tundravm.manifest import sha256_file
@@ -364,6 +365,33 @@ def test_the_payloads_package_manifest_is_bound(
     assert json.loads((build.path / "packages.json").read_text()) == payload
     assert build.manifest["sbom"]["bound"] is True
     assert "1:1.37.0-6" in (build.path / "sbom.spdx.json").read_text()
+
+
+def test_a_built_kernels_records_are_named_in_the_manifest(
+    project: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A built kernel's configs before and after ``olddefconfig`` and its drivers report
+    move from mkosi's output directory to ``kernel/``, each in the manifest's ``kernel``."""
+    bake = lifecycle.bake_image
+
+    def baked(*args: Any, **kwargs: Any) -> Any:
+        result, artifacts = bake(*args, **kwargs)
+        for name in KERNEL_RECORDS:
+            (artifacts[0].path.parent / name).write_text(f"{name}\n")
+        return result, artifacts
+
+    monkeypatch.setattr("tundravm.builds.bake_image", baked)
+    assert cli("lock").code == EXIT_OK
+    assert cli("build").code == EXIT_OK
+    build = Build.open((project / "build/demo/latest-production").resolve())
+    kernel = build.manifest["kernel"]
+    assert {key: record["path"] for key, record in kernel.items()} == {
+        "config_before": "kernel/config.before",
+        "config_after": "kernel/config.after",
+        "drivers": "kernel/drivers.txt",
+    }
+    assert (build.path / "kernel/drivers.txt").read_text() == "kernel-drivers.txt\n"
+    assert cli("verify", "latest").code == EXIT_OK
 
 
 CLOUD_ONLY = STARTER.replace("    dev=DevAccess", '    targets=("gcp",),\n    dev=DevAccess')

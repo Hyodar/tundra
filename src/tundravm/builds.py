@@ -59,6 +59,7 @@ from ._source import (
 )
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
+from .compiler.emit_mkosi import KERNEL_RECORDS as emitted_kernel_records
 from .declarative._compile import emit, mkosi_argv
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
@@ -671,6 +672,7 @@ def _assemble(
             _move(Path(artifact.boot_payload), out / mf.UKI, moved)
         for split in sorted(Path(artifact.path).parent.glob("payload.*.raw")):
             _move(split, out / split.name, moved)
+    kernel = _kernel_records(artifacts, out, moved)
     mf.write_canonical(out / mf.MEASUREMENTS, measurements)
     uki = out / mf.UKI
     root_hash = mf.uki_root_hash(uki) if uki.is_file() else None
@@ -726,6 +728,8 @@ def _assemble(
         "unchecked": unchecked,
         "probe": img.probes[profile].manifest() if profile in img.probes else [],
     }
+    if kernel:
+        payload["kernel"] = kernel
     payload["id"] = mf.build_id(payload)
     mf.write_canonical(out / mf.MANIFEST, payload)
     return payload
@@ -756,6 +760,36 @@ def _toolchains(img: Lowered, profile: str, locked: Lock, work: Path) -> dict[st
         pin = spec.pin_from(pins)
         record = None if pin is None else toolchain_record(spec, pin, work / SOURCES_DIRNAME)
         found[spec.key] = {key: record or mf.missing(why)}
+    return found
+
+
+KERNEL_RECORDS = dict(
+    zip(
+        emitted_kernel_records,
+        (
+            ("config_before", "kernel/config.before"),
+            ("config_after", "kernel/config.after"),
+            ("drivers", "kernel/drivers.txt"),
+        ),
+        strict=True,
+    )
+)
+"""A built kernel's records in mkosi's output directory: the manifest's ``kernel`` key for
+each and its path in the build directory."""
+
+
+def _kernel_records(artifacts: Sequence[Artifact], out: Path, moved: set[Path]) -> dict[str, Any]:
+    """Move a built kernel's records into ``kernel/`` of *out*; the manifest's ``kernel``
+    section naming each, empty when the build compiled no kernel."""
+    found: dict[str, Any] = {}
+    for directory in sorted({Path(artifact.path).parent for artifact in artifacts}):
+        for name, (key, rel) in KERNEL_RECORDS.items():
+            source = directory / name
+            if key in found or not source.is_file():
+                continue
+            _mkdir((out / rel).parent)
+            _move(source, out / rel, moved)
+            found[key] = {"path": rel, **mf.file_record(out / rel)}
     return found
 
 

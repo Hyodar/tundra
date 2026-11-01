@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from tundravm.errors import ValidationError
 from tundravm.models import MODULES_PATH, DebloatConfig, ProfileState
 
 MODULE_SETS_VERSION = 2
@@ -100,12 +101,137 @@ FIREWALL_MODULES: tuple[str, ...] = (
 )
 """A variant that installs ``nftables`` (a ``Firewall``), on top of its outputs' sets."""
 
+VERITY_MODULES: tuple[str, ...] = (
+    # The initrd opens the root through dm-verity (pulls dm_mod, dm_bufio).
+    "dm_verity",
+    # The root file system.
+    "erofs",
+    # systemd.volatile=overlay: the initrd stacks a tmpfs over the read-only root.
+    "overlay",
+    # erofs pulls libcrc32c, whose init fails without a crc32c implementation: its softdep
+    # names the alias, which mkosi skips (as for nftables in the firewall set).
+    "crc32c_generic",
+)
+"""What the verity layout's initrd mounts the root with: Debian builds each as a module, and
+mkosi's kernel-modules initrd holds only the ``KernelModules=`` the payload keeps."""
+
 TARGET_MODULES: dict[str, tuple[str, ...]] = {
     "qemu": (),
     "azure": AZURE_MODULES,
     "gcp": GCP_MODULES,
 }
 """Output target -> what it adds to :data:`TDX_GUEST_MODULES`."""
+
+MODULE_OPTIONS: dict[str, str] = {
+    "tdx_guest": "CONFIG_TDX_GUEST_DRIVER",
+    "virtio_net": "CONFIG_VIRTIO_NET",
+    "virtio_blk": "CONFIG_VIRTIO_BLK",
+    "virtio_scsi": "CONFIG_SCSI_VIRTIO",
+    "sd_mod": "CONFIG_BLK_DEV_SD",
+    "nvme": "CONFIG_BLK_DEV_NVME",
+    "efivarfs": "CONFIG_EFIVAR_FS",
+    "hv_vmbus": "CONFIG_HYPERV",
+    "hv_netvsc": "CONFIG_HYPERV_NET",
+    "hv_storvsc": "CONFIG_HYPERV_STORAGE",
+    "hv_utils": "CONFIG_HYPERV_UTILS",
+    "pci_hyperv": "CONFIG_PCI_HYPERV",
+    "mana": "CONFIG_MICROSOFT_MANA",
+    "gve": "CONFIG_GVE",
+    "dm_crypt": "CONFIG_DM_CRYPT",
+    "xts": "CONFIG_CRYPTO_XTS",
+    "aesni_intel": "CONFIG_CRYPTO_AES_NI_INTEL",
+    "algif_skcipher": "CONFIG_CRYPTO_USER_API_SKCIPHER",
+    "ext4": "CONFIG_EXT4_FS",
+    "crc32c_intel": "CONFIG_CRYPTO_CRC32C_INTEL",
+    "nf_tables": "CONFIG_NF_TABLES",
+    "nft_ct": "CONFIG_NFT_CT",
+    "nft_reject_inet": "CONFIG_NFT_REJECT_INET",
+    "crc32c_generic": "CONFIG_CRYPTO_CRC32C",
+    "dm_verity": "CONFIG_DM_VERITY",
+    "erofs": "CONFIG_EROFS_FS",
+    "overlay": "CONFIG_OVERLAY_FS",
+}
+"""Each curated module and the ``CONFIG_*`` option that builds it: a built kernel loads no
+module, so it needs every one ``=y``.
+
+The source of truth is Debian trixie's ``linux`` 6.12 source, the ``obj-$(CONFIG_...) +=
+<module>.o`` line of the Makefile that builds each module, checked against
+``config.amd64_none_cloud-amd64`` of ``linux-config-6.12`` (6.12.57-1), which sets every one
+(``=m``, or ``=y`` for ``nvme``, ``ext4`` and ``crc32c_generic``)."""
+
+GUEST_OPTIONS: tuple[str, ...] = (
+    # The TDX guest support every module of the set stands on.
+    "CONFIG_INTEL_TDX_GUEST",
+    # configfs-tsm, the quote interface (the tsm module tdx_guest pulls).
+    "CONFIG_TSM_REPORTS",
+    # The virtio PCI transport the virtio drivers bind through (built in by Debian).
+    "CONFIG_VIRTIO_PCI",
+)
+"""Options of every TDX guest that are no curated module: Debian builds them in, or a
+module of :data:`TDX_GUEST_MODULES` pulls them."""
+
+DENIED_DRIVERS: tuple[str, ...] = (
+    # A PCIe SSD driver no target offers, reachable by a device the host emulates.
+    "CONFIG_BLK_DEV_PCIESSD_MTIP32XX",
+)
+"""Drivers a built kernel must not carry: no target offers the device, so only a hostile
+host could, and :data:`tundravm.declarative.utils.KernelHardening` turns them off too."""
+
+_FEATURE_MODULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("an encrypted Volume", DISK_MODULES),
+    ("the Firewall", FIREWALL_MODULES),
+    ("RootFS.verity()", VERITY_MODULES),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CloudDrivers:
+    """The options a built kernel needs to boot on every one of *targets*, as a check.
+
+    A built kernel loads no module, so every driver the curated sets keep for a modular
+    kernel must be built in: :attr:`required` are ``(option, who needs it)``, the
+    :data:`MODULE_OPTIONS` of :data:`TDX_GUEST_MODULES` and :data:`GUEST_OPTIONS` (every
+    target), of each target's :data:`TARGET_MODULES` and of the features an image may
+    switch on (:data:`DISK_MODULES`, :data:`FIREWALL_MODULES`, :data:`VERITY_MODULES`).
+    :attr:`denied` are :data:`DENIED_DRIVERS`. The kernel build asserts both after
+    ``olddefconfig``: it requests none of them, so a miss names what the config must say.
+    """
+
+    targets: Sequence[str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "targets", tuple(self.targets))
+        unknown = [target for target in self.targets if target not in TARGET_MODULES]
+        if unknown:
+            raise ValidationError(
+                f"CloudDrivers: {', '.join(unknown)} is not a target.",
+                hint=f"Name targets among {', '.join(TARGET_MODULES)}.",
+            )
+
+    @property
+    def required(self) -> tuple[tuple[str, str], ...]:
+        """Each required option (sorted) and who needs it, comma-separated."""
+        needs: dict[str, list[str]] = {}
+
+        def add(options: Iterable[str], who: str) -> None:
+            for option in options:
+                found = needs.setdefault(option, [])
+                if who not in found:
+                    found.append(who)
+
+        for target in self.targets:
+            add(GUEST_OPTIONS, target)
+            add((MODULE_OPTIONS[m] for m in TDX_GUEST_MODULES), target)
+            add((MODULE_OPTIONS[m] for m in TARGET_MODULES[target]), target)
+        for who, modules in _FEATURE_MODULES:
+            add((MODULE_OPTIONS[m] for m in modules), who)
+        return tuple((option, ", ".join(needs[option])) for option in sorted(needs))
+
+    @property
+    def denied(self) -> tuple[str, ...]:
+        """The options that must stay unset."""
+        return DENIED_DRIVERS
+
 
 KernelModules = tuple[str, ...] | Literal["all"]
 """``Debian(kernel_modules=...)``: ``"all"`` keeps every module, a tuple adds to the sets."""
@@ -218,14 +344,19 @@ def debloat_paths_remove(
 
 __all__ = [
     "AZURE_MODULES",
+    "DENIED_DRIVERS",
     "DISK_MODULES",
     "FIREWALL_MODULES",
     "GCP_MODULES",
+    "GUEST_OPTIONS",
     "MODULE_NAME",
+    "MODULE_OPTIONS",
     "MODULE_SETS_VERSION",
     "NO_MODULES",
     "TARGET_MODULES",
     "TDX_GUEST_MODULES",
+    "VERITY_MODULES",
+    "CloudDrivers",
     "KernelModules",
     "ModuleSelection",
     "curated_modules",

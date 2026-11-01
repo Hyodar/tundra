@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import pytest
 
 from tests.helpers import conf_list
+from tundravm.compiler.emit_mkosi import KERNEL_RECORDS, drivers_check
 from tundravm.declarative import (
     Debian,
     DebianConfig,
@@ -29,6 +31,7 @@ from tundravm.declarative._lowered import kernel_payload
 from tundravm.declarative.model import KERNEL_BUILD_PACKAGES
 from tundravm.declarative.utils import KernelHardening
 from tundravm.errors import ValidationError
+from tundravm.kernel_modules import CloudDrivers
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
@@ -140,6 +143,7 @@ def test_the_script_patches_in_order_merges_and_checks(base: Path, tmp_path: Pat
     assert (
         '    ./scripts/kconfig/merge_config.sh -m .config "$KERNEL_TREE/fragment.config"\n'
         "    make olddefconfig\n"
+        '    cp .config "$KERNEL_CACHE/kernel-config.after"\n'
         "    # Kconfig drops a requested option whose dependencies are unmet: "
         "check each survived\n"
         "    kconfig_check() {\n"
@@ -155,10 +159,16 @@ def test_the_script_patches_in_order_merges_and_checks(base: Path, tmp_path: Pat
         "    kconfig_check CONFIG_MODULES n || dropped=1\n"
         "    kconfig_check CONFIG_CMDLINE '\"quiet\"' || dropped=1\n"
         "    kconfig_check CONFIG_XFS_FS n || dropped=1\n"
-        '    [ "$dropped" -eq 0 ] || exit 1\n'
+        + textwrap.indent(drivers_check(CloudDrivers(("qemu", "azure", "gcp"))), "    ")
+        + "\n"
+        '    [ "$dropped$missing" = 00 ] || exit 1\n'
         '    make -j"$(nproc)" bzImage ARCH=x86_64\n'
     ) in script
     assert "modules_install" not in script
+    records = (out / "payload/mkosi.postinst.d/90-kernel-records.sh").read_text()
+    for name in KERNEL_RECORDS:
+        assert f'cp "$KERNEL_CACHE/{name}" "$ARTIFACTDIR/io.tundravm.kernel/"' in script
+        assert f'"$ARTIFACTDIR/io.tundravm.kernel/{name}" "$OUTPUTDIR/{name}"' in records
 
 
 def test_a_debian_base_is_locked_fetched_and_extracted(tmp_path: Path) -> None:

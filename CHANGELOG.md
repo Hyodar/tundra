@@ -32,6 +32,7 @@ Breaking changes are marked **Breaking**.
 - On GCP, Google's own udev rules and `google_nvme_id` name NVMe disks, the hostname comes from the metadata server and load-balancer forwarded IPs are routed; each unit is inert off GCE.
 - On Azure, the image installs the `curl` its provisioning report needs, so a production build without a probe still reports ready.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
+- `KernelHardening()` also turns off `BLK_DEV_PCIESSD_MTIP32XX`, a driver no target needs, which every built kernel's check denies.
 - `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`.
 - `tundravm.testing`: `plan(image)` or `plan(component)`, `assert_clean`, `assert_diagnostic`, `assert_tree`, `read_lock`, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe`, `run_cli`, `image_file`.
@@ -65,6 +66,7 @@ Breaking changes are marked **Breaking**.
 - Every build carries `measurements.json` with a `tundravm.policy/2` policy per record, an SPDX SBOM, and `observations.json`.
 - `build --reproduce`, `--sign KEY`, `--offline` and `verify [--rebuild]` check the bytes anywhere.
 - The ESP is a fixed 128 MiB FAT32; a UKI over 126 MiB fails with both sizes and `RootFS.verity()` as the fix.
+- A `Kernel.build` kernel fails after `olddefconfig` when a driver the qemu, azure or gcp target needs is not `=y`, naming the option and the line to add; `kernel/` of the build directory keeps its config before and after, named in the manifest.
 
 ### Sources and toolchains
 

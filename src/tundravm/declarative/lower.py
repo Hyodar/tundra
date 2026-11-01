@@ -37,9 +37,9 @@ from tundravm._modules import probe as probe_module
 from tundravm._modules.probe import Probe
 from tundravm._options import MkosiOptions
 from tundravm._source import DebFile, HttpSource
-from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY, VERITY_MODULES
+from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
-from tundravm.kernel_modules import module_selection
+from tundravm.kernel_modules import VERITY_MODULES, module_selection
 from tundravm.models import Kernel as FluentKernel
 from tundravm.models import KernelPatchSpec, OutputTarget, ProfileState, RecipeState, unit_name
 
