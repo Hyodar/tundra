@@ -180,8 +180,8 @@ def _listing(kind: str) -> str:
 
 
 def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
-    """What a service edit cannot carry: a different built binary, a timer switched on or
-    off, a state moved onto or off a volume."""
+    """What a service edit cannot carry: a different built binary, a credential bound or
+    unbound, a timer switched on or off, a state moved onto or off a volume."""
     from ._storage import VolumeDirectory
 
     if edited.binaries() != value.binaries():
@@ -189,6 +189,18 @@ def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
             f"The edit of {ref} changes the built binary it runs, whose build the image "
             "already declares.",
             hint="Remove the service and add one that runs the new binary in add=.",
+        )
+    before = {binding.name: binding for binding in value.bindings}
+    after = {binding.name: binding for binding in edited.bindings}
+    if after != before:
+        changed = sorted(
+            name for name in before.keys() | after.keys() if before.get(name) != after.get(name)
+        )
+        raise ValidationError(
+            f"The edit of {ref} changes the credentials it binds ({', '.join(changed)}), and "
+            "each binding adds the delivery units the service waits for.",
+            hint="Name the secret in the image's own Service (argv=[..., secret]), or remove "
+            "the service and add one that reads it in add=.",
         )
     if (edited.timer is None) != (value.timer is None):
         raise ValidationError(

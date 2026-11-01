@@ -53,16 +53,17 @@ class Built(Protocol):
         """The absolute path the binary is installed at."""
 
 
-type Argument = str | Endpoint | Built
-"""What an argv element may be: a word, an :class:`Endpoint` rendered as its URL, or
-a built binary as the first element."""
+type Binding = Credential | Secret
+"""What ``credentials=`` takes: a delivered :class:`Secret`, or a fixed-path credential."""
+
+type Argument = str | Endpoint | Binding | Built
+"""What an argv element may be: a word, an :class:`Endpoint` rendered as its URL, a
+:class:`Secret` (or :class:`Credential`) rendered as the path the service reads it at,
+which binds it, or a built binary as the first element."""
 
 type Requirement = ServiceReady | ComponentReady | BootReady | Endpoint | ServiceRef | UnitOutput
 """What ``requires=`` takes: a readiness handle, an export that carries one, or a setup
 task's ``task.output(path)`` (start after it, and only if it wrote *path*)."""
-
-type Binding = Credential | Secret
-"""What ``credentials=`` takes: a delivered :class:`Secret`, or a fixed-path credential."""
 
 type Sandbox = Hardening | Literal["static", "jit", "node", "python", "dotnet", "relaxed"]
 """What ``hardening=`` takes: a preset by name (``Hardening.preset(name)``, or
@@ -134,9 +135,11 @@ class Service(Located):
 
     ``state=`` is a ``StateDirectory=`` name under ``/var/lib`` (volatile, like the rest
     of the root) or a directory on a persistent volume (``data.directory("app")``), which
-    the service then waits for. ``credentials=[jwt]`` binds delivered secrets: the service
-    waits for each required one and reads it at ``jwt.path``; an argv word naming a
-    credential the service does not bind is refused.
+    the service then waits for. A :class:`Secret` in argv (``[app, "--jwt", jwt]``) or in
+    ``environment=`` (``{"JWT_FILE": jwt}``) is the path the service reads it at, and
+    binds it: the service waits for a required one. ``credentials=[jwt]`` binds one the
+    program finds otherwise (a word that embeds ``jwt.path``, a config file); an argv
+    word naming a credential the service does not bind is refused.
 
     ``timer=Every("1h")`` (or ``Calendar(...)``) runs it as a scheduled oneshot with every
     other keyword kept; what only a long-lived service has (``socket=``, ``readiness=``,
@@ -162,7 +165,9 @@ class Service(Located):
     user: str | None = None
     groups: Sequence[str] = ()
     working_directory: str | None = None
-    environment: Mapping[str, str] = field(default_factory=FrozenMap)
+    environment: Mapping[str, str | Binding] = field(default_factory=FrozenMap)
+    """Each value one line of text, or a :class:`Secret` (or :class:`Credential`), which
+    binds it and renders as the path the service reads it at."""
     logs: str | None = None
     runtime: str | None = None
 
@@ -176,6 +181,7 @@ class Service(Located):
         self._check_argv()
         self._check_requires()
         self._check_values()
+        self._check_bindings()
 
     def _freeze(self) -> None:
         for name in ("argv", "requires", "credentials", "expose", "groups"):
@@ -202,25 +208,14 @@ class Service(Located):
                     "binary such as GoBinary(...).",
                 )
         for argument in self.argv[1:]:
-            if not isinstance(argument, (str, Endpoint)):
+            if not isinstance(argument, (str, Endpoint, Secret, Credential)):
                 raise _fail(
                     self,
                     f"{self.name!r} argv holds {argument!r}, which is not a word.",
-                    hint="Pass strings, or an Endpoint a component exported.",
+                    hint="Pass strings, an Endpoint a component exported, or a Secret.",
                 )
             if isinstance(argument, str) and "\n" in argument:
                 raise _fail(self, f"{self.name!r} argv holds a multi-line argument.")
-        bound = {binding.name for binding in self.credentials}
-        for argument in self.argv:
-            if not isinstance(argument, str):
-                continue
-            for name in CREDENTIAL_REFERENCE.findall(argument):
-                if name not in bound:
-                    raise _fail(
-                        self,
-                        f"{self.name!r} reads credential {name!r} it does not bind.",
-                        hint=f"Pass credentials=[{name}] (the Secret) alongside its path.",
-                    )
 
     def _check_requires(self) -> None:
         for item in self.requires:
@@ -322,10 +317,44 @@ class Service(Located):
             if not isinstance(group, str) or not group:
                 raise _fail(self, f"groups= holds {group!r}, not a group name.")
         for key, value in self.environment.items():
+            if isinstance(key, str) and isinstance(value, (Secret, Credential)):
+                continue
             if not isinstance(key, str) or not isinstance(value, str) or "\n" in value:
-                raise _fail(self, f"environment[{key!r}] must be one line of text.")
+                raise _fail(
+                    self,
+                    f"environment[{key!r}] must be one line of text.",
+                    hint="Pass a string, or a Secret to name the path it is read at.",
+                )
         if self.timer is not None:
             self._check_timer()
+
+    def _check_bindings(self) -> None:
+        """One credential per name, and every argv word that names one names a bound one."""
+        found: dict[str, Binding] = {}
+        for binding in (*self.credentials, *self._references()):
+            known = found.setdefault(binding.name, binding)
+            if known != binding:
+                raise _fail(
+                    self,
+                    f"{self.name!r} binds two different credentials named {binding.name!r}.",
+                    hint="Declare the Secret once and pass that value everywhere it is read.",
+                )
+        for argument in self.argv:
+            if not isinstance(argument, str):
+                continue
+            for name in CREDENTIAL_REFERENCE.findall(argument):
+                if name not in found:
+                    raise _fail(
+                        self,
+                        f"{self.name!r} reads credential {name!r} it does not bind.",
+                        hint="Pass the Secret itself as the argument (argv=[..., secret]), or "
+                        "credentials=[secret] beside a word that embeds secret.path.",
+                    )
+
+    def _references(self) -> tuple[Binding, ...]:
+        """The credentials argv and ``environment=`` name, in order."""
+        values = (*self.argv[1:], *self.environment.values())
+        return tuple(item for item in values if isinstance(item, (Secret, Credential)))
 
     def _check_timer(self) -> None:
         """A timer starts a run that exits when done: what only a long-lived service has is
@@ -356,6 +385,15 @@ class Service(Located):
                     f"{self.name!r} runs on a timer, so {name}= does not apply: {why}.",
                     hint=f"Drop {name}=, or drop timer= to run it as a long-lived service.",
                 )
+        referenced = self._references()
+        if referenced:
+            raise _fail(
+                self,
+                f"{self.name!r} runs on a timer, so it cannot read credential "
+                f"{referenced[0].name!r}: secret delivery orders long-lived services only.",
+                hint="Drop it from argv= and environment=, or drop timer= to run it as a "
+                "long-lived service.",
+            )
 
     @property
     def unit_name(self) -> str:
@@ -397,7 +435,7 @@ class Service(Located):
 
     def command(self) -> tuple[str, ...]:
         """The argv as words: a built first element becomes its installed path, an
-        :class:`Endpoint` its URL."""
+        :class:`Endpoint` its URL, a credential ``${CREDENTIALS_DIRECTORY}/<name>``."""
         words: list[str] = []
         for item in self.argv:
             built = executable_of(item)
@@ -405,9 +443,28 @@ class Service(Located):
                 words.append(built)
             elif isinstance(item, Endpoint):
                 words.append(item.url)
+            elif isinstance(item, (Secret, Credential)):
+                words.append("${CREDENTIALS_DIRECTORY}/" + item.name)
             else:
                 words.append(str(item))
         return tuple(words)
+
+    def variables(self) -> dict[str, str]:
+        """``environment=`` as text: a credential becomes ``%d/<name>``, systemd's
+        specifier for the directory the service reads it in."""
+        return {
+            key: f"%d/{value.name}" if isinstance(value, (Secret, Credential)) else value
+            for key, value in self.environment.items()
+        }
+
+    @property
+    def bindings(self) -> tuple[Binding, ...]:
+        """Every credential this service binds: ``credentials=``, then each one its argv or
+        ``environment=`` names."""
+        found = {binding.name: binding for binding in self.credentials}
+        for binding in self._references():
+            found.setdefault(binding.name, binding)
+        return tuple(found.values())
 
     @property
     def state_directory(self) -> str | None:
@@ -421,4 +478,4 @@ class Service(Located):
     @property
     def secrets(self) -> tuple[Secret, ...]:
         """The delivered secrets this service binds."""
-        return tuple(item for item in self.credentials if isinstance(item, Secret))
+        return tuple(item for item in self.bindings if isinstance(item, Secret))

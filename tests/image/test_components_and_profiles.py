@@ -21,6 +21,7 @@ from tundravm.components import (
 )
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
+from tundravm.secrets import Secret
 from tundravm.systemd import Resources, TcpProbe
 from tundravm.testing import plan
 
@@ -228,6 +229,7 @@ def test_a_profile_removes_a_service_by_reference() -> None:
         ("app", {"exec_start": ["/usr/bin/app"]}, "sets: argv, requires, state, expose"),
         ("app", {"readiness": TcpProbe(8080)}, "cannot set Service readiness="),
         ("app", {"expose": [TCP(8080)]}, "changes nothing"),
+        ("app", {"argv": ["/usr/bin/app", Secret("jwt")]}, "changes the credentials it binds"),
     ],
 )
 def test_a_profile_edits_a_service_by_its_public_keywords(

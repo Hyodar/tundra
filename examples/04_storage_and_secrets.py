@@ -13,11 +13,11 @@ Teaches:
 - ``volume.directory("x")``: a directory on the volume a service keeps its state in. The
   service waits until the volume is open and the directory exists, owned by it.
 - ``Secret(name)``: a value delivered after attestation (``tundravm secrets deliver``) and
-  never written into the image. A service binds it with ``credentials=[...]``, waits for
-  it when it is required, and reads it at ``secret.path`` (``${CREDENTIALS_DIRECTORY}/
-  <name>``), a systemd credential. ``required=False`` starts without it (an empty
-  credential until it arrives); ``rotation="restart"`` restarts the service when it is
-  delivered again, ``"none"`` leaves it running.
+  never written into the image. A service that names it in its argv binds it, waits for
+  it when it is required, and reads it at the path the argument renders as
+  (``${CREDENTIALS_DIRECTORY}/<name>``), a systemd credential. ``required=False`` starts
+  without it (an empty credential until it arrives); ``rotation="restart"`` restarts the
+  service when it is delivered again, ``"none"`` leaves it running.
 - ``/etc/tundravm/runtime.json``: what the image records for the tools that deliver.
 
     tundravm show examples/04_storage_and_secrets.py
@@ -54,9 +54,8 @@ image = Image(
     services=[
         Service(
             "app",
-            [APP, "--token-file", token.path, "--flags-file", flags.path],
+            [APP, "--token-file", token, "--flags-file", flags],
             state=data.directory("app"),
-            credentials=[token, flags],
         ),
         Service(
             "indexer",

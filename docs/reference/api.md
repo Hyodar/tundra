@@ -281,7 +281,7 @@ Service(
     user: str | None = None,
     groups: Sequence[str] = (),
     working_directory: str | None = None,
-    environment: Mapping[str, str] = FrozenMap(),
+    environment: Mapping[str, str | Binding] = FrozenMap(),
     logs: str | None = None,
     runtime: str | None = None,
 )
@@ -292,7 +292,8 @@ A program the image runs, as its own user, in a tested sandbox.
 | Member | Does |
 |---|---|
 | `Service.binaries() -> tuple[Any, ...]` | The built binary declarations this service's argv pulls in. |
-| `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL. |
+| `Service.bindings` | Every credential this service binds: `credentials=`, then each one its argv or `environment=` names. |
+| `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL, a credential `${CREDENTIALS_DIRECTORY}/<name>`. |
 | `Service.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where this service answers on the loopback, with its readiness: what an ingress fronts (`upstream=app.endpoint(8080)`) or a dependent requires. It opens no port and changes no listen address. |
 | `Service.probe_unit` | The bounded probe unit a dependent waits for, when readiness needs one. |
 | `Service.ready` | "This service is ready": what another service's `requires=` takes. |
@@ -301,6 +302,7 @@ A program the image runs, as its own user, in a tested sandbox.
 | `Service.state_directory` | The working directory a `state=` implies. |
 | `Service.stem` | The unit name without its suffix: the generated user's name. |
 | `Service.unit_name` | The `.service` unit this lowers to. |
+| `Service.variables() -> dict[str, str]` | `environment=` as text: a credential becomes `%d/<name>`, systemd's specifier for the directory the service reads it in. |
 
 ### `Tree`
 

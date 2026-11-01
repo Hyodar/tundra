@@ -513,7 +513,7 @@ class _Lowering:
         requires = (*self.required_units(item), *self.runtime.waits(item))
         shutdown = item.shutdown
         state = item.state
-        environment = dict(item.environment)
+        environment = item.variables()
         groups = list(item.groups)
         working = item.working_directory
         write: tuple[str, ...] = ()
@@ -531,7 +531,7 @@ class _Lowering:
             groups=tuple(groups),
             working_dir=working,
             env=environment,
-            credentials=_credentials(tuple(item.credentials)),
+            credentials=_credentials(item.bindings),
             state=None if isinstance(state, VolumeDirectory) else state,
             write_paths=write,
             needs=_outputs(item),
@@ -561,7 +561,7 @@ class _Lowering:
             groups=tuple(item.groups),
             state=item.state,
             working_dir=item.working_directory,
-            env=dict(item.environment),
+            env=item.variables(),
             logs=item.logs,
             runtime=item.runtime,
             after=requires,

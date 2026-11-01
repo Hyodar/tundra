@@ -269,9 +269,37 @@ def test_an_optional_secret_starts_the_service_without_it() -> None:
     assert entries["api-token"]["units"] == ["app.service"]
 
 
-def test_secret_bindings_are_checked() -> None:
-    with pytest.raises(ValidationError, match="does not bind"):
-        Service("x", ["/usr/bin/x", token.path])
+@pytest.mark.parametrize(
+    ("argv", "environment", "expected"),
+    [
+        (["--token", token], {}, ("ExecStart", "--token ${CREDENTIALS_DIRECTORY}/api-token")),
+        ([], {"TOKEN_FILE": token}, ("Environment", "TOKEN_FILE=%d/api-token")),
+        ([token.path], {}, "Pass the Secret itself as the argument"),
+        ([token], {"TOKEN": Secret("api-token", required=False)}, "two different credentials"),
+    ],
+)
+def test_a_secret_named_in_argv_or_environment_binds_itself(
+    argv: list[object], environment: dict[str, object], expected: tuple[str, str] | str
+) -> None:
+    def make() -> Service:
+        return Service("x", ["/usr/bin/x", *argv], environment=environment)  # type: ignore[list-item, arg-type]
+
+    if isinstance(expected, str):
+        with pytest.raises(ValidationError) as caught:
+            make()
+        assert expected in str(caught.value)
+        return
+    planned = plan(Image("x", services=[make()]), "production")
+    unit = planned.service("x")
+    key, text = expected
+    assert text in " ".join(unit.values("Service", key))
+    assert unit.values("Service", "LoadCredential") == (
+        "api-token:/run/tundravm/credentials/api-token",
+    )
+    assert "credential-api-token.service" in _after(planned, "x.service")
+
+
+def test_secret_values_are_checked() -> None:
     with pytest.raises(ValidationError, match="rotation"):
         Secret("x", rotation="reload")  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="https://"):

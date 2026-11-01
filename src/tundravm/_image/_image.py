@@ -142,7 +142,7 @@ class Image(Located):
       ``BrokerKey(...)``): a service binds a directory on one with
       ``state=volume.directory("x")`` and waits for it.
     - Secrets delivered after attestation and read as systemd credentials
-      (``Service(credentials=[jwt])``); nothing is written into the image.
+      (``Service(name, [app, "--jwt", jwt])``); nothing is written into the image.
     - ``ingress=[AttestedTLS(port, upstream=...)]`` (or ``TLS``): the only path from
       outside to a service that listens on the loopback.
     - ``rootfs=RootFS.verity()``: a dm-verity erofs root instead of the initrd.
