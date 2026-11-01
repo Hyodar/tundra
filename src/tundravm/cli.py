@@ -37,9 +37,10 @@ from . import manifest as mf
 from . import templates as scaffold
 from ._describe import describe
 from ._reporting import TextReporter
+from ._source import SOURCES_DIRNAME, CargoBuild, GoBuild, SourceBuild, checkout_rust_toolchain
 from .attestation import render_attestation
 from .backends.base import BuildBackend
-from .capabilities import AREAS, Capability, Host, capabilities, failed
+from .capabilities import AREAS, Capability, Host, ToolchainNeeds, capabilities, failed
 from .check import (
     explain,
     explain_command,
@@ -65,7 +66,7 @@ from .declarative.lifecycle import (
 from .declarative.resolve import resolve
 from .diagnostics import Diagnostic
 from .diff import diff_against
-from .errors import TdxError, ValidationError
+from .errors import SourceError, TdxError, ValidationError
 from .formats import in_github_actions, workflow_command
 from .project import RESOLUTION_HELP, Settings, settings
 from .recipe import RecipeFile, load_file
@@ -692,9 +693,12 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor",
         _cmd_doctor,
         "Report what this host can build, run, deploy and verify.",
-        "One row per capability: ready, blocked (with the fix), unavailable or unsupported.\n"
-        "--for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1 when a\n"
-        "build row (or, with --for, a row of that area) is blocked.",
+        "One row per capability: ready, blocked (with the fix), optional, unavailable or\n"
+        "unsupported. --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1\n"
+        "when a build row (or, with --for, a row of that area) is blocked. build:go and\n"
+        "build:rustup block only when IMAGE has a Go source, or a Cargo source that pins a\n"
+        "Rust toolchain; without an image they are optional.",
+        image,
         as_json,
     )
     doctor.add_argument(
@@ -1520,8 +1524,8 @@ def _cmd_convert(args: argparse.Namespace, out: TextIO) -> int:
 # ── doctor ───────────────────────────────────────────────────────────────
 
 
-def _rows(area: str | None, host: Host) -> list[Capability]:
-    rows = list(capabilities(host, backend=None, areas=AREAS))
+def _rows(area: str | None, host: Host, needs: ToolchainNeeds | None) -> list[Capability]:
+    rows = list(capabilities(host, backend=None, areas=AREAS, needs=needs))
     if area is None:
         return rows
     if area == "build":
@@ -1539,12 +1543,16 @@ def doctor(
     runner: ProbeRunner | None = None,
     host: Host | None = None,
     as_json: bool = False,
+    needs: ToolchainNeeds | None = None,
 ) -> int:
-    """Print one row per capability (of *area*); exit 1 when a relevant one is blocked."""
+    """Print one row per capability (of *area*); exit 1 when a relevant one is blocked.
+
+    *needs* is what the image builds with (:func:`_toolchain_needs`); ``None`` without one.
+    """
     facts = host if host is not None else Host()
     if runner is not None:
         facts.runner = runner
-    rows = _rows(area, facts)
+    rows = _rows(area, facts, needs)
     if as_json:
         payload = {
             "rows": [{"name": r.name, "verdict": r.verdict, "detail": r.detail} for r in rows]
@@ -1559,7 +1567,41 @@ def doctor(
 
 
 def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
-    return doctor(out, area=args.area, runner=args.runner, as_json=args.json)
+    found = _settings(args)
+    needs = None if found.image is None else _toolchain_needs(_loaded(args, found), found)
+    return doctor(out, area=args.area, runner=args.runner, as_json=args.json, needs=needs)
+
+
+def _toolchain_needs(loaded: RecipeFile, found: Settings) -> ToolchainNeeds:
+    """The image's Go sources, and its Cargo sources that pin a Rust toolchain.
+
+    A Cargo source pins one when its checkout in the workspace says so; one not checked out
+    yet (or whose toolchain file the build would refuse) counts as needing ``rustup``.
+    """
+    img = _lowered(loaded, found)
+    locked = _locked(found)
+    pins = {} if locked is None else {f.name: f for f in locked.lockfile.fetches if f.name}
+    checkouts = found.build / img.image_id / builds.WORK / SOURCES_DIRNAME
+    go: list[str] = []
+    rustup: list[str] = []
+    for spec in img.lock_sources().values():
+        if not isinstance(spec, SourceBuild):
+            continue
+        if isinstance(spec.build, GoBuild):
+            go.append(spec.key)
+        elif isinstance(spec.build, CargoBuild) and _may_pin(spec, spec.pin_from(pins), checkouts):
+            rustup.append(spec.key)
+    return ToolchainNeeds(tuple(go), tuple(rustup))
+
+
+def _may_pin(spec: SourceBuild, pin: str | None, checkouts: Path) -> bool:
+    checkout = None if pin is None else checkouts / spec.pin_dir(pin)
+    if checkout is None or not checkout.is_dir():
+        return True
+    try:
+        return checkout_rust_toolchain(spec, checkout) is not None
+    except SourceError:
+        return True
 
 
 __all__ = [

@@ -106,7 +106,11 @@ pinned to the same Debian snapshot. When the kernel refuses unprivileged user na
 `lima` on Apple Silicon emulates the x86-64 guest with QEMU TCG. The bytes are the same
 and the build is several times slower. A build never switches backend on failure.
 
-`doctor` says what this host can do, one row per capability, each failure with its fix:
+`doctor` says what this host can do, one row per capability, each failure with its fix.
+`build:go` and `build:rustup` block only when the image (`IMAGE`, else the project's) has
+a Go source, or a Cargo source that pins a Rust toolchain (one not checked out yet counts);
+otherwise they say `optional: not needed by this image`, and without an image a missing
+tool is `optional`. Neither fails `doctor` then:
 
 ```console
 $ tundravm doctor
@@ -116,7 +120,7 @@ $ tundravm doctor --for build
 ```text
 build:x86-64     ready (mkosi 27.1, sudo, which may ask for a password, as this host has no unprivileged user namespaces)
 build:go         ready (go1.24.4, which fetches each Go source's modules and the toolchain its go.mod names for the offline build (every image's Tdxs is one))
-build:rustup     ready (rustup 1.28.2, which installs the toolchain each Cargo source's rust-toolchain.toml pins for the offline build)
+build:rustup     optional: not needed by this image
 run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
 run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled
 deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI

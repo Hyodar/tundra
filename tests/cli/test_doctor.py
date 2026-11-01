@@ -7,13 +7,21 @@ import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.helpers import run_main
 from tundravm.backends.local_linux import DEBIAN_KEYRING
-from tundravm.capabilities import GO_PURPOSE, RUSTUP_PURPOSE, Host, capabilities, default_backend
+from tundravm.capabilities import (
+    GO_PURPOSE,
+    RUSTUP_PURPOSE,
+    Host,
+    ToolchainNeeds,
+    capabilities,
+    default_backend,
+)
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, doctor
 from tundravm.toolchain import MKOSI_PIN
 
@@ -117,32 +125,97 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
     assert rows[8].startswith("verify:gcp       ready (built-in replay, GCP firmware table ")
 
 
+NO_GO = f"no go on PATH, which {GO_PURPOSE}: install Go 1.21+"
+NO_RUSTUP = (
+    f"no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
+    "(https://rustup.rs, or the Debian package rustup)"
+)
+NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("raiko",))
+
+
 @pytest.mark.parametrize(
-    ("tool", "version", "row"),
+    ("tool", "version", "needs", "row", "code"),
     [
-        ("go", None, f"blocked: no go on PATH, which {GO_PURPOSE}: install Go 1.21+"),
+        ("go", None, NEEDS_BOTH, f"blocked: {NO_GO}", EXIT_FAILURE),
         (
             "go",
             "go version go1.19.8 linux/amd64",
+            NEEDS_BOTH,
             f"blocked: go1.19.8 predates toolchain switching (Go 1.21), and go {GO_PURPOSE}: "
             "install Go 1.21+",
+            EXIT_FAILURE,
         ),
+        ("rustup", None, NEEDS_BOTH, f"blocked: {NO_RUSTUP}", EXIT_FAILURE),
+        ("go", None, None, f"optional: {NO_GO}", EXIT_OK),
+        ("rustup", None, None, f"optional: {NO_RUSTUP}", EXIT_OK),
         (
             "rustup",
             None,
-            f"blocked: no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
-            "(https://rustup.rs, or the Debian package rustup)",
+            ToolchainNeeds(go=("tdxs",)),
+            "optional: not needed by this image",
+            EXIT_OK,
+        ),
+        (
+            "go",
+            "go version go1.24.4 linux/amd64",
+            ToolchainNeeds(),
+            "optional: not needed by this image",
+            EXIT_OK,
         ),
     ],
-    ids=["no-go", "too-old-go", "no-rustup"],
+    ids=[
+        "no-go",
+        "too-old-go",
+        "no-rustup",
+        "no-image-go",
+        "no-image-rustup",
+        "unneeded",
+        "unneeded-present",
+    ],
 )
-def test_the_host_toolchain_rows_say_what_each_is_for(
-    tool: str, version: str | None, row: str
+def test_the_host_toolchain_rows_block_only_for_an_image_that_needs_them(
+    tool: str, version: str | None, needs: ToolchainNeeds | None, row: str, code: int
 ) -> None:
+    """build:go and build:rustup say what each tool is for, and block only when the image's
+    sources need it; without an image a missing tool is optional."""
     tools = {k: v for k, v in TOOLS.items() if k != tool}
     host, _ = _host(tools if version is None else {**tools, tool: version}, files=LINUX_FILES)
-    assert _rows(host)[f"build:{tool}"] == row
-    assert doctor(io.StringIO(), area="build", host=host) == EXIT_FAILURE
+    assert _rows(host, needs=needs)[f"build:{tool}"] == row
+    assert doctor(io.StringIO(), area="build", host=host, needs=needs) == code
+
+
+PROBE = """
+from dataclasses import replace
+
+from tundravm import Service
+from tundravm.sources import CargoBinary, Git
+
+probe = CargoBinary("probe", Git("https://example.com/probe.git", "b" * 40))
+image = replace(image, services=[*image.services, Service("probe", [probe])])
+"""
+
+
+@pytest.mark.parametrize(
+    ("added", "row", "code"),
+    [
+        ("", "optional: not needed by this image", EXIT_OK),
+        (PROBE, f"blocked: {NO_RUSTUP}", EXIT_FAILURE),
+    ],
+    ids=["no-cargo-source", "cargo-source-not-checked-out"],
+)
+def test_doctor_reads_what_the_projects_image_needs(
+    project: Path, monkeypatch: pytest.MonkeyPatch, added: str, row: str, code: int
+) -> None:
+    """The project's image says which toolchains the build needs: every image's Tdxs is a Go
+    source, and a Cargo source not checked out yet may pin a Rust toolchain."""
+    with (project / "demo.py").open("a", encoding="utf-8") as demo:
+        demo.write(added)
+    host, _ = _host({k: v for k, v in TOOLS.items() if k != "rustup"}, files=LINUX_FILES)
+    monkeypatch.setattr("tundravm.cli.Host", lambda: host)
+    got, out = run_main("doctor", "--for", "build")
+    rows = {line.split(None, 1)[0]: line.split(None, 1)[1] for line in out.splitlines()}
+    assert rows["build:rustup"] == row and rows["build:go"].startswith("ready (go1.24.4")
+    assert got == code
 
 
 def test_build_falls_back_to_sudo_and_names_the_userns_fix_without_it() -> None:

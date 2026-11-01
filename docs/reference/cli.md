@@ -466,11 +466,18 @@ options:
 Report what this host can build, run, deploy and verify.
 
 ```text
-usage: tundravm doctor [-h] [--json] [--traceback] [--for {build,run,tdx,azure,gcp}]
+usage: tundravm doctor [-h] [--attr NAME] [--pythonpath DIR] [--json] [--traceback]
+                       [--for {build,run,tdx,azure,gcp}]
+                       [IMAGE]
 
-One row per capability: ready, blocked (with the fix), unavailable or unsupported.
---for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1 when a
-build row (or, with --for, a row of that area) is blocked.
+One row per capability: ready, blocked (with the fix), optional, unavailable or
+unsupported. --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1
+when a build row (or, with --for, a row of that area) is blocked. build:go and
+build:rustup block only when IMAGE has a Go source, or a Cargo source that pins a
+Rust toolchain; without an image they are optional.
+
+positional arguments:
+  IMAGE                 The image file (default: $TUNDRAVM_IMAGE, else [tool.tundravm] image).
 
 options:
   -h, --help            show this help message and exit
@@ -478,6 +485,11 @@ options:
   --traceback           Raise errors with the Python traceback.
   --for {build,run,tdx,azure,gcp}
                         One capability.
+
+loading the image file:
+  --attr NAME           The name the image (or a zero-argument factory) is bound to in the file.
+  --pythonpath DIR      Extra import directory for the file (repeatable); the working directory is
+                        one.
 ```
 
 ## Shell completion

@@ -5,6 +5,8 @@ Each row is ``<area>:<what>`` and a verdict:
 - ``ready`` (with what it will use),
 - ``blocked: <why>: <fix>`` when something installable or configurable is missing,
 - ``unavailable: <why>`` when this host cannot do it (no TDX hardware),
+- ``optional: <why>`` when the image needs no such tool (``not needed by this image``), or
+  no image says whether it does and the tool is missing (never a failure),
 - ``unsupported: <why>`` when tundravm does not do it anywhere.
 
 Every fact comes through :class:`Host`, so tests describe a host instead of probing this one.
@@ -29,7 +31,7 @@ from .toolchain import MKOSI_PIN, installed_version
 
 Area = Literal["build", "run", "deploy", "verify"]
 AREAS: tuple[Area, ...] = ("build", "run", "deploy", "verify")
-Verdict = Literal["ready", "blocked", "unavailable", "unsupported"]
+Verdict = Literal["ready", "blocked", "optional", "unavailable", "unsupported"]
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 BuildBackendKind = Literal["local", "lima"]
 
@@ -191,8 +193,38 @@ GO_PURPOSE = (
 """What the host ``go`` is for, in every ``build:go`` row."""
 
 
-def go_capability(host: Host) -> Capability:
-    """``build:go``: the host ``go`` that prefetches Go sources (1.21+ switches toolchains)."""
+@dataclass(frozen=True, slots=True)
+class ToolchainNeeds:
+    """The sources of the image doctor checks that need a host toolchain to build.
+
+    *go*: its Go source builds. *rustup*: its Cargo source builds that pin a Rust toolchain,
+    or whose checkout is not in the workspace yet to say.
+    """
+
+    go: tuple[str, ...] = ()
+    rustup: tuple[str, ...] = ()
+
+
+def _as_needed(row: Capability, wanted: Sequence[str] | None) -> Capability:
+    """*row* for an image whose sources *wanted* need the tool (``None``: no image).
+
+    Unneeded, it is ``optional: not needed by this image``; without an image, a missing
+    tool is ``optional`` rather than ``blocked``. Either way it never fails doctor.
+    """
+    if wanted is not None and not wanted:
+        return Capability(row.name, "optional", "not needed by this image")
+    if wanted is None and row.verdict == "blocked":
+        return Capability(row.name, "optional", row.detail)
+    return row
+
+
+def go_capability(host: Host, needs: ToolchainNeeds | None = None) -> Capability:
+    """``build:go``: the host ``go`` that prefetches Go sources (1.21+ switches toolchains),
+    blocked only when the image *needs* it (:func:`_as_needed`)."""
+    return _as_needed(_go_row(host), None if needs is None else needs.go)
+
+
+def _go_row(host: Host) -> Capability:
     name = "build:go"
     words = (host.output("go", "version") or "").split()
     found = words[2] if len(words) > 2 and words[2].startswith("go1.") else None
@@ -215,8 +247,13 @@ RUSTUP_PURPOSE = (
 """What the host ``rustup`` is for, in every ``build:rustup`` row."""
 
 
-def rustup_capability(host: Host) -> Capability:
-    """``build:rustup``: the host ``rustup`` that installs a Cargo source's pinned toolchain."""
+def rustup_capability(host: Host, needs: ToolchainNeeds | None = None) -> Capability:
+    """``build:rustup``: the host ``rustup`` that installs a Cargo source's pinned toolchain,
+    blocked only when the image *needs* it (:func:`_as_needed`)."""
+    return _as_needed(_rustup_row(host), None if needs is None else needs.rustup)
+
+
+def _rustup_row(host: Host) -> Capability:
     name = "build:rustup"
     words = (host.output("rustup", "--version") or "").split()
     if len(words) < 2 or words[0] != "rustup":
@@ -349,17 +386,24 @@ def verify_capabilities() -> tuple[Capability, ...]:
 
 
 def capabilities(
-    host: Host, *, backend: BuildBackendKind | None = None, areas: Sequence[Area] = AREAS
+    host: Host,
+    *,
+    backend: BuildBackendKind | None = None,
+    areas: Sequence[Area] = AREAS,
+    needs: ToolchainNeeds | None = None,
 ) -> tuple[Capability, ...]:
-    """Every row of *areas*, in :data:`AREAS` order; *backend* defaults to this host's."""
+    """Every row of *areas*, in :data:`AREAS` order; *backend* defaults to this host's.
+
+    *needs* is what the image doctor checks builds with; ``None`` without an image.
+    """
     rows: list[Capability] = []
     for area in AREAS:
         if area not in areas:
             continue
         if area == "build":
             rows.append(build_capability(host, backend or default_backend(host)))
-            rows.append(go_capability(host))
-            rows.append(rustup_capability(host))
+            rows.append(go_capability(host, needs))
+            rows.append(rustup_capability(host, needs))
         elif area == "run":
             rows.extend(run_capabilities(host))
         elif area == "deploy":
@@ -380,6 +424,7 @@ __all__ = [
     "Area",
     "Capability",
     "Host",
+    "ToolchainNeeds",
     "build_capability",
     "capabilities",
     "default_backend",

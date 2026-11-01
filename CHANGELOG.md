@@ -42,7 +42,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - `doctor` prints one row per capability (`build:x86-64`, `build:go`, `build:rustup`,
   `run:simulated`, `run:tdx`, `deploy:gcp`, `deploy:azure`, `verify:*`), each failure with
   its fix; `--for` picks one. `build:go` says what the host's `go` is for and wants 1.21 or
-  newer; `build:rustup` says what the host's `rustup` is for.
+  newer; `build:rustup` says what the host's `rustup` is for. Both block only when the
+  image (`doctor IMAGE`, else the project's) has a Go source, or a Cargo source that pins a
+  Rust toolchain or is not checked out yet; otherwise they are `optional: not needed by
+  this image`, and without an image a missing tool is `optional`, never a failure.
 - A Go source builds with the toolchain its `go.mod` names (the `toolchain` line, else the
   `go` line), pinned: the host's `go` fetches that release into the module cache with the
   modules (`GOTOOLCHAIN=<release>`), the offline build selects it from the copied cache,
