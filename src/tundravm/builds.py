@@ -81,6 +81,7 @@ from .errors import (
     ValidationError,
 )
 from .models import OutputTarget
+from .project import lock_command
 
 Kind = Literal["production", "development"]
 KINDS: tuple[Kind, ...] = ("production", "development")
@@ -434,7 +435,7 @@ def _current_lock(
         if offline:
             raise LockfileError(
                 f"No lockfile at {lockfile}: an offline build builds only what the lock pins.",
-                hint="Run `tundravm lock` with the network first.",
+                hint=f"Run `{lock_command()}` with the network first.",
                 context={"path": str(lockfile)},
             )
         locked = lock_image(img, img.profile_names)
@@ -456,8 +457,8 @@ def _current_lock(
             raise LockfileError(
                 f"The lockfile {lockfile} is stale:\n{drift.render()}",
                 hint="A build never updates the lock except to re-pin a development build's "
-                "Local sources: run `tundravm lock` (or `tundravm lock --update NAME` to move "
-                "one pin), review the change, then build.",
+                f"Local sources: run `{lock_command()}` (or `{lock_command('--update', 'NAME')}` "
+                "to move one pin), review the change, then build.",
                 context={"path": str(lockfile)},
             )
     if tuple(img.targets.get(profile, ("qemu",))) != tuple(scoped.targets[profile]):
@@ -491,7 +492,7 @@ def lock_missing(lockfile: Path) -> Diagnostic:
         "error",
         f"No lockfile at {lockfile}: a production build builds only what a lock pins",
         subject=str(lockfile),
-        hint="Run `tundravm lock IMAGE`, review and commit the lockfile, then build.",
+        hint=f"Run `{lock_command()}`, review and commit the lockfile, then build.",
     )
 
 

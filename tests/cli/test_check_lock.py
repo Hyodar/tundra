@@ -54,7 +54,7 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     result = cli("check", "--explain", "source-unpinned", "--explain", "tree-drift", "demo.py")
     assert result.code == EXIT_OK, result.err
     assert result.out.startswith("source-unpinned: warning (error when the policy refuses")
-    assert "\n    fix: Run `tundravm lock IMAGE`" in result.out
+    assert "\n    fix: Run `tundravm lock` to pin every source" in result.out
     assert "\n\ntree-drift: error\n" in result.out
     unknown = cli("check", "--explain", "source-unpined")
     assert unknown.code == EXIT_SDK_ERROR
@@ -187,7 +187,7 @@ def test_a_local_source_is_pinned_by_its_content(project: Path, cli: Cli) -> Non
     main.write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
     unpinned = cli("check")
     assert unpinned.code == EXIT_OK
-    assert "source-unpinned [production] app: source build 'app' (local app)" in unpinned.out
+    assert "source-unpinned [image] sources.app: source build 'app' (local app)" in unpinned.out
     assert cli("lock").code == EXIT_OK
     assert cli("lock", "--check").out == "lock is up to date\n"
     main.write_text("package main\n\nfunc main() { println() }\n", encoding="utf-8")
@@ -196,11 +196,31 @@ def test_a_local_source_is_pinned_by_its_content(project: Path, cli: Cli) -> Non
     assert drift.out.startswith("~ sources.app: local-changed: app changed since the lock (")
     checked = cli("check")
     assert "error local-changed [image] sources.app: app changed since the lock (" in checked.out
+    assert "re-pins it itself" in checked.out and "`tundravm build --dev`" in checked.out
     assert cli("lock").code == EXIT_OK and cli("build").code == EXIT_OK
     pin = json.loads((project / "build" / "tundravm.lock").read_text())["fetches"][0]
     assert (pin["name"], pin["kind"], pin["source"]) == ("app", "local", "app")
     shown = cli("show", "latest").out
     assert re.search(rf"\n  app +local +- +{pin['digest'][:12]} ", shown), shown
+
+
+@pytest.mark.parametrize(
+    ("given", "command"),
+    [
+        ((), "tundravm lock"),
+        (("demo.py",), "tundravm lock"),
+        (("other.py",), "tundravm lock other.py"),
+    ],
+    ids=["configured", "the-configured-file", "another-file"],
+)
+def test_a_hint_names_the_lock_command_that_runs_here(
+    project: Path, cli: Cli, given: tuple[str, ...], command: str
+) -> None:
+    (project / "other.py").write_text(STARTER, encoding="utf-8")
+    checked = cli("check", *given)
+    assert f"hint: Run `{command}` to pin it " in checked.out
+    assert f"`{command}` writes it" in checked.err
+    assert "IMAGE" not in checked.out + checked.err
 
 
 REPINNED = "lock: app re-pinned, local source changed\n"

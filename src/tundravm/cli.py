@@ -80,7 +80,7 @@ from .diagnostics import Diagnostic
 from .diff import diff_against
 from .errors import SourceError, StateError, TdxError, ValidationError
 from .formats import in_github_actions, workflow_command
-from .project import RESOLUTION_HELP, Settings, settings
+from .project import RESOLUTION_HELP, Settings, given_image, lock_command, settings
 from .recipe import RecipeFile, load_file
 from .templates import (
     GITIGNORE_BLOCK,
@@ -151,7 +151,8 @@ def main(
     args.runner = runner
     handler: Callable[[argparse.Namespace, TextIO], int] = args.handler
     try:
-        code = handler(args, out)
+        with given_image(getattr(args, "image", None)):
+            code = handler(args, out)
         out.flush()
         return code
     except TdxError as exc:
@@ -873,7 +874,7 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     if locked is None:
         _err(
             f"note: no lockfile at {found.lockfile}: a production build needs one (lock-missing); "
-            "`tundravm lock` writes it"
+            f"`{lock_command()}` writes it"
         )
     elif resolved:
         diagnostics.extend(lock_status(loaded.recipe, locked, variants=names))
@@ -1003,11 +1004,11 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
 
 def _no_lockfile(args: argparse.Namespace, path: Path, out: TextIO) -> int:
     """``lock --check`` without a lockfile: drift like any other, exit 1."""
-    line = f"no lockfile at {path}: run `tundravm lock` and commit it"
+    line = f"no lockfile at {path}: run `{lock_command()}` and commit it"
     if args.json:
         print(json_report("lock", {"path": str(path), "clean": False, "drift": [line]}), file=out)
     elif in_github_actions():
-        message = f"No lockfile at {path}. Run `tundravm lock` and commit the lockfile."
+        message = f"No lockfile at {path}. Run `{lock_command()}` and commit the lockfile."
         print(workflow_command("error", message, title="lock drift"), file=out)
     else:
         print(line, file=out)

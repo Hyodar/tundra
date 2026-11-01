@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
@@ -226,6 +229,33 @@ def deployment_table(target: str, start: Path | None = None) -> dict[str, str]:
     return found
 
 
+_GIVEN_IMAGE: ContextVar[str | None] = ContextVar("tundravm_given_image", default=None)
+"""The image file the running command was given that the project does not configure."""
+
+
+@contextmanager
+def given_image(image: str | os.PathLike[str] | None) -> Iterator[None]:
+    """Run a command given *image* (``None``: the configured one), so the hints it prints
+    name the lock command that works here (:func:`lock_command`)."""
+    other = None
+    if image is not None:
+        configured = settings(None).image
+        if configured is None or Path(configured).resolve() != Path(image).resolve():
+            other = os.fspath(image)
+    token = _GIVEN_IMAGE.set(other)
+    try:
+        yield
+    finally:
+        _GIVEN_IMAGE.reset(token)
+
+
+def lock_command(*flags: str) -> str:
+    """``tundravm lock`` with *flags*, naming the image file when the running command was
+    given one the project does not configure, so the hint runs as printed."""
+    image = _GIVEN_IMAGE.get()
+    return " ".join(["tundravm lock", *([image] if image else []), *flags])
+
+
 def render_table(*, image: str, backend: str | None = None) -> str:
     """The ``[tool.tundravm]`` table ``new`` writes (a TOML snippet, trailing newline)."""
     return f'[{TABLE}]\nimage = "{image}"\nbuild = "build"\n' + (
@@ -250,6 +280,8 @@ __all__ = [
     "Settings",
     "deployment_table",
     "find_project",
+    "given_image",
+    "lock_command",
     "render_table",
     "settings",
 ]

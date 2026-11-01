@@ -904,7 +904,7 @@ def test_efi_stub_drifts_until_locked(
 def test_unpinned_efi_stub_is_reported_until_locked() -> None:
     recipe = _recipe(_stub("20251113T083151Z"))
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
-    assert [(d.severity, d.subject) for d in found] == [("warning", "efi-stub")]
+    assert [(d.severity, d.subject) for d in found] == [("warning", "sources.efi-stub")]
     assert "systemd-boot-efi_257.8-1~deb13u1_amd64.deb" in found[0].message
     strict = _recipe(_stub("20251113T083151Z"), policy=Policy(mutable_ref_policy="error"))
     assert [d.severity for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
@@ -912,7 +912,7 @@ def test_unpinned_efi_stub_is_reported_until_locked() -> None:
     assert not [d for d in lint(recipe, lock=locked) if d.code == "source-unpinned"]
     report = check_report(recipe, None, variants=None)
     (unpinned,) = (d for d in report if d.code == "source-unpinned")
-    assert unpinned.hint is not None and "`tundravm lock IMAGE`" in unpinned.hint
+    assert unpinned.hint is not None and "`tundravm lock`" in unpinned.hint
 
 
 def test_a_build_named_efi_stub_collides_with_the_package(

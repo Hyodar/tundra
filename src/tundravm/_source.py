@@ -43,6 +43,7 @@ from urllib.request import urlopen
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, SourceError, StateError, TdxError, ValidationError
 from .lockfile.model import LockedFetch
+from .project import lock_command
 
 if TYPE_CHECKING:
     from .models import Kernel
@@ -346,7 +347,8 @@ def copy_local(source: LocalSource, pin: str, dest: Path) -> None:
             f"The {described} source changed since the lock ({LOCAL_CHANGED}).",
             source=described,
             reason=reason,
-            hint="Run `tundravm lock` to record it, review and commit the lockfile, then build.",
+            hint=f"Run `{lock_command()}` to record it, review and commit the lockfile, then "
+            "build.",
         )
 
 
@@ -2279,7 +2281,7 @@ def _download(source: HttpSource, pin: str, dest: Path) -> None:
             f"Cannot fetch {described}: {reason}.",
             source=described,
             reason=reason,
-            hint="The file changed upstream: `tundravm lock IMAGE --update NAME` pins it again.",
+            hint=f"The file changed upstream: `{lock_command('--update', 'NAME')}` pins it again.",
         )
     if source.filename.endswith(_ARCHIVE_SUFFIXES):
         unpack = ["tar", "-xf", str(file), "-C", str(dest), "--strip-components=1"]

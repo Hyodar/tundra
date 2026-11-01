@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from tundravm.errors import PolicyError
+from tundravm.project import lock_command
 
 MutableRefPolicy = Literal["warn", "error", "allow"]
 NetworkMode = Literal["online", "offline"]
@@ -34,7 +35,7 @@ def ensure_bake_policy(*, policy: Policy, frozen: bool) -> None:
         raise PolicyError(
             "Frozen lock mode is required by policy.",
             hint=(
-                "Run `tundravm lock IMAGE`, then `tundravm build`: it builds against "
+                f"Run `{lock_command()}`, then `tundravm build`: it builds against "
                 "BUILD/tundravm.lock."
             ),
             context={"operation": "bake"},

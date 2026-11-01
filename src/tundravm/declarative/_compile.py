@@ -27,6 +27,7 @@ from tundravm.models import (
     enable_unit,
     ships_unit,
 )
+from tundravm.project import lock_command
 
 from ._lowered import Lowered
 
@@ -129,7 +130,7 @@ def _enforce_source_policy(lowered: Lowered, pins: Mapping[str, LockedFetch]) ->
     names = ", ".join(f"{spec.name}@{spec.source.requested}" for spec in unpinned)
     raise PolicyError(
         f"Unpinned source builds are not allowed by policy: {names}.",
-        hint="Run `tundravm lock IMAGE` to pin them.",
+        hint=f"Run `{lock_command()}` to pin them.",
         context={"operation": "compile", "sources": names},
     )
 

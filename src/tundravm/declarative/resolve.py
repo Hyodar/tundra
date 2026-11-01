@@ -849,7 +849,7 @@ def locate(diagnostics: Iterable[Diagnostic], items: Sequence[Declaration]) -> l
     for diagnostic in diagnostics:
         if not diagnostic.location and diagnostic.subject:
             subjects = _subjects(items) if subjects is None else subjects
-            candidates = subjects.get(diagnostic.subject, ())
+            candidates = subjects.get(diagnostic.subject.removeprefix("sources."), ())
             prefix = diagnostic.code.split("-")[0]
             item = next(
                 (c for c in candidates if type(c).__name__.lower() == prefix),

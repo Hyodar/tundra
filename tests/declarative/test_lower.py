@@ -153,12 +153,12 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE
     assert compile(declarative_recipe()).digest == EQUIVALENCE_TREE
     assert [(d.severity, d.code, d.profile, d.subject) for d in check(lowered)] == [
+        ("warning", "source-unpinned", "", "sources.app"),
+        ("warning", "source-unpinned", "", "sources.disk-encryption"),
+        ("warning", "source-unpinned", "", "sources.key-generation"),
+        ("warning", "source-unpinned", "", "sources.secret-delivery"),
         ("error", "disk-device-guessed", "default", "disk_persistent"),
         ("error", "kernel-missing", "default", ""),
-        ("warning", "source-unpinned", "default", "app"),
-        ("warning", "source-unpinned", "default", "disk-encryption"),
-        ("warning", "source-unpinned", "default", "key-generation"),
-        ("warning", "source-unpinned", "default", "secret-delivery"),
     ]
 
     emit(lowered.select(PROFILES), tmp_path / "lowered")

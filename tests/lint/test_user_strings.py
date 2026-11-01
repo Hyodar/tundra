@@ -63,6 +63,9 @@ DENYLIST = {
         r"|import)\b"
     ),
     "RECIPE placeholder (IMAGE)": re.compile(r"\btundravm \w+ RECIPE\b"),
+    "IMAGE placeholder in a lock hint (project.lock_command())": re.compile(
+        r"`tundravm lock IMAGE\b"
+    ),
     "bake for a build (build)": re.compile(
         r"\bbake\(\)|\b(?:the|an?|its|offline|frozen) bake\b|\b[Bb]ake (?:again|the)\b|\bbaked \d"
     ),
@@ -296,7 +299,7 @@ def test_removed_docs_are_caught() -> None:
         "tundravm check --tree mkosi",
         "tundravm convert ./units --from systemd",
         "echo 'tundravm: tool is not pinned: run tundravm lock, then tundravm build' >&2",
-        "Run `tundravm lock IMAGE` to pin them.",
+        "Run `tundravm lock` to pin them.",
         "Deliver it at boot instead of baking it into the image",
         "Unknown profile(s): staging.",
         "profile=dev  debian/trixie (x86_64)  reproducible=yes",

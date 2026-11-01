@@ -41,6 +41,7 @@ from .kernel_modules import (
     removes_path,
 )
 from .models import MODULES_PATH, ProfileState, ServiceSpec, debloat_units_keep, unit_name
+from .project import lock_command
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -578,8 +579,7 @@ def _rule_source_unpinned(
             code="source-unpinned",
             message=message,
             hint=hint,
-            profile=profile_name,
-            subject=spec.name,
+            subject=f"sources.{spec.name}",
         )
 
 
@@ -591,31 +591,31 @@ def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
         return (
             f"kernel {spec.version} ({source.kind} {source.url} @ {source.requested}) "
             "is not pinned in the lockfile",
-            f"Run `tundravm lock IMAGE` to pin it as {spec.name!r}{fetch}, or give "
+            f"Run `{lock_command()}` to pin it as {spec.name!r}{fetch}, or give "
             "Kernel a Git source with a 40-hex commit ref.",
         )
     if isinstance(spec, KernelFile):
         return (
             f"the kernel's {spec.name} ({source.kind} {source.url}) is not pinned in the lockfile",
-            f"Run `tundravm lock IMAGE` to pin its sha256 as {spec.name!r}{fetch}.",
+            f"Run `{lock_command()}` to pin its sha256 as {spec.name!r}{fetch}.",
         )
     if isinstance(spec, DebFile):
         return (
             f"the EFI stub package ({source.kind} {source.url}) is not pinned in the lockfile",
-            f"Run `tundravm lock IMAGE` to pin its sha256 as {spec.name!r} "
+            f"Run `{lock_command()}` to pin its sha256 as {spec.name!r} "
             "(`tundravm build` then downloads it on the host). "
             "Unpinned, the postinst hook downloads it in the build sandbox.",
         )
     if isinstance(source, LocalSource):
         return (
             f"source build {spec.name!r} ({source.describe()}) is not pinned in the lockfile",
-            "Run `tundravm lock IMAGE` to pin its content digest (`tundravm build` then "
+            f"Run `{lock_command()}` to pin its content digest (`tundravm build` then "
             "copies the directory into its workspace).",
         )
     return (
         f"source build {spec.name!r} ({source.kind} {source.url} @ {source.requested}) "
         "is not pinned in the lockfile",
-        f"Run `tundravm lock IMAGE` to pin it{fetch}, or declare an immutable source "
+        f"Run `{lock_command()}` to pin it{fetch}, or declare an immutable source "
         "(Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...)). "
         "Locking reports a dead upstream ref, with every other source it cannot "
         "resolve, before anything is written.",
@@ -1165,7 +1165,7 @@ def _rule_module_checks(
 _UNIT_TEXT = (_rule_unit_text,)
 _MODULES = (_rule_module_checks,)
 _LOCK_AGAIN = (
-    "Review the change, then run `tundravm lock IMAGE` to record it and commit the lockfile; "
+    "Review the change, then run `tundravm lock` to record it and commit the lockfile; "
     "`tundravm lock --check` shows the same drift without writing."
 )
 
@@ -1456,7 +1456,7 @@ _REGISTRY: tuple[Rule, ...] = (
         ("warning", "error", "info"),
         "A source build, built kernel or downloaded package has no pin in the lockfile, so "
         "a moving ref builds different bytes.",
-        "Run `tundravm lock IMAGE` to pin every source at once (`tundravm build` then "
+        "Run `tundravm lock` to pin every source at once (`tundravm build` then "
         "fetches each on the host), or declare an immutable source: Git(url, ref) with a "
         "40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, "
         "with every other source it cannot resolve, before anything is written.",
@@ -1698,7 +1698,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "A production build has no lockfile to build against: a production build is a "
         "locked build, so its bytes reproduce and its manifest records every pin (a "
         "development build writes the lockfile first; `check` notes it).",
-        "Run `tundravm lock IMAGE`, review and commit the lockfile, then build.",
+        "Run `tundravm lock`, review and commit the lockfile, then build.",
     ),
     Rule(
         "lock-changed",
@@ -1711,8 +1711,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "error",
         "A Local source's directory changed since the lock: its content digest is not the one "
         "the lock pins, so a build refuses it.",
-        "Review the change, then run `tundravm lock IMAGE` to record the new digest and "
-        "commit the lockfile.",
+        "Review the change, then run `tundravm lock` to record the new digest and "
+        "commit the lockfile; a development build (`tundravm build --dev`) re-pins it itself.",
     ),
     Rule(
         "lock-added",

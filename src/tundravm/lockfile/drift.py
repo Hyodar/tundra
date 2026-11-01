@@ -10,6 +10,7 @@ from pathlib import Path
 from tundravm.formats import annotation_path, workflow_command
 from tundravm.lockfile.model import Lockfile
 from tundravm.lockfile.resolve import PROFILES_KEY, recipe_digest, section_values, value_digest
+from tundravm.project import lock_command
 
 DETAIL_LIMIT = 5
 """Maximum item entries shown per section detail before eliding the rest."""
@@ -67,7 +68,7 @@ class LockDrift:
             message = f"{name} {_DRIFT_WORDS[marker]}"
             if detail:
                 message += f": {detail}"
-            message += ". Run `tundravm lock` and commit the lockfile."
+            message += f". Run `{lock_command()}` and commit the lockfile."
             lines.append(workflow_command("error", message, file=path, title="lock drift"))
         return "\n".join(lines)
 

@@ -343,7 +343,7 @@ def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:
         bake(recipe, lock=unpinned, backend=Backend("local"), build=tmp_path / "out", fetch=False)
     assert excinfo.value.hint is not None
-    assert "tundravm lock IMAGE" in excinfo.value.hint
+    assert "`tundravm lock`" in excinfo.value.hint
 
 
 # ── Policy ──────────────────────────────────────────────────────────
@@ -468,7 +468,7 @@ def test_show_lists_sources_and_hooks_at_their_pins(
 def test_check_rule_source_unpinned() -> None:
     recipe = _recipe(_build())
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
-    assert [(d.severity, d.subject) for d in found] == [("warning", "tool")]
+    assert [(d.severity, d.subject) for d in found] == [("warning", "sources.tool")]
     strict = _recipe(_build(), policy=Policy(mutable_ref_policy="error"))
     assert [d.severity for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
     # lint reads the pins of ./build/tundravm.lock, as `tundravm lint` does.

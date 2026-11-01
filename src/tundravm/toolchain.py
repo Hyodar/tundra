@@ -22,6 +22,7 @@ from typing import Any
 
 from .diagnostics import Diagnostic
 from .errors import LockfileError
+from .project import lock_command
 
 TOOLCHAIN_UPDATE = "toolchain"
 """The ``lock --update`` name that records the running toolchain instead of keeping the lock's."""
@@ -130,7 +131,7 @@ class Toolchain:
         if not isinstance(raw, Mapping) or not isinstance(raw.get("tundravm"), str):
             raise LockfileError(
                 "Invalid lockfile `toolchain` value.",
-                hint="The lockfile is generated: run `tundravm lock IMAGE` to rewrite it.",
+                hint=f"The lockfile is generated: run `{lock_command()}` to rewrite it.",
             )
         mkosi = raw.get("mkosi")
         tree = raw.get("tools_tree")

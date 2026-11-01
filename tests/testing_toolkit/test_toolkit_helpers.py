@@ -200,7 +200,7 @@ def test_assert_diagnostic_failure_lists_every_finding() -> None:
         assert_diagnostic(image, "service-user-missing", subject="app")
     message = str(excinfo.value)
     assert "code='service-user-missing', subject='app'" in message
-    assert "warning source-unpinned [production]" in message
+    assert "warning source-unpinned [image] sources.tdxs" in message
     with pytest.raises(AssertionError, match="severity='error'"):
         assert_diagnostic(image, "source-unpinned", severity="error")
 

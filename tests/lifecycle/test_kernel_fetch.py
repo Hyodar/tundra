@@ -402,7 +402,7 @@ def test_inspect_and_lint_report_the_kernel_pin(tmp_path: Path, config: Path) ->
     assert info["kernel"]["pinned"] is None  # type: ignore[index]
     assert "Kernel: 6.1  tdx=yes  pinned=-" in render(info)
     (unpinned,) = [d for d in lint(recipe) if d.code == "source-unpinned"]
-    assert unpinned.subject == "kernel"
+    assert unpinned.subject == "sources.kernel"
     assert unpinned.message == (
         "kernel 6.1 (git https://k.example/linux @ v6.1) is not pinned in the lockfile"
     )

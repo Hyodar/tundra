@@ -42,6 +42,7 @@ from tundravm.models import (
     ProfileBuildResult,
 )
 from tundravm.policy import ensure_bake_policy
+from tundravm.project import lock_command
 from tundravm.toolchain import Toolchain
 
 from ._compile import emit, mkosi_argv
@@ -325,8 +326,7 @@ def _fetched_sources(
             raise StateError(
                 f"{what} {name!r} is not pinned, so nothing is fetched to build it from.",
                 hint=(
-                    "Run `tundravm lock IMAGE`, then `tundravm build`: it fetches what the "
-                    "lock pins."
+                    f"Run `{lock_command()}`, then `tundravm build`: it fetches what the lock pins."
                 ),
                 context={"source": f"{spec.source.kind} {spec.source.url}"},
             )
@@ -378,7 +378,7 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
         raise LockfileError(
             f"A frozen build needs a version {LOCKFILE_VERSION} lockfile; {lock_path} is version "
             f"{lock.version}, which does not cover the distribution, compiler and kernel inputs.",
-            hint="Run `tundravm lock IMAGE` to lock the image again, then commit the lockfile.",
+            hint=f"Run `{lock_command()}` to lock the image again, then commit the lockfile.",
             context={"lock": str(lock_path), "version": str(lock.version)},
         )
     current = lowered.payload()
@@ -391,7 +391,7 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
             raise LockfileError(
                 f"A frozen build requires every source build to be pinned; unpinned: "
                 f"{', '.join(unpinned)}.",
-                hint="Run `tundravm lock IMAGE` to pin them.",
+                hint=f"Run `{lock_command()}` to pin them.",
                 context={"lock": str(lock_path), "sources": ", ".join(unpinned)},
             )
         return
@@ -400,7 +400,7 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
         hidden = len(lines) - _DRIFT_MESSAGE_LINES
         lines = [
             *lines[:_DRIFT_MESSAGE_LINES],
-            f"... {hidden} more; run `tundravm lock IMAGE --check` for the full list",
+            f"... {hidden} more; run `{lock_command('--check')}` for the full list",
         ]
     sections = drift.sections
     changed = ", ".join(sections[:_DRIFT_MESSAGE_LINES])
@@ -409,7 +409,7 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
     raise LockfileError(
         "The lockfile of a frozen build is stale for the image as it is now:\n"
         + "\n".join(f"  {line}" for line in lines),
-        hint="Run `tundravm lock IMAGE` to accept these changes, or revert them.",
+        hint=f"Run `{lock_command()}` to accept these changes, or revert them.",
         context={"lock": str(lock_path), "changed": changed},
     )
 

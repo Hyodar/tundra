@@ -65,6 +65,7 @@ from tundravm.models import (
     BakeResult,
     ProfileBuildResult,
 )
+from tundravm.project import lock_command
 from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 
 from . import _bake, _compile
@@ -540,13 +541,16 @@ _SEVERITY = {"error": 0, "warning": 1, "info": 2}
 
 
 def _located(recipe: Recipe, diagnostics: Sequence[Diagnostic]) -> list[Diagnostic]:
-    """*diagnostics* pointed at the declarations their subjects name in their variants."""
-    declared = {v.name for v in recipe.variants}
+    """*diagnostics* pointed at the declarations their subjects name in their variants; an
+    image-wide one at the first variant that declares its subject."""
+    declared = [v.name for v in recipe.variants]
     out: list[Diagnostic] = []
     for name in dict.fromkeys(d.profile for d in diagnostics):
         group = [d for d in diagnostics if d.profile == name]
-        if name in declared and any(not d.location and d.subject for d in group):
-            group = locate(group, resolve(recipe, variant=name).items)
+        for variant in declared if name == "" else [name] if name in declared else []:
+            if not any(not d.location and d.subject for d in group):
+                break
+            group = locate(group, resolve(recipe, variant=variant).items)
         out.extend(group)
     return out
 
@@ -714,7 +718,9 @@ def image_lock_status(
         elif detail:
             message = detail
         found.append(
-            Diagnostic(code, "error", message, subject=subject, profile=profile, hint=_DRIFT_HINT)
+            Diagnostic(
+                code, "error", message, subject=subject, profile=profile, hint=_drift_hint(code)
+            )
         )
     if not found and not drift.digest_matches:
         found.append(
@@ -722,13 +728,17 @@ def image_lock_status(
                 "lock-stale",
                 "error",
                 "the image digest differs from the lock",
-                hint="Run `tundravm lock` to record it and commit the lockfile.",
+                hint=f"Run `{lock_command()}` to record it and commit the lockfile.",
             )
         )
     return tuple(found)
 
 
-_DRIFT_HINT = "Review the change, then run `tundravm lock` to record it and commit the lockfile."
+def _drift_hint(code: str) -> str:
+    hint = f"Review the change, then run `{lock_command()}` to record it and commit the lockfile."
+    if code == LOCAL_CHANGED:
+        hint += " A development build (`tundravm build --dev`) re-pins it itself."
+    return hint
 
 
 def lock_status(
@@ -913,7 +923,7 @@ def _resolve_for_fetch(
         names = ", ".join(f"{b.name}@{b.source.requested}" for b in pending.values())
         raise PolicyError(
             f"Unpinned source builds are not allowed by policy: {names}.",
-            hint="Run `tundravm lock IMAGE` to pin them, then build from that lockfile.",
+            hint=f"Run `{lock_command()}` to pin them, then build from that lockfile.",
             context={"operation": "fetch", "sources": names},
         )
     try:
@@ -922,7 +932,7 @@ def _resolve_for_fetch(
         message = str(exc.args[0]).replace("Cannot lock", "Cannot fetch", 1)
         raise LockfileError(
             message.replace("; nothing written.", "; nothing fetched."),
-            hint="Fix the sources above, or run `tundravm lock IMAGE` and build from its lockfile.",
+            hint=f"Fix the sources above, or run `{lock_command()}` and build from its lockfile.",
             failures=exc.failures,
         ) from exc
     return {fetch.name: fetch.digest for fetch in resolved if fetch.name is not None}
