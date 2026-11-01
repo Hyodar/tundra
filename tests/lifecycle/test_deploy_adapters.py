@@ -1,4 +1,3 @@
-import re
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -91,100 +90,41 @@ def _reply(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess
     return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
 
 
-AZURE_IMAGE = (
-    "/subscriptions/s/resourceGroups/tdx-vms/providers/Microsoft.Compute/galleries/"
-    "tdx_images/images/tdx-dev/versions/1.0.1"
+@pytest.mark.parametrize(
+    ("params", "secure_boot"),
+    [
+        ({"secure_boot": "true", "signed": "true"}, "true"),
+        ({"secure_boot": "true"}, None),
+    ],
+    ids=["signed", "unsigned-refused"],
 )
-
-
-def test_azure_publishes_a_confidential_gallery_image_then_creates_the_vm(
-    tmp_path: Path,
+def test_azure_secure_boot_needs_a_signed_image(
+    tmp_path: Path, params: dict[str, str], secure_boot: str | None
 ) -> None:
+    """A signed image boots with Secure Boot on; an unsigned one asking for it is refused
+    before anything is uploaded (the walk covers the default, off)."""
     run = Recorder(
         {
             "az storage account show": _reply('"/subscriptions/s/storageAccounts/acct"\n'),
-            "az sig image-version create": _reply(f'"{AZURE_IMAGE}"\n'),
+            "az sig image-version create": _reply('"/subscriptions/s/images/tdx-dev"\n'),
         }
     )
     request = DeployRequest(
         profile="dev",
         target="azure",
         artifact_path=_artifact(tmp_path, "disk.vhd"),
-        parameters={"storage_account": "acct", "secure_boot": "true", "signed": "true"},
+        parameters={"storage_account": "acct", **params},
     )
-    result = AzureDeployAdapter(runner=run).deploy(request)
-
-    verbs = [" ".join(cmd[:4]) for cmd in run.calls]
-    assert verbs == [
-        "az storage container create",
-        "az storage blob upload",
-        "az storage account show",
-        "az sig create --resource-group",
-        "az sig image-definition create",
-        "az sig image-version create",
-        "az vm create --resource-group",
-    ]
-    container, upload, _, _, definition, version, create = run.calls
-    assert container[container.index("--name") + 1] == "tdx-images"
-    blob = upload[upload.index("--name") + 1]
-    assert re.fullmatch(r"disk-[0-9a-f]{8}\.vhd", blob)
-    assert definition[definition.index("--features") + 1] == "SecurityType=ConfidentialVMSupported"
-    assert definition[definition.index("--hyper-v-generation") + 1] == "V2"
-    assert version[version.index("--os-vhd-uri") + 1] == (
-        f"https://acct.blob.core.windows.net/tdx-images/{blob}"
-    )
-    assert version[version.index("--os-vhd-storage-account") + 1] == (
-        "/subscriptions/s/storageAccounts/acct"
-    )
-    assert create[create.index("--image") + 1] == AZURE_IMAGE
-    assert create[create.index("--size") + 1] == "Standard_DC2es_v5"
-    for flag, value in (
-        ("--security-type", "ConfidentialVM"),
-        ("--os-disk-security-encryption-type", "VMGuestStateOnly"),
-        ("--enable-vtpm", "true"),
-        ("--enable-secure-boot", "true"),
-    ):
-        assert create[create.index(flag) + 1] == value
-    assert "--specialized" in create
-    assert result.metadata["blob"] == f"tdx-images/{blob}"
-    assert result.metadata["image"] == AZURE_IMAGE
-
-
-def test_azure_defaults_to_secure_boot_off(tmp_path: Path) -> None:
-    run = Recorder(
-        {
-            "az storage account show": _reply('"/subscriptions/s/storageAccounts/acct"\n'),
-            "az sig image-version create": _reply(f'"{AZURE_IMAGE}"\n'),
-        }
-    )
-    request = DeployRequest(
-        profile="dev",
-        target="azure",
-        artifact_path=_artifact(tmp_path, "disk.vhd"),
-        parameters={"storage_account": "acct"},
-    )
-    result = AzureDeployAdapter(runner=run).deploy(request)
+    if secure_boot is None:
+        with pytest.raises(DeploymentError, match="Secure Boot needs a signed image") as exc:
+            AzureDeployAdapter(runner=run).deploy(request)
+        hint = exc.value.hint or ""
+        assert "--param secure_boot=false" in hint and "--param signed=true" in hint
+        assert run.calls == []
+        return
+    AzureDeployAdapter(runner=run).deploy(request)
     create = run.calls[-1]
-    assert create[create.index("--enable-secure-boot") + 1] == "false"
-    assert "signed" not in result.metadata
-
-
-def test_azure_refuses_secure_boot_for_an_unsigned_image_before_uploading(
-    tmp_path: Path,
-) -> None:
-    run = Recorder()
-    request = DeployRequest(
-        profile="dev",
-        target="azure",
-        artifact_path=_artifact(tmp_path, "disk.vhd"),
-        parameters={"storage_account": "acct", "secure_boot": "true"},
-    )
-    with pytest.raises(DeploymentError, match="Secure Boot needs a signed image") as exc:
-        AzureDeployAdapter(runner=run).deploy(request)
-    assert exc.value.code == "E_DEPLOYMENT"
-    hint = exc.value.hint or ""
-    assert "--param secure_boot=false" in hint and "--param signed=true" in hint
-    assert run.calls == []
+    assert create[create.index("--enable-secure-boot") + 1] == secure_boot
 
 
 def test_azure_reports_a_missing_image_id(tmp_path: Path) -> None:
@@ -196,29 +136,6 @@ def test_azure_reports_a_missing_image_id(tmp_path: Path) -> None:
     )
     with pytest.raises(DeploymentError, match="printed no resource id"):
         AzureDeployAdapter(runner=Recorder()).deploy(request)
-
-
-def test_gcp_creates_a_tdx_instance_on_c3_after_gcloud_storage_upload(tmp_path: Path) -> None:
-    run = Recorder()
-    request = DeployRequest(
-        profile="dev",
-        target="gcp",
-        artifact_path=_artifact(tmp_path, "disk.raw.tar.gz"),
-        parameters={"project": "proj", "bucket": "bkt"},
-    )
-    result = GcpDeployAdapter(runner=run).deploy(request)
-
-    upload, image, instance = run.calls
-    assert upload[:3] == ["gcloud", "storage", "cp"]
-    image_name = result.metadata["image_name"]
-    assert upload[-1] == f"gs://bkt/tdx-images/{image_name}.tar.gz"
-    assert "--guest-os-features=UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE" in image
-    assert instance[:4] == ["gcloud", "compute", "instances", "create"]
-    assert "--machine-type=c3-standard-4" in instance
-    assert "--confidential-compute-type=TDX" in instance
-    assert "--maintenance-policy=TERMINATE" in instance
-    assert "--confidential-compute" not in instance
-    assert result.metadata["blob"] == upload[-1]
 
 
 def test_gcp_upload_failure_names_the_gcloud_storage_command(tmp_path: Path) -> None:

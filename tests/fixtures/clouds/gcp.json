@@ -1,0 +1,107 @@
+{
+  "exchanges": [
+    {
+      "request": ["gcloud", "storage", "cp"],
+      "SOURCE": "https://cloud.google.com/sdk/gcloud/reference/storage/cp",
+      "stdout": "",
+      "stderr": "Copying file://gcp.tar.gz to gs://b/tdx-images/tdx-prover.tar.gz\n  Completed files 1/1 | 216.0B/216.0B\n"
+    },
+    {
+      "request": ["gcloud", "compute", "images", "create"],
+      "SOURCE": "https://cloud.google.com/sdk/gcloud/reference/compute/images/create",
+      "stdout": "NAME                 PROJECT  FAMILY  DEPRECATED  STATUS\ntdx-prover-00000002  p                            READY\n",
+      "stderr": "Created [https://www.googleapis.com/compute/v1/projects/p/global/images/tdx-prover-00000002].\n"
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "create"],
+      "SOURCE": "https://cloud.google.com/compute/docs/reference/rest/v1/instances",
+      "json": [
+        {
+          "kind": "compute#instance",
+          "id": "4398046511104",
+          "name": "tdx-prover-000003",
+          "status": "RUNNING",
+          "machineType": "https://www.googleapis.com/compute/v1/projects/p/zones/z/machineTypes/c3-standard-4",
+          "zone": "https://www.googleapis.com/compute/v1/projects/p/zones/z",
+          "confidentialInstanceConfig": {"confidentialInstanceType": "TDX"},
+          "scheduling": {"onHostMaintenance": "TERMINATE"}
+        }
+      ]
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "describe"],
+      "SOURCE": "https://cloud.google.com/compute/docs/reference/rest/v1/instances/get",
+      "json": {
+        "kind": "compute#instance",
+        "id": "4398046511104",
+        "name": "tdx-prover-000003",
+        "status": "RUNNING",
+        "machineType": "https://www.googleapis.com/compute/v1/projects/p/zones/z/machineTypes/c3-standard-4",
+        "zone": "https://www.googleapis.com/compute/v1/projects/p/zones/z",
+        "confidentialInstanceConfig": {"confidentialInstanceType": "TDX"},
+        "networkInterfaces": [
+          {
+            "kind": "compute#networkInterface",
+            "name": "nic0",
+            "networkIP": "10.128.0.2",
+            "accessConfigs": [
+              {
+                "kind": "compute#accessConfig",
+                "name": "External NAT",
+                "type": "ONE_TO_ONE_NAT",
+                "natIP": "203.0.113.7"
+              }
+            ]
+          }
+        ],
+        "disks": [
+          {
+            "kind": "compute#attachedDisk",
+            "boot": true,
+            "deviceName": "persistent-disk-0",
+            "mode": "READ_WRITE",
+            "type": "PERSISTENT",
+            "source": "https://www.googleapis.com/compute/v1/projects/p/zones/z/disks/tdx-prover-000003"
+          },
+          {
+            "kind": "compute#attachedDisk",
+            "boot": false,
+            "deviceName": "tundravm-data",
+            "mode": "READ_WRITE",
+            "type": "PERSISTENT",
+            "source": "https://www.googleapis.com/compute/v1/projects/p/zones/z/disks/prover-data-1"
+          }
+        ]
+      }
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "get-serial-port-output"],
+      "SOURCE": "https://cloud.google.com/compute/docs/reference/rest/v1/instances/getSerialPortOutput",
+      "stdout": "[    1.0] Kernel command line: console=ttyS0\nReached target minimal.target\n"
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "stop"],
+      "SOURCE": "https://cloud.google.com/sdk/gcloud/reference/compute/instances/stop",
+      "stdout": "",
+      "stderr": "Stopping instance(s) tdx-prover-000003...done.\n"
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "start"],
+      "SOURCE": "https://cloud.google.com/sdk/gcloud/reference/compute/instances/start",
+      "stdout": "",
+      "stderr": "Starting instance(s) tdx-prover-000003...done.\n"
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "detach-disk"],
+      "SOURCE": "https://cloud.google.com/sdk/gcloud/reference/compute/instances/detach-disk",
+      "stdout": "",
+      "stderr": "Updated [https://www.googleapis.com/compute/v1/projects/p/zones/z/instances/tdx-prover-000003].\n"
+    },
+    {
+      "request": ["gcloud", "compute", "instances", "attach-disk"],
+      "SOURCE": "https://cloud.google.com/sdk/gcloud/reference/compute/instances/attach-disk",
+      "stdout": "",
+      "stderr": "Updated [https://www.googleapis.com/compute/v1/projects/p/zones/z/instances/tdx-prover-000006].\n"
+    }
+  ]
+}

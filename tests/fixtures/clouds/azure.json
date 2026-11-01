@@ -1,0 +1,118 @@
+{
+  "exchanges": [
+    {
+      "request": ["az", "storage", "container", "create"],
+      "SOURCE": "https://learn.microsoft.com/en-us/cli/azure/storage/container#az-storage-container-create",
+      "json": {"created": true}
+    },
+    {
+      "request": ["az", "storage", "blob", "upload"],
+      "SOURCE": "https://learn.microsoft.com/en-us/cli/azure/storage/blob#az-storage-blob-upload",
+      "json": {
+        "client_request_id": "1f0e2d3c-0000-0000-0000-000000000000",
+        "date": "2026-11-01T12:00:00+00:00",
+        "etag": "\"0x8DCF1A2B3C4D5E6\"",
+        "last_modified": "2026-11-01T12:00:00+00:00",
+        "request_id": "2a1b0c9d-0000-0000-0000-000000000000",
+        "request_server_encrypted": true,
+        "version": "2022-11-02"
+      }
+    },
+    {
+      "request": ["az", "storage", "account", "show"],
+      "SOURCE": "https://learn.microsoft.com/en-us/rest/api/storagerp/storage-accounts/get-properties",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Storage/storageAccounts/acct",
+        "name": "acct",
+        "type": "Microsoft.Storage/storageAccounts",
+        "kind": "StorageV2",
+        "location": "eastus",
+        "sku": {"name": "Standard_LRS", "tier": "Standard"}
+      }
+    },
+    {
+      "request": ["az", "sig", "create"],
+      "SOURCE": "https://learn.microsoft.com/en-us/rest/api/compute/galleries/create-or-update",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/galleries/tdx_images",
+        "name": "tdx_images",
+        "type": "Microsoft.Compute/galleries",
+        "location": "eastus",
+        "provisioningState": "Succeeded",
+        "identifier": {"uniqueName": "00000000-0000-0000-0000-000000000000-TDX_IMAGES"}
+      }
+    },
+    {
+      "request": ["az", "sig", "image-definition", "create"],
+      "SOURCE": "https://learn.microsoft.com/en-us/rest/api/compute/gallery-images/create-or-update",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/galleries/tdx_images/images/tdx-demo",
+        "name": "tdx-demo",
+        "type": "Microsoft.Compute/galleries/images",
+        "location": "eastus",
+        "osType": "Linux",
+        "osState": "Specialized",
+        "hyperVGeneration": "V2",
+        "features": [{"name": "SecurityType", "value": "ConfidentialVMSupported"}],
+        "identifier": {"publisher": "tundravm", "offer": "demo", "sku": "demo"},
+        "provisioningState": "Succeeded"
+      }
+    },
+    {
+      "request": ["az", "sig", "image-version", "create"],
+      "SOURCE": "https://learn.microsoft.com/en-us/rest/api/compute/gallery-image-versions/create-or-update",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/galleries/tdx_images/images/tdx-demo/versions/1.0.1761998400",
+        "name": "1.0.1761998400",
+        "type": "Microsoft.Compute/galleries/images/versions",
+        "location": "eastus",
+        "provisioningState": "Succeeded",
+        "storageProfile": {
+          "osDiskImage": {
+            "hostCaching": "ReadWrite",
+            "source": {
+              "storageAccountId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Storage/storageAccounts/acct",
+              "uri": "https://acct.blob.core.windows.net/tdx-images/azure-00000002.vhd"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": ["az", "vm", "create"],
+      "SOURCE": "https://learn.microsoft.com/en-us/cli/azure/vm#az-vm-create",
+      "json": {
+        "fqdns": "",
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/virtualMachines/tdx-demo-000003",
+        "location": "eastus",
+        "macAddress": "00-0D-3A-00-00-01",
+        "powerState": "VM running",
+        "privateIpAddress": "10.0.0.4",
+        "publicIpAddress": "203.0.113.9",
+        "resourceGroup": "tdx-vms",
+        "zones": ""
+      }
+    },
+    {
+      "request": ["az", "vm", "get-instance-view"],
+      "SOURCE": "https://learn.microsoft.com/en-us/cli/azure/vm#az-vm-get-instance-view",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/virtualMachines/tdx-demo-000003",
+        "name": "tdx-demo-000003",
+        "instanceView": {
+          "computerName": "tdx-demo-000003",
+          "hyperVGeneration": "V2",
+          "statuses": [
+            {"code": "ProvisioningState/succeeded", "displayStatus": "Provisioning succeeded", "level": "Info"},
+            {"code": "PowerState/running", "displayStatus": "VM running", "level": "Info"}
+          ]
+        }
+      }
+    },
+    {
+      "request": ["az", "vm", "boot-diagnostics", "get-boot-log"],
+      "SOURCE": "https://learn.microsoft.com/en-us/cli/azure/vm/boot-diagnostics#az-vm-boot-diagnostics-get-boot-log",
+      "stdout": "[    1.0] Kernel command line: console=ttyS0\nReached target minimal.target\n"
+    }
+  ]
+}

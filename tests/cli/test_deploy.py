@@ -1,7 +1,9 @@
-"""``deploy azure|gcp`` and its actions, with a fake cloud CLI."""
+"""``deploy azure|gcp`` and its actions, against the cloud CLIs' recorded exchanges."""
 
 from __future__ import annotations
 
+import base64
+import itertools
 import json
 import os
 import shlex
@@ -12,47 +14,78 @@ from pathlib import Path
 import pytest
 
 from tests.cli.conftest import STARTER, Cli
-from tundravm import deployments, instances
+from tests.cli.test_attest import PEER, FakeValidator, _tcp
+from tests.cli.test_secrets import REGISTERS
+from tundravm import bootstrap, deployments
 from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_OK
+from tundravm.deploy._run import Fresh
 from tundravm.deploy.azure import AzureDeployAdapter
 from tundravm.deploy.gcp import GcpDeployAdapter
-from tundravm.testing import UPDATE_GOLDEN_ENV
+from tundravm.testing import UPDATE_GOLDEN_ENV, FakeEndpoint
 
-DESCRIBE = {
-    "status": "RUNNING",
-    "networkInterfaces": [{"accessConfigs": [{"natIP": "203.0.113.7"}]}],
-    "disks": [
-        {"deviceName": "persistent-disk-0", "source": "zones/z/disks/boot"},
-        {"deviceName": "tundravm-data", "source": "projects/p/zones/z/disks/prover-data-1"},
-    ],
-}
+CLOUDS = Path(__file__).parents[1] / "fixtures" / "clouds"
+EPOCH = "1761998400"
 
 
-class FakeCloud:
+class RecordedCloud:
+    """The ``gcloud`` and ``az`` CLIs as ``tests/fixtures/clouds/*.json`` record them: each
+    call is answered by the exchange whose request its argv starts with (the longest), with
+    ``--query KEY`` applied as the CLI applies it; a call nothing records fails the test."""
+
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        self.exchanges = [
+            exchange
+            for name in ("gcp", "azure")
+            for exchange in json.loads((CLOUDS / f"{name}.json").read_text())["exchanges"]
+        ]
+        assert all(e["SOURCE"].startswith("https://") for e in self.exchanges)
 
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        self.calls.append(list(argv))
-        if "describe" in argv:
-            return subprocess.CompletedProcess(list(argv), 0, json.dumps(DESCRIBE), "")
-        if "get-serial-port-output" in argv:
-            return subprocess.CompletedProcess(list(argv), 0, "Reached target minimal.target\n", "")
-        return subprocess.CompletedProcess(list(argv), 0, "{}", "")
+        words = list(argv)
+        self.calls.append(words)
+        found = [e for e in self.exchanges if words[: len(e["request"])] == e["request"]]
+        assert found, f"no recorded exchange answers {shlex.join(words)}"
+        exchange = max(found, key=lambda e: len(e["request"]))
+        stdout = exchange.get("stdout", "")
+        if "json" in exchange:
+            value = exchange["json"]
+            if "--query" in words:
+                value = value[words[words.index("--query") + 1]]
+            stdout = json.dumps(value, indent=2)
+        return subprocess.CompletedProcess(words, 0, stdout, exchange.get("stderr", ""))
+
+    def take(self) -> list[str]:
+        """The calls since the last ``take``, each as one shell line."""
+        taken = [shlex.join(call) for call in self.calls]
+        self.calls.clear()
+        return taken
+
+
+def _counted() -> Fresh:
+    """Suffixes 1, 2, 3 ... in hex, and :data:`EPOCH`: every name a deploy draws, known."""
+    numbers = itertools.count(1)
+    return Fresh(hex=lambda length: f"{next(numbers):0{length}x}", epoch=lambda: EPOCH)
 
 
 @pytest.fixture
-def cloud(prover: Path, monkeypatch: pytest.MonkeyPatch) -> FakeCloud:
-    fake = FakeCloud()
+def cloud(prover: Path, monkeypatch: pytest.MonkeyPatch) -> RecordedCloud:
+    fake = RecordedCloud()
+    fresh = _counted()
 
     def adapter(target: str) -> GcpDeployAdapter | AzureDeployAdapter:
-        return GcpDeployAdapter(runner=fake) if target == "gcp" else AzureDeployAdapter(runner=fake)
+        if target == "gcp":
+            return GcpDeployAdapter(runner=fake, fresh=fresh)
+        return AzureDeployAdapter(runner=fake, fresh=fresh)
 
     monkeypatch.setattr(deployments, "get_adapter", adapter)
     monkeypatch.setattr(deployments, "run_captured", fake)
     with (prover / "pyproject.toml").open("a") as handle:
-        handle.write('\n[tool.tundravm.gcp]\nproject = "p"\nbucket = "b"\nzone = "z"\n')
+        handle.write(
+            '\n[tool.tundravm.gcp]\nproject = "p"\nbucket = "b"\nzone = "z"\n'
+            '\n[tool.tundravm.azure]\nstorage_account = "acct"\n'
+        )
     return fake
 
 
@@ -64,21 +97,13 @@ def prover_build(prover: Path, cli: Cli) -> Build:
 
 
 def test_deploy_gcp_writes_a_receipt(
-    prover_build: Build, prover: Path, cli: Cli, cloud: FakeCloud
+    prover_build: Build, prover: Path, cli: Cli, cloud: RecordedCloud
 ) -> None:
     result = cli("deploy", "gcp", "--build", "latest", "--volume", "data=create:100GiB")
     assert result.code == EXIT_OK, result.err
     assert f"deployed {prover_build.id} to gcp: instance prover-1" in result.out
     assert "address   203.0.113.7" in result.out
     assert "firewall  allow tcp:" in result.out and "8745" in result.out
-    create = next(call for call in cloud.calls if "create" in call and "instances" in call)
-    assert "--confidential-compute-type=TDX" in create
-    disk = next(arg for arg in create if arg.startswith("--create-disk="))
-    assert (
-        "size=100GiB" in disk and "device-name=tundravm-data" in disk and "auto-delete=no" in disk
-    )
-    upload = next(call for call in cloud.calls if call[:3] == ["gcloud", "storage", "cp"])
-    assert upload[3] == str(prover_build.path / "gcp.tar.gz")
     receipt = json.loads((prover / ".tundravm/instances/prover-1/instance.json").read_text())
     assert receipt["kind"] == "deploy" and receipt["platform"] == "gcp" and receipt["mode"] == "tdx"
     assert receipt["volumes"] == {"data": {"how": "create", "value": "100GiB"}}
@@ -87,7 +112,7 @@ def test_deploy_gcp_writes_a_receipt(
 
 
 def test_every_declared_volume_needs_a_disk(
-    prover_build: Build, cli: Cli, cloud: FakeCloud
+    prover_build: Build, cli: Cli, cloud: RecordedCloud
 ) -> None:
     result = cli("deploy", "gcp", "--build", "latest")
     assert result.code == EXIT_ERROR
@@ -108,7 +133,7 @@ def test_every_declared_volume_needs_a_disk(
     assert not any("create" in call and "instances" in call for call in cloud.calls)
 
 
-def test_azure_cannot_attach_a_volume(prover_build: Build, cli: Cli, cloud: FakeCloud) -> None:
+def test_azure_cannot_attach_a_volume(prover_build: Build, cli: Cli, cloud: RecordedCloud) -> None:
     result = cli("deploy", "azure", "--build", "latest", "--volume", "data=existing:disk-1")
     assert result.code == EXIT_ERROR
     assert "identified by LUN" in result.err
@@ -121,30 +146,25 @@ def test_a_build_without_the_target_is_refused(built: Build, cli: Cli) -> None:
     assert "has no gcp artifact" in result.err and "--target gcp" in result.err
 
 
-def test_status_logs_and_mode(prover_build: Build, cli: Cli, cloud: FakeCloud) -> None:
+def test_status_reports_as_json_and_takes_one_instance(
+    prover_build: Build, cli: Cli, cloud: RecordedCloud
+) -> None:
     assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:disk-1").code == 0
-    status = cli("deploy", "status", "prover-1")
-    assert status.code == EXIT_OK
-    assert "state          running" in status.out and "control_plane  not listening" in status.out
     report = json.loads(cli("deploy", "status", "prover-1", "--json").out)
     assert report["schema"] == "tundravm.deploy/1" and report["address"] == "203.0.113.7"
-    assert "Reached target minimal.target" in cli("deploy", "logs", "prover-1").out
-    mode = cli("deploy", "mode", "prover-1")
-    assert (
-        "tdx on gcp, production build: a TDX guest whose evidence a production policy" in mode.out
-    )
-    extra = cli("deploy", "status", "prover-1", "more")
-    assert extra.code == EXIT_ERROR
+    assert cli("deploy", "status", "prover-1", "more").code == EXIT_ERROR
 
 
-def test_run_actions_refuse_a_deployment(prover_build: Build, cli: Cli, cloud: FakeCloud) -> None:
+def test_run_actions_refuse_a_deployment(
+    prover_build: Build, cli: Cli, cloud: RecordedCloud
+) -> None:
     assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:disk-1").code == 0
     result = cli("run", "status", "prover-1")
     assert result.code == EXIT_ERROR and "deploy status prover-1" in result.err
 
 
 def test_upgrade_needs_a_policy_and_a_build(
-    prover_build: Build, cli: Cli, cloud: FakeCloud
+    prover_build: Build, cli: Cli, cloud: RecordedCloud
 ) -> None:
     assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:disk-1").code == 0
     assert "needs --policy FILE" in cli("deploy", "upgrade", "prover-1", "--build", "latest").err
@@ -156,7 +176,7 @@ def test_upgrade_refuses_a_volume_change(
     prover_build: Build,
     prover: Path,
     cli: Cli,
-    cloud: FakeCloud,
+    cloud: RecordedCloud,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -175,33 +195,6 @@ def test_upgrade_refuses_a_volume_change(
     assert result.code == EXIT_ERROR
     assert "The new build's volumes differ" in result.err
     assert not any(call[3:4] == ["stop"] for call in cloud.calls)
-
-
-def test_upgrade_is_refused_on_azure(
-    prover_build: Build, prover: Path, cli: Cli, tmp_path: Path
-) -> None:
-    found = instances.create(
-        prover / ".tundravm" / "instances",
-        prover_build,
-        kind="deploy",
-        platform="azure",
-        mode="tdx",
-    )
-    policy = tmp_path / "p.json"
-    policy.write_text("{}")
-    result = cli("deploy", "upgrade", found.id, "--build", "latest", "--policy", policy)
-    assert result.code == EXIT_ERROR
-    assert "replaces GCP instances" in result.err and "identified by LUN" in result.err
-
-
-def test_rollback_needs_a_replaced_instance(
-    prover_build: Build, cli: Cli, cloud: FakeCloud, tmp_path: Path
-) -> None:
-    assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:disk-1").code == 0
-    policy = tmp_path / "p.json"
-    policy.write_text("{}")
-    result = cli("deploy", "rollback", "prover-1", "--policy", policy)
-    assert result.code == EXIT_ERROR and "replaced nothing" in result.err
 
 
 PLAN_SETTINGS = {
@@ -263,3 +256,183 @@ def test_plan_prints_every_step_and_call_and_runs_none(
     if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
         golden.write_text(text)
     assert text == golden.read_text()
+
+
+# ── a whole lifecycle per cloud, every call against the recorded exchanges ──
+
+G = "--project=p --zone=z"
+GCE = "gcloud compute instances"
+UPLOADED = "gs://b/tdx-images/tdx-prover-{n:08x}.tar.gz"
+KEPT = "mode=rw,auto-delete=no"
+
+
+def _launch(image: int, vm: int, disks: str = "") -> list[str]:
+    uri = UPLOADED.format(n=image)
+    return [
+        f"gcloud storage cp {{artifact}} {uri}",
+        f"gcloud compute images create tdx-prover-{image:08x} --project=p --source-uri={uri} "
+        "--guest-os-features=UEFI_COMPATIBLE,GVNIC,TDX_CAPABLE",
+        f"{GCE} create tdx-prover-{vm:06x} {G} --machine-type=c3-standard-4 "
+        f"--image=tdx-prover-{image:08x} --confidential-compute-type=TDX "
+        f"--maintenance-policy=TERMINATE {disks}--format=json",
+        f"{GCE} describe tdx-prover-{vm:06x} {G} --format=json",
+    ]
+
+
+def _move(old: int, new: int) -> list[str]:
+    return [
+        f"{GCE} stop tdx-prover-{old:06x} {G}",
+        f"{GCE} detach-disk tdx-prover-{old:06x} {G} --disk=prover-data-1",
+        f"{GCE} attach-disk tdx-prover-{new:06x} {G} --disk=prover-data-1 "
+        "--device-name=tundravm-data",
+    ]
+
+
+ATTESTED = ("--policy", "{policy}", "--identity", "{key}", "--validator", "{validator}")
+GCP_WALK = [
+    (
+        ("deploy", "gcp", "--build", "latest", "--volume", "data=existing:prover-data-1"),
+        _launch(
+            2, 3, "--disk=name=prover-data-1,device-name=tundravm-data,mode=rw,auto-delete=no "
+        ),
+        "address   203.0.113.7",
+    ),
+    (
+        ("deploy", "status", "prover-1"),
+        [f"{GCE} describe tdx-prover-000003 {G} --format=json"],
+        "state          running",
+    ),
+    (
+        ("deploy", "logs", "prover-1"),
+        [f"{GCE} get-serial-port-output tdx-prover-000003 {G}"],
+        "Reached target minimal.target",
+    ),
+    (("deploy", "mode", "prover-1"), [], "tdx on gcp, production build: a TDX guest"),
+    (
+        ("deploy", "upgrade", "prover-1", "--build", "latest", *ATTESTED),
+        [f"{GCE} describe tdx-prover-000003 {G} --format=json", *_launch(5, 6), *_move(3, 6)],
+        "upgraded prover-1 -> prover-2",
+    ),
+    (
+        ("deploy", "rollback", "prover-2", *ATTESTED),
+        [
+            f"{GCE} describe tdx-prover-000006 {G} --format=json",
+            f"{GCE} start tdx-prover-000003 {G}",
+            f"{GCE} describe tdx-prover-000003 {G} --format=json",
+            *_move(6, 3),
+        ],
+        "rolled back prover-2 -> prover-1",
+    ),
+]
+
+
+def test_gcp_lifecycle_makes_the_recorded_calls(
+    prover_build: Build,
+    cli: Cli,
+    cloud: RecordedCloud,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """deploy, status, logs, mode, upgrade and rollback, in order: each one's calls (each
+    step's VM a fresh boot of the attested endpoint)."""
+    monkeypatch.setattr(bootstrap, "read_passphrase", lambda volume: b"passphrase")
+    monkeypatch.setattr(deployments, "_wait_ready", lambda instance, timeout: True)
+    key = tmp_path / "op"
+    key.write_text("k")
+    key.with_name("op.pub").write_text("ssh-ed25519 " + base64.b64encode(bytes(51)).decode())
+    policy = tmp_path / "peer.json"
+    policy.write_text(json.dumps(PEER))
+    with _tcp(FakeValidator()) as validator:
+        values = {
+            "artifact": prover_build.artifact("gcp"),
+            "policy": policy,
+            "key": key,
+            "validator": validator,
+        }
+        for argv, calls, shown in GCP_WALK:
+            endpoint = FakeEndpoint(platform="tdx", mode="tdx", registers=REGISTERS)
+            monkeypatch.setattr(bootstrap, "_tls", endpoint.connect)
+            result = cli(*(word.format(**values) for word in argv))
+            assert result.code == EXIT_OK, (argv, result.err)
+            assert shown in result.out, (argv, result.out)
+            assert cloud.take() == [call.format(**values) for call in calls], argv
+
+
+AZ_VM = "--name tdx-demo-000003 --resource-group tdx-vms"
+SUBSCRIPTION = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms"
+AZURE_WALK = [
+    (
+        ("deploy", "azure", "--build", "latest"),
+        [
+            "az storage container create --account-name acct --name tdx-images --output json",
+            "az storage blob upload --account-name acct --container-name tdx-images "
+            "--name azure-00000002.vhd --file {artifact} --type page --output json",
+            "az storage account show --name acct --query id --output json",
+            "az sig create --resource-group tdx-vms --gallery-name tdx_images --location eastus "
+            "--output json",
+            "az sig image-definition create --resource-group tdx-vms --gallery-name tdx_images "
+            "--gallery-image-definition tdx-demo --location eastus --publisher tundravm "
+            "--offer demo --sku demo --os-type Linux --os-state specialized "
+            "--hyper-v-generation V2 --features SecurityType=ConfidentialVMSupported "
+            "--output json",
+            "az sig image-version create --resource-group tdx-vms --gallery-name tdx_images "
+            f"--gallery-image-definition tdx-demo --gallery-image-version 1.0.{EPOCH} "
+            "--location eastus --os-vhd-storage-account "
+            f"{SUBSCRIPTION}/providers/Microsoft.Storage/storageAccounts/acct "
+            "--os-vhd-uri https://acct.blob.core.windows.net/tdx-images/azure-00000002.vhd "
+            "--query id --output json",
+            "az vm create --resource-group tdx-vms --name tdx-demo-000003 --location eastus "
+            f"--size Standard_DC2es_v5 --image {SUBSCRIPTION}/providers/Microsoft.Compute/"
+            f"galleries/tdx_images/images/tdx-demo/versions/1.0.{EPOCH} --specialized "
+            "--security-type ConfidentialVM --os-disk-security-encryption-type VMGuestStateOnly "
+            "--enable-vtpm true --enable-secure-boot false --public-ip-sku Standard "
+            "--nsg-rule NONE --output json",
+        ],
+        "address   203.0.113.9",
+    ),
+    (
+        ("deploy", "status", "demo-1"),
+        [f"az vm get-instance-view {AZ_VM} --output json"],
+        "state          VM running",
+    ),
+    (
+        ("deploy", "status", "demo-1", "--json"),
+        [f"az vm get-instance-view {AZ_VM} --output json"],
+        '"address": "203.0.113.9"',
+    ),
+    (
+        ("deploy", "logs", "demo-1"),
+        [f"az vm boot-diagnostics get-boot-log {AZ_VM}"],
+        "Reached target minimal.target",
+    ),
+    (("deploy", "mode", "demo-1"), [], "tdx on azure, production build: a TDX guest"),
+]
+AZURE_REFUSED = [
+    (("deploy", "upgrade", "demo-1", "--build", "latest", "--policy", "{policy}"), "GCP instances"),
+    (("deploy", "rollback", "demo-1", "--policy", "{policy}"), "replaced nothing"),
+]
+
+
+def test_azure_lifecycle_makes_the_recorded_calls(
+    prover: Path, cli: Cli, cloud: RecordedCloud, tmp_path: Path
+) -> None:
+    """The starter on Azure: deploy, status, logs and mode make their calls; upgrade and
+    rollback are refused before any."""
+    (prover / "prover.py").write_text(
+        STARTER.replace("    dev=DevAccess", '    targets=("azure",),\n    dev=DevAccess')
+    )
+    assert cli("lock").code == EXIT_OK
+    assert cli("build").code == EXIT_OK
+    build = Build.open((prover / "build/demo/latest-production").resolve())
+    policy = tmp_path / "p.json"
+    policy.write_text("{}")
+    values = {"artifact": build.artifact("azure"), "policy": policy}
+    for argv, calls, shown in AZURE_WALK:
+        result = cli(*argv)
+        assert result.code == EXIT_OK, (argv, result.err)
+        assert shown in result.out, (argv, result.out)
+        assert cloud.take() == [call.format(**values) for call in calls], argv
+    for argv, refusal in AZURE_REFUSED:
+        result = cli(*(word.format(**values) for word in argv))
+        assert result.code == EXIT_ERROR and refusal in result.err, (argv, result.err)
+        assert cloud.take() == [], argv

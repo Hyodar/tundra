@@ -13,7 +13,7 @@ import pytest
 
 from tests.cli.conftest import Cli
 from tests.cli.test_attest import PEER, FakeValidator, _tcp
-from tests.cli.test_deploy import FakeCloud, cloud, prover_build  # noqa: F401 (fixtures)
+from tests.cli.test_deploy import RecordedCloud, cloud, prover_build  # noqa: F401 (fixtures)
 from tests.cli.test_secrets import REGISTERS
 from tundravm import bootstrap, deployments
 from tundravm.builds import Build
@@ -45,7 +45,7 @@ def test_upgrade_runs_the_replacement_in_order(
     prover_build: Build,  # noqa: F811
     prover: Path,
     cli: Cli,
-    cloud: FakeCloud,  # noqa: F811
+    cloud: RecordedCloud,  # noqa: F811
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -115,7 +115,7 @@ def test_a_candidate_that_does_not_attest_keeps_the_old_instance(
     prover_build: Build,  # noqa: F811
     prover: Path,
     cli: Cli,
-    cloud: FakeCloud,  # noqa: F811
+    cloud: RecordedCloud,  # noqa: F811
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
