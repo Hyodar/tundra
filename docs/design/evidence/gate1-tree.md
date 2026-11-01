@@ -955,6 +955,32 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
   The verity disk boots in 10.1s, and its kernel and `/proc/cmdline` carry the UKI's line,
   `roothash=` included.
 
+### A built kernel (plan 5.2 item 1, the `kernel` workflow)
+
+`.github/workflows/kernel.yml` builds `tests/fixtures/kernel/recipe.py`: gregkh/linux
+`v6.12.57` (`97a5dacb9050`) with `config.amd64_none_cloud-amd64` of Debian's
+`linux-config-6.12` 6.12.57-1, `CONFIG_MODULES=n` and a fragment that only drops debug info
+(`DEBUG_INFO_NONE=y`, no BTF), the composed kernel `Kernel.build` lowers to. Run
+41299630516 (head `12e91cf`, platform snapshot `20261018T082309Z`) took 21m30s: 1m11s to
+fetch the source and the config, 19m14s for the mkosi build that compiles it on the
+runner's 4 cores without ccache (the build script has none), 11s to boot. Run 41299024098,
+on the earlier snapshot `20251113T083151Z`, took 27m42s. The tree took 5 GB of disk.
+
+- **The config diff**: Debian's config has 1136 `=m` options; after `olddefconfig` all
+  1136 are `=y` and none dropped, so Kconfig promotes `m` to `y` under `CONFIG_MODULES=n`
+  for this config and `mod2yesconfig` is not needed. Beyond that, only module-only options
+  leave (`MODULE_SIG_*`, `MODPROBE_PATH`), and the toolchain lines change.
+- **The drivers check**: all 30 required options (`CloudDrivers` of qemu, azure and gcp,
+  the encrypted volume, the firewall and the verity root) are `=y` from Debian's config
+  alone; none needed a fragment. `BLK_DEV_PCIESSD_MTIP32XX`, the denied one, is unset
+  there already.
+- **The boot**: `qemu.raw` boots through its ESP and the probe prints `release 6.12.57`,
+  `module-files 0`, `drivers virtio_net virtio_blk virtio_scsi nvme gve mana` and
+  `filesystems ext4 erofs overlay`. The Hyper-V drivers register only on Hyper-V, so no
+  boot here shows them.
+- The first run, 41295881308, found that a composed kernel had never compiled: `make` ran
+  in mkosi's tools tree, which has no compiler. It now runs through `mkosi-chroot`.
+
 ### Still open
 
 - **The templates' boots** (`boot` job, `test_templates_boot.py`) are blocked on repository
@@ -972,6 +998,7 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
   the initramfs layout only. The root hash matched across runs 41139713901 and 41140855928
   (`784caec0...`), but no job compares the digests.
 - **The surge tree** is not built by any job.
+- **The built kernel on a cloud**: no job boots it on Azure or GCP, nor under TDX.
 
 ## Bumping the snapshot
 

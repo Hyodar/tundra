@@ -1087,13 +1087,13 @@ A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
 Both jobs install what `uv.lock` locks. Findings show as annotations on
 the pull request. A project without a committed `build/tundravm.lock` fails `lock --check`:
 lock, commit it and push again. The `build` job builds production, so it reads tundra-tools
-with the repository secret `TUNDRA_TOOLS_TOKEN`: a fine-grained personal access token with
-read-only Contents on `Hyodar/tundra-tools`, added with
-`gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`.
+with the secret `TUNDRA_TOOLS_TOKEN`, a fine-grained token with read-only Contents on
+`Hyodar/tundra-tools`: `gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`.
 
-tundravm's own CI bakes the `Image` templates with the same secret. Making tundra-tools
-public does the same without a secret. Without either, the template tests skip and name the
-repository.
+tundravm's own CI bakes its templates with it, or skips them.
+
+Its weekly `kernel` workflow compiles Debian's 6.12 kernel as `Kernel.build` does and boots
+it. It uploads the configs before and after `olddefconfig` and the drivers check's report.
 
 ## When something fails
 
