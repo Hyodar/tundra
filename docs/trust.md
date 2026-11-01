@@ -150,7 +150,8 @@ More limits that are not platform-specific:
 - **`BrokerKey`.** The pull client is gate 3. Until then the image waits for the value as it
   waits for an operator, and an operator can stand in for the broker.
 - **The kernel.** `Kernel.default()` is Debian's `linux-image-amd64` with a curated module
-  set. The tested kernel matrix of plan 6.7 is not published yet.
+  set. A weekly CI workflow builds and boots one `Kernel.build` with every target's drivers
+  built in; the tested kernel matrix of plan 6.7 is not published yet.
 - **tundra-tools.** Every image builds the evidence service from a private repository.
   Without read access, `lock` and `build` fail.
 

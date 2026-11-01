@@ -7,15 +7,16 @@ attests the build. The choices are made for you: Debian trixie, systemd, a measu
 Intel TDX. Each default below has one escape hatch, and the hatch is a typed value, not a
 string.
 
-This guide follows the loop: create a project, declare the image, lock, build, run, deploy.
+This guide follows the loop: create a project, declare the image, lock, test, build, run,
+deploy.
 The [command reference](reference/cli.md), the [API reference](reference/api.md) and the
 [lint reference](reference/lint.md) are generated from the code. The [trust page](trust.md)
 says what the image defends against and how to recover.
 
 ## What is proven today
 
-The work follows the gates of the v2 plan. Gates 1, 4 and 5 are implemented, and so is
-gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
+The work follows the gates of the v2 plan. Gates 1, 4, 5 and 6 are implemented, and so
+is gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 
 | Area | State |
 |---|---|
@@ -23,8 +24,9 @@ gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 | Building an `Image` in CI | needs the `TUNDRA_TOOLS_TOKEN` secret: see [CI](#ci) |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
-| `run --mode simulated` | unit-tested against a fake QEMU; CI runs the fixture's dev build with it and fetches its page |
+| `run --mode simulated --probe` | CI runs the fixture's dev build: every probe check passes and its page is fetched |
 | The fail-closed production profile | CI boots the production fixture without TDX: `tdx-evidence.service` refuses and its services never start |
+| `Kernel.build` | a weekly CI workflow compiles Debian's 6.12 with every target's drivers built in and boots it |
 | A real TDX quote, raw-disk measurements matched against it (gate 2) | not done |
 | The attested endpoint, channel-bound delivery, `OperatorKey` unlock over it, `BrokerKey` (gate 3) | not done in tundra-tools |
 | `deploy` to GCP or Azure, `attest` against a real quote | unit-tested against fake `gcloud`, `az` and SSH only |
@@ -100,30 +102,19 @@ An image file names no backend. The host decides.
 | `local` | Linux x86-64 | Python, apt and dpkg with `debian-archive-keyring`, and unprivileged user namespaces or `sudo` |
 | `lima` | macOS, other Linux | Lima; the guest is x86-64 Debian running the same pinned mkosi |
 
-`local` runs mkosi 27.1 in-process, in a child forked by mkosi's own `fork_and_wait`. It
-never looks for mkosi on `PATH`. Every other build tool comes from mkosi's tools tree,
-pinned to the same Debian snapshot. When the kernel refuses unprivileged user namespaces
-(Ubuntu 24.04 does by default), mkosi runs under `sudo`. `lima` on Apple Silicon emulates
-the x86-64 guest with QEMU TCG: the same bytes, several times slower. A build never
-switches backend on failure.
+`local` runs mkosi 27.1 in-process, never from `PATH`; every other build tool comes from
+mkosi's tools tree, pinned to the same Debian snapshot. Without unprivileged user
+namespaces (Ubuntu 24.04's default), mkosi runs under `sudo`. `lima` on Apple Silicon
+emulates the x86-64 guest: the same bytes, several times slower. A build never switches
+backend on failure.
 
-`doctor` says what this host can do, one row per capability, each failure with its fix.
-The host toolchains a build needs are in [Sources and toolchains](#sources-and-toolchains):
+`doctor` prints one row per capability: `ready`, `blocked` with its fix, `optional`,
+`unavailable` or `unsupported`. `build:go` blocks without a host `go` (see
+[Sources and toolchains](#sources-and-toolchains)), `run:simulated` without QEMU:
 
 ```console
 $ tundravm doctor
 $ tundravm doctor --for build
-```
-
-```text
-build:x86-64     ready (mkosi 27.1, sudo, which may ask for a password, as this host has no unprivileged user namespaces)
-build:go         ready (go1.24.4, which fetches each Go source's modules and the toolchain its go.mod names for the offline build (every image's Tdxs is one))
-build:rustup     optional: not needed by this image
-run:simulated    blocked: qemu-system-x86_64 not found: install qemu-system-x86
-run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled
-deploy:gcp       blocked: gcloud not found: install the Google Cloud CLI
-verify:qemu      ready (built-in TDX replay 1.0+attest-12f1e29.dstack-mr-gcp-b16e08b)
-verify:azure     unsupported: Azure evidence is vTPM-bound: no TDX register can be predicted
 ```
 
 ## The image
@@ -193,33 +184,21 @@ Passing a baseline component in `components=` replaces the implied one.
 systemd-tmpfiles applies the owner at boot. Build dependencies are not image packages: they
 belong to the `GoBinary`, `CargoBinary` or `Build` that needs them.
 
-`cmdline=` on either `Kernel` appends parameters to the UKI's measured command line, after
-the ones the image writes itself: `kernel=Kernel.default(cmdline=["nospectre_v2"])`. None is
-added by default. Each entry is one parameter, `name` or `name=value`. The ones tundravm
-sets are refused, each with what sets it: `root=`, `roothash=`, `usrhash=`, `systemd.verity*` and
-`systemd.volatile=` follow from `rootfs=`, the image boots systemd into `minimal.target`
-(`init=`, `rdinit=`, `systemd.unit=`), and `run` passes `console=` at boot. They are part
-of the image and move its digest in the lockfile.
+`cmdline=` on either `Kernel` appends parameters (`name` or `name=value`) to the UKI's
+measured command line, after the image's own: `Kernel.default(cmdline=["nospectre_v2"])`.
+The ones tundravm sets are refused, each naming what sets it: `rootfs=` (`root=`,
+`roothash=`, `usrhash=`, `systemd.verity*`, `systemd.volatile=`), `minimal.target`
+(`init=`, `rdinit=`, `systemd.unit=`) and `run` (`console=`).
 
 ### Imports
 
-Every public name has one home, so an image file's imports say which parts of tundravm it
-uses:
-
-| Namespace | Holds |
-|---|---|
-| `tundravm` | `Image`, `Profile`, `Service`, the contents (`Package`, `File`, `Tree`, `User`, `Group`), the foundation (`Debian`, `Kernel`, `RootFS`, `Mkosi`), and `load`, `lower`, `compile`, `bake`, `doctor` |
-| `tundravm.ports` | `TCP`, `UDP`, `AttestedTLS`, `TLS` |
-| `tundravm.systemd` | what `Service` keywords take: `Hardening`, `Resources`, `Shutdown`, `Notify`, `TcpProbe`, `HttpProbe`, `Every`, `Calendar`, `Listen`, `DropIn` |
-| `tundravm.components` | `Component`, its exports (`Endpoint`, `ServiceRef`, `ServiceReady`, `ComponentReady`), `Resolved`, `Diagnostic` and `Rule` for `check()`, and the [shipped library](#the-shipped-library) with `StaticAddress` and `Egress` |
-| `tundravm.storage` | `Volume`, `VolumeDirectory` and the unlock policies `OperatorKey`, `TpmSeal`, `BrokerKey` |
-| `tundravm.secrets` | `Secret`, `Credential` |
-| `tundravm.sources` | `GoBinary`, `CargoBinary`, `Build`, `Install`, `Local`, `Git`, `Http` |
-| `tundravm.errors` | the exceptions, each with a stable code |
-| `tundravm.testing` | see [Testing a project](#testing-a-project) |
-
-There are no aliases: importing `TCP` from the root is an `ImportError`. The
-[API reference](reference/api.md) has one section per namespace.
+Every public name has one home, without aliases, so an image file's imports say what it
+uses: `tundravm` (the image, its contents and foundation), `tundravm.ports` (ports and
+ingress), `tundravm.systemd` (what `Service` keywords take), `tundravm.components`
+(`Component`, its exports, `check()` types and the [shipped library](#the-shipped-library)),
+`tundravm.storage`, `tundravm.secrets`, `tundravm.sources`, `tundravm.errors` and
+`tundravm.testing` ([Testing a project](#testing-a-project)). Importing `TCP` from the root
+is an `ImportError`; the [API reference](reference/api.md) lists each namespace.
 
 ## Services
 
@@ -471,13 +450,9 @@ image = Image(
 A change names a declaration that exists, or the image does not resolve. Removing a
 service removes its unit, its user, its firewall rule and the dependencies nothing else
 uses. A component's service is `component.service("name").ref`. An edit takes the keywords
-of the value's own constructor, and the edited value is checked like a new one. A
-`Service` edit sets `argv`, `requires`, `state`, `expose`, `resources`, `shutdown`,
-`hardening`, `timer`, `socket`, `user`, `groups`, `working_directory`, `environment`,
-`logs` or `runtime`; a `File` edit `content` or `mode`; a `Tree` edit `src` or `exclude`.
-What decides other units (`readiness=`, `credentials=`, `unit=`, a timer turned on or off,
-another built binary, a state moved onto a volume) is refused: remove the value and add
-the new one in `add=`.
+of the value's own constructor and is checked like a new value. What decides other units
+(`readiness=`, `credentials=`, `unit=`, a timer turned on or off, another built binary, a
+state moved onto a volume) is refused: remove the value and add the new one in `add=`.
 
 How profiles lower: tundravm resolves every profile's whole image, writes what all of them
 build once in the shared `payload/`, and puts what each builds beyond that in
@@ -500,7 +475,7 @@ from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", unlock=OperatorKey())
-config = Secret("raiko-config", rotation="restart")
+config = Secret("raiko-config")
 raiko = Raiko(config=config, state=data.directory("raiko"), listen="127.0.0.1:8080")
 
 image = Image(
@@ -631,8 +606,8 @@ image = Image("demo", services=[Service("app", [app], expose=[TCP(8080)])])
 The path stays inside the project (the nearest `pyproject.toml`). The digest covers each
 file's path, sha256 and exec bit, and symlink targets, of what `git ls-files --cached
 --others --exclude-per-directory=.gitignore` lists (every file outside a work tree).
-`build` copies those files like a checkout. An edit is `local-changed`: `build --dev`
-re-pins it, a production build refuses until `tundravm lock`.
+`build` copies those files like a checkout. An edit is `local-changed`
+([the lock](#the-lock) says who re-pins it).
 
 The build sandbox never fetches a source. `build` checks each one out on the host, as you,
 into `build/<image>/.work/`, verifies a reused checkout against its pin, and mounts the
@@ -643,26 +618,19 @@ workspace afresh. The manifest records each Go and Cargo source's toolchain, and
 `show BUILD` prints it.
 
 A Go source builds with the toolchain its `go.mod` names: the `toolchain` line, else the
-`go` line (`go 1.25.0` is `go1.25.0`, `go 1.22` is `go1.22.0`). The host's `go`, 1.21 or
-newer and of any version, fetches that release from the Go module proxy with the modules,
-and the offline build runs it from the same cache: Debian's `golang` is only the bootstrap
-that switches to it. A release the host cannot fetch fails the build with `E_SOURCE`,
-naming the release and its module. A `go.mod` older than Go 1.21, which publishes no
-toolchain, builds with Debian's `go`. Every image's `Tdxs` is a Go source, so `build`
-needs a host `go` 1.21 or newer and stops before it fetches anything without one; the
-`build:go` row of `doctor` checks it, and blocks without one even outside a project.
+`go` line (`go 1.22` is `go1.22.0`). The host's `go`, any 1.21 or newer, fetches that
+release with the modules, and the offline build runs it; Debian's `golang` only bootstraps
+it. A release the host cannot fetch is `E_SOURCE`; a `go.mod` older than Go 1.21 builds
+with Debian's `go`. Every image's `Tdxs` is a Go source, so `build` stops before fetching
+anything without a host `go`, and `doctor`'s `build:go` row blocks.
 
-A Cargo source builds with the toolchain its `rust-toolchain.toml` (or the legacy
-`rust-toolchain`) pins, looked up as `rustup` does from the build's directory up to the
-checkout. The host's `rustup` installs that channel, with the components and targets the
-file lists and `--profile minimal` unless it names another, into the workspace; that
-toolchain's `cargo` fetches the crates, and the offline build runs its own `cargo` and
-`rustc`, with Debian's compiler and linker underneath. The channel must be pinned: a
-release (`1.91.0`) or a dated channel (`nightly-2026-09-01`); `stable`, `1.91` or a bare
-`nightly` fail the build with `E_SOURCE`, since they move with each release. A source
-without a toolchain file builds with Debian's `cargo`. A pinned source on a host without
-`rustup` stops before any toolchain runs; `build:rustup` blocks only for an image with
-such a source (one not checked out yet counts), and is `optional` otherwise.
+A Cargo source builds with the toolchain its `rust-toolchain.toml` (or `rust-toolchain`)
+pins, found as `rustup` finds it. The host's `rustup` installs that channel, with the
+file's components and targets, into the workspace; its `cargo` fetches the crates, and the
+offline build runs its `cargo` and `rustc` over Debian's linker. The channel must be a
+release (`1.91.0`) or a dated one (`nightly-2026-09-01`): `stable`, `1.91` or a bare
+`nightly` move, and are `E_SOURCE`. Without a toolchain file, Debian's `cargo` builds it.
+`build:rustup` blocks only for an image with a pinned source.
 
 ## The lock
 
@@ -742,6 +710,59 @@ verbatim settings and scripts at an mkosi stage (`prepare`, `build`, `postinst`,
 or that would contradict a guarantee are refused at construction, each with the slot that
 sets it: `KernelCommandLine`, `Packages`, `ExtraTrees`, `ConfigureScripts`, `Environment`,
 `Bootable`, `Format`, `Profiles`, `Dependencies`.
+
+## Testing a project
+
+`tundravm.testing` reads an image as values without building it, as the generated
+`tests/test_NAME.py` does:
+
+```python
+from tundravm import File, Image, Service
+from tundravm.components import Egress, Network
+from tundravm.ports import TCP
+from tundravm.testing import assert_clean, plan
+
+image = Image(
+    "demo",
+    packages=["busybox"],
+    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
+    services=[
+        Service(
+            "app",
+            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
+            expose=[TCP(8080)],
+        ),
+    ],
+    network=Network(egress=Egress()),
+)
+
+
+def test_lints_clean() -> None:
+    # The evidence service's source stays unpinned until `tundravm lock`.
+    assert_clean(plan(image), allow=("source-unpinned",))
+
+
+def test_the_firewall_opens_the_port() -> None:
+    nftables = plan(image).file("/etc/nftables.conf").content.decode()
+    assert "tcp dport 8080 accept" in nftables
+
+```
+
+| Helper | Does |
+|---|---|
+| `plan(image, profile)`, `plan(component)` | one profile (a component on an image of its own) compiled in memory: `service()`, `unit()`, `file()`, `packages`, `users`, `settings()`, `lint()` |
+| `assert_clean(subject, allow=)` | fails on any error or warning not allowed |
+| `assert_diagnostic(subject, code)` | the first finding with that code, or a failure listing all |
+| `assert_tree(tundravm.compile(image), golden)` | every path, byte, exec bit and symlink; `TUNDRAVM_UPDATE_GOLDEN=1` rewrites |
+| `read_lock(path)` | the lockfile, as `compile(image, lock=)` and `plan(image, lock=)` take it |
+| `FakeMkosi`, fixture `fake_mkosi` | mkosi replaced at the adapter: nothing forks, `build` writes placeholders, `calls` records each argv |
+| `FakeSources` | git and http fetches replaced by stub checkouts, `fetched` records each |
+| `boot(artifact)`, fixture `boot` | boots a built disk or UKI under QEMU with OVMF and reads the serial console |
+| `assert_probe(result)`, `read_probe` | a dev boot's probe report; fails unless it finished clean (`markers=[PROBE_DONE]` waits for it) |
+| `run_cli(*argv)` | runs the CLI in-process: `(exit code, stdout, stderr)` |
+
+The pytest fixtures load once tundravm is installed; `boot_unavailable()` and
+`build_unavailable()` say why a host cannot boot or build, for a test to skip on.
 
 ## Build
 
@@ -984,59 +1005,6 @@ refuses Azure and a build whose volumes differ. A candidate that fails attestati
 the old instance running with its volumes. `rollback` is the same back to the instance it
 replaced. The [trust page](trust.md#recovery) has the recovery rules.
 
-## Testing a project
-
-`tundravm.testing` reads an image as values without building it, as the generated
-`tests/test_NAME.py` does:
-
-```python
-from tundravm import File, Image, Service
-from tundravm.components import Egress, Network
-from tundravm.ports import TCP
-from tundravm.testing import assert_clean, plan
-
-image = Image(
-    "demo",
-    packages=["busybox"],
-    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
-    services=[
-        Service(
-            "app",
-            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
-            expose=[TCP(8080)],
-        ),
-    ],
-    network=Network(egress=Egress()),
-)
-
-
-def test_lints_clean() -> None:
-    # The evidence service's source stays unpinned until `tundravm lock`.
-    assert_clean(plan(image), allow=("source-unpinned",))
-
-
-def test_the_firewall_opens_the_port() -> None:
-    nftables = plan(image).file("/etc/nftables.conf").content.decode()
-    assert "tcp dport 8080 accept" in nftables
-
-```
-
-| Helper | Does |
-|---|---|
-| `plan(image, profile)`, `plan(component)` | one profile (a component on an image of its own) compiled in memory: `service()`, `unit()`, `file()`, `packages`, `users`, `settings()`, `lint()` |
-| `assert_clean(subject, allow=)` | fails on any error or warning not allowed |
-| `assert_diagnostic(subject, code)` | the first finding with that code, or a failure listing all |
-| `assert_tree(tundravm.compile(image), golden)` | every path, byte, exec bit and symlink; `TUNDRAVM_UPDATE_GOLDEN=1` rewrites |
-| `read_lock(path)` | the lockfile, as `compile(image, lock=)` and `plan(image, lock=)` take it |
-| `FakeMkosi`, fixture `fake_mkosi` | mkosi replaced at the adapter: nothing forks, `build` writes placeholders, `calls` records each argv |
-| `FakeSources` | git and http fetches replaced by stub checkouts, `fetched` records each |
-| `boot(artifact)`, fixture `boot` | boots a built disk or UKI under QEMU with OVMF and reads the serial console |
-| `assert_probe(result)`, `read_probe` | a dev boot's probe report; fails unless it finished clean (`markers=[PROBE_DONE]` waits for it) |
-| `run_cli(*argv)` | runs the CLI in-process: `(exit code, stdout, stderr)` |
-
-The pytest fixtures load once tundravm is installed; `boot_unavailable()` and
-`build_unavailable()` say why a host cannot boot or build, for a test to skip on.
-
 ## Converting
 
 ### Systemd units
@@ -1045,16 +1013,14 @@ The pytest fixtures load once tundravm is installed; `boot_unavailable()` and
 $ tundravm convert ./units --from systemd > image.py
 ```
 
-reads a unit file or a directory of them and prints an `Image` file. `tundravm check`
-accepts it once the image ships each program a unit runs (`service-program-missing` names
-the missing ones: `packages=["python3"]` for a Python unit). Each service unit becomes one `Service`, with its `x.service.d/*.conf` drop-ins
-and the `x.timer` or `x.socket` that starts it folded in: `ExecStart=` as the argv,
-`Type=notify` as `readiness=Notify()`, the cgroup limits as `resources=`, the stop as
-`shutdown=`, the schedule as `timer=`, the socket as `socket=`, and every other directive
-systemd knows in `unit=DropIn(...)`. A `# note:` line says where the unit differs from what
-the image implies (`Type=exec`, `Restart=on-failure`, the generated user, the `static`
-sandbox in place of the unit's own, enabled at boot); a `# unsupported:` line names each
-unit or directive no `Image` slot holds (a mount, a path unit, a second `ExecStart=`).
+reads a unit file or a directory of them and prints an `Image` file: one `Service` per
+service unit, its drop-ins and the timer or socket that starts it folded in (`ExecStart=`
+as the argv, `Type=notify` as `readiness=Notify()`, cgroup limits as `resources=`, the
+schedule as `timer=`), every other directive in `unit=DropIn(...)`. A `# note:` says where
+the unit differs from what the image implies (`Type=exec`, the generated user, the
+`static` sandbox); a `# unsupported:` names what no slot holds (a mount, a path unit, a
+second `ExecStart=`). `check` passes once the image ships each program a unit runs:
+`service-program-missing` names the rest (`packages=["python3"]`).
 
 ### An mkosi tree
 
@@ -1083,12 +1049,8 @@ Both jobs install what `uv.lock` locks. Findings show as annotations on
 the pull request. A project without a committed `build/tundravm.lock` fails `lock --check`:
 lock, commit it and push again. The `build` job builds production, so it reads tundra-tools
 with the secret `TUNDRA_TOOLS_TOKEN`, a fine-grained token with read-only Contents on
-`Hyodar/tundra-tools`: `gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`.
-
-tundravm's own CI bakes its templates with it, or skips them.
-
-Its weekly `kernel` workflow compiles Debian's 6.12 kernel as `Kernel.build` does and boots
-it. It uploads the configs before and after `olddefconfig` and the drivers check's report.
+`Hyodar/tundra-tools`: `gh secret set TUNDRA_TOOLS_TOKEN --repo OWNER/REPO`. Without it the
+job warns and builds only through a `Tdxs(source=Git(mirror, ref))` mirror.
 
 ## When something fails
 
@@ -1115,7 +1077,8 @@ with the Python traceback.
 A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint, where
 `[image]` marks a finding about the whole image. A finding several profiles share is one
 line naming them, and a hint several findings share follows the last of them once. The
-report ends with the command that explains its codes, a component's included:
+report ends with the command that explains its codes, a component's included (here the
+`service` template's `App`):
 
 ```console
 $ tundravm check --explain app-privileged-port
