@@ -83,6 +83,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Lint
 
 - Every code is a registered rule with its severities and a fix in public spelling; `check --explain CODE` prints one, a component's own included.
+- Every fix an `Image` file can hit names the keyword to change (`hardening="relaxed"`, `value.ref.edit(...)`, `Tree(exclude=[...])`); the 28 codes only the internal model reaches sit apart in the lint reference and `check --explain` marks them `internal`.
 - **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces `service-command-not-shipped`: a service's program must be something the image ships.
