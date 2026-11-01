@@ -230,6 +230,7 @@ jobs:
           uv run tundravm run mode fixture-1
           grep -F 'tdx-evidence: no TDX quote path; development profile, running simulated' \
             "$console"
+          grep -F 'tdxs-issuer: no TDX quote path; issuing simulated quotes' "$console"
           grep -m 2 -E 'sink: journal batch [0-9]+ [1-9][0-9]* bytes' "$console"
           grep -m 2 -E 'sink: remote-write batch [0-9]+ [1-9][0-9]* bytes' "$console"
           grep -F 'sink: proxy carries 127.0.0.2:19580' "$console"
@@ -240,8 +241,9 @@ jobs:
           curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
 
       - name: Attest the dev instance and deliver a secret over its attested endpoint
-        # Plan 6.3 under QEMU: the simulator issuer's quote binds the nonce, the endpoint's
-        # TLS key, the SSH host keys and the instance key; deliver verifies on its own session.
+        # Plan 6.3 under QEMU: the simulator issuer the dev profile picked at boot binds the
+        # nonce, the endpoint's TLS key, the SSH host keys and the instance key; deliver
+        # verifies on its own session.
         run: |
           ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/operator"
           policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"

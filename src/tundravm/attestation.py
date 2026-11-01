@@ -105,6 +105,12 @@ PARTIAL_NOTE = (
     "the policy's platform_approval (MRTD, RTMR0)"
 )
 """What a ``partial`` verdict lacks and how to close it."""
+SIMULATED_NOTE = (
+    "simulated: the tdxs simulator signs with a published key, so this proves the endpoint "
+    "bound this session and answered the nonce, not that a TD runs this image: never "
+    "production evidence"
+)
+"""What a ``simulated`` verdict does not prove."""
 
 TDX_TEE_TYPE = 0x81
 QUOTE_HEADER_SIZE = 48
@@ -1190,6 +1196,8 @@ def render_attestation(result: Attestation, fmt: str) -> str:
         lines.append(f"note: {CHECKS_NOTE}")
     if result.verdict == "partial":
         lines.append(f"note: {PARTIAL_NOTE}")
+    if result.verdict == "simulated":
+        lines.append(f"note: {SIMULATED_NOTE}")
     if reasons:
         lines.append(f"reasons: {reasons}")
     lines.append(f"verdict: {result.verdict}")

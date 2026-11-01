@@ -67,7 +67,7 @@ def test_status_logs_mode_and_stop(dev_built: Build, project: Path, cli: Cli, qe
     logs = cli("run", "logs", "demo-1")
     assert "Reached target minimal.target" in logs.out
     mode = cli("run", "mode", "demo-1")
-    assert "simulated on qemu, development build: no TDX" in mode.out
+    assert "simulated on qemu, development build, issuer simulator: no TDX" in mode.out
     assert json.loads(cli("run", "mode", "demo-1", "--json").out)["production_evidence"] is False
     stopped = cli("run", "stop", "demo-1")
     assert stopped.out.strip() == "stopped demo-1"

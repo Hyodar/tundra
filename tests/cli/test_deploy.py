@@ -307,7 +307,7 @@ GCP_WALK = [
         [f"{GCE} get-serial-port-output tdx-prover-000003 {G}"],
         "Reached target minimal.target",
     ),
-    (("deploy", "mode", "prover-1"), [], "tdx on gcp, production build: a TDX guest"),
+    (("deploy", "mode", "prover-1"), [], "tdx on gcp, production build, issuer tdx: a TDX guest"),
     (
         ("deploy", "upgrade", "prover-1", "--build", "latest", *ATTESTED),
         [f"{GCE} describe tdx-prover-000003 {G} --format=json", *_launch(5, 6), *_move(3, 6)],
@@ -405,7 +405,7 @@ AZURE_WALK = [
         [f"az vm boot-diagnostics get-boot-log {AZ_VM}"],
         "Reached target minimal.target",
     ),
-    (("deploy", "mode", "demo-1"), [], "tdx on azure, production build: a TDX guest"),
+    (("deploy", "mode", "demo-1"), [], "tdx on azure, production build, issuer tdx: a TDX guest"),
 ]
 AZURE_REFUSED = [
     (("deploy", "upgrade", "demo-1", "--build", "latest", "--policy", "{policy}"), "GCP instances"),

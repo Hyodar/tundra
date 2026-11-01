@@ -84,6 +84,8 @@ FAIL_CLOSED = (
     "service starts"
 )
 """What :func:`status` says of a production build's services in a simulated instance."""
+NO_ISSUER = "none: a production build without TDX never starts tdxs"
+"""What :func:`issuer` says of a production build in a simulated instance."""
 
 
 @dataclass(slots=True)
@@ -521,6 +523,15 @@ def fail_closed(instance: Instance) -> bool:
     return bool(instance.mode == "simulated" and instance.data["build"]["kind"] == "production")
 
 
+def issuer(instance: Instance) -> str:
+    """The tdxs issuer *instance*'s quotes come from: ``simulator`` for a development build
+    without TDX (its profile picks it at boot), ``tdx`` on TDX, :data:`NO_ISSUER` for a
+    production build without TDX."""
+    if fail_closed(instance):
+        return NO_ISSUER
+    return "simulator" if instance.mode == "simulated" else "tdx"
+
+
 def instance_key(instance: Instance) -> str | None:
     """This boot's instance public key: the last ``tundravm-instance-key: pub`` line on a
     local instance's console, recorded in the receipt (``instance_key``), else what the
@@ -539,9 +550,9 @@ def instance_key(instance: Instance) -> str | None:
 
 
 def status(instance: Instance) -> dict[str, object]:
-    """``run status``: the process, then readiness when it runs, the instance public key
-    once the guest printed it, and :data:`FAIL_CLOSED` as ``services`` for a production
-    build in a simulated instance."""
+    """``run status``: the process, the tdxs issuer (:func:`issuer`), then readiness when
+    it runs, the instance public key once the guest printed it, and :data:`FAIL_CLOSED` as
+    ``services`` for a production build in a simulated instance."""
     running = alive(instance)
     if not running and instance.data.get("state") == "running":
         instance.data["state"] = "exited"
@@ -551,6 +562,7 @@ def status(instance: Instance) -> dict[str, object]:
         "mode": instance.data["mode"],
         "state": "running" if running else str(instance.data.get("state")),
         "build": instance.data["build"],
+        "issuer": issuer(instance),
     }
     if fail_closed(instance):
         report["services"] = FAIL_CLOSED
@@ -662,6 +674,7 @@ __all__ = [
     "CONSOLE",
     "EVENTS",
     "FAIL_CLOSED",
+    "NO_ISSUER",
     "INSTANCE",
     "MANAGEMENT_PORT",
     "MODES",
@@ -679,6 +692,7 @@ __all__ = [
     "forwards",
     "free_port",
     "instance_key",
+    "issuer",
     "launch",
     "logs",
     "monitor_socket",

@@ -6,6 +6,8 @@ partial coverage and every mode, build kind and verdict (``test_release_predicat
 debug attributes (``test_production_delivery_refuses_debug_attributes``). A replayed
 quote fails the nonce check (``test_attest.py``); relay, replay and wrong-key against the
 attested endpoint's channel binding are ``test_secrets.py::test_delivery_is_refused``.
+Which tdxs issuer each build kind answers with where it boots, and the verdict it gets, is
+``test_the_issuer_and_the_verdict_follow_the_build_and_where_it_boots``.
 """
 
 from __future__ import annotations
@@ -20,8 +22,10 @@ from tests.cli.conftest import Cli
 from tests.cli.test_attest import NONCE, PEER, UNAPPROVED, FakeIssuer, FakeValidator
 from tests.cli.test_attest import tdx_quote as quote_bytes
 from tests.cli.test_secrets import REGISTERS, SIMULATED, TOKEN
+from tests.cli.test_secrets import _instance as booted
 from tundravm import bootstrap, instances
 from tundravm.attestation import (
+    SIMULATED_NOTE,
     Attestation,
     attest,
     parse_quote,
@@ -29,7 +33,7 @@ from tundravm.attestation import (
     report_data_for,
 )
 from tundravm.builds import Build
-from tundravm.cli import EXIT_ERROR, EXIT_OK
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.testing import FakeEndpoint
 
 FAIL_CLOSED = (
@@ -236,3 +240,50 @@ def test_attest_reads_the_guest_gate_mode_from_the_evidence(
     assert report["verdict"] == "simulated" and report["guest_mode"] == "simulated"
     attested = [json.loads(line) for line in (found.path / "events.jsonl").read_text().splitlines()]
     assert attested[-1]["guest_mode"] == "simulated"
+
+
+# ── the issuer each build answers with, where it boots ───────────────────
+
+
+BOOTS: list[tuple[str, str, str, str, int]] = [
+    ("development", "simulated", "simulator", "simulated", EXIT_OK),
+    ("production", "simulated", instances.NO_ISSUER, "simulated", EXIT_FAILURE),
+    ("development", "tdx", "tdx", "measurements-match", EXIT_OK),
+    ("production", "tdx", "tdx", "measurements-match", EXIT_OK),
+]
+
+
+@pytest.mark.parametrize(
+    ("kind", "mode", "issuer", "verdict", "code"),
+    BOOTS,
+    ids=[f"{kind}-{mode}" for kind, mode, *_ in BOOTS],
+)
+def test_the_issuer_and_the_verdict_follow_the_build_and_where_it_boots(
+    prover: Path,
+    cli: Cli,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    mode: str,
+    issuer: str,
+    verdict: str,
+    code: int,
+) -> None:
+    """A dev build under QEMU attests as ``simulated`` and says what that does not prove; a
+    production build there is fail-closed (no issuer, never passes); on TDX both answer with
+    the tdx issuer."""
+    found = booted(prover, cli, mode=mode, kind=kind)  # type: ignore[arg-type]
+    simulated = mode == "simulated"
+    endpoint = (
+        FakeEndpoint()
+        if simulated
+        else FakeEndpoint(platform="tdx", mode="tdx", registers=REGISTERS)
+    )
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps(SIMULATED if simulated else PEER))
+    monkeypatch.setattr(bootstrap, "_tls", endpoint.connect)
+    assert json.loads(cli("run", "mode", found.id, "--json").out)["issuer"] == issuer
+    assert json.loads(cli("run", "status", found.id, "--json").out)["issuer"] == issuer
+    result = cli("attest", found.id, "--policy", policy)
+    assert (result.code, result.out.splitlines()[-2]) == (code, f"verdict: {verdict}")
+    assert (f"note: {SIMULATED_NOTE}" in result.out) == (verdict == "simulated")

@@ -1475,6 +1475,7 @@ def _mode(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -
         "mode": instance.mode,
         "platform": instance.platform,
         "build_kind": build["kind"],
+        "issuer": instances.issuer(instance),
         "production_evidence": production,
         "meaning": "a TDX guest whose evidence a production policy can accept"
         if production
@@ -1490,8 +1491,8 @@ def _mode(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -
         print(json_report(args.command, report), file=out)
     else:
         print(
-            f"{instance.id}: {instance.mode} on {instance.platform}, {build['kind']} build: "
-            f"{report['meaning']}",
+            f"{instance.id}: {instance.mode} on {instance.platform}, {build['kind']} build, "
+            f"issuer {report['issuer']}: {report['meaning']}",
             file=out,
         )
     return EXIT_OK
