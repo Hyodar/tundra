@@ -57,41 +57,8 @@ and the image's name appears nowhere in the text; `show BUILD` says
 `demo production (production)`. Proposal: production first, then the other profiles in
 declaration order; the first line `demo  profile=production  debian/trixie x86_64`. `show.py`.
 
-### 2.6 Lock findings speak the lockfile's internal vocabulary (M)
+### 2.8 Left as is
 
-`lock-changed [image] variants.dev.files: variants.dev.files changed since the lock`: the
-subject is the lockfile section key, which says `variants`, a word the public API dropped
-for profiles, and the finding carries no profile. Proposal: findings name
-`profile dev: files`, set `variant=` from the section, and lock v3 renames the keys to
-`profiles.*` (a lockfile migration, so M).
-
-### 2.7 `--format` and the Markdown table exist only in code (S)
-
-`check.render_as` and `formats.py` still document `--format auto|text|json|github|markdown`,
-`compile --check` and `ci`; the CLI has `--json` and switches to annotations under
-`GITHUB_ACTIONS=true`. `render_markdown` is unreachable from the CLI. Proposal: delete the
-Markdown renderer and the stale docstrings, or give `check` the one `--summary` flag that
-writes the Markdown table into `$GITHUB_STEP_SUMMARY` (and use it in the `--ci` workflow).
-
-### 2.8 Small output papercuts (S each)
-
-- `show --json | head` ends in a `BrokenPipeError` traceback; `main` should exit quietly on
-  `BrokenPipeError`.
-- `check --explain CODE ...` takes `nargs="+"`, so `check --explain tree-drift demo.py`
-  reads `demo.py` as a code. `--explain` could take one code per flag (`append`).
-- The text summary counts profiles (`2 warnings`) under one printed line; say
-  `2 warnings (1 line)` or count lines.
-- `E_SOURCE` repeats its fix: the message ends `run tundravm build --clean-cache` and the
-  hint says it again. `_source.py`.
-- `run --mode tdx` nests parentheses: `(unavailable: no Intel TDX host (kvm_intel tdx is
-  not enabled))`.
-- `No production build under build.` reads as a verb; `under build/` or the absolute path.
-- `doctor` reports `build ready (sudo ...)` when `sudo --version` runs, not when sudo will
-  run without a prompt; a CI runner without passwordless sudo learns it at build time.
-  Probing `sudo -n` is not enough either (this host refuses `sudo -n true` and still ran the
-  build), so the row should say `sudo (may ask for a password)` unless `-n` succeeds.
-- `lock --check` without a lockfile is `E_LOCKFILE` (exit 2), where the guide says drift
-  exits 1; a first CI run on a project that has not locked reads as a crash.
 - The README's Python block is the minimal image, while the commands under it run on the
   `App` project `new` wrote; left as is to keep the README near 400 words.
 
@@ -130,6 +97,25 @@ source whatever its `rust-toolchain.toml` pins, and the manifest records no Rust
   boots fail-closed), and links the lint reference.
 - Guide: the first steps lock and write `mkosi/` before `pytest`, since the generated tests
   and CI compare against it; the Markdown table no command prints is gone.
+- Fixed later on `lock-output`, through the next `lock --check` entry: lock findings said
+  `variants.<name>.*` and were image-wide; lockfile version 6 says `profiles.<name>.*` (an
+  older lock is refused: lock again), and a profile's drift is that profile's finding.
+- A production build without a lockfile locked moving refs on the spot: it refuses with
+  `lock-missing` (`tundravm lock IMAGE`); `build --dev` still writes a missing lock, and
+  CI's fixture jobs lock first.
+- `render_as`, the `--format` resolution and every Markdown renderer were reachable from
+  no command: deleted; `check` keeps `--json` and the GitHub annotations.
+- `show --json | head` printed a BrokenPipeError traceback: it exits 141 quietly.
+- `check --explain tree-drift demo.py` read `demo.py` as a code: `--explain` takes one
+  code per flag.
+- The text summary counted profiles under fewer lines: it says `(1 line)` when they differ.
+- `E_SOURCE` for a modified checkout said its fix twice: the hint alone says it.
+- `run --mode tdx` nested parentheses: `cannot run here: no Intel TDX host: ...`.
+- `No production build under build.`: it says `under build/.`.
+- `doctor` called sudo ready without asking whether it prompts: the row says sudo may ask
+  for a password unless `sudo -n true` succeeds.
+- `lock --check` without a lockfile was `E_LOCKFILE` (exit 2): it is drift, exit 1, naming
+  `tundravm lock`, and the guide's CI section says so.
 
 ## 4. What held up
 
