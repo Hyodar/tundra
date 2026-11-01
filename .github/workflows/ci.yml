@@ -1,5 +1,6 @@
 # test is the unit suite alone; templates and boot bake the Image templates for real, and
-# the fixture jobs build tests/fixtures/native-tree/recipe.py, which fetches no source.
+# the fixture jobs build tests/fixtures/native-tree/recipe.py, whose one source is a public
+# Go program asking for a newer Go than Debian's: the runner's go fetches that toolchain.
 # Every job sets up through .github/actions/setup.
 #
 # Every image implies the evidence service, which builds tundra-tools from
@@ -124,9 +125,9 @@ jobs:
           if-no-files-found: ignore
 
   fixture-boot:
-    # Gate 1, 3 and 5 evidence: the fixture recipe (initramfs root, no source builds) built
-    # into build directories, its production profile and its dev one, each verified against
-    # its manifest. The production build is booted under QEMU with OVMF both ways
+    # Gate 1, 3 and 5 evidence: the fixture recipe (initramfs root, one Go source build)
+    # built into build directories, its production profile and its dev one, each verified
+    # against its manifest, which names the Go toolchain the source's go.mod asks for. The production build is booted under QEMU with OVMF both ways
     # (payload.efi through -kernel, qemu.raw through its ESP) by the harness: no TDX here,
     # so it must be fail-closed (tdx-evidence.service refuses, web.service never starts,
     # the boot probe still prints). The dev build runs as an instance with
@@ -163,6 +164,7 @@ jobs:
           uv run tundravm verify latest
           uv run tundravm verify latest-development
           uv run tundravm show latest
+          uv run tundravm show latest | grep -E '^    git-codereview +go1\.26\.0  h1:'
           uv run tundravm show latest --measurements
           uv run tundravm show --diff latest latest-development
 

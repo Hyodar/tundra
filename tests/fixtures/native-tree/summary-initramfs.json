@@ -5,8 +5,12 @@
         "Architecture": "x86-64",
         "Bootable": "auto",
         "Bootloader": "systemd-boot",
-        "BuildPackages": [],
-        "BuildScripts": [],
+        "BuildPackages": [
+          "golang"
+        ],
+        "BuildScripts": [
+          "<tree>/payload/mkosi.build.d/50-build.sh"
+        ],
         "BuildSources": [
           {
             "Source": "<tree>",
@@ -179,8 +183,12 @@
         "Architecture": "x86-64",
         "Bootable": "auto",
         "Bootloader": "systemd-boot",
-        "BuildPackages": [],
-        "BuildScripts": [],
+        "BuildPackages": [
+          "golang"
+        ],
+        "BuildScripts": [
+          "<tree>/payload/mkosi.build.d/50-build.sh"
+        ],
         "BuildSources": [
           {
             "Source": "<tree>",

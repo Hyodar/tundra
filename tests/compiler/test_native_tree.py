@@ -186,6 +186,7 @@ def test_tree_has_the_native_shape() -> None:
         "mkosi.images/gcp/mkosi.repart/00-esp.conf",
         "mkosi.images/payload/mkosi.conf",
         "mkosi.repart/00-esp.conf",
+        "payload/mkosi.build.d/50-build.sh",
         "payload/mkosi.conf",
         "payload/mkosi.conf.d/10-platform.conf",
         "payload/mkosi.conf.d/20-greeter.conf",

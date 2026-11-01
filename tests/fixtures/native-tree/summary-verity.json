@@ -14,8 +14,12 @@
         "Architecture": "x86-64",
         "Bootable": "enabled",
         "Bootloader": "uki",
-        "BuildPackages": [],
-        "BuildScripts": [],
+        "BuildPackages": [
+          "golang"
+        ],
+        "BuildScripts": [
+          "<tree>/payload/mkosi.build.d/50-build.sh"
+        ],
         "BuildSources": [
           {
             "Source": "<tree>",
@@ -217,8 +221,12 @@
         "Architecture": "x86-64",
         "Bootable": "enabled",
         "Bootloader": "uki",
-        "BuildPackages": [],
-        "BuildScripts": [],
+        "BuildPackages": [
+          "golang"
+        ],
+        "BuildScripts": [
+          "<tree>/payload/mkosi.build.d/50-build.sh"
+        ],
         "BuildSources": [
           {
             "Source": "<tree>",

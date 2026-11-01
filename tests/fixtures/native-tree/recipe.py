@@ -1,16 +1,17 @@
 """Gate 1 fixture: the smallest recipe that exercises every node of the mkosi-native tree.
 
-One service, one component, a ``dev`` variant that adds content (a profile overlay with
-SSH access by public key only) and two variants that only add outputs (the ``azure`` and
-``gcp`` wrapper subimages). ``recipe_with(root=...)`` builds it with either root layout;
-``tests/compiler/test_native_tree.py`` compiles both into ``tree-initramfs/`` and
-``tree-verity/`` beside this file and asserts every file and the resolved mkosi summary.
+One service, one component, a Go program built from source, a ``dev`` variant that adds
+content (a profile overlay with SSH access by public key only) and two variants that only
+add outputs (the ``azure`` and ``gcp`` wrapper subimages). ``recipe_with(root=...)``
+builds it with either root layout; ``tests/compiler/test_native_tree.py`` compiles both
+into ``tree-initramfs/`` and ``tree-verity/`` beside this file and asserts every file and
+the resolved mkosi summary.
 
 ``recipe`` is the ``initramfs`` layout and ``verity_recipe`` the ``verity`` one, which
 ``tundravm build ... --attr verity_recipe`` selects. Both boot in CI from ``qemu.raw``
 through the ESP (``tests/integration/test_fixture_boot.py``, ``test_verity_boot.py``):
-``Web`` serves a page the host fetches, and ``BootProbe`` prints the command line and what
-the root is on the console.
+``Web`` serves a page the host fetches, and ``BootProbe`` prints the command line, what
+the root is and the usage line of the Go program on the console.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from tundravm.declarative import (
     Debian,
     Declaration,
     File,
+    Git,
     Hardening,
     Mkosi,
     Package,
@@ -32,7 +34,7 @@ from tundravm.declarative import (
     Variant,
     component,
 )
-from tundravm.declarative.utils import Composite, Network, SshAccess
+from tundravm.declarative.utils import Composite, GoBinary, Network, SshAccess
 
 SNAPSHOT = "20251113T083151Z"
 SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
@@ -52,21 +54,31 @@ class Greeter(Composite):
         yield File("/etc/greeter/greeting", f"{self.greeting}\n")
 
 
+REVIEW = GoBinary(
+    "git-codereview",
+    Git("https://github.com/golang/review", "6c2c97b0f412fc91be975ada5e0628294794e570"),
+    package="./git-codereview",
+)
+"""A Go program whose go.mod asks for a newer Go than trixie's 1.24: golang.org/x/review at a
+commit that says ``go 1.26.0`` and requires no module. The build fetches go1.26.0 on the
+host and builds offline with it."""
+
+
 PROBE = "/usr/lib/tundravm/boot-probe"
-PROBE_SCRIPT = """\
+PROBE_SCRIPT = f"""\
 #!/bin/sh
 # What the boot tests assert, one "boot-probe:" line each: the command line, the mounts
-# stacked on / (fstype, source, options), each device-mapper device, and where a write to
-# /usr/bin lands.
-say() { echo "boot-probe: $*"; }
+# stacked on / (fstype, source, options), each device-mapper device, where a write to
+# /usr/bin lands, and the first line the Go program prints.
+say() {{ echo "boot-probe: $*"; }}
 say "cmdline $(cat /proc/cmdline)"
 while read -r line; do
     set -- $line
-    [ "$5" = / ] && say "mount / ${line#* - }"
+    [ "$5" = / ] && say "mount / ${{line#* - }}"
 done </proc/self/mountinfo
 for dm in /sys/block/dm-*; do
     [ -e "$dm/dm/name" ] || continue
-    say "dm $(cat "$dm/dm/name") ${dm##*/} uuid=$(cat "$dm/dm/uuid") ro=$(cat "$dm/ro")"
+    say "dm $(cat "$dm/dm/name") ${{dm##*/}} uuid=$(cat "$dm/dm/uuid") ro=$(cat "$dm/ro")"
 done
 if touch /usr/bin/.boot-probe 2>/dev/null; then
     say "usr-bin write=accepted"
@@ -74,9 +86,10 @@ if touch /usr/bin/.boot-probe 2>/dev/null; then
 else
     say "usr-bin write=refused"
 fi
+say "go $({REVIEW.executable} help | head -n 1)"
 say done
 """
-"""The probe ``BootProbe`` installs; ``/bin/sh`` and coreutils only, no extra package."""
+"""The probe ``BootProbe`` installs; ``/bin/sh``, coreutils and :data:`REVIEW`."""
 
 WWW = "/srv/www"
 WEB_PORT = 8080
@@ -125,6 +138,7 @@ def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
             Service("greeter", ("/usr/bin/cat", "/etc/greeter/greeting")),
             Network(ipv6=False),
             Web(),
+            REVIEW,
             BootProbe(),
         ),
         variants=(

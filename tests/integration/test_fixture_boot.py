@@ -1,16 +1,17 @@
 """Boot the gate 1 fixture (``initramfs`` layout) both ways: ``-kernel`` and ``qemu.raw``.
 
-``tests/fixtures/native-tree/recipe.py``'s ``recipe`` is a plain ``Recipe`` with no source
-builds, so it bakes anywhere the Linux backend does. Its ``default`` variant, a production
-profile, is booted under QEMU with OVMF from pflash twice: the payload's UKI
+``tests/fixtures/native-tree/recipe.py``'s ``recipe`` is a plain ``Recipe`` whose one source
+build is a public Go program asking for a newer Go than Debian's, so it bakes where the
+Linux backend does with ``go`` and the network on the host. Its ``default`` variant, a
+production profile, is booted under QEMU with OVMF from pflash twice: the payload's UKI
 (``payload.efi``) through ``-kernel``, and ``qemu.raw`` attached as a virtio disk on a
 snapshot with no ``-kernel``, which OVMF boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI``
 on the ESP (the way ``run --mode simulated`` boots it). There is no TDX here, so each boot
 must be fail-closed (plan 6.1): ``minimal.target`` reached, ``tdx-evidence.service`` failed
 with the gate's console line, the ``web`` and ``greeter`` services never started on that
-dependency, and the ungated ``boot-probe`` task run. The kernel's command line (and
-``/proc/cmdline``, which the probe prints) must be the UKI's own with the harness's SMBIOS
-console words appended.
+dependency, and the ungated ``boot-probe`` task run, the Go program among what it prints.
+The kernel's command line (and ``/proc/cmdline``, which the probe prints) must be the UKI's
+own with the harness's SMBIOS console words appended.
 
 CI's ``fixture-boot`` job builds it with ``tundravm build --profile default`` and points
 ``TUNDRAVM_FIXTURE_BUILD`` at that build directory; without it the test bakes the
@@ -129,6 +130,12 @@ def test_disk_boots_through_its_esp_fail_closed(output: Path, disk_boot: BootRes
     assert f"file={output / 'qemu.raw'},format=raw,if=virtio,snapshot=on" in command
     assert any(arg.startswith("if=pflash,format=raw,readonly=on,") for arg in command)
     assert_fail_closed(disk_boot)
+
+
+def test_the_go_program_built_with_its_go_mod_toolchain_runs(kernel_boot: BootResult) -> None:
+    """``git-codereview``, whose go.mod says ``go 1.26.0`` (trixie's Go is 1.24), built in the
+    offline sandbox with the toolchain the host fetched, runs and prints its usage line."""
+    assert probe_lines(kernel_boot.console, "go") == ["Usage: git-codereview <command> [-n] [-v]"]
 
 
 @pytest.mark.parametrize("via", ["kernel", "disk"])

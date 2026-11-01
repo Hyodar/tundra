@@ -1,7 +1,7 @@
 #!/bin/sh
 # What the boot tests assert, one "boot-probe:" line each: the command line, the mounts
-# stacked on / (fstype, source, options), each device-mapper device, and where a write to
-# /usr/bin lands.
+# stacked on / (fstype, source, options), each device-mapper device, where a write to
+# /usr/bin lands, and the first line the Go program prints.
 say() { echo "boot-probe: $*"; }
 say "cmdline $(cat /proc/cmdline)"
 while read -r line; do
@@ -18,4 +18,5 @@ if touch /usr/bin/.boot-probe 2>/dev/null; then
 else
     say "usr-bin write=refused"
 fi
+say "go $(/usr/bin/git-codereview help | head -n 1)"
 say done

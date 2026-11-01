@@ -15,7 +15,7 @@ fail-closed (plan 6.1: ``tdx-evidence.service`` refuses and no service starts): 
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
 ``qemu-system-x86_64``, OVMF and read access to tundra-tools (``support.require_sources``);
 skipped otherwise. ``test_fixture_boot.py`` boots the same
-two paths on the gate 1 fixture, which fetches no source.
+two paths on the gate 1 fixture, whose one source is public.
 CI's ``boot`` job runs it.
 Run with: uv run pytest tests/integration/test_templates_boot.py -m boot
 """
