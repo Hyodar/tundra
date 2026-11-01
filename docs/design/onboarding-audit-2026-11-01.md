@@ -228,22 +228,16 @@ demo's and surge's trees; surge through `check --tree` and `show`.
   gate 6; Testing before Build; the explain sample says it is the template's `App`.
 - CHANGELOG: 1755 to 1131 words, one bullet per change, 21 breaking marks; README 399.
 - Trust: the weekly `kernel` workflow; `docs/design/status-2026-11-01.md` is new.
+- Item 11: every `lint.md` fix and hint names the public API, or says tundravm sets it.
+- Item 12: the 8745 rule comes from `secret-delivery` and is gone where nothing listens.
+- Item 13: the manifest is `tundravm.manifest/2` with `image_digest`; old ones are refused.
+- Item 14: `show IMAGE` lists the components the file wrote, what they composed nested.
+- Item 16: `show --dev` is always a build; a dev profile is `--profile dev`.
 
 ### Not fixed, ranked (items 7 to 10 above still stand)
 
-11. About 25 rows of `docs/reference/lint.md` give fixes in the internal model (`Unit`,
-    `Key`, `Disk`, `SecretEnv`, `ExternalDelivery`, `Setting`, `Debloat`, `needs=`); most
-    cannot fire from an `Image` file, but every user reads the page (M; `check.py`,
-    `declarative/resolve.py`, `declarative/utils.py`).
-12. The firewall's 8745 rule says `comment "allow"` and opens on images with no
-    `secret-delivery` (S; `components/_base.py`, `declarative/_network.py`; regenerates
-    the native-tree fixture, which `observability-proof` owns now).
-13. The manifest and `show BUILD --json` carry `recipe_digest` (S; `manifest.py`).
-14. `show` lists `server` (a source build) and `dev`, `dev-access`, `devtools` as
-    components (S; `_describe.py`, `cli.py`).
 15. `egress-unfiltered` puts its fix in the message and prints no `hint:` (S;
     `components/_base.py`).
-16. `show --dev` is a build in a project and a profile after `IMAGE` (S; `cli.py`).
 17. The API reference: `File(mode=420)` in decimal, `Firewall.check(resolved:
     dm.Resolved)`, `FakeMkosi.invoke`/`verbs` and `FakeSources.*` without a line
     (S; `_reference.py`, `components/_base.py`, `testing/`).
