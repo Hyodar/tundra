@@ -88,6 +88,10 @@ class _Lowering:
     image: Image
     owned: list[tuple[str, str]] = field(default_factory=list)
     curl: bool = False
+    curl_shipped: bool = False
+    """Whether the image itself ships curl, which an HTTP probe runs."""
+    world: dict[str, Service] = field(default_factory=dict)
+    """The services as the profile being lowered sees them, by unit, where it edits them."""
     backports: bool = False
     sends: tuple[tuple[str, Egress], ...] | None = None
     runtime: Runtime = field(init=False)
@@ -103,11 +107,21 @@ class _Lowering:
             volumes=tuple(image.volumes),
             secrets=tuple(image.secrets),
             ingress=tuple(image.ingress),
-            # A profile's services too: the volume step makes their directories in
-            # every profile, which is harmless where the profile is not selected.
+            # A profile's services and its edits of them too: the volume step makes their
+            # directories in every profile, which is harmless where the profile is not
+            # selected.
             services=tuple(
                 services_of(
-                    (*self.workload(), *(i for p in image.profiles.values() for i in p.add))
+                    (
+                        *self.workload(),
+                        *(i for p in image.profiles.values() for i in p.add),
+                        *(
+                            c.edited
+                            for p in image.profiles.values()
+                            for c in p.changes
+                            if isinstance(c, Edit)
+                        ),
+                    )
                 )
             ),
             tools=Tdxs().source if evidence is None else evidence.source,
@@ -227,6 +241,7 @@ class _Lowering:
             found.append(Backports())
         if self.curl:
             found.append(dm.Package("curl"))
+        self.curl_shipped = self.curl
         return tuple(found)
 
     def outbound(
@@ -319,9 +334,16 @@ class _Lowering:
 
     def variant(self, name: str, profile: Profile) -> dm.Variant:
         """One ``Profile`` as the overlay it is."""
+        changes, regenerated, world = self.changes(profile)
         items: list[dm.Declaration | dm.Fragment] = []
+        self.world, curl, self.curl = world, self.curl, False
         for item in profile.add:
             items.extend(self.content(item))
+        self.world = {}
+        items.extend(regenerated)
+        if self.curl and not self.curl_shipped:
+            items.append(dm.Package("curl"))
+        self.curl = curl
         items.extend(self.owned_files(name))
         inherited = [item for ancestor in self.ancestors(profile) for item in ancestor.add]
         with _at(profile):
@@ -330,26 +352,39 @@ class _Lowering:
             name,
             inherits=profile.extends or BASE_PROFILE,
             add=dm.Fragment(name, items=tuple(items)),
-            changes=(*self.changes(profile), *egress),
+            changes=(*changes, *egress),
             release=profile.production,
         )
 
-    def changes(self, profile: Profile) -> tuple[dm.Edit | dm.Remove, ...]:
-        """*profile*'s changes on the declarations their values lower to.
+    def changes(
+        self, profile: Profile
+    ) -> tuple[tuple[dm.Edit | dm.Remove, ...], tuple[dm.Declaration, ...], dict[str, Service]]:
+        """*profile*'s changes on the declarations their values lower to, the declarations
+        its service edits add, and the services as it sees them, by unit.
 
         An edit changes what the value its profile sees lowers to: the image's value with
         the edits of the profiles it extends applied, so two edits that land on the same
         directive (``resources=`` and ``shutdown=`` both write ``[Service]`` lines) add up.
+        Service edits are lowered together: every service the profile inherits is lowered
+        as it sees them, so a dependent of an edited readiness waits for the new probe, and
+        what differs from the inherited lowering is the profile's change.
         """
         current: dict[dm.Ref, object] = {}
+        world: dict[str, Service] = {}
         for ancestor in self.ancestors(profile):
             for change in ancestor.changes:
-                if isinstance(change, Edit):
+                if isinstance(change, Edit) and isinstance(change.ref.value, Service):
+                    unit = change.ref.value.unit_name
+                    world[unit] = replace(world.get(unit, change.ref.value), **change.fields)  # type: ignore[arg-type]
+                elif isinstance(change, Edit):
                     target = change.ref.target
                     current[target] = replace(
                         current.get(target, change.ref.value), **change.fields
                     )  # type: ignore[type-var]
+        inherited = dict(world)
+        causes: dict[str, Edit] = {}
         found: list[dm.Edit | dm.Remove] = []
+        position: int | None = None
         for change in profile.changes:
             if isinstance(change, (dm.Edit, dm.Remove)):
                 found.append(change)
@@ -358,11 +393,83 @@ class _Lowering:
                 if isinstance(change, Remove):
                     found.append(dm.Remove(change.ref.target))
                     continue
+                if isinstance(change.ref.value, Service):
+                    self.edit_service(change, world)
+                    causes[change.ref.value.unit_name] = change
+                    position = len(found) if position is None else position
+                    continue
                 target = change.ref.target
                 before = current.get(target, change.ref.value)
                 after = current[target] = replace(before, **change.fields)  # type: ignore[type-var]
                 found.append(self.edit(change, before, after))
-        return tuple(found)
+        if position is None:
+            return tuple(found), (), world
+        edits, added = self.regenerate(profile, inherited, world, causes)
+        found[position:position] = edits
+        return tuple(found), added, world
+
+    def edit_service(self, change: Edit, world: dict[str, Service]) -> None:
+        """Apply *change* to the service it names in *world*, refusing one that changes
+        none of its units."""
+        value = change.ref.value
+        assert isinstance(value, Service)
+        before = world.get(value.unit_name, value)
+        after = replace(before, **change.fields)  # type: ignore[arg-type]
+        self.world = world
+        try:
+            unchanged = tuple(self.units(before)) == tuple(self.units(after))
+        finally:
+            self.world = {}
+        if unchanged:
+            raise ValidationError(
+                f"The edit of {change.ref} changes nothing the image builds.",
+                hint="Drop it, or set a keyword whose value differs.",
+            )
+        world[value.unit_name] = after
+
+    def regenerate(
+        self,
+        profile: Profile,
+        inherited: dict[str, Service],
+        world: dict[str, Service],
+        causes: dict[str, Edit],
+    ) -> tuple[list[dm.Edit | dm.Remove], tuple[dm.Declaration, ...]]:
+        """What turns the units of the services *profile* inherits, lowered as *inherited*
+        sees them, into those lowered as *world* does: an edit of each unit that differs, a
+        removal of each that is gone, and the units that are new."""
+        services = tuple(
+            services_of((*self.workload(), *(i for a in self.ancestors(profile) for i in a.add)))
+        )
+        before = {unit.ref: unit for unit, _ in self.lowered(services, inherited)}
+        after = self.lowered(services, world)
+        edits: list[dm.Edit | dm.Remove] = []
+        added: list[dm.Declaration] = []
+        for unit, owner in after:
+            old = before.get(unit.ref)
+            with _at(causes.get(owner, profile)):
+                if old is None:
+                    added.append(unit)
+                elif old != unit:
+                    edits.append(dm.Edit(unit.ref, _differing(old, unit)))
+        kept = {unit.ref for unit, _ in after}
+        with _at(profile):
+            edits.extend(dm.Remove(ref) for ref in before if ref not in kept)
+        return edits, tuple(added)
+
+    def lowered(
+        self, services: Sequence[Service], world: dict[str, Service]
+    ) -> list[tuple[dm.Declaration, str]]:
+        """The units of *services* as *world* sees them, each with its service's unit."""
+        self.world = world
+        try:
+            found: list[tuple[dm.Declaration, str]] = []
+            for service in services:
+                seen = world.get(service.unit_name, service)
+                with _at(seen):
+                    found.extend((unit, seen.unit_name) for unit in self.units(seen))
+            return found
+        finally:
+            self.world = {}
 
     def ancestors(self, profile: Profile) -> tuple[Profile, ...]:
         """The profiles *profile* extends, the image's nearest first."""
@@ -375,15 +482,7 @@ class _Lowering:
 
     def edit(self, change: Edit, before: object, after: object) -> dm.Edit:
         """The internal edit that turns what *before* lowers to into what *after* does."""
-        old, new = self.declaration(before), self.declaration(after)
-        keys = dm.key_fields(change.ref.target.kind)
-        fields = {
-            item.name: getattr(new, item.name)
-            for item in dataclass_fields(new)
-            if item.init
-            and item.name not in keys
-            and getattr(new, item.name) != getattr(old, item.name)
-        }
+        fields = _differing(self.declaration(before), self.declaration(after))
         if not fields:
             raise ValidationError(
                 f"The edit of {change.ref} changes nothing the image builds.",
@@ -392,9 +491,7 @@ class _Lowering:
         return dm.Edit(change.ref.target, fields)
 
     def declaration(self, value: object) -> dm.Declaration:
-        """The one declaration a public value an edit names lowers to."""
-        if isinstance(value, Service):
-            return self.timer_task(value) if value.timer is not None else self.unit(value)
+        """The one declaration a :class:`File` or :class:`Tree` lowers to."""
         if isinstance(value, File):
             return dm.File(value.path, value.content, value.mode)
         assert isinstance(value, Tree)
@@ -493,8 +590,17 @@ class _Lowering:
     # ── Services ────────────────────────────────────────────────────
 
     def service(self, item: Service) -> Iterator[dm.Declaration | dm.Fragment]:
-        """A ``Service`` as its unit, the builds its argv pulls in and its probe."""
+        """A ``Service`` as the builds its argv pulls in and its units."""
+        from ._values import HttpProbe
+
+        if isinstance(item.readiness, HttpProbe):
+            self.curl = True
         yield from item.binaries()
+        yield from self.units(item)
+
+    def units(self, item: Service) -> Iterator[dm.Declaration]:
+        """*item*'s units: its ``.service`` and its probe, or its timer task, then its
+        drop-in."""
         if item.timer is not None:
             yield self.timer_task(item)
         else:
@@ -579,10 +685,6 @@ class _Lowering:
         readiness = item.readiness
         if readiness is None or isinstance(readiness, Notify):
             return None
-        from ._values import HttpProbe
-
-        if isinstance(readiness, HttpProbe):
-            self.curl = True
         return dm.Task(
             f"{item.stem}-ready",
             readiness.command(),
@@ -600,7 +702,7 @@ class _Lowering:
         for requirement in (*_evidence(item), *item.requires):
             if isinstance(requirement, dm.UnitOutput):
                 continue
-            for handle in _handles(requirement):
+            for handle in _handles(requirement, self.world):
                 units.append(_ready_unit(item, handle))
         return tuple(dict.fromkeys(units))
 
@@ -623,17 +725,22 @@ def _outputs(item: Service) -> tuple[dm.UnitOutput, ...]:
     return tuple(r for r in item.requires if isinstance(r, dm.UnitOutput))
 
 
-def _handles(requirement: object) -> tuple[Readied, ...]:
-    """The readiness handles one ``requires=`` entry stands for."""
-    if isinstance(requirement, (ServiceReady, BootReady)):
+def _handles(requirement: object, world: dict[str, Service]) -> tuple[Readied, ...]:
+    """The readiness handles one ``requires=`` entry stands for, each service's as *world*
+    declares it where it holds the service."""
+    if isinstance(requirement, BootReady):
         return (requirement,)
-    if isinstance(requirement, ServiceRef):
-        return (requirement.ready,)
-    if isinstance(requirement, Endpoint):
-        assert requirement.ready is not None
-        return (requirement.ready,)
+    if isinstance(requirement, (ServiceReady, ServiceRef, Endpoint)):
+        handle = requirement if isinstance(requirement, ServiceReady) else requirement.ready
+        assert handle is not None
+        return (world[handle.unit].ready if handle.unit in world else handle,)
     if isinstance(requirement, ComponentReady):
-        found = requirement.handles()
+        component = requirement.component
+        if type(component).readiness is Component.readiness:
+            services = (world.get(s.unit_name, s) for s in component.services())
+            found: tuple[Readied, ...] = tuple(s.ready for s in services if s.readiness is not None)
+        else:
+            found = requirement.handles()
         if not found:
             raise ValidationError(
                 f"Component {requirement.name!r} declares no readiness, so nothing can "
@@ -662,6 +769,18 @@ def _ready_unit(owner: Service, handle: Readied) -> str:
     if isinstance(handle.probe, Notify):
         return handle.unit
     return f"{handle.unit.removesuffix('.service')}-ready.service"
+
+
+def _differing(old: dm.Declaration, new: dm.Declaration) -> dict[str, object]:
+    """The fields of *new*, keys aside, whose values differ from *old*'s."""
+    keys = dm.key_fields(type(new).__name__)
+    return {
+        item.name: getattr(new, item.name)
+        for item in dataclass_fields(new)
+        if item.init
+        and item.name not in keys
+        and getattr(new, item.name) != getattr(old, item.name)
+    }
 
 
 def _owned_lines(owned: Sequence[tuple[str, str]]) -> Iterator[str]:

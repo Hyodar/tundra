@@ -392,7 +392,7 @@ class Runtime:
                 "rotation": secret.rotation,
                 "location": secret.location,
                 "source": None if secret.source is None else secret.source.manifest(),
-                "units": sorted(bound.get(secret.name, [])),
+                "units": sorted(set(bound.get(secret.name, []))),
             }
             for secret in self.secrets
         ]
