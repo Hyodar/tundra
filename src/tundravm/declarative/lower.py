@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import posixpath
 from collections.abc import Collection, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from tundravm._location import display_location
@@ -49,6 +50,7 @@ from .model import (
     Debloat,
     Declaration,
     Disk,
+    Edit,
     FileTree,
     Firewall,
     Fragment,
@@ -326,15 +328,25 @@ def _probes(
 
 def declared_firewall(recipe: Recipe, variant: Variant) -> Firewall | None:
     """The ``Firewall`` *variant* builds with, which resolution replaces with what it renders:
-    the last one its chain of variants (and the image's items) declares."""
+    the last one its chain of variants (and the image's items) declares, with the edits
+    each variant of the chain makes to it (a profile's components' egress)."""
     chain: list[Variant] = []
     current: Variant | None = variant
     while current is not None and current not in chain:
         chain.insert(0, current)
         parent = current.inherits
         current = None if parent is None or parent == BASE_VARIANT else recipe.variant(parent)
-    roots: list[object] = list(recipe.items) if chain[0].inherits == BASE_VARIANT else []
-    roots += [v.add for v in chain]
+    found = _last_firewall(list(recipe.items)) if chain[0].inherits == BASE_VARIANT else None
+    for link in chain:
+        for change in link.changes:
+            if found is not None and isinstance(change, Edit) and change.target.kind == "Firewall":
+                found = replace(cast(Any, found), **change.fields)
+        found = _last_firewall([link.add]) or found
+    return found
+
+
+def _last_firewall(roots: list[object]) -> Firewall | None:
+    """The last ``Firewall`` *roots* declare, nested fragments included."""
     found: Firewall | None = None
     pending = roots
     while pending:

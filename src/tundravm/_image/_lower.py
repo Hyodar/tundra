@@ -88,6 +88,7 @@ class _Lowering:
     owned: list[tuple[str, str]] = field(default_factory=list)
     curl: bool = False
     backports: bool = False
+    sends: tuple[tuple[str, Egress], ...] | None = None
     runtime: Runtime = field(init=False)
     baseline_types: tuple[type, ...] = field(init=False)
 
@@ -211,7 +212,8 @@ class _Lowering:
             firewall = Firewall(allow=firewall.allow, egress=egress)
         filtering = self.component(firewall)
         if egress is not None:
-            rules = egress_rules(self.outbound(egress, (tee, tdxs, network)))
+            self.sends = tuple(self.outbound(egress, (tee, tdxs, network)))
+            rules = egress_rules(self.sends)
             with _at(firewall):
                 filtering = _with_rules(filtering, rules)
         found: list[dm.Declaration | dm.Fragment] = [
@@ -241,6 +243,23 @@ class _Lowering:
         for target in image.targets:
             if target in _CLOUD_EGRESS:
                 yield target, Egress(hosts=_CLOUD_EGRESS[target])
+
+    def profile_egress(
+        self, added: Sequence[object], inherited: Sequence[object] = ()
+    ) -> tuple[dm.Edit, ...]:
+        """The edit of the firewall a profile needs so its output chain also accepts what
+        the components it adds (*added*, beyond the *inherited* ones of the profiles it
+        extends) send: none when the image does not filter egress or they ask for nothing
+        new."""
+        from tundravm.components._base import egress_rules
+
+        if self.sends is None:
+            return ()
+        before = (*self.sends, *_sends(inherited))
+        rules = egress_rules((*before, *_sends(added)))
+        if rules == egress_rules(before):
+            return ()
+        return (dm.Ref("Firewall").edit(egress_rules=rules),)
 
     def shared_groups(self) -> tuple[str, ...]:
         """The groups shared volume directories name, declared once each."""
@@ -303,11 +322,14 @@ class _Lowering:
         for item in profile.add:
             items.extend(self.content(item))
         items.extend(self.owned_files(name))
+        inherited = [item for ancestor in self.ancestors(profile) for item in ancestor.add]
+        with _at(profile):
+            egress = self.profile_egress(profile.add, inherited)
         return dm.Variant(
             name,
             inherits=profile.extends or BASE_PROFILE,
             add=dm.Fragment(name, items=tuple(items)),
-            changes=self.changes(profile),
+            changes=(*self.changes(profile), *egress),
             release=profile.production,
         )
 
@@ -397,10 +419,13 @@ class _Lowering:
         else:
             items.append(self.component(dev))
         items.extend(self.owned_files(DEV_PROFILE))
+        with _at(dev):
+            egress = self.profile_egress([dev])
         return dm.Variant(
             DEV_PROFILE,
             inherits=BASE_PROFILE,
             add=dm.Fragment(DEV_PROFILE, items=tuple(items)),
+            changes=egress,
             release=False,
         )
 
@@ -709,6 +734,13 @@ def _outbound(component: Component) -> Iterator[tuple[str, Egress]]:
         )
     yield component.name, sends
     for item in composed(component):
+        if isinstance(item, Component):
+            yield from _outbound(item)
+
+
+def _sends(items: Sequence[object]) -> Iterator[tuple[str, Egress]]:
+    """Who among *items* (a profile's content) sends where: each component's ``outbound()``."""
+    for item in items:
         if isinstance(item, Component):
             yield from _outbound(item)
 

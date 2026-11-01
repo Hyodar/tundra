@@ -330,7 +330,8 @@ class Component(Located, metaclass=_ComponentMeta):
         a subclass overrides it.
 
         An image that declares an ``Egress`` accepts it as it accepts the baseline's
-        traffic, and each rule's comment in ``nftables.conf`` names the component. A URL
+        traffic, in every profile the component is part of (one a ``Profile`` adds, in that
+        profile's ``nftables.conf`` only), and each rule's comment names the component. A URL
         field becomes ``HOST:PORT``; a host name the firewall cannot match becomes its port
         with the name as the comment (see :class:`~tundravm.components.Egress`).
         """

@@ -216,8 +216,9 @@ class Firewall(Component):
     the management ingress on :data:`~tundravm._image._values.MANAGEMENT_PORT` and *allow*
     (ports something other than a ``Service`` listens on: a packaged daemon). Outbound it
     filters only with *egress*, and then accepts what the baseline and every component's
-    ``outbound()`` send as well, each rule commented with who asked for it. The image
-    holds ``Firewall()`` by default;
+    ``outbound()`` send as well, each rule commented with who asked for it; a component a
+    ``Profile`` adds joins that profile's rules only. The image holds ``Firewall()`` by
+    default;
     ``network=Network(egress=...)`` is the usual way to set *egress*. Component name:
     ``firewall``.
     """
