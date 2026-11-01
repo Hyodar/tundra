@@ -20,6 +20,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `tundravm.bake` is `tundravm.build`, the command's verb, without an alias; its directory keyword is `into=` (was `build=`).
 - **Breaking:** a `Secrets` block and every `Image` with a volume or a secret run the attested endpoint (`tools/cmd/attested-endpoint`, `tundravm-endpoint.service`) instead of `secret-delivery`, which is gone with `tools/pkg/secrets`: its quote binds the nonce, its TLS key, the SSH host keys and the instance public key, and it writes `SecretFile` targets, an operator-key volume's passphrase and the operator's SSH key only on the session that fetched that evidence, once per boot; the built-in provider writes files, `secrets.ready` waits for the required ones, and `sshd` waits only for its host keys.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports (and 8745 where the attested endpoint listens), one hardened user per service, and `tdxs`.
+- **Breaking:** `Raiko` is removed, its upstream ref gone; `Nethermind(config=)` defaults to `hoodi`, which Nethermind ships.
 - `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)` or a component's `self.service(name).endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `hardening="python"` names the sandbox per runtime (`static`, `jit`, `node`, `python`, `dotnet`, `relaxed`), `Hardening.preset(NAME, ...)` a deviation; `quotes=True` joins the `tdx` group and requires the evidence service.
 - `Service.packaged(unit, package=, hardening=)` runs a Debian package's unit under the image's sandbox, which replaces the package's own; `convert --from systemd` writes it for drop-ins whose unit is not in the set.
 - `Hardening(capabilities=["CAP_SYS_TIME"])` also drops `ProtectClock=` and allows `@clock` back, so a time daemon's grant takes effect; the boot probe's `service:` failure names a denied capability when the unit's status shows one.
@@ -34,12 +35,12 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it: `Nethermind(jwt=Generated("jwt"))` and its consensus client need no delivered JWT.
 - `Lighthouse(execution=, jwt=, checkpoint_sync_url=)` runs the v8.3.2 release as a beacon node on `hoodi` (or another network it ships) beside `Nethermind`, dialing its peers without accepting any unless `expose_p2p=True`.
 - `Mkosi(settings=)` writes each key in its mkosi section, and a key tundravm writes is refused with the public slot that sets it.
-- The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
+- The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `Lighthouse`, `TaikoClient`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
 
 ### Network and clouds
 
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
-- `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks, peers and collateral, `TaikoClient(l1=)` and `Raiko(l1=)` name their L1, and `Observability(proxy=)` sends through one proxy.
+- `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks, peers and collateral, `TaikoClient(l1=)` names its L1, and `Observability(proxy=)` sends through one proxy.
 - `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.
 
@@ -94,6 +95,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Docs
 
 - `README.md`, `docs/guide.md` in the order of the loop, `docs/trust.md` for the threat model and recovery, and `docs/reference/` generated from the code; the prose's examples run in the tests.
+- `examples/attested-node/` is the example: Nethermind on Hoodi behind a Go proxy that signs its block responses with the instance key, reached only through attested TLS.
 
 ### Removed
 
