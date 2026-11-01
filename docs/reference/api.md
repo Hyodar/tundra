@@ -860,6 +860,7 @@ Raiko(
     state: VolumeDirectory | None = None,
     listen: str = '127.0.0.1:8080',
     l2_rpc: Endpoint | None = None,
+    l1: Sequence[str] = (),
     source: dm.Git = Git(url='https://github.com/NethermindEth/raiko.git', ref='feat/tdx', subdir=None, submodules=False),
 )
 ```
@@ -868,7 +869,7 @@ Raiko(
 |---|---|
 | `Raiko.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `raiko-listens-publicly`: a prover reachable around its attested ingress. |
 | `Raiko.http` | Raiko's HTTP API. |
-| `Raiko.outbound() -> Egress` | Intel's PCS over HTTPS (TDX collateral), and *l2_rpc* when it is not on the loopback. |
+| `Raiko.outbound() -> Egress` | Intel's PCS over HTTPS (TDX collateral), *l1*, and *l2_rpc* when it is not on the loopback. |
 
 ### `Resolved`
 
@@ -982,6 +983,7 @@ TaikoClient(
     rpc: Endpoint,
     jwt: Secret,
     chain: Secret,
+    l1: Sequence[str] = (),
     source: dm.Git = Git(url='https://github.com/NethermindEth/surge-taiko-mono', ref='feat/tdx-proving', subdir='packages/taiko-client', submodules=False),
 )
 ```
@@ -990,7 +992,7 @@ The `taiko-client` driver: follows L1 and drives the execution client's Engine A
 
 | Member | Does |
 |---|---|
-| `TaikoClient.outbound() -> Egress` | TCP 443 for the L1 endpoints *chain* names, and *engine* and *rpc* when they are not on the loopback. |
+| `TaikoClient.outbound() -> Egress` | *l1* (TCP 443 without it), and *engine* and *rpc* when they are not on the loopback. |
 
 ### `Tdxs`
 

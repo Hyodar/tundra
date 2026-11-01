@@ -22,6 +22,7 @@ chain = Secret("taiko-chain")
 config = Secret("raiko-config")
 
 execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
+# The deployment's L1 endpoints are not in this repository: without l1= both send to TCP 443.
 driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
 prover = Raiko(config=config, l2_rpc=execution.rpc, state=data.directory("raiko"))
 

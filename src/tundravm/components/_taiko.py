@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from tundravm._image._component import Component, Endpoint
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
 from tundravm._image._storage import VolumeDirectory
-from tundravm._image._values import TCP, Egress, TcpProbe
+from tundravm._image._values import TCP, Egress, TcpProbe, egress_host
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.diagnostics import Rule
@@ -51,6 +51,22 @@ def _remote(*endpoints: Endpoint | None) -> list[str]:
     return list(dict.fromkeys(e.address for e in endpoints if e is not None and not e.loopback))
 
 
+def _l1(owner: object, value: object) -> tuple[str, ...]:
+    """*value*, the ``l1=`` of *owner*, as the ``HOST:PORT`` of each L1 endpoint."""
+    kind = type(owner).__name__
+    hint = "Pass l1=['l1.example:8546', 'beacon.example:5052'], each endpoint's HOST:PORT."
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValidationError(f"{kind}: l1= takes a list of HOST:PORT.", hint=hint)
+    for entry in value:
+        try:
+            port = egress_host(owner, entry)[1]
+        except ValidationError:
+            port = None
+        if port is None:
+            raise ValidationError(f"{kind}: l1= entry {entry!r} is not HOST:PORT.", hint=hint)
+    return tuple(value)
+
+
 def _endpoint(owner: str, name: str, value: object) -> Endpoint:
     if not isinstance(value, Endpoint) or value.ready is None:
         raise ValidationError(
@@ -73,18 +89,21 @@ class TaikoClient(Component, build_network=True):
     inbox address the protocol fork needs (``PACAYA_INBOX``...), the variables
     taiko-client's flags read. It starts once both endpoints are ready.
 
-    :meth:`outbound` is TCP 443, the HTTPS and WSS port of L1 providers, because the L1
-    endpoints are in *chain*, delivered after the image is built; an L1 on another port
-    needs ``Egress(hosts=["HOST:PORT"])`` in the image.
+    *l1* is the ``HOST:PORT`` of each endpoint *chain* names (``L1_WS``, ``L1_BEACON``),
+    which :meth:`outbound` accepts and nothing else of L1's. *chain* is delivered after the
+    image is built, so without *l1* the build cannot read them, and :meth:`outbound` is TCP
+    443 to any address, the HTTPS and WSS port of L1 providers.
     """
 
     engine: Endpoint
     rpc: Endpoint
     jwt: Secret
     chain: Secret
+    l1: Sequence[str] = ()
     source: dm.Git = TAIKO_CLIENT_SOURCE
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "l1", _l1(self, self.l1))
         _endpoint("TaikoClient", "engine", self.engine)
         _endpoint("TaikoClient", "rpc", self.rpc)
         for name in ("jwt", "chain"):
@@ -95,9 +114,10 @@ class TaikoClient(Component, build_network=True):
                 )
 
     def outbound(self) -> Egress:
-        """TCP 443 for the L1 endpoints *chain* names, and *engine* and *rpc* when they are
-        not on the loopback."""
-        return Egress(ports=[TCP(443)], hosts=_remote(self.engine, self.rpc))
+        """*l1* (TCP 443 without it), and *engine* and *rpc* when they are not on the
+        loopback."""
+        hosts = list(dict.fromkeys([*self.l1, *_remote(self.engine, self.rpc)]))
+        return Egress(ports=[] if self.l1 else [TCP(443)], hosts=hosts)
 
     def compose(self) -> Iterator[object]:
         yield dm.Build(
@@ -133,8 +153,11 @@ class Raiko(Component, build_network=True):
     is ready, since every proof carries a quote. *config* is Raiko's configuration file,
     delivered because it names the L1 and L2 endpoints and their provider keys; *l2_rpc*,
     when given, is the execution client it proves blocks of, and Raiko starts after it.
-    *state* keeps its proof cache. :meth:`outbound` is Intel's collateral service over
-    HTTPS, whose port 443 also carries the HTTPS endpoints *config* names.
+    *state* keeps its proof cache. *l1* is the ``HOST:PORT`` of each L1 endpoint *config*
+    names. :meth:`outbound` is Intel's collateral service over HTTPS and *l1*; the
+    collateral rule is TCP 443 to any address (nftables matches no names), which also
+    carries the HTTPS endpoints *config* names, so without *l1* an endpoint on 443 needs
+    nothing more.
 
     Exports :attr:`http`, ready once the listener accepts connections: put it behind
     ``AttestedTLS(443, upstream=raiko.http)``, the only way requests should reach it.
@@ -144,9 +167,11 @@ class Raiko(Component, build_network=True):
     state: VolumeDirectory | None = None
     listen: str = "127.0.0.1:8080"
     l2_rpc: Endpoint | None = None
+    l1: Sequence[str] = ()
     source: dm.Git = RAIKO_SOURCE
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "l1", _l1(self, self.l1))
         if not isinstance(self.config, Secret):
             raise ValidationError(
                 "Raiko: config= must be the Secret the image declares.",
@@ -168,9 +193,9 @@ class Raiko(Component, build_network=True):
         return Endpoint(host, int(port), ready=self.service("raiko").ready)
 
     def outbound(self) -> Egress:
-        """Intel's PCS over HTTPS (TDX collateral), and *l2_rpc* when it is not on the
+        """Intel's PCS over HTTPS (TDX collateral), *l1*, and *l2_rpc* when it is not on the
         loopback."""
-        return Egress(hosts=[INTEL_PCS, *_remote(self.l2_rpc)])
+        return Egress(hosts=list(dict.fromkeys([INTEL_PCS, *self.l1, *_remote(self.l2_rpc)])))
 
     def compose(self) -> Iterator[object]:
         yield dm.Build(

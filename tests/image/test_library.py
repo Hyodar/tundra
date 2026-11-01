@@ -3,6 +3,8 @@ workloads whose exports wire into each other."""
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from tundravm import Image, Service
@@ -123,6 +125,12 @@ def test_component_checks_report_what_the_contract_warns_about() -> None:
 
 PCS = "api.trustedservices.intel.com:443"
 REMOTE = Endpoint("10.0.0.7", 8545, ready=execution.rpc.ready)
+TAIKO: dict[str, Any] = {
+    "engine": execution.engine_api,
+    "rpc": execution.rpc,
+    "jwt": jwt,
+    "chain": chain,
+}
 
 
 @pytest.mark.parametrize(
@@ -149,8 +157,13 @@ REMOTE = Endpoint("10.0.0.7", 8545, ready=execution.rpc.ready)
             TaikoClient(engine=REMOTE, rpc=REMOTE, jwt=jwt, chain=chain),
             Egress([TCP(443)], ["10.0.0.7:8545"]),
         ),
+        (
+            TaikoClient(**TAIKO, l1=["l1.example:8546", "10.0.0.9:5052"]),
+            Egress(hosts=["l1.example:8546", "10.0.0.9:5052"]),
+        ),
         (prover, Egress(hosts=[PCS])),
         (Raiko(config=config, l2_rpc=REMOTE), Egress(hosts=[PCS, "10.0.0.7:8545"])),
+        (Raiko(config=config, l1=["10.0.0.9:8545"]), Egress(hosts=[PCS, "10.0.0.9:8545"])),
         (SshAccess(from_delivery=True), Egress()),
         (DevAccess(password="tdx"), Egress()),
     ],
@@ -187,6 +200,8 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
             "readiness",
         ),
         (lambda: Raiko(config=config, listen="8080"), "HOST:PORT"),
+        (lambda: TaikoClient(**TAIKO, l1="l1.example:8546"), "a list of HOST:PORT"),
+        (lambda: Raiko(config=config, l1=["l1.example"]), "'l1.example' is not HOST:PORT"),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
         (lambda: stack(secrets=[jwt, config]), "taiko-chain"),
     ],
