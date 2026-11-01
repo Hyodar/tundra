@@ -163,8 +163,9 @@ ESP_SIZE = "128M"
 """The ESP of every disk, fixed: FAT32 with 512-byte sectors and clusters holds 258078
 clusters and 126 MiB of data at this size, room for a UKI up to about 125 MiB (the
 fixture's initramfs UKI is about 65 MiB, its verity one 43 MiB, the templates' at most
-72 MiB). A larger UKI fails the disk's build (``mcopy``: disk full); ``RootFS.verity()``
-keeps the OS out of the UKI."""
+72 MiB). A larger UKI fails the disk's build (``mcopy``: disk full), which the local
+backend reports with both sizes (:data:`UKI_CAPACITY`); ``RootFS.verity()`` keeps the OS
+out of the UKI."""
 ESP_BYTES = 128 << 20
 """:data:`ESP_SIZE` in bytes."""
 ESP_CLUSTERS = 258078

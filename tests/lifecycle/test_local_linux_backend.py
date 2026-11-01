@@ -12,6 +12,7 @@ from tests.helpers import bake_request
 from tundravm import _mkosi
 from tundravm.backends.base import StreamResult
 from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.compiler.emit_mkosi import UKI_CAPACITY
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, OutputTarget
 from tundravm.testing import FakeMkosi
@@ -171,6 +172,28 @@ def test_local_execute_reports_mkosis_failure_with_the_log_tail(
     assert "| apt: E: Unable to locate package nope" in message
     assert excinfo.value.context["returncode"] == "1"
     assert excinfo.value.hint is not None and "mkosi.log" in excinfo.value.hint
+
+
+@linux_only
+@pytest.mark.parametrize(
+    ("extra", "said"),
+    [(0, "mkosi build failed (exit 1)."), (1 << 20, "The UKI is 127.0 MiB: the 128.0 MiB ESP")],
+    ids=["fits", "past-the-esp"],
+)
+def test_a_failed_build_with_a_uki_past_the_esp_names_its_size_and_the_fix(
+    tmp_path: Path, fake_mkosi: FakeMkosi, monkeypatch: pytest.MonkeyPatch, extra: int, said: str
+) -> None:
+    """mkosi built the payload, then failed the disk: a UKI past what the ESP holds is the
+    failure, told with both sizes and the fix; one that fits leaves mkosi's failure as it is."""
+    monkeypatch.setattr("tundravm.backends.local_linux.platform.machine", lambda: "x86_64")
+    fake_mkosi.fail = 1
+    fake_mkosi.uki_size = UKI_CAPACITY + extra
+
+    with pytest.raises(BackendExecutionError) as excinfo:
+        LocalLinuxBackend().execute(_request(tmp_path))
+
+    assert str(excinfo.value).startswith(said)
+    assert ("RootFS.verity" in str(excinfo.value.hint)) == bool(extra)
 
 
 @linux_only

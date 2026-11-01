@@ -33,7 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from tundravm._reporting import format_size
 from tundravm.backends.base import (
+    BOOT_PAYLOAD_NAME,
     MountSpec,
     Requirement,
     build_sources_args,
@@ -41,6 +43,7 @@ from tundravm.backends.base import (
     mkosi_project,
     run_streaming,
 )
+from tundravm.compiler.emit_mkosi import ESP_BYTES, UKI_CAPACITY
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 from tundravm.toolchain import MkosiTool, ToolsTree, installed_mkosi
@@ -146,13 +149,19 @@ class LocalLinuxBackend:
                     "info",
                     "this host gives no unprivileged user namespaces: running mkosi with sudo",
                 )
-            self.run_mkosi(
-                [*argv, "build"],
-                cwd=state_dir,
-                log=profile_dir / LOG_FILENAME,
-                on_output=request.on_output,
-                sudo=sudo,
-            )
+            try:
+                self.run_mkosi(
+                    [*argv, "build"],
+                    cwd=state_dir,
+                    log=profile_dir / LOG_FILENAME,
+                    on_output=request.on_output,
+                    sudo=sudo,
+                )
+            except BackendExecutionError as exc:
+                overflow = esp_overflow(output_dir / BOOT_PAYLOAD_NAME, profile_dir / LOG_FILENAME)
+                if overflow is None:
+                    raise
+                raise overflow from exc
         finally:
             if sudo:
                 self._reclaim((output_dir, state_dir, profile_dir / LOG_FILENAME), request)
@@ -326,6 +335,30 @@ class LocalLinuxBackend:
                 "kernel.apparmor_restrict_unprivileged_userns=0`), or install sudo.",
                 context={"backend": self.name, "operation": "prepare"},
             )
+
+
+def esp_overflow(uki: Path, log: Path) -> BackendExecutionError | None:
+    """The error a failed ``mkosi build`` is when the payload subimage left a UKI *uki* larger
+    than the fixed ESP of every disk holds (``UKI_CAPACITY``): mkosi got as far as copying
+    it onto the disk, which failed. ``None`` for any other failure."""
+    try:
+        size = uki.stat().st_size
+    except OSError:
+        return None
+    if size <= UKI_CAPACITY:
+        return None
+    return BackendExecutionError(
+        f"The UKI is {format_size(size)}: the {format_size(ESP_BYTES)} ESP every disk boots "
+        f"it from holds {format_size(UKI_CAPACITY)}, so mkosi could not copy it onto the disk.",
+        hint='Keep the OS out of the UKI with rootfs=RootFS.verity(filesystem="erofs"), or '
+        "make the payload smaller with fewer packages in Image(packages=...).",
+        context={
+            "uki_bytes": str(size),
+            "esp_bytes": str(ESP_BYTES),
+            "capacity_bytes": str(UKI_CAPACITY),
+            "log": str(log),
+        },
+    )
 
 
 def _discard(line: str) -> None:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import os
 import platform
 import shutil
 import struct
@@ -74,7 +75,9 @@ class FakeMkosi:
     :data:`DEFAULT_TOOLS` and the images the call selects). *outputs* are the file names a
     ``build`` writes besides the selected wrappers' (:data:`WRAPPER_OUTPUTS`). *fail* makes
     the verb named *fail_verb* raise ``MkosiError`` with that exit status and *log* as its
-    log. *sudo* is what ``needs_sudo()`` answers.
+    log. *uki_size* pads the ``payload.efi`` a build writes to that many bytes (sparse), and
+    a failing build writes it before it fails, as mkosi's payload subimage is built before
+    the disk around it. *sudo* is what ``needs_sudo()`` answers.
     """
 
     summary: dict[str, Any] | None = None
@@ -82,6 +85,7 @@ class FakeMkosi:
     fail: int | None = None
     fail_verb: str = "build"
     log: str = ""
+    uki_size: int | None = None
     sudo: bool = False
     calls: list[FakeCall] = field(default_factory=list)
 
@@ -109,6 +113,8 @@ class FakeMkosi:
             for line in lines:
                 on_output(line)
         if self.fail is not None and call.verb == self.fail_verb:
+            if call.verb == "build" and self.uki_size is not None:
+                self._build(call, only=DEFAULT_OUTPUTS[:1])
             raise MkosiError(argv, log.read_text(encoding="utf-8"), self.fail)
         printed = ""
         if call.verb == "summary":
@@ -120,7 +126,7 @@ class FakeMkosi:
     def needs_sudo(self) -> bool:
         return self.sudo
 
-    def _build(self, call: FakeCall) -> None:
+    def _build(self, call: FakeCall, only: Sequence[str] | None = None) -> None:
         output = call.option("--output-directory")
         if output is None:
             return
@@ -129,8 +135,10 @@ class FakeMkosi:
         wrappers = [
             WRAPPER_OUTPUTS[t] for t in call.options("--dependency") if t in WRAPPER_OUTPUTS
         ]
-        for name in (*self.outputs, *wrappers):
+        for name in only or (*self.outputs, *wrappers):
             (directory / name).write_bytes(_output(name, call.options("--profile")))
+            if name.endswith(".efi") and self.uki_size is not None:
+                os.truncate(directory / name, self.uki_size)
 
     def install(self, setattr: Callable[[object, str, object], None]) -> FakeMkosi:
         """Put this fake in place of the adapter's ``invoke`` and ``needs_sudo`` using

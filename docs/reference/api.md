@@ -1670,6 +1670,7 @@ FakeMkosi(
     fail: int | None = None,
     fail_verb: str = 'build',
     log: str = '',
+    uki_size: int | None = None,
     sudo: bool = False,
     calls: list[FakeCall] = list(),
 )
