@@ -52,8 +52,8 @@ jobs:
         working-directory: tools
         run: go test ./...
 
-      - name: Check the surge image and its committed tree
-        run: uv run tundravm check examples/surge-tdx-prover/image.py --tree examples/surge-tdx-prover/mkosi
+      - name: Check the example image and its committed tree
+        run: uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
 
   build:
     needs: test
