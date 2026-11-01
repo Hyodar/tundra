@@ -124,12 +124,14 @@ DEPLOY_ACTIONS = ("status", "logs", "mode", "upgrade", "rollback")
 DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 
 QUICKSTART = """\
-quickstart:
-  tundravm new demo && cd demo           a project: demo.py, its tests, pyproject.toml
-  tundravm lock                          pin every source: build/tundravm.lock
-  tundravm build                         build, measure: build/demo/production/<id>/
-  tundravm dev                           build the dev profile, boot it, probe it, follow
-                                         its console; Ctrl-C stops the instance"""
+tundravm builds, runs and verifies confidential VM images declared as one Image. Start here:
+  tundravm doctor               what this host can build and run, and the fix for the rest
+  tundravm new demo && cd demo  a project: demo.py, its tests, pyproject.toml
+  uv run tundravm check         the image without a build: lint, lock and tree drift
+  uv run tundravm dev           build the dev profile, boot it without TDX, probe it, follow it
+
+`tundravm --help` lists all thirteen commands."""
+"""What ``tundravm`` with no arguments prints: the first four commands of a new project."""
 
 
 def main(
@@ -147,7 +149,6 @@ def main(
     parser = build_parser()
     tokens = list(sys.argv[1:] if argv is None else argv)
     if not tokens:
-        print(parser.format_help(), file=out)
         print(QUICKSTART, file=out)
         return EXIT_OK
     args = _parse(parser, tokens)

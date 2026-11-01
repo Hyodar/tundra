@@ -61,12 +61,17 @@ def test_the_parser_has_exactly_the_thirteen_commands() -> None:
     assert tuple(verb.name for verb in verbs_of(build_parser())) == THIRTEEN
 
 
-def test_no_arguments_prints_help_and_the_quickstart(cli: Cli) -> None:
+def test_no_arguments_prints_the_first_four_commands(cli: Cli) -> None:
     result = cli()
     assert result.code == EXIT_OK
-    for name in THIRTEEN:
-        assert f"    {name} " in result.out
-    assert "quickstart:" in result.out and "tundravm new demo" in result.out
+    commands = [line.split("  ", 2)[1] for line in result.out.splitlines() if line[:2] == "  "]
+    assert commands == [
+        "tundravm doctor",
+        "tundravm new demo && cd demo",
+        "uv run tundravm check",
+        "uv run tundravm dev",
+    ]
+    assert result.out.rstrip().endswith("`tundravm --help` lists all thirteen commands.")
 
 
 def test_version(capsys: pytest.CaptureFixture[str], cli: Cli) -> None:
