@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 
-from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE, write_template
 
 _UNIT_PATH = re.compile(r"(^|/)(usr/lib|etc)/systemd/system/")
 _UNIT_SUFFIX = re.compile(r"\.(service|socket|target|timer|mount|path|conf)$")
@@ -43,22 +43,12 @@ def constant_units() -> Iterator[tuple[str, str]]:
 def recipe_paths(scratch: Path) -> dict[str, Path]:
     """Every example recipe, the surge recipe and every ``init`` template, by name; the
     templates are rendered into *scratch*."""
-    from tundravm.templates import TEMPLATES, render_recipe_template
+    from tundravm.templates import TEMPLATES
 
     paths = {path.stem: path for path in EXAMPLE_RECIPES}
     paths["surge"] = SURGE_EXAMPLE / "image.py"
     for template in TEMPLATES:
-        path = scratch / template / f"{template}.py"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            render_recipe_template(
-                title=template,
-                filename=path.name,
-                release="trixie",
-                template=template,
-            ),
-            encoding="utf-8",
-        )
+        path = write_template(scratch / template / f"{template}.py", template, title=template)
         paths[f"init-{template}"] = path
     return paths
 

@@ -58,6 +58,7 @@ on the lock: write the tree after locking and commit both. `new` prints this loo
 | File | Holds |
 |---|---|
 | `NAME.py` | the image, from the `service` template (or `--template prover`) |
+| `app/` | with `service`: the Go program it builds through `Local("app")` |
 | `tests/test_NAME.py` | lint, compile and committed-tree tests |
 | `pyproject.toml` | tundravm from git at a commit, pytest, and `[tool.tundravm]` |
 | `README.md` | the commands of the loop |
@@ -341,8 +342,8 @@ re-pins it, a production build refuses until `tundravm lock`.
 
 ## Components
 
-A `Component` is a class that groups declarations and exports typed values. This is the
-`App` the `service` template writes, cut down:
+A `Component` is a class that groups declarations and exports typed values. This one
+serves a page with busybox; the `service` template's `App` builds `app/` instead:
 
 ```python
 from collections.abc import Iterator

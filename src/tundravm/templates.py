@@ -32,10 +32,10 @@ TemplateName = Literal["minimal", "service", "cloud", "prover"]
 
 TEMPLATES: dict[str, str] = {
     "minimal": "the starter: one package, one file, one service, one qemu target",
-    "service": "an App component (a web page busybox httpd serves from a sandboxed service, "
-    "its readiness and a lint rule) plus a dev profile",
-    "cloud": "service with one UKI for qemu, azure and gcp, and an EFI stub pinned to a "
-    "Debian snapshot",
+    "service": "an App component (your Go program in app/, built from that directory and run "
+    "as a sandboxed service, its readiness and a lint rule) plus a dev profile",
+    "cloud": "a web page busybox httpd serves, one UKI for qemu, azure and gcp, and an EFI "
+    "stub pinned to a Debian snapshot",
     "prover": "cloud with the app behind an attested TLS ingress, its state on a volume an "
     "operator unlocks, and a token delivered after attestation",
 }
@@ -73,7 +73,7 @@ image = Image(
 )
 """
 
-_SERVICE_IMPORTS = (
+_CLOUD_IMPORTS = (
     "from tundravm import Debian, File, Image, Package, Service\n"
     "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
     "from tundravm.ports import TCP\n"
@@ -81,8 +81,14 @@ _SERVICE_IMPORTS = (
 )
 
 _APP_IMPORTS = {
-    "service": _SERVICE_IMPORTS,
-    "cloud": _SERVICE_IMPORTS,
+    "service": (
+        "from tundravm import Debian, Image, Package, Service\n"
+        "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
+        "from tundravm.ports import TCP\n"
+        "from tundravm.sources import GoBinary, Local\n"
+        "from tundravm.systemd import TcpProbe\n"
+    ),
+    "cloud": _CLOUD_IMPORTS,
     "prover": (
         "from tundravm import Debian, File, Image, Package, Service\n"
         "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
@@ -139,6 +145,83 @@ class App(Component):
         message = f"app runs as user app and cannot bind port {self.port}"
         return (Diagnostic("app-privileged-port", "error", message),)
 '''
+
+_SERVICE_APP = r'''
+APP_VERSION = "0.1.0"
+APP_PORT = 8080
+
+
+class App(Component):
+    """The app: the Go program in app/, built from that directory, its readiness and a lint rule.
+
+    app/ is a Local source: `tundravm lock` pins its content, so lock again after an edit,
+    and `tundravm build` builds it offline with the Go its go.mod names. Component name:
+    ``app``.
+    """
+
+    version: str
+    port: int
+
+    @property
+    def http(self) -> Endpoint:
+        """Where the app answers, with its readiness: what a caller wires to."""
+        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
+
+    def compose(self) -> Iterator[Service]:
+        server = GoBinary("server", Local("app"), package=".")
+        # Runs as system user "app" (declared for you), sandboxed by the "static" preset,
+        # restarted on failure. expose= is what the image's firewall opens; readiness= is
+        # what another service's requires=[app.http] would wait for.
+        yield Service(
+            "app",
+            [server, "-port", str(self.port), "-version", self.version],
+            expose=[TCP(self.port)],
+            readiness=TcpProbe(self.port),
+        )
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+        """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
+        if self.port >= 1024:
+            return ()
+        message = f"app runs as user app and cannot bind port {self.port}"
+        return (Diagnostic("app-privileged-port", "error", message),)
+'''
+
+_APP_MAIN = """\
+// The program the image runs: an HTTP server on -port that answers with a page.
+package main
+
+import (
+\t"flag"
+\t"fmt"
+\t"log"
+\t"net/http"
+)
+
+func main() {
+\tport := flag.Int("port", 8080, "the TCP port to listen on")
+\tversion := flag.String("version", "dev", "the version the page names")
+\tflag.Parse()
+\tpage := fmt.Sprintf("<!doctype html>\\n<title>$title</title>\\n<h1>$title %s</h1>\\n", *version)
+\thttp.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+\t\tw.Header().Set("Content-Type", "text/html; charset=utf-8")
+\t\tfmt.Fprint(w, page)
+\t})
+\tlog.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
+}
+"""
+
+_APP_GO_MOD = """\
+module app
+
+go 1.24
+"""
+
+APP_FILES: dict[str, dict[str, str]] = {
+    "service": {"app/main.go": _APP_MAIN, "app/go.mod": _APP_GO_MOD},
+}
+"""The program a template builds from the project, by path: the ``service`` template's
+``app/``, which its image builds through ``Local("app")``."""
 
 _SERVICE_RECIPE = r"""
 
@@ -256,7 +339,7 @@ _SOURCES: dict[str, str] = {
     "service": _HEADER
     + "from collections.abc import Iterator\n\n"
     + _APP_IMPORTS["service"]
-    + _APP
+    + _SERVICE_APP
     + _SERVICE_RECIPE,
     "cloud": _HEADER
     + "from collections.abc import Iterator\n\n"
@@ -567,7 +650,7 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
 
 _ALLOW_COMMENTS: dict[str, str] = {
     "minimal": "        # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
-    "service": "        # The evidence service builds tundra-tools: `tundravm lock` pins it.\n",
+    "service": "        # app/ and tundra-tools: `tundravm lock` pins both.\n",
     "cloud": "        # The EFI stub stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
         "        # The tundra-tools builds (evidence, volume and delivery tools) and the EFI\n"
@@ -609,6 +692,15 @@ def render_recipe_template(
         )
     name, instance = EXPLICIT_BACKENDS[backend]
     return f"{source}\nfrom tundravm.backends import {name}  # noqa: E402\n\nbackend = {instance}\n"
+
+
+def render_app_files(*, title: str, template: str = DEFAULT_TEMPLATE) -> dict[str, str]:
+    """The program files ``new`` writes beside the image of *template*, by relative path
+    (:data:`APP_FILES`; none for a template that builds no program of the project)."""
+    return {
+        path: Template(text).substitute(title=title)
+        for path, text in APP_FILES.get(template, {}).items()
+    }
 
 
 def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> str:
@@ -697,6 +789,7 @@ def render_workflow(*, recipe: str, tree: str = "mkosi") -> str:
 
 
 __all__ = [
+    "APP_FILES",
     "DEFAULT_TEMPLATE",
     "EXPLICIT_BACKENDS",
     "EDITABLE_INSTALL",
@@ -716,6 +809,7 @@ __all__ = [
     "TundravmSource",
     "WORKFLOW_PATH",
     "WORKFLOW_TEMPLATE",
+    "render_app_files",
     "render_pyproject",
     "render_readme",
     "render_steps",

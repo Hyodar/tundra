@@ -136,7 +136,11 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - `tundravm.components`: `TeeBase`, `Network`, `Firewall`, `Tdxs` (implied, replaced by
   passing one), `SshAccess`, `DevAccess`, `Observability`, and the surge workloads
   `Nethermind`, `TaikoClient` and `Raiko`, each with exports and a `check()`.
-- The templates (`service`, `prover`), the examples and surge are `Image` files.
+- The templates (`service`, `prover`), the examples and surge are `Image` files. The
+  `service` template's app is your own program: `new` writes `app/main.go` and `app/go.mod`,
+  a small Go HTTP server the image builds through `Local("app")` and runs as the sandboxed
+  `app` service (it was a page busybox httpd served), so the starter is the whole story of
+  a service in a TDX image; `cloud` keeps the busybox page.
   `examples/surge-tdx-prover/image.py` is 33 lines (was 151 plus 500 more in helpers);
   byte parity with the 2024 nethermind-tdx tree is dropped.
 - An image file names no backend: `TUNDRAVM_BACKEND`, else `local` on Linux x86-64 and

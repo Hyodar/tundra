@@ -81,6 +81,7 @@ from .recipe import RecipeFile, load_file
 from .templates import (
     GITIGNORE_BLOCK,
     WORKFLOW_PATH,
+    render_app_files,
     render_pyproject,
     render_readme,
     render_recipe_template,
@@ -295,15 +296,17 @@ def build_parser() -> argparse.ArgumentParser:
         "Create a project: an image file, its tests, pyproject.toml.",
         "Write NAME/NAME.py from a template, tests/test_NAME.py, pyproject.toml with\n"
         '[tool.tundravm] image = "NAME.py", README.md and .gitignore; --ci adds a GitHub\n'
-        "workflow that runs check, lock --check and build. The prover template also makes\n"
-        "policies/, where the operator-approved verifier policies go.",
+        "workflow that runs check, lock --check and build. The service template also makes\n"
+        'app/, the Go program its image builds through Local("app"); the prover template\n'
+        "makes policies/, where the operator-approved verifier policies go.",
     )
     new.add_argument("name", metavar="NAME", help="Project directory and image name.")
     new.add_argument(
         "--template",
         choices=NEW_TEMPLATES,
         default="service",
-        help="service: one sandboxed web service and a dev profile (default); prover: a "
+        help="service: your Go program in app/ as a sandboxed web service, and a dev profile "
+        "(default); prover: a "
         "service behind attested TLS, its state on an operator-unlocked volume, a secret.",
     )
     new.add_argument("--ci", action="store_true", help=f"Also write {WORKFLOW_PATH}.")
@@ -793,6 +796,8 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
         ),
         root / ".gitignore": GITIGNORE_BLOCK,
     }
+    for rel, text in render_app_files(title=name, template=template).items():
+        files[root / rel] = text
     if template == "prover":
         files[root / "policies" / "README.md"] = POLICIES_README
     if args.ci:

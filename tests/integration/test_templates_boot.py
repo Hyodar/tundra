@@ -28,11 +28,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import write_template
 from tundravm._modules.execution import REFUSED
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative.lifecycle import Artifact, bake_image
 from tundravm.recipe import load_file
-from tundravm.templates import render_recipe_template
 from tundravm.testing import BootResult, boot
 from tundravm.testing._boot import BootPath, expected_cmdline, on_console
 
@@ -54,7 +54,7 @@ LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 """Where console logs go (CI uploads them); a pytest temp directory when unset."""
 
 APP_PORT = 8080
-"""The port the ``service`` template's busybox httpd serves its page on."""
+"""The port the ``service`` template's Go program (its ``app/``) serves its page on."""
 PAGE = "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
 """What the unchanged ``service`` starter serves."""
 
@@ -62,13 +62,7 @@ PAGE = "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
 def _bake(tmp: Path, template: str, variant: str) -> Iterator[Artifact]:
     """Bake *template*'s *variant*, unchanged: its ``qemu`` artifact (``qemu.raw``, booting
     ``payload.efi``), removed with the build afterwards."""
-    recipe_path = tmp / "node.py"
-    recipe_path.write_text(
-        render_recipe_template(
-            title="node", filename="node.py", release="trixie", backend="local", template=template
-        ),
-        encoding="utf-8",
-    )
+    recipe_path = write_template(tmp / "node.py", template, backend="local")
     lowered = load_file(recipe_path).lowered()
     require_sources(lowered, (variant,))
     out = tmp / "build"
@@ -194,7 +188,7 @@ def test_service_template_boots_with_its_app_running(service_boot: BootResult) -
 
 
 def test_service_template_serves_its_page_to_the_host(service_boot: BootResult) -> None:
-    """busybox httpd answers through QEMU's forward, so DHCP, the nftables opening for the
+    """The app answers through QEMU's forward, so DHCP, the nftables opening for the
     app port and the sandboxed service all work: the unchanged starter is reachable."""
     assert service_boot.http_get(SERVICE_URL["kernel"]) == PAGE
 

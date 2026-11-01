@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -53,6 +56,18 @@ def test_the_prover_template_with_ci(here: Path, cli: Cli) -> None:
         assert not re.search(rf"tundravm {verb}\b", workflow), verb
     header = (root / "prover.py").read_text().split('"""')[1]
     assert "tundravm check prover.py" in header and "tundravm build prover.py" in header
+
+
+def test_the_service_template_app_compiles(here: Path, cli: Cli) -> None:
+    go = shutil.which("go")
+    if go is None:
+        pytest.skip("no go on PATH to vet and build the service template's app/")
+    assert cli("new", "demo").code == EXIT_OK
+    for argv in (("vet", "./..."), ("build", "-o", os.devnull, "./...")):
+        done = subprocess.run(
+            [go, *argv], cwd=here / "demo" / "app", capture_output=True, text=True, check=False
+        )
+        assert done.returncode == 0, f"go {' '.join(argv)}: {done.stderr}"
 
 
 @pytest.mark.parametrize("name", ["Demo", "1x", "a/b", "x" * 70])

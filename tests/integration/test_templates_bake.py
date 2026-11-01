@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import write_template
 from tundravm.backends.base import BOOT_PAYLOAD_NAME, MountSpec, Requirement
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Repository, lower
@@ -102,17 +103,7 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     if build_unavailable() is not None or not _sudo_works():
         pytest.skip("needs a Linux build host and non-interactive sudo")
     tmp_path = tmp_path_factory.mktemp("service")
-    recipe_path = tmp_path / "node.py"
-    recipe_path.write_text(
-        render_recipe_template(
-            title="node",
-            filename="node.py",
-            release="trixie",
-            backend="local",
-            template="service",
-        ),
-        encoding="utf-8",
-    )
+    recipe_path = write_template(tmp_path / "node.py", "service", backend="local")
     lowered = load_file(recipe_path).lowered()
     require_sources(lowered, ("production",))
     backend = LocalLinuxBackend()
@@ -128,18 +119,13 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 
 
 def test_service_template_bakes_with_its_app(service_build: Path) -> None:
-    """The service template builds; its unit, server, page and user are in the tree."""
+    """The service template builds; its unit, the Go program it builds from app/ and its
+    user are in the tree."""
     root = service_build / "root"
     unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
-    assert "ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www" in unit
+    assert "ExecStart=/usr/bin/server -port 8080 -version 0.1.0" in unit
     assert "User=app\n" in unit and "ProtectSystem=strict\n" in unit
-    applets = subprocess.run(
-        ["sudo", "chroot", str(root), "/usr/bin/busybox", "--list"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
-    assert "httpd" in applets  # Debian's busybox build has the applet the app runs
+    assert _sudo_test("-x", root / "usr/bin/server")
 
     wants = root / "etc/systemd/system/minimal.target.wants"
     assert _sudo_test("-L", wants / "app.service"), f"app.service is not linked into {wants}"
@@ -148,8 +134,6 @@ def test_service_template_bakes_with_its_app(service_build: Path) -> None:
     for target in ("sockets.target", "timers.target"):
         assert not _sudo_test("-L", root / "etc/systemd/system" / target), target
 
-    page = "<!doctype html>\n<title>node</title>\n<h1>node 0.1.0</h1>\n"
-    assert _sudo_read(root / "srv/www/index.html") == page
     passwd = _sudo_read(root / "etc/passwd").splitlines()
     assert any(line.startswith("app:") and "/usr/sbin/nologin" in line for line in passwd)
 

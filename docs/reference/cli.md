@@ -57,8 +57,9 @@ usage: tundravm new [-h] [--traceback] [--template {service,prover}] [--ci] NAME
 
 Write NAME/NAME.py from a template, tests/test_NAME.py, pyproject.toml with
 [tool.tundravm] image = "NAME.py", README.md and .gitignore; --ci adds a GitHub
-workflow that runs check, lock --check and build. The prover template also makes
-policies/, where the operator-approved verifier policies go.
+workflow that runs check, lock --check and build. The service template also makes
+app/, the Go program its image builds through Local("app"); the prover template
+makes policies/, where the operator-approved verifier policies go.
 
 positional arguments:
   NAME                  Project directory and image name.
@@ -67,9 +68,9 @@ options:
   -h, --help            show this help message and exit
   --traceback           Raise errors with the Python traceback.
   --template {service,prover}
-                        service: one sandboxed web service and a dev profile (default); prover: a
-                        service behind attested TLS, its state on an operator-unlocked volume, a
-                        secret.
+                        service: your Go program in app/ as a sandboxed web service, and a dev
+                        profile (default); prover: a service behind attested TLS, its state on an
+                        operator-unlocked volume, a secret.
   --ci                  Also write .github/workflows/tundravm.yml.
 ```
 

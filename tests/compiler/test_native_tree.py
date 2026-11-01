@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE
+from tests.helpers import EXAMPLE_RECIPES, REPO_ROOT, SURGE_EXAMPLE, write_template
 from tundravm.check import declaration_check
 from tundravm.compiler.emit_mkosi import (
     ESP_MKFS_ENVIRONMENT,
@@ -42,7 +42,7 @@ from tundravm.declarative import (
     mkosi_argv,
 )
 from tundravm.errors import ValidationError
-from tundravm.templates import TEMPLATES, render_recipe_template
+from tundravm.templates import TEMPLATES
 from tundravm.testing import UPDATE_GOLDEN_ENV, assert_tree_matches
 from tundravm.toolchain import ToolsTree
 
@@ -503,13 +503,7 @@ def test_every_template_pins_the_tools_tree_to_its_release_and_snapshot(
     """``ToolsTreeRelease`` and ``ToolsTreeSnapshot`` equal the image's: mkosi's default tools
     release is ``testing``, whose package-manager profile installs a dnf5 a trixie snapshot
     lacks, so an unpinned release breaks the tools tree."""
-    path = tmp_path / "node.py"
-    path.write_text(
-        render_recipe_template(
-            title="node", filename="node.py", release="trixie", template=template
-        ),
-        encoding="utf-8",
-    )
+    path = write_template(tmp_path / "node.py", template)
     recipe = load(path)
     compile(recipe).write(tmp_path / "tree")
     main = (tmp_path / "tree" / "mkosi.conf").read_text(encoding="utf-8")

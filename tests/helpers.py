@@ -15,6 +15,7 @@ from tundravm.cli import main
 from tundravm.declarative import Lock, Recipe, lower
 from tundravm.declarative.lifecycle import FetchedSource, fetch_image, variant_names
 from tundravm.models import BakeRequest, FileEntry
+from tundravm.templates import render_app_files, render_recipe_template
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SURGE_EXAMPLE = REPO_ROOT / "examples" / "surge-tdx-prover"
@@ -79,6 +80,22 @@ def run_main(*argv: str) -> tuple[int, str]:
     out = io.StringIO()
     code = main(list(argv), stdout=out)
     return code, out.getvalue()
+
+
+def write_template(
+    path: Path, template: str, *, title: str = "node", backend: str | None = None
+) -> Path:
+    """Write the image file of *template* at *path* and the program files ``new`` writes
+    beside it (the ``service`` template's ``app/``); return *path*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source = render_recipe_template(
+        title=title, filename=path.name, release="trixie", template=template, backend=backend
+    )
+    path.write_text(source, encoding="utf-8")
+    for rel, text in render_app_files(title=title, template=template).items():
+        (path.parent / rel).parent.mkdir(parents=True, exist_ok=True)
+        (path.parent / rel).write_text(text, encoding="utf-8")
+    return path
 
 
 def write_recipe_file(
