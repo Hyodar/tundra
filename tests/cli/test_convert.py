@@ -72,17 +72,29 @@ def test_an_mkosi_tree_becomes_an_image_file(cli: Cli, tmp_path: Path) -> None:
     assert str(tree) not in result.out  # paths are relative to the image file
 
 
-def test_a_tree_tundravm_wrote_converts_its_payload_and_checks(cli: Cli, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("wrappers", "targets"),
+    [((), ("qemu",)), (("gcp",), ("qemu", "gcp")), (("azure", "gcp"), ("qemu", "azure", "gcp"))],
+)
+def test_a_tree_tundravm_wrote_converts_its_payload_and_targets_and_checks(
+    cli: Cli, tmp_path: Path, wrappers: tuple[str, ...], targets: tuple[str, ...]
+) -> None:
     tree = tmp_path / "mkosi"
     shutil.copytree(REPO_ROOT / "examples" / "surge-tdx-prover" / "mkosi", tree, symlinks=True)
+    for cloud in {"azure", "gcp"} - set(wrappers):
+        shutil.rmtree(tree / "mkosi.images" / cloud)
     result = cli("convert", tree, "--from", "mkosi")
     assert result.code == EXIT_OK, result.err
-    (tree / "image.py").write_text(result.out, encoding="utf-8")
-    assert cli("check", tree / "image.py").code == EXIT_OK
+    image_file = tree / "image.py"
+    image_file.write_text(result.out, encoding="utf-8")
+    assert tuple(tundravm.load(image_file).targets) == targets
+    checked = cli("check", image_file)
+    assert checked.code == EXIT_OK, checked.out
     assert "systemd-boot-efi" in ast.literal_eval(
         ast.unparse(next(k.value for k in _image_call(result.out).keywords if k.arg == "packages"))
     )
-    for note in ("main image (disk)", "subimage azure", "subimage gcp", "payload Bootloader"):
+    notes = ("main image (disk)", "payload Bootloader", *(f"subimage {w}" for w in wrappers))
+    for note in notes:
         assert f"# note: {note}" in result.out, note
     assert "# unsupported:" not in result.out
 

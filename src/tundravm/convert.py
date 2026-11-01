@@ -11,9 +11,10 @@ says so, and what no ``Image`` slot holds is listed as unsupported.
 read, not ours. Parsing runs a tree's executable inputs (an executable ``mkosi.version``,
 ``mkosi.configure``), so a tree with one is refused unless ``--allow-scripts``. The image
 with content becomes an ``Image``: the payload of a tree tundravm wrote
-(``mkosi.images/payload/``), whose QEMU disk and cloud wrappers tundravm generates again,
-else the image with ``Packages=`` (not mkosi's own ``default-initrd``), else the main one:
-``Distribution=debian`` and ``Release=`` as ``base=``, ``Packages=`` as ``packages=``,
+(``mkosi.images/payload/``), whose QEMU disk and cloud wrappers tundravm generates again
+(the wrappers present are written as ``targets=``), else the image with ``Packages=``
+(not mkosi's own ``default-initrd``), else the main one: ``Distribution=debian`` and
+``Release=`` as ``base=``, ``Packages=`` as ``packages=``,
 ``ExtraTrees=`` and ``SkeletonTrees=`` as ``Tree(...)`` (one per target, beside the image
 file), ``Verity=hash`` as ``RootFS.verity()``, the scripts as ``Mkosi(scripts=)``;
 every other setting that differs from mkosi's default is reported as unsupported, with its
@@ -115,6 +116,9 @@ GENERATED = frozenset(
 
 DEFAULT_INITRD = "default-initrd"
 """The initrd image mkosi adds to every bootable tree that names none."""
+
+CLOUD_WRAPPERS = ("azure", "gcp")
+"""The subimages a tree tundravm wrote wraps the payload in, one per cloud target."""
 
 
 @dataclass(slots=True)
@@ -290,18 +294,20 @@ def from_mkosi(tree: Path, *, allow_scripts: bool = False) -> Converted:
         else (i for i in own if i.get("Packages")),
         summary.main,
     )
-    converted = _image_source(
-        content,
-        root,
-        name=summary.main.get("ImageId"),
-        written=written and content is not summary.main,
-    )
     others = [(i.get("Image") or "main", i.get("Format")) for i in images if i is not content]
     if written:
         # A cloud wrapper no profile selects is in the tree but not in mkosi's summary.
         listed = {name for name, _ in others} | {content.get("Image")}
         found = sorted(d.name for d in (root / "mkosi.images").iterdir() if d.is_dir())
         others += [(name, "disk") for name in found if name not in listed]
+    wrappers = [cloud for cloud in CLOUD_WRAPPERS if cloud in {name for name, _ in others}]
+    converted = _image_source(
+        content,
+        root,
+        name=summary.main.get("ImageId"),
+        written=written and content is not summary.main,
+        targets=("qemu", *wrappers) if written and wrappers else (),
+    )
     for name, fmt in others:
         if name == "main" and fmt == "disk":
             converted.notes.append(
@@ -309,10 +315,10 @@ def from_mkosi(tree: Path, *, allow_scripts: bool = False) -> Converted:
             )
         elif name == DEFAULT_INITRD:
             converted.notes.append(f"{name}: mkosi's own initrd, which tundravm's UKI uses too")
-        elif name in ("azure", "gcp"):
+        elif name in CLOUD_WRAPPERS:
             converted.notes.append(
                 f"subimage {name}: the {name} disk tundravm wraps the payload in, "
-                f"targets=(..., {name!r})"
+                f"written as the {name!r} target"
             )
         else:
             converted.unsupported.append(f"subimage {name} (Format={fmt}): no Image slot")
@@ -333,10 +339,16 @@ def _defaults() -> dict[str, Any]:
 
 
 def _image_source(
-    config: Mapping[str, Any], root: Path, *, name: object = None, written: bool = False
+    config: Mapping[str, Any],
+    root: Path,
+    *,
+    name: object = None,
+    written: bool = False,
+    targets: tuple[str, ...] = (),
 ) -> Converted:
     """*config* as an ``Image`` file; *written*: a payload tundravm wrote, whose trees,
-    scripts and boot settings are what its own Image file generated, so none is copied."""
+    scripts and boot settings are what its own Image file generated, so none is copied.
+    *targets* are the outputs the tree builds, written as ``targets=`` when given."""
     defaults = _defaults()
     name = str(name or config.get("ImageId") or config.get("Image") or root.name)
     unsupported: list[str] = []
@@ -381,6 +393,8 @@ def _image_source(
     if trees:
         imports.append("Tree")
         args.append("files=[\n        " + ",\n        ".join(trees.values()) + ",\n    ]")
+    if targets:
+        args.append(f"targets=({', '.join(_quoted(target) for target in targets)})")
     scripts: list[str] = []
     for key, stage in {} if written else SCRIPTS.items():
         for script in config.get(key) or ():

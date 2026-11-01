@@ -690,9 +690,9 @@ prints an `Image` file for a tree mkosi itself resolves, with every setting it c
 listed as `# unsupported:`. Save it beside the tree: its `Tree(...)` and script paths are
 relative to the file. A tree tundravm wrote (`mkosi.images/payload/`) converts its payload;
 the QEMU disk, the cloud wrappers and the payload's trees and scripts are what tundravm
-generates, so the notes name them and nothing is copied. A tree with an executable
-`mkosi.version` or `mkosi.configure` is refused unless `--allow-scripts`, since parsing
-would run it.
+generates, so the notes name them and nothing is copied; the wrappers become `targets=`.
+A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
+`--allow-scripts`, since parsing would run it.
 
 ## The lock
 
