@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from tundravm import Image, Service
-from tundravm.components import Endpoint
+from tundravm.components import Component, Endpoint
+from tundravm.declarative import Root, Task
 from tundravm.declarative.systemd import PRESETS
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
@@ -68,6 +71,23 @@ def test_notify_needs_no_probe_and_the_dependent_waits_for_the_unit() -> None:
     unit = planned.service("app")
     assert unit.get("Unit", "Requires") == "worker.service tdx-evidence.service"
     assert unit.get("Unit", "After") == "worker.service tdx-evidence.service"
+
+
+def test_a_setup_tasks_output_skips_its_consumer_when_the_setup_wrote_nothing() -> None:
+    """The fail-safe idiom: Wants= and After= on the task, never Requires=, and the
+    condition on what it writes, so a failed setup leaves the consumer skipped."""
+    setup = Task("render", ("/usr/bin/render", "/run/app/config"), user=Root())
+
+    class Rendered(Component):
+        def compose(self) -> Iterator[object]:
+            yield setup
+            yield Service("app", ["/usr/bin/app"], requires=[setup.output("/run/app/config")])
+
+    unit = plan(Image("app", components=[Rendered()]), "production").service("app")
+    assert unit.get("Unit", "Wants") == "render.service"
+    assert "render.service" in (unit.get("Unit", "After") or "").split()
+    assert unit.get("Unit", "Requires") == "tdx-evidence.service"
+    assert unit.get("Unit", "ConditionPathExists") == "/run/app/config"
 
 
 def test_requiring_a_service_without_readiness_is_refused_where_it_is_written() -> None:

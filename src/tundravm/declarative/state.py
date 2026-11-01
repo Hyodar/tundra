@@ -115,11 +115,12 @@ from .model import (
     Task,
     Template,
     Unit,
+    UnitOutput,
     UnitReady,
     User,
 )
 from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
-from .systemd import UNIT_REF_KINDS, Dynamic, Root, UnitTarget, target_unit
+from .systemd import UNIT_REF_KINDS, Condition, Dynamic, Root, UnitTarget, target_unit
 
 INIT_SERVICE = "runtime-init.service"
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
@@ -845,6 +846,7 @@ def _unit(
     through the :data:`NEEDS_DROPIN` drop-in. Without *states* its enable,
     disable and mask lines are left to the profile it extends.
     """
+    _refuse_outputs("Unit", unit.name, unit.needs)
     waits = wait_units(_steps(unit.needs), steps=steps)
     waits = (*waits, *ready_units(unit.needs))
     if unit.content is not None:
@@ -1308,7 +1310,29 @@ def _suffixed(path: str, name: str) -> str:
 
 def ready_units(needs: Sequence[Ready]) -> tuple[str, ...]:
     """The units of the ``task.ready`` handles in *needs* (``After=`` + ``Requires=``)."""
-    return tuple(ref.unit for ref in needs if isinstance(ref, UnitReady))
+    return tuple(
+        ref.unit for ref in needs if isinstance(ref, UnitReady) and not isinstance(ref, UnitOutput)
+    )
+
+
+def output_units(needs: Sequence[Ready]) -> tuple[str, ...]:
+    """The units of the ``task.output(path)`` handles in *needs* (``After=`` + ``Wants=``)."""
+    return tuple(ref.unit for ref in needs if isinstance(ref, UnitOutput))
+
+
+def output_conditions(needs: Sequence[Ready]) -> tuple[tuple[str, str], ...]:
+    """``ConditionPathExists=`` on each ``task.output(path)``'s path in *needs*."""
+    return tuple(
+        Condition.path_exists(ref.path).entry for ref in needs if isinstance(ref, UnitOutput)
+    )
+
+
+def _refuse_outputs(kind: str, name: str, needs: Sequence[Ready]) -> None:
+    if output_units(needs):
+        raise ValidationError(
+            f"{kind} {name!r} needs a task.output(...), which only a Service or a Task takes.",
+            hint="Wait for the task with needs=[task.ready], or make the consumer a Service.",
+        )
 
 
 def _steps(needs: Sequence[Ready]) -> tuple[str, ...]:
@@ -1341,10 +1365,15 @@ def _finish_service(profile: ProfileState, service: Service) -> None:
     socket activation (``<name>.socket`` enabled, the service left for it to start)."""
     spec = profile.services[-1]
     units = ready_units(service.needs)
-    if not units and service.socket is None:
+    outputs = output_units(service.needs)
+    if not units and not outputs and service.socket is None:
         return
     first = list(units)
-    changes: dict[str, object] = {"needs": _steps(service.needs)}
+    changes: dict[str, object] = {
+        "needs": _steps(service.needs),
+        "wants": _merged(outputs, spec.wants),
+        "conditions": (*spec.conditions, *output_conditions(service.needs)),
+    }
     if service.socket is not None:
         stem = unit_name(service.name).removesuffix(".service").removesuffix("@")
         socket = f"{stem}.socket"
@@ -1358,7 +1387,7 @@ def _finish_service(profile: ProfileState, service: Service) -> None:
         _add_file(profile, f"{UNIT_DIRECTORY}/{socket}", text)
         enable_unit(profile, socket)
         changes["enabled"] = False
-    changes["after"] = _merged(first, spec.after)
+    changes["after"] = _merged(first, outputs, spec.after)
     changes["requires"] = _merged(first, spec.requires)
     profile.services[profile.services.index(spec)] = replace(spec, **changes)  # type: ignore[arg-type]
 
@@ -1398,7 +1427,7 @@ def _task(
         user = _system_user(profile, stem, users)
     command = task.command
     boot = task.schedule is None
-    wants = _targets(name, "wants", task.wants, units)
+    wants = _merged(output_units(task.needs), _targets(name, "wants", task.wants, units))
     requires = _merged(ready_units(task.needs), _targets(name, "requires", task.requires, units))
     profile.services.append(
         ServiceSpec(
@@ -1428,7 +1457,10 @@ def _task(
             hardening=task.hardening.entries(),
             wanted_by=task.wanted_by,
             needs=_steps(task.needs),
-            conditions=tuple(condition.entry for condition in task.conditions),
+            conditions=(
+                *(condition.entry for condition in task.conditions),
+                *output_conditions(task.needs),
+            ),
         )
     )
     if task.schedule is not None:
@@ -1456,6 +1488,7 @@ def _mount(
     units: Collection[str] | None = None,
 ) -> None:
     """Lower *mount* to ``<escaped where>.mount``, enabled through the usual mechanism."""
+    _refuse_outputs("Mount", mount.where, mount.needs)
     waits = _merged(wait_units(_steps(mount.needs), steps=steps), ready_units(mount.needs))
     requires = _merged(waits, _targets(mount.unit, "requires", mount.requires, units))
     after = _merged(requires, _targets(mount.unit, "after", mount.after, units))

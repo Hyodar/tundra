@@ -509,7 +509,7 @@ class _Lowering:
             credentials=_credentials(tuple(item.credentials)),
             state=None if isinstance(state, VolumeDirectory) else state,
             write_paths=write,
-            needs=(),
+            needs=_outputs(item),
             logs=item.logs,
             runtime=item.runtime,
             ports=tuple(dm.Port(port.port, port.protocol) for port in item.expose),
@@ -541,7 +541,7 @@ class _Lowering:
             runtime=item.runtime,
             after=requires,
             requires=requires,
-            needs=(),
+            needs=_outputs(item),
             hardening=item.hardening,
             timeout_stop=None if shutdown is None else shutdown.timeout,
             kill_mode=None if shutdown is None else shutdown.kill_mode,
@@ -572,9 +572,16 @@ class _Lowering:
         """The units ``requires=`` means: what proves each dependency ready."""
         units: list[str] = []
         for requirement in item.requires:
+            if isinstance(requirement, dm.UnitOutput):
+                continue
             for handle in _handles(requirement):
                 units.append(_ready_unit(item, handle))
         return tuple(dict.fromkeys(units))
+
+
+def _outputs(item: Service) -> tuple[dm.UnitOutput, ...]:
+    """The setup tasks' outputs ``requires=`` names, which the unit waits for by condition."""
+    return tuple(r for r in item.requires if isinstance(r, dm.UnitOutput))
 
 
 def _handles(requirement: object) -> tuple[Readied, ...]:

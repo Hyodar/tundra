@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
-from tundravm.declarative.model import Calendar, DropIn, Every, Listen
+from tundravm.declarative.model import Calendar, DropIn, Every, Listen, UnitOutput
 from tundravm.declarative.systemd import Hardening
 from tundravm.errors import ValidationError
 
@@ -57,13 +57,21 @@ type Argument = str | Endpoint | Built
 """What an argv element may be: a word, an :class:`Endpoint` rendered as its URL, or
 a built binary as the first element."""
 
-type Requirement = ServiceReady | ComponentReady | BootReady | Endpoint | ServiceRef
-"""What ``requires=`` takes: a readiness handle, or an export that carries one."""
+type Requirement = ServiceReady | ComponentReady | BootReady | Endpoint | ServiceRef | UnitOutput
+"""What ``requires=`` takes: a readiness handle, an export that carries one, or a setup
+task's ``task.output(path)`` (start after it, and only if it wrote *path*)."""
 
 type Binding = Credential | Secret
 """What ``credentials=`` takes: a delivered :class:`Secret`, or a fixed-path credential."""
 
-_REQUIREMENTS: tuple[type, ...] = (ServiceReady, ComponentReady, BootReady, Endpoint, ServiceRef)
+_REQUIREMENTS: tuple[type, ...] = (
+    ServiceReady,
+    ComponentReady,
+    BootReady,
+    Endpoint,
+    ServiceRef,
+    UnitOutput,
+)
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -99,6 +107,9 @@ class Service(Located):
 
     ``requires=[other.ready]`` is a real dependency: ``Requires=`` and ``After=`` on
     whatever proves the other service ready (its ``Type=notify``, or its probe unit).
+    ``requires=[setup.output("/run/app/config")]`` is the fail-safe idiom: ``After=`` and
+    ``Wants=`` on the setup task, ``ConditionPathExists=`` on what it writes, so a failed
+    setup skips this service instead of failing it.
     ``expose=[TCP(8080)]`` opens that port in the image's firewall and nothing else does.
 
     ``state=`` is a ``StateDirectory=`` name under ``/var/lib`` (volatile, like the rest
@@ -220,7 +231,7 @@ class Service(Located):
 
     def _check_readiness(self, item: Requirement) -> None:
         """A dependency must prove it is ready; ``After=`` alone is never what was meant."""
-        if isinstance(item, BootReady):
+        if isinstance(item, (BootReady, UnitOutput)):
             return
         if isinstance(item, ComponentReady):
             if not item.handles():

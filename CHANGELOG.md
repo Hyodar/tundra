@@ -19,6 +19,7 @@ Breaking changes are marked **Breaking**.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports and 8745, one hardened user per service, and `tdxs`.
 - `Service` takes an argv; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`); `expose=` is the only way to open a port.
 - A timer service keeps every keyword and refuses the ones only a long-lived service has.
+- `requires=[setup.output(path)]` is the fail-safe idiom: the service starts after a component's setup `Task` and is skipped, not failed, when the task wrote nothing.
 - `Hardening.preset(NAME)` names the runtime class (`static`, `jit`, `node`, `python`, `dotnet`), each with a `systemd-analyze security` ceiling.
 - Every development profile compiles in a boot probe derived from its declarations (services, ports, volumes, egress, sandboxes, kernel, host keys); a production profile carries none.
 - `Component` is a dataclass with `compose()`, typed exports (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()`.

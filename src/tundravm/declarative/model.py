@@ -2636,6 +2636,23 @@ class UnitReady(Ready):
         return self.step
 
 
+@dataclass(frozen=True, slots=True)
+class UnitOutput(UnitReady):
+    """``task.output(path)``: "start after that boot task, and only if it wrote *path*".
+
+    The fail-safe idiom: a setup task that fails writes nothing, so its consumer renders
+    ``After=`` and ``Wants=`` on the task (never ``Requires=``) and
+    ``ConditionPathExists=`` on *path*: systemd skips it, not fails it, and nothing
+    crash-loops on a missing config. A ``Service`` or a ``Task`` takes it.
+    """
+
+    path: str = ""
+
+    def __post_init__(self) -> None:
+        Ready.__post_init__(self)
+        _require_absolute(self, self.path, "path")
+
+
 def _require_service_name(owner: object, name: object) -> None:
     if not isinstance(name, str) or not _UNIT_NAME.fullmatch(name):
         raise _fail(owner, f"invalid unit name {name!r}.")
@@ -2774,6 +2791,11 @@ class Task(Declared):
                 hint="Wait for a boot task (no schedule=), or order with after=.",
             )
         return UnitReady(self.unit)
+
+    def output(self, path: str) -> UnitOutput:
+        """A ``needs=`` (or public ``requires=``) handle: start after this boot task, and
+        only if it wrote *path* (:class:`UnitOutput`)."""
+        return UnitOutput(self.ready.unit, path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2998,6 +3020,7 @@ __all__ = [
     "Template",
     "Task",
     "Unit",
+    "UnitOutput",
     "UnitReady",
     "User",
     "Variant",

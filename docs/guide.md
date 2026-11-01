@@ -190,11 +190,10 @@ Passing a baseline component in `components=` replaces the implied one.
 | `profiles` | `{"name": Profile(...)}` | `tundravm` |
 | `mkosi` | `Mkosi(settings={...}, scripts=[...])`: see [The escape to mkosi](#the-escape-to-mkosi) | `tundravm` |
 
-`File.copy` and `Tree` read host files when the image lowers. Build their paths from
-`Path(__file__).parent`, so the result does not depend on the working directory. A file is
-root-owned unless `owner=` says otherwise; systemd-tmpfiles applies the owner at
-boot. Build dependencies are not image packages: they belong to the `GoBinary`,
-`CargoBinary` or `Build` that needs them.
+`File.copy` and `Tree` read host files when the image lowers: build their paths from
+`Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise;
+systemd-tmpfiles applies the owner at boot. Build dependencies are not image packages: they
+belong to the `GoBinary`, `CargoBinary` or `Build` that needs them.
 
 `cmdline=` on either `Kernel` appends parameters to the UKI's measured command line, after
 the ones the image writes itself: `kernel=Kernel.default(cmdline=["nospectre_v2"])`. None is
@@ -270,6 +269,10 @@ the other service ready. `After=` alone is never generated.
 
 A probe is its own oneshot unit (`app-ready.service`), so a dependent waits for an answer,
 not for an exec.
+
+A component's setup `Task` that fails writes nothing;
+`requires=[setup.output("/run/app/config")]` renders `Wants=`, `After=` and
+`ConditionPathExists=`, so its consumer is skipped, not failed.
 
 ### The sandbox
 
@@ -489,8 +492,7 @@ not depend on which profiles a compile selects. `build --profile staging` is
 
 ## Volumes, secrets and ingress
 
-These are the runtime contracts of a confidential service. The prover template is the
-shortest image that uses all three:
+The prover template uses all three runtime contracts:
 
 ```python
 from tundravm import Image, RootFS
@@ -518,8 +520,8 @@ image = Image(
 
 `Volume(name, mount=, unlock=)` is a LUKS2 volume with ext4 inside. Its size and the disk
 are deployment configuration (`deploy --volume data=create:100GiB`). The image finds the
-disk by name through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order. It formats
-a volume only while it carries no initialisation token: an unlock failure never permits
+disk by name through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order. It formats a
+volume only while it carries no initialisation token: an unlock failure never permits
 formatting.
 
 `unlock=` is the trust decision and has no default:
