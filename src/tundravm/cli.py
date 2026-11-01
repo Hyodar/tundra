@@ -1349,7 +1349,7 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
         )
         return EXIT_OK
     if args.json:
-        report["provenance"] = show.provenance(loaded.recipe, names)
+        report["provenance"] = show.provenance(loaded.recipe, names, declared=loaded.declared)
     print(json_report("show", report) if args.json else show.render_image(report), file=out)
     return EXIT_OK
 

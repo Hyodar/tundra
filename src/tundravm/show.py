@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import stat
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,7 +45,7 @@ from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
 from .declarative.lower import declared_firewall
 from .declarative.model import Recipe
-from .declarative.resolve import COMMON_LEVEL, resolve
+from .declarative.resolve import COMMON_LEVEL, Origin, resolve
 from .declarative.resolve import describe as describe_identity
 from .declarative.resolve import provenance as resolved_provenance
 from .diff import diff_trees
@@ -117,35 +117,68 @@ IMAGE_KEYS = (
 """The top-level keys of ``show IMAGE --json``, in order."""
 
 
-def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[str, object]]]:
+def provenance(
+    recipe: Recipe, profiles: Sequence[str], *, declared: Image | None = None
+) -> dict[str, list[dict[str, object]]]:
     """Per profile, every declaration its resolution touched, with each step that touched it
     (declared, added, edited, removed), the profile (``image`` for the image's own
-    declarations), the component chain and the ``file:line``."""
+    declarations), the classes of the components it came through and the ``file:line``.
+
+    A declaration is named as the image file wrote it: ``Service('app')``,
+    ``GoBinary('server')`` for a built binary, ``Service('app').readiness`` for the probe
+    *declared* (the ``Image`` *recipe* lowers) generates for one."""
+    from ._image._lower import component_classes
+    from ._image._runtime import _image_services
+
+    classes = {cls.__name__ for cls in component_classes(recipe)}
+    probes = (
+        {}
+        if declared is None
+        else {s.probe_unit: s.stem for s in _image_services(declared) if s.probe_unit}
+    )
     found: dict[str, list[dict[str, object]]] = {}
-    declared = {variant.name for variant in recipe.variants}
+    known = {variant.name for variant in recipe.variants}
     for name in profiles:
-        if name not in declared:
+        if name not in known:
             continue
-        found[name] = [
+        rows: list[dict[str, object]] = [
             {
-                "declaration": describe_identity(key),
+                "declaration": _declaration(key, origins, classes, probes),
                 "origins": [
                     {
                         "action": origin.action,
                         "profile": "image" if origin.variant == COMMON_LEVEL else origin.variant,
-                        "components": [f for f, _ in origin.fragments],
+                        "components": [kind for _, kind in origin.fragments if kind in classes],
                         "fields": list(origin.fields),
                         "location": display_location(origin.location),
                     }
                     for origin in origins
                 ],
             }
-            for key, origins in sorted(
-                resolved_provenance(recipe, variant=name).items(),
-                key=lambda kv: describe_identity(kv[0]),
-            )
+            for key, origins in resolved_provenance(recipe, variant=name).items()
         ]
+        found[name] = sorted(rows, key=lambda row: str(row["declaration"]))
     return found
+
+
+def _declaration(
+    key: tuple[str, ...],
+    origins: Sequence[Origin],
+    classes: Collection[str],
+    probes: Mapping[str, str],
+) -> str:
+    """The public value behind the declaration *key*: the binary a source build's own
+    fragment is (``GoBinary('server')``), the readiness a probe unit checks, or
+    :func:`~tundravm.declarative.resolve.describe`'s spelling."""
+    kind, *rest = key
+    if kind == "Build":
+        for origin in origins:
+            for fragment, value in reversed(origin.fragments):
+                if fragment == rest[0] and value not in (*classes, "Fragment", ""):
+                    return f"{value}({rest[0]!r})"
+    if kind == "Task" and rest and rest[0] in probes:
+        return f"Service({probes[rest[0]]!r}).readiness"
+    return describe_identity(key)
 
 
 def render_image(report: Mapping[str, Any]) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,10 +13,13 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT
-from tundravm import File, Image, Package, Profile, Service, errors
+from tundravm import File, Image, Package, Profile, Service, errors, show
+from tundravm._image import recipe_of
 from tundravm._reference import MODULES, lint_markdown
 from tundravm.check import RULES
-from tundravm.systemd import Every
+from tundravm.components import Component
+from tundravm.sources import GoBinary, Local
+from tundravm.systemd import Every, TcpProbe
 from tundravm.testing import plan
 
 PACKAGE = Path(tundravm.__file__).parent
@@ -206,6 +210,7 @@ INTERNAL_MODEL = {
     "File(stage, path), Package(name, role)": re.compile(
         r"\bFile(?:Tree)?\(\w+, /|\bPackage\([\w.+-]+, \w+\)"
     ),
+    "Build(name), a source build by its identity": re.compile(r"(?<![\w.])Build\(\w+\)"),
     "an internal module path": re.compile(
         r"\btundravm\.(?:declarative|_(?!reference\b)\w+)\b|\b_(?:image|modules|units)\.[a-z_]+\b"
     ),
@@ -549,6 +554,7 @@ def test_lint_fixes_and_hints_name_the_public_api() -> None:
         "See tundravm._modules.init, or tundravm.declarative.utils.",
         "profile 'dev' edits File(extra, /etc/motd), which it does not inherit",
         "profile 'dev' removes Package(jq, runtime), which it does not inherit",
+        "declared Build(server) via app > server",
     ],
 )
 def test_internal_model_names_are_caught(text: str) -> None:
@@ -584,6 +590,22 @@ def test_resolve_messages_name_the_value_an_image_file_wrote() -> None:
         "Package('jq')",
     ]
     assert [what for d in found for what in _internal(d.message)] == []
+
+
+def test_show_json_provenance_names_the_public_objects() -> None:
+    class App(Component):
+        def compose(self) -> Iterator[object]:
+            server = [GoBinary("server", Local("."))]
+            yield Service("server", server, readiness=TcpProbe(8080))
+
+    image = Image("x", components=[App()])
+    found = show.provenance(recipe_of(image), ["production"], declared=image)["production"]
+    rows = {row["declaration"]: row["origins"][0]["components"] for row in found}  # type: ignore[index]
+    assert {key: rows[key] for key in ("GoBinary('server')", "Service('server').readiness")} == {
+        "GoBinary('server')": ["App"],
+        "Service('server').readiness": ["App"],
+    }
+    assert _internal(json.dumps(found)) == []
 
 
 @pytest.mark.parametrize("code", PUBLIC_RULES)
