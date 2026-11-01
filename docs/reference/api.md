@@ -293,6 +293,7 @@ A program the image runs, as its own user, in a tested sandbox.
 |---|---|
 | `Service.binaries() -> tuple[Any, ...]` | The built binary declarations this service's argv pulls in. |
 | `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL. |
+| `Service.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where this service answers on the loopback, with its readiness: what an ingress fronts (`upstream=app.endpoint(8080)`) or a dependent requires. It opens no port and changes no listen address. |
 | `Service.probe_unit` | The bounded probe unit a dependent waits for, when readiness needs one. |
 | `Service.ready` | "This service is ready": what another service's `requires=` takes. |
 | `Service.ref` | What a `Profile` change targets. |

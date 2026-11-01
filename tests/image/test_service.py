@@ -90,6 +90,13 @@ def test_a_setup_tasks_output_skips_its_consumer_when_the_setup_wrote_nothing() 
     assert unit.get("Unit", "ConditionPathExists") == "/run/app/config"
 
 
+def test_a_service_endpoint_is_its_loopback_address_with_its_readiness() -> None:
+    api = Service("api", ["/usr/bin/api"], readiness=TcpProbe(8080))
+    endpoint = api.endpoint(8080, path="/health")
+    assert (endpoint.url, endpoint.ready) == ("http://127.0.0.1:8080/health", api.ready)
+    assert Service("app", ["/usr/bin/app"], requires=[endpoint]).requires == (endpoint,)
+
+
 def test_requiring_a_service_without_readiness_is_refused_where_it_is_written() -> None:
     silent = Service("silent", ["/usr/bin/silent"])
     with pytest.raises(ValidationError) as caught:

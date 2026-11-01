@@ -249,9 +249,9 @@ valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
 
 ### Reaching a service
 
-`expose=[TCP(8080)]` opens that port in the firewall, and nothing else opens a port. It
-does not protect the requests: use an [ingress](#ingress) for that. `UDP(53)` works the
-same way.
+`expose=[TCP(8080)]` (or `UDP(53)`) opens that port in the firewall, and nothing else opens
+a port. It does not protect the requests: an [ingress](#ingress) fronts
+`app.endpoint(8080)`, the loopback address with the service's readiness.
 
 ### Readiness and order
 

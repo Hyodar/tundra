@@ -353,6 +353,12 @@ class Service(Located):
         """ "This service is ready": what another service's ``requires=`` takes."""
         return ServiceReady(self.unit_name, self.readiness)
 
+    def endpoint(self, port: int, *, path: str = "/", scheme: str = "http") -> Endpoint:
+        """Where this service answers on the loopback, with its readiness: what an ingress
+        fronts (``upstream=app.endpoint(8080)``) or a dependent requires. It opens no port
+        and changes no listen address."""
+        return Endpoint("127.0.0.1", port, path, scheme, ready=self.ready)
+
     @property
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""

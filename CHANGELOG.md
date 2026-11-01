@@ -18,6 +18,7 @@ Breaking changes are marked **Breaking**.
 - **Breaking:** `profile` replaces `variant` everywhere, `--json` output and `tundravm.testing` included; `show --json` says `image` and `components`.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports and 8745, one hardened user per service, and `tdxs`.
 - `Service` takes an argv; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`); `expose=` is the only way to open a port.
+- `service.endpoint(port)` is the loopback `Endpoint` a plain service answers at, with its readiness, for `upstream=` and `requires=`.
 - A timer service keeps every keyword and refuses the ones only a long-lived service has.
 - `requires=[setup.output(path)]` is the fail-safe idiom: the service starts after a component's setup `Task` and is skipped, not failed, when the task wrote nothing.
 - `Hardening.preset(NAME)` names the runtime class (`static`, `jit`, `node`, `python`, `dotnet`), each with a `systemd-analyze security` ceiling.

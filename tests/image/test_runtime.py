@@ -49,7 +49,7 @@ def app(**changes: object) -> Service:
 
 
 def upstream(service: Service | None = None) -> Endpoint:
-    return Endpoint("127.0.0.1", 8080, ready=(service or app()).ready)
+    return (service or app()).endpoint(8080)
 
 
 def prover(**changes: object) -> Image:
