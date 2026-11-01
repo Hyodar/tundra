@@ -36,8 +36,8 @@ TEMPLATES: dict[str, str] = {
     "as a sandboxed service, its readiness and a lint rule) plus a dev profile",
     "cloud": "a web page busybox httpd serves, one UKI for qemu, azure and gcp, and an EFI "
     "stub pinned to a Debian snapshot",
-    "prover": "cloud with the app behind an attested TLS ingress, its state on a volume an "
-    "operator unlocks, and a token delivered after attestation",
+    "prover": "the web page for qemu, azure and gcp behind an attested TLS ingress, its state "
+    "on a volume an operator unlocks, and a token delivered after attestation",
 }
 """Template name -> one-line description; ``new --template`` offers ``service`` and
 ``prover``, and the tests render all four."""
@@ -86,7 +86,7 @@ _CLOUD_IMPORTS = (
 
 _APP_IMPORTS = {
     "service": (
-        "from tundravm import Debian, Image, Package, Service\n"
+        "from tundravm import Image, Service\n"
         "from tundravm.components import (\n"
         "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
         "    Network,\n    Resolved,\n    Rule,\n)\n"
@@ -96,7 +96,7 @@ _APP_IMPORTS = {
     ),
     "cloud": _CLOUD_IMPORTS,
     "prover": (
-        "from tundravm import Debian, File, Image, Package, Service\n"
+        "from tundravm import File, Image, Package, Service\n"
         "from tundravm.components import (\n"
         "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
         "    Network,\n    Resolved,\n    Rule,\n)\n"
@@ -253,11 +253,9 @@ _SERVICE_RECIPE = r"""
 
 image = Image(
     "$title",
-    base=Debian("$release"),
-    # Implied with no further words: Debian from the locked snapshot, a measured
+    # Implied with no further words: Debian trixie from the locked snapshot, a measured
     # UKI, NTS time, a volatile journal, sysctl hardening, DHCP, a firewall that opens only
     # what a service exposes, one hardened user per service and the evidence service.
-    packages=[Package("ca-certificates")],
     components=[App(version=APP_VERSION, port=APP_PORT)],
     # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.
     network=Network(egress=Egress()),
@@ -356,13 +354,11 @@ _PROVER_RECIPE = r"""
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 # A secret delivered after attestation (`tundravm secrets deliver INSTANCE api-token=@f`)
 # and read as a systemd credential: nothing is written into the image.
-token = Secret("api-token", rotation="restart")
+token = Secret("api-token")
 app = App(version=APP_VERSION, port=APP_PORT, state=data.directory("app"), token=token)
 
 image = Image(
     "$title",
-    base=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
-    packages=[Package("ca-certificates")],
     components=[app],
     volumes=[data],
     secrets=[token],
@@ -709,8 +705,8 @@ _ALLOW_COMMENTS: dict[str, str] = {
     "service": "        # app/ and tundra-tools: `tundravm lock` pins both.\n",
     "cloud": "        # The EFI stub stays unpinned until `tundravm lock` pins its sha256.\n",
     "prover": (
-        "        # The tundra-tools builds (evidence, volume and delivery tools) and the EFI\n"
-        "        # stub package stay unpinned until `tundravm lock` pins them.\n"
+        "        # The tundra-tools builds (evidence, volume and delivery tools) stay unpinned\n"
+        "        # until `tundravm lock` pins them.\n"
     ),
 }
 """The comment above ``allow=`` in the test module of a template with :data:`EXPECTED_FINDINGS`."""
@@ -731,7 +727,7 @@ def render_recipe_template(
     :data:`EXPLICIT_BACKENDS`) appends an explicit ``backend = ...`` binding instead, for a
     file that must build with that one wherever it runs; ``new`` never passes it.
     """
-    constants = _CLOUD_CONSTANTS if template in ("cloud", "prover") else ""
+    constants = _CLOUD_CONSTANTS if template == "cloud" else ""
     source = Template(_SOURCES[template]).substitute(
         title=title,
         template=template,

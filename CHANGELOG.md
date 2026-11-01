@@ -44,6 +44,7 @@ Breaking changes are marked **Breaking**.
 - `new NAME [--template service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written.
 - A new project's `pyproject.toml` sets `[tool.ruff] line-length = 100`, at which its files are `ruff format` clean.
 - The `service` template builds your own Go program from `app/`; the prover template adds a volume, a secret, attested TLS and `policies/`.
+- The templates state only what differs from a default: no `base=`, snapshot or EFI-stub pin, or default `rotation=`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds with `TUNDRA_TOOLS_TOKEN` when the repository sets it.
 - `show` leads with the image and its file, then production; with a build, with the build's report; `--diff` compares two builds.
 - `run --mode simulated|tdx` is always explicit; a production build boots fail-closed without TDX, and `--dev` runs the dev build's services.
