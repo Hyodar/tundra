@@ -42,6 +42,8 @@ VERSION = "6.12.111"
 """The stable release Debian trixie's ``linux`` 6.12.111-1 packages: the newest whose
 ``linux-config-6.12`` :data:`SNAPSHOT`'s pool holds (6.12.113-1 is in the security pool
 only, which ``DebianConfig`` does not read)."""
+RELEASE = VERSION
+"""What ``uname -r`` prints: Debian's config sets no ``CONFIG_LOCALVERSION``."""
 
 FRAGMENT = KernelConfig(
     {

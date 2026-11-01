@@ -1,10 +1,11 @@
-# A kernel built from source, too slow for every push: tests/fixtures/kernel/recipe.py compiles
+# Kernels built from source, too slow for every push: tests/fixtures/kernel/recipe.py compiles
 # Debian trixie's 6.12 kernel from its own cloud-amd64 config with CONFIG_MODULES=n, the way
-# Kernel.build(...) does. The build's drivers check asserts every driver the qemu, azure and
-# gcp targets need is built in (=y) and the denied ones are off; the job uploads the config
-# before and after olddefconfig, the check's report and the diff summary, then boots
-# qemu.raw under QEMU with OVMF until the fixture's probe has printed what the kernel
-# registered. Weekly, and by hand:
+# Kernel.build(...) does, and tests/fixtures/kernel/example.py the kernel
+# examples/nethermind_base.py builds from its own config. Each build's drivers check asserts
+# every driver the qemu, azure and gcp targets need is built in (=y) and the denied ones are
+# off; each job uploads the config before and after olddefconfig, the check's report and the
+# diff summary, then boots qemu.raw under QEMU with OVMF until the fixture's probe has
+# printed what the kernel registered. Weekly, and by hand:
 #   gh workflow run kernel.yml --ref BRANCH
 name: kernel
 
@@ -19,10 +20,20 @@ concurrency:
 
 jobs:
   kernel:
+    name: kernel (${{ matrix.fixture }})
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: recipe
+            image: kernel
+          - fixture: example
+            image: kernel-example
     env:
       TUNDRAVM_BACKEND: local
+      FIXTURE: tests/fixtures/kernel/${{ matrix.fixture }}.py
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -32,6 +43,7 @@ jobs:
       - name: Put the build root under the runner's temp
         run: |
           echo "TUNDRAVM_BUILD=$RUNNER_TEMP/kernel" >> "$GITHUB_ENV"
+          echo "BUILD_DIR=$RUNNER_TEMP/kernel/${{ matrix.image }}/latest-production" >> "$GITHUB_ENV"
           echo "RECORDS=$RUNNER_TEMP/kernel-records" >> "$GITHUB_ENV"
 
       - name: Set up the build host, QEMU and OVMF
@@ -42,15 +54,15 @@ jobs:
 
       - name: Lock and build the fixture
         run: |
-          uv run tundravm lock tests/fixtures/kernel/recipe.py
-          uv run tundravm build tests/fixtures/kernel/recipe.py
+          uv run tundravm lock "$FIXTURE"
+          uv run tundravm build "$FIXTURE"
           uv run tundravm verify latest
-          ls -lL "$TUNDRAVM_BUILD/kernel/latest-production/" "$TUNDRAVM_BUILD/kernel/latest-production/kernel/"
+          ls -lL "$BUILD_DIR/" "$BUILD_DIR/kernel/"
           df -h /
 
-      - name: Summarize what olddefconfig did to Debian's config
+      - name: Summarize what olddefconfig did to the base config
         run: |
-          build="$TUNDRAVM_BUILD/kernel/latest-production"
+          build="$BUILD_DIR"
           mkdir -p "$RECORDS"
           cp "$build"/kernel/* "$build/manifest.json" "$RECORDS/"
           jq '.kernel' "$build/manifest.json"
@@ -60,7 +72,7 @@ jobs:
           comm -12 "$RECORDS/modules.before" "$RECORDS/builtin.after" > "$RECORDS/m-to-y.txt"
           comm -23 "$RECORDS/modules.before" "$RECORDS/builtin.after" > "$RECORDS/m-dropped.txt"
           {
-            echo "Debian =m options: $(wc -l < "$RECORDS/modules.before")"
+            echo "base config =m options:$(wc -l < "$RECORDS/modules.before")"
             echo "=m became =y: $(wc -l < "$RECORDS/m-to-y.txt")"
             echo "=m dropped: $(wc -l < "$RECORDS/m-dropped.txt")"
             echo "drivers check: $(grep -c ' required by ' "$build/kernel/drivers.txt") required, $(grep -c ' denied$' "$build/kernel/drivers.txt") denied, all passed"
@@ -78,13 +90,14 @@ jobs:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/kernel-records/boot-logs
-          TUNDRAVM_KERNEL_BUILD: ${{ runner.temp }}/kernel/kernel/latest-production
+          TUNDRAVM_KERNEL_BUILD: ${{ runner.temp }}/kernel/${{ matrix.image }}/latest-production
+          TUNDRAVM_KERNEL_FIXTURE: ${{ matrix.fixture }}
         run: uv run pytest tests/integration/test_kernel_boot.py -m boot -v -rsP
 
       - name: Upload the configs, the check's report and the console log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: kernel-records
+          name: kernel-records-${{ matrix.fixture }}
           path: ${{ runner.temp }}/kernel-records
           if-no-files-found: ignore
