@@ -37,3 +37,16 @@ The tag pins the release, and so does the wheel attached to it. Its images build
 at the tag's commit, with no clone. mkosi is not on PyPI, so the wheel names mkosi 27.1 by
 its git commit, which PyPI refuses: leave the `pypi` environment uncreated until mkosi is
 on PyPI.
+
+Beside the wheel, a Debian 13 or Ubuntu 24.04 host needs four packages for `dev`, and
+`doctor` names the command for each one missing:
+
+| Package | For |
+|---|---|
+| `debian-archive-keyring` | mkosi checks its tools tree against it; every other build tool (`systemd-repart`, `mkfs.*`, `ukify`, `systemd-boot`) comes from that tree |
+| `golang` (1.21 or newer) | fetches the toolchain and modules of each Go source, the evidence service's among them |
+| `qemu-system-x86`, `ovmf` | boot the dev build |
+
+A Cargo source that pins a Rust toolchain needs `rustup` too. mkosi builds in an
+unprivileged user namespace, or under `sudo` where the host withholds them (Ubuntu
+24.04's AppArmor default; `doctor` prints the sysctl).
