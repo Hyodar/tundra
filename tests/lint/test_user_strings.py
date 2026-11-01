@@ -13,6 +13,7 @@ import pytest
 import tundravm
 from tests.helpers import REPO_ROOT
 from tundravm._reference import MODULES, lint_markdown
+from tundravm.check import RULES
 
 PACKAGE = Path(tundravm.__file__).parent
 EXAMPLES = REPO_ROOT / "examples"
@@ -186,9 +187,24 @@ INTERNAL_MODEL = {
     "Key(, Disk(": re.compile(r"(?<![\w.])(?:Key|Disk)\("),
     "Setting": re.compile(r"\bSetting\b"),
     "Task, BootStep, Condition": re.compile(r"\bTask\b|\bBootStep\b|\bCondition\."),
+    "Hook(, Mount(, Run(, Repository(, FileTree(, Partition(, Template(": re.compile(
+        r"(?<![\w.])(?:Hook|Mount|Run|Repository|FileTree|Partition|Template)\("
+    ),
+    "Variant, Platform(, RuntimeInit, RuntimeTools, KernelConfig": re.compile(
+        r"\bVariant\b|(?<![\w.])Platform\(|\bRuntimeInit\b|\bRuntimeTools\b|\bKernelConfig\b"
+    ),
+    "UnitReady, Ready(, Root(), Dynamic()": re.compile(
+        r"\bUnitReady\b|(?<![\w.])Ready\(|\bRoot\(\)|\bDynamic\(\)"
+    ),
+    "Firewall(collect=, ssh=)": re.compile(r"\b(?:collect|ssh)=(?!=)"),
+    "an internal module path": re.compile(
+        r"\btundravm\.(?:declarative|_(?!reference\b)\w+)\b|\b_(?:image|modules|units)\.[a-z_]+\b"
+    ),
 }
 """The internal model's names, which no lint fix or finding hint names: an image file cannot
 write them (a fix it cannot express says tundravm sets it)."""
+PUBLIC_RULES = sorted(code for code, rule in RULES.items() if not rule.internal)
+"""The codes an image file can hit: every rule of the registry but the internal model's."""
 DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
 """The current docs; ``docs/design`` keeps the dated design records as written."""
 CLI_DOCS = [
@@ -512,7 +528,38 @@ def test_lint_fixes_and_hints_name_the_public_api() -> None:
         "Declare the step or the Task in the profile.",
         'Add conditions=(Condition.virtualization("google"),).',
         "Setting is for keys tundravm has no field for.",
+        "Order it with Hook(name, phase, script, after=[...]).",
+        "Mount it with Mount(ref, where).",
+        "Open it with Firewall(collect=True), or Firewall(ssh=True) for port 22.",
+        "Wait for it with needs=[UnitReady(unit)] or Ready('disks').",
+        "Run as user=Root() when the unit must.",
+        "See tundravm._modules.init, or tundravm.declarative.utils.",
     ],
 )
 def test_internal_model_names_are_caught(text: str) -> None:
     assert _internal(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Declare Service(NAME, argv) with requires=[other.ready] and expose=[TCP(8080)].",
+        "Add AptRepository(url, suite, key=...) to Debian(repositories=[...]).",
+        "Its readiness is a ServiceReady, bound as ComponentReady(self).",
+        "Pass dev=DevAccess(ssh_keys=[...]), or SshAccess(from_delivery=True).",
+        "Declare the code with Rule from tundravm.components.",
+    ],
+)
+def test_public_spellings_pass_the_internal_model_guard(text: str) -> None:
+    assert _internal(text) == []
+
+
+@pytest.mark.parametrize("code", PUBLIC_RULES)
+def test_a_rule_an_image_file_can_hit_speaks_the_public_api(code: str) -> None:
+    rule = RULES[code]
+    found = [
+        f"{field}: {what}"
+        for field, text in (("summary", rule.summary), ("fix", rule.fix))
+        for what in (*_hits(text), *_renamed(text), *_internal(text))
+    ]
+    assert found == []
