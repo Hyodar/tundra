@@ -43,6 +43,7 @@ from tundravm.declarative import (
 )
 from tundravm.declarative.lifecycle import check_report
 from tundravm.declarative.utils import EfiStub
+from tundravm.diagnostics import tundravm_sets
 from tundravm.errors import ValidationError
 
 DEFAULT = Variant("default", outputs=("qemu",))
@@ -251,7 +252,7 @@ def test_debloat_masks_needed_units() -> None:
         ("debloat-removes-needed-unit", "net"),
         ("debloat-removes-needed-unit", "systemd-resolved"),
     ]
-    assert "keep_units" in (diags[0].hint or "")
+    assert "report 'systemd-networkd.service'" in (diags[0].hint or "")
 
 
 def test_debloat_keeps_the_targets_an_enabled_service_pulls_in() -> None:
@@ -319,7 +320,7 @@ def test_declared_debloat_removing_modules_of_a_modular_kernel_is_an_error() -> 
         "error",
         "/usr/lib/modules",
     )
-    assert "keep_modules=True" in (diag.hint or "")
+    assert diag.hint == tundravm_sets("whether the debloat keeps the kernel's modules")
     # A parent path or a glob removes them too.
     custom = Debloat(remove=("/usr/lib/mod*",))
     assert codes(recipe(custom)) == ["debloat-removes-modules"]
@@ -372,8 +373,7 @@ def test_secret_target_unsupported_by_the_builtin_provider() -> None:
     ]
     [file] = [d for d in found if "file /run/token" in d.message]
     assert "provisions only the SSH key" in file.message
-    assert "ExternalDelivery('NAME', supports=('file',))" in (file.hint or "")
-    assert "reach the VM with the SSH key" in (file.hint or "")
+    assert file.hint == tundravm_sets("where each secret is delivered")
 
 
 def test_secret_target_unsupported_by_an_external_provider() -> None:
@@ -381,10 +381,7 @@ def test_secret_target_unsupported_by_an_external_provider() -> None:
     secrets = Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent", ("file",)))
     [found] = [d for d in report(recipe(secrets)) if d.code == "secret-target-unsupported"]
     assert "environment variable TOKEN" in found.message
-    assert found.hint == (
-        "Add 'env' to ExternalDelivery('vault-agent', supports=) if it writes the target, "
-        "or remove the target from the Secret."
-    )
+    assert found.hint == tundravm_sets("where each secret is delivered")
 
 
 # k. kernel-missing
@@ -395,8 +392,7 @@ def test_kernel_missing() -> None:
     [diag] = report(subject)
     assert (diag.severity, diag.code, diag.profile) == ("error", "kernel-missing", "default")
     assert "A kernel must be installed" in diag.message
-    for fix in ("linux-image-amd64", "Kernel(...)", '"Bootable", ("no",)'):
-        assert fix in (diag.hint or "")
+    assert diag.hint == tundravm_sets("the kernel package")
 
 
 @pytest.mark.parametrize(
@@ -446,7 +442,7 @@ def test_aarch64_with_efi_stub_is_unsupported() -> None:
         if d.code == "image-arch-unsupported" and d.subject == "EfiStub"
     ]
     assert (diag.severity, diag.subject) == ("error", "EfiStub")
-    assert "_amd64.deb" in (diag.hint or "")
+    assert diag.hint == tundravm_sets("the architecture")
 
 
 def test_x86_64_is_fine_and_aarch64_always_builds_the_qemu_disk() -> None:

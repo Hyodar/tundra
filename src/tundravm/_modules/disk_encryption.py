@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_entry_name
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
-from tundravm.diagnostics import Diagnostic
+from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
 
 if TYPE_CHECKING:
@@ -174,7 +174,6 @@ class DiskEncryption(Module):
                 continue
             key = keys.get(key_ref)
             if key is None:
-                declared = ", ".join(sorted(keys)) or "none"
                 yield Diagnostic(
                     severity="error",
                     code="disk-key-undefined",
@@ -182,10 +181,7 @@ class DiskEncryption(Module):
                         f"disk {disk.name!r} uses key {key_ref!r}, which no "
                         "Key in this profile declares"
                     ),
-                    hint=(
-                        f"Declared keys: {declared}. Declare Key({key_ref!r}, ...) "
-                        "in this profile, or fix the Disk's key."
-                    ),
+                    hint=tundravm_sets("a volume's key"),
                     profile=profile,
                     subject=disk.name,
                 )
@@ -198,10 +194,7 @@ class DiskEncryption(Module):
                         f"disk {disk.name!r} reads its key from {disk.key_path}, but key "
                         f"{key.name!r} is written to {written}"
                     ),
-                    hint=(
-                        f"Set Key({key.name!r}, output={disk.key_path!r}) or point the Disk "
-                        "at the key's output."
-                    ),
+                    hint=tundravm_sets("where a volume's key is written"),
                     profile=profile,
                     subject=disk.name,
                 )
@@ -221,12 +214,7 @@ class DiskEncryption(Module):
                         f"disk {disk.name!r} sets no device and format={disk.format_policy!r}: "
                         "automatic device selection can pick the boot disk and format it"
                     ),
-                    hint=(
-                        "device=None takes the largest whole /dev/sd* disk, boot disk included. "
-                        "Name a stable device (device='/dev/disk/by-id/virtio-SERIAL'), or "
-                        "format='never' for a disk prepared beforehand; "
-                        "Policy(storage_safety='warn') makes this a warning."
-                    ),
+                    hint=tundravm_sets("each volume's device"),
                     profile=profile,
                     subject=disk.name,
                 )
@@ -238,10 +226,7 @@ class DiskEncryption(Module):
                         f"disk {disk.name!r} formats {disk.device}, a kernel name that can "
                         "point at another disk on the next boot"
                     ),
-                    hint=(
-                        "Kernel names follow probe order; name the disk by a stable link: "
-                        "/dev/disk/by-id/ (a virtio serial, a SCSI WWN) or /dev/disk/by-path/."
-                    ),
+                    hint=tundravm_sets("each volume's device"),
                     profile=profile,
                     subject=disk.name,
                 )

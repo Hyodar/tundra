@@ -37,6 +37,7 @@ from tundravm._modules import probe as probe_module
 from tundravm._modules.probe import Probe
 from tundravm._options import MkosiOptions
 from tundravm._source import DebFile, HttpSource
+from tundravm.check import CONFIGURE_SCRIPT_HINT, ENVIRONMENT_HINT
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import VERITY_MODULES, module_selection
@@ -749,7 +750,7 @@ def _refuse_unreproducible(setting: Setting) -> None:
         raise ValidationError(
             f"mkosi-configure-script: Setting {setting.section}.{setting.key} runs scripts "
             "that rewrite the configuration after `mkosi summary` resolved it.",
-            hint="Declare what the script would set as typed declarations or Settings.",
+            hint=CONFIGURE_SCRIPT_HINT,
             context={
                 "setting": f"{setting.section}.{setting.key}",
                 "code": "mkosi-configure-script",
@@ -761,7 +762,7 @@ def _refuse_unreproducible(setting: Setting) -> None:
         raise ValidationError(
             f"mkosi-environment-passthrough: Setting {setting.section}.{setting.key} passes "
             f"the host's {names} into the build.",
-            hint="Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
+            hint=ENVIRONMENT_HINT,
             context={
                 "setting": f"{setting.section}.{setting.key}",
                 "code": "mkosi-environment-passthrough",

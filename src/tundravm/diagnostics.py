@@ -159,4 +159,17 @@ class Rule:
         return f"{default} ({', '.join(changes)})"
 
 
-__all__ = ["SEVERITIES", "Context", "Diagnostic", "Rule", "RuleCheck", "Severity"]
+def tundravm_sets(what: str) -> str:
+    """The fix of a finding about *what* no image file declares: tundravm's own."""
+    return f"tundravm sets this itself ({what}); report it."
+
+
+__all__ = [
+    "SEVERITIES",
+    "Context",
+    "Diagnostic",
+    "Rule",
+    "RuleCheck",
+    "Severity",
+    "tundravm_sets",
+]

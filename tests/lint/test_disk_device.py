@@ -38,8 +38,7 @@ def test_the_error_names_the_boot_disk_risk_and_the_fix() -> None:
     (found,) = (d for d in check(lower(recipe)) if d.code == "disk-device-guessed")
     assert "automatic device selection can pick the boot disk and format it" in found.message
     assert "format='on_fail'" in found.message
-    hint = found.hint or ""
-    assert "/dev/disk/by-id/virtio-SERIAL" in hint and "storage_safety='warn'" in hint
+    assert found.hint == "tundravm sets this itself (each volume's device); report it."
 
 
 @pytest.mark.parametrize(

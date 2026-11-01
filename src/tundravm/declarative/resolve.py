@@ -47,6 +47,7 @@ from .model import (
     Key,
     Mount,
     Package,
+    Port,
     Recipe,
     Ref,
     Resolved,
@@ -642,8 +643,8 @@ def _check_unit_files(state: _Resolution, items: Sequence[Declaration]) -> None:
                 + f" both write {unit}",
                 subject=unit,
                 at=item,
-                hint="Rename one of them; a packaged unit takes Unit(name, dropin=...), and a "
-                "Service's own unit is changed through its fields.",
+                hint="Rename one of them; a Service's own unit changes through its fields "
+                "and unit=DropIn(...).",
             )
 
 
@@ -663,8 +664,8 @@ def _expand_firewall(state: _Resolution) -> None:
                 subject=units[0],
                 severity="warning",
                 at=firewall,
-                hint=f"Firewall(allow=({port.number},)) opens it; collect=True opens every port "
-                "a service declares.",
+                hint=f"Open it with the service's expose=[{_spelled(port)}], or "
+                f"Firewall(allow=[{_spelled(port)}]) for a program no Service runs.",
             )
     for item in expand_firewall(firewall, state.items.values()):
         rendered = located(item, firewall.declared_at)
@@ -681,6 +682,11 @@ def _expand_firewall(state: _Resolution) -> None:
         state.items.setdefault(ident, rendered)
         state.declared.setdefault(ident, rendered)
         state.trace.setdefault(ident, []).extend(state.trace.get(key, ()))
+
+
+def _spelled(port: Port) -> str:
+    """*port* as an Image file writes it: ``TCP(8080)``, ``UDP(53)``."""
+    return f"{port.protocol.upper()}({port.number})"
 
 
 def _configures_network(items: Sequence[Declaration]) -> bool:
@@ -719,7 +725,7 @@ def _check_network(state: _Resolution, items: Sequence[Declaration]) -> None:
         "profile configures no network interface",
         subject=state.variant,
         severity="warning",
-        hint="Add Network() (TeeBase(network=True) does), or ship a .network file.",
+        hint="Add network=Network() to the Image, or ship a .network file.",
     )
 
 

@@ -26,11 +26,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ._modules.init import is_init_path
-from ._modules.secret_delivery import SecretDelivery
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
-from .diagnostics import Diagnostic, Rule, RuleCheck, Severity
+from .diagnostics import Diagnostic, Rule, RuleCheck, Severity, tundravm_sets
 from .errors import ValidationError
 from .formats import annotation_path, workflow_command
 from .kernel_modules import (
@@ -516,8 +515,8 @@ def _rule_debloat_removes_needed_unit(
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} is a systemd unit that debloat masks",
                 hint=(
-                    f"Add it to Debloat(keep_units_extra=({unit!r},)) so the "
-                    "systemd minimization keeps it."
+                    "Rename the Service: the debloat masks the systemd units tundravm does "
+                    f"not keep, so report {unit!r} if the image needs it."
                 ),
                 profile=profile_name,
                 subject=svc.name,
@@ -530,8 +529,9 @@ def _rule_debloat_removes_needed_unit(
                 code="debloat-removes-needed-unit",
                 message=f"service {svc.name!r} depends on {dep!r}, which debloat masks",
                 hint=(
-                    f"Add it to Debloat(keep_units_extra=({dep!r},)), or drop "
-                    "the dependency; a Requires= on a masked unit stops the service."
+                    "Drop the dependency (a Requires= on a masked unit stops the service), "
+                    f"or report {dep!r} if the image needs it: tundravm decides which "
+                    "systemd units the debloat keeps."
                 ),
                 profile=profile_name,
                 subject=svc.name,
@@ -553,10 +553,7 @@ def _rule_debloat_removes_declared_file(
                     severity="warning",
                     code="debloat-removes-declared-file",
                     message=f"debloat deletes {pattern} at finalize, after this file is placed",
-                    hint=(
-                        f"Add {pattern!r} to Debloat(keep_paths=(...)) or move the file "
-                        "outside the removed path."
-                    ),
+                    hint=f"Ship the file outside {pattern}, which the debloat removes.",
                     profile=profile_name,
                     subject=path,
                 )
@@ -636,11 +633,7 @@ def _rule_kernel_missing(
             "profile builds a bootable UKI but installs no kernel, so mkosi stops with "
             "'A kernel must be installed in the image to build a UKI'"
         ),
-        hint=(
-            'Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, '
-            'declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) '
-            "with Debian(boot=None) for a non-bootable image."
-        ),
+        hint=tundravm_sets("the kernel package"),
         profile=profile_name,
     )
 
@@ -672,8 +665,7 @@ def _rule_built_kernel_modules(
                 "Debian(kernel_modules=...) selects modules, but the built kernel has no "
                 "loadable modules (Kernel(modules=False) or a whole config=)"
             ),
-            hint="Drop kernel_modules and build those drivers in (KernelConfig), or pass "
-            "Kernel(modules=True).",
+            hint=tundravm_sets("a built kernel's modules"),
             profile=profile_name,
             subject="kernel_modules",
         )
@@ -690,8 +682,7 @@ def _rule_built_kernel_modules(
                     f"debloat removes {pattern} but the built kernel installs its loadable "
                     "modules there (Kernel(modules=True))"
                 ),
-                hint="Debloat(keep_modules=True) keeps them; or build them in "
-                "(Kernel(modules=False)).",
+                hint=tundravm_sets("whether the debloat keeps the kernel's modules"),
                 profile=profile_name,
                 subject=MODULES_PATH,
             )
@@ -722,10 +713,7 @@ def _rule_debloat_removes_modules(
             f"debloat removes {pattern} but the profile boots the distribution's modular "
             "kernel, whose drivers (virtio, tdx_guest, cloud NICs) then never load"
         ),
-        hint=(
-            "Debloat(keep_modules=True) keeps them; Debloat(keep_modules=False) removes them "
-            "on purpose; or declare Kernel(...) built with everything the image needs."
-        ),
+        hint=tundravm_sets("whether the debloat keeps the kernel's modules"),
         profile=profile_name,
         subject=MODULES_PATH,
     )
@@ -747,10 +735,7 @@ def _rule_recipe_arch_unsupported(
                 "the platform's arch is aarch64 but EfiStub installs the amd64 systemd-boot-efi "
                 "package, whose x86-64 EFI stub cannot boot an arm64 UKI"
             ),
-            hint=(
-                "EfiStub downloads systemd-boot-efi_<version>_amd64.deb only: drop EfiStub "
-                "from aarch64 recipes, or build for x86_64."
-            ),
+            hint=tundravm_sets("the architecture"),
             profile=profile_name,
             subject="EfiStub",
         )
@@ -762,10 +747,7 @@ def _rule_recipe_arch_unsupported(
                 "the platform's arch is aarch64 but the profile targets qemu, whose deploy adapter "
                 "boots images with qemu-system-x86_64"
             ),
-            hint=(
-                "The qemu adapter runs qemu-system-x86_64 only, and TDX guests are x86-64: "
-                "set Debian(..., arch='x86_64')."
-            ),
+            hint=tundravm_sets("the architecture"),
             profile=profile_name,
             subject="qemu",
         )
@@ -773,32 +755,10 @@ def _rule_recipe_arch_unsupported(
 
 SECRET_HINT = (
     "Deliver it at boot instead of baking it into the image, where every copy and every "
-    "registry holding it exposes it. The built-in Secrets() delivery provisions only an "
-    "SSH key: put the value in a Secret with a SecretFile or SecretEnv target under "
-    "Secrets(delivery=ExternalDelivery(NAME)), naming what writes it at boot (a cloud "
-    "secret store, a custom unit). If it is not a secret, pass allow_secret=True to the "
-    "declaration."
+    "registry holding it exposes it: declare a Secret and pass it in the service's argv or "
+    "environment=, where it is the path the service reads it at and binds itself."
 )
-"""The secret lints' hint for a variant without an ``ExternalDelivery`` (:func:`secret_hint`)."""
-
-_TARGET_CLASSES = {"file": "SecretFile", "env": "SecretEnv"}
-
-
-def secret_hint(image: Lowered, profile_name: str) -> str:
-    """The secret lints' hint: the targets an ``ExternalDelivery`` of the variant writes.
-
-    :data:`SECRET_HINT` when the variant declares none.
-    """
-    for module in image.applied_modules(profile_name, inherited=True):
-        if isinstance(module, SecretDelivery) and module.external:
-            targets = " or ".join(_TARGET_CLASSES[kind] for kind in module.provider_supports)
-            return (
-                "Deliver it at boot instead of baking it into the image, where every copy "
-                "and every registry holding it exposes it: add a Secret with a "
-                f"{targets} target to the Secrets that ExternalDelivery({module.provider!r}) "
-                "delivers. If it is not a secret, pass allow_secret=True to the declaration."
-            )
-    return SECRET_HINT
+"""The secret lints' hint."""
 
 
 def _secret_allowed(image: Lowered, profile_name: str, subject: str) -> bool:
@@ -835,7 +795,7 @@ def _rule_secret_in_file(
                 severity="error",
                 code="secret-in-file",
                 message=_secret_message("the file", findings),
-                hint=secret_hint(image, profile_name),
+                hint=SECRET_HINT,
                 profile=profile_name,
                 subject=path,
             )
@@ -895,7 +855,7 @@ def _rule_secret_in_env(
                 severity="error",
                 code="secret-in-env",
                 message=_secret_message(f"service {name!r}", found),
-                hint=secret_hint(image, profile_name),
+                hint=SECRET_HINT,
                 profile=profile_name,
                 subject=name,
             )
@@ -908,7 +868,7 @@ def _rule_secret_in_env(
                 severity="error",
                 code="secret-in-env",
                 message=_secret_message("the unit file", findings),
-                hint=secret_hint(image, profile_name),
+                hint=SECRET_HINT,
                 profile=profile_name,
                 subject=path,
             )
@@ -1261,8 +1221,8 @@ def _unit_raw(name: str, variant: str) -> Diagnostic:
         subject=name,
         profile=variant,
         hint=(
-            f"Declare Service({posixpath.splitext(name)[0]!r}, command, ...) instead: the "
-            "compiler renders the unit, its ordering after needs= and its enablement."
+            f"Declare Service({posixpath.splitext(name)[0]!r}, argv, ...) instead: the "
+            "compiler renders the unit, its ordering after requires= and its enablement."
         ),
     )
 
@@ -1274,7 +1234,7 @@ def _unit_as_file(path: str, variant: str) -> Diagnostic:
         message=f"the unit file {path!r} is shipped as a File",
         subject=path,
         profile=variant,
-        hint="Ship it as Unit(name, text) so enabled=, needs= and the unit lint apply to it.",
+        hint="Declare it as a Service(...) instead, so tundravm renders the unit and lints it.",
     )
 
 
@@ -1291,6 +1251,13 @@ _LOCK_AGAIN = (
     "Review the change, then run `tundravm lock` to record it and commit the lockfile; "
     "`tundravm lock --check` shows the same drift without writing."
 )
+
+CONFIGURE_SCRIPT_HINT = (
+    "Drop it: set what the script would set through the Image keywords or Mkosi(settings=)."
+)
+"""The fix of ``mkosi-configure-script``."""
+ENVIRONMENT_HINT = "Drop it from Mkosi(settings=): the build sees no host variable."
+"""The fix of ``mkosi-environment-passthrough``."""
 
 _REGISTRY: tuple[Rule, ...] = (
     # ── resolution: the declarations of each profile ──
@@ -1341,15 +1308,13 @@ _REGISTRY: tuple[Rule, ...] = (
         "error",
         "A profile targets outputs that drop the cloud platform integration it inherits, "
         "so its UKI carries glue for a cloud it never boots on.",
-        "Keep every inherited cloud target in the profile's outputs, or extend a profile "
-        "that has no cloud integration.",
+        tundravm_sets("each profile's targets"),
     ),
     Rule(
         "unit-collision",
         "error",
         "Two declarations write the same unit file, so one would silently replace the other.",
-        "Rename one of them. Change a packaged unit with Unit(name, dropin=...), and a "
-        "Service's own unit through its fields.",
+        "Rename one of them. A Service's own unit changes through its fields and unit=DropIn(...).",
     ),
     Rule(
         "port-unreachable",
@@ -1362,61 +1327,61 @@ _REGISTRY: tuple[Rule, ...] = (
         "network-missing",
         "warning",
         "The profile serves ports or syncs time but brings up no network interface.",
-        "Add Network() (TeeBase(network=True) does), or ship a .network file.",
+        "Add network=Network() to the Image, or ship a .network file.",
     ),
     Rule(
         "step-undefined",
         "error",
         "A boot step orders itself after or before a step the profile does not declare.",
-        "Declare that step in the profile, or drop it from after=/before=.",
+        tundravm_sets("the boot steps and their order"),
     ),
     Rule(
         "step-cycle",
         "error",
         "The boot steps' after= and before= form a cycle, so runtime-init has no order to "
         "run them in.",
-        "Drop one after=/before= edge of the cycle the message names.",
+        tundravm_sets("the boot steps and their order"),
     ),
     Rule(
         "needs-undefined",
         "error",
-        "A unit needs a boot step or boot task the profile does not declare, so it would "
-        "wait forever.",
-        "Declare the step or the Task in the profile, or drop it from needs=.",
+        "A unit waits for a boot step or boot task the profile does not declare, so it "
+        "would wait forever.",
+        "Declare what it requires in the same profile, or drop it from requires=.",
     ),
     Rule(
         "needs-without-init",
         "warning",
         "A unit waits for runtime-init, but the profile declares no runtime-init step, so "
         "it waits for nothing.",
-        "Declare the boot step the unit waits for, or drop needs= so it starts without waiting.",
+        "Declare what the unit requires in the same profile, or drop it from requires= so "
+        "it starts without waiting.",
     ),
     Rule(
         "hook-after-undefined",
         "error",
         "A build hook runs after a hook the profile does not declare.",
-        "Declare that hook in the profile, or drop it from after=.",
+        tundravm_sets("the build hooks and their order"),
     ),
     Rule(
         "hook-order",
         "error",
         "A build hook is ordered after a hook of a later phase, which only runs after it.",
-        "Drop the later hook from after=, or move this hook to that phase or a later one.",
+        tundravm_sets("the build hooks and their order"),
     ),
     Rule(
         "disk-key-undefined",
         "error",
-        "A disk is encrypted with a key that no Key in the profile declares, so it cannot "
-        "be unlocked at boot.",
-        "Declare Key(NAME, ...) in the same profile, or point the Disk at a declared key.",
+        "A volume is encrypted with a key the profile does not declare, so it cannot be "
+        "unlocked at boot.",
+        tundravm_sets("a volume's key"),
         _MODULES,
     ),
     Rule(
         "secret-store-undefined",
         ("error", "warning"),
-        "The secrets are stored on a disk no Disk in the profile declares.",
-        "Declare Disk(NAME, ...) in the same profile, pass Secrets(store=) one of the "
-        "declared disks, or store=None.",
+        "The secrets are stored on a disk the profile does not declare.",
+        tundravm_sets("where the secrets are stored"),
         _MODULES,
         when=("when the compiled profile, not its declarations, lacks the disk",),
     ),
@@ -1441,10 +1406,9 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "external-delivery-unwired",
         "warning",
-        "Nothing in the image can tell when an ExternalDelivery has written the secrets, "
+        "Nothing in the image can tell when the secret delivery has written the secrets, "
         "so services start without them.",
-        "Give the delivery unit= (the unit that writes them) or ready_path= (a file it "
-        "writes when done), and wait for it with needs=[delivery.ready].",
+        tundravm_sets("the secret delivery"),
     ),
     Rule(
         "volume-tpm-on-cloud",
@@ -1469,10 +1433,9 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "disk-key-path-mismatch",
         "warning",
-        "A disk reads its key from a path other than the one its Key writes, so the unlock "
-        "finds no key.",
-        "Set Key(NAME, output=PATH) to the path the Disk reads, or point the Disk at the "
-        "key's output.",
+        "A disk reads its key from a path other than the one its key is written to, so the "
+        "unlock finds no key.",
+        tundravm_sets("where a volume's key is written"),
         _MODULES,
     ),
     Rule(
@@ -1480,8 +1443,7 @@ _REGISTRY: tuple[Rule, ...] = (
         ("error", "warning"),
         "A disk that is formatted names no device, and automatic selection can pick the "
         "boot disk and format it.",
-        "Name a stable device (device='/dev/disk/by-id/virtio-SERIAL'), or format='never' "
-        "for a disk prepared beforehand.",
+        tundravm_sets("each volume's device"),
         _MODULES,
         when=("under Policy(storage_safety='warn')",),
     ),
@@ -1490,24 +1452,22 @@ _REGISTRY: tuple[Rule, ...] = (
         "warning",
         "A disk is formatted through a kernel name (/dev/sdb), which follows probe order "
         "and can point at another disk on the next boot.",
-        "Name the disk by a stable link: /dev/disk/by-id/ (a virtio serial, a SCSI WWN) or "
-        "/dev/disk/by-path/.",
+        tundravm_sets("each volume's device"),
         _MODULES,
     ),
     Rule(
         "secret-target-unsupported",
         "error",
         "A secret goes to a target its delivery does not write at boot, so it never arrives.",
-        "Name what writes it with Secrets(delivery=ExternalDelivery(NAME, supports=...)), "
-        "add the target kind to that delivery's supports=, or remove the target.",
+        tundravm_sets("where each secret is delivered"),
         _MODULES,
     ),
     Rule(
         "secret-env-service-unknown",
         "error",
-        "A SecretEnv delivers to a service the profile neither generates, ships nor enables.",
-        "Declare the Service or Unit in the same profile, enable a packaged unit with "
-        "Unit(NAME, enabled=True), or fix the SecretEnv's service=.",
+        "A secret is delivered into the environment of a service the profile neither "
+        "generates, ships nor enables.",
+        tundravm_sets("which service a secret is delivered to"),
         _MODULES,
     ),
     Rule(
@@ -1515,7 +1475,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "info",
         "A key reads its pipe outside /run, where a FIFO survives reboots and can be "
         "replaced by a regular file.",
-        "Place the pipe under /run, which is a tmpfs.",
+        tundravm_sets("where a volume's key pipe is"),
         _MODULES,
     ),
     # ── the compiler: each profile's lowered state ──
@@ -1573,7 +1533,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "warning",
         "The systemd debloat masks a unit a service is, or depends on, so the service "
         "stops or never starts.",
-        "Keep it with Debloat(keep_units_extra=(UNIT,)), or drop the dependency.",
+        "Drop the dependency, or rename a Service called systemd-*; tundravm decides which "
+        "systemd units the debloat keeps, so report one the image needs.",
         (_rule_debloat_removes_needed_unit,),
     ),
     Rule(
@@ -1581,7 +1542,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "warning",
         "The debloat deletes a path at finalize, after a declared file was placed there, "
         "so the file never reaches the image.",
-        "Keep the path with Debloat(keep_paths=(...)), or move the file outside it.",
+        "Ship the file outside the path the debloat removes (the message names it).",
         (_rule_debloat_removes_declared_file,),
     ),
     Rule(
@@ -1603,9 +1564,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "kernel-missing",
         "error",
         "A bootable image installs no kernel, so mkosi cannot build its UKI.",
-        'Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, '
-        'declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) with '
-        "Debian(boot=None) for a non-bootable image.",
+        tundravm_sets("the kernel package"),
         (_rule_kernel_missing,),
     ),
     Rule(
@@ -1613,8 +1572,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "warning",
         "Kernel modules are selected, but the built kernel has no loadable modules, so the "
         "selection does nothing.",
-        "Build those drivers into the kernel config and drop the selection, or build the "
-        "kernel with loadable modules.",
+        tundravm_sets("a built kernel's modules"),
         (_rule_built_kernel_modules,),
     ),
     Rule(
@@ -1622,17 +1580,15 @@ _REGISTRY: tuple[Rule, ...] = (
         "error",
         "The debloat removes /usr/lib/modules while the kernel loads its drivers (virtio, "
         "tdx_guest, cloud NICs) from there, so they never load.",
-        "Debloat(keep_modules=True) keeps them; Debloat(keep_modules=False) removes them on "
-        "purpose; or build a Kernel with everything the image needs built in.",
+        tundravm_sets("whether the debloat keeps the kernel's modules"),
         (_rule_debloat_removes_modules, _rule_built_kernel_modules),
     ),
     Rule(
         "image-arch-unsupported",
         "error",
-        "An aarch64 image uses what only boots x86-64: EfiStub's amd64 stub or the qemu "
+        "An aarch64 image uses what only boots x86-64: the amd64 EFI stub or the qemu "
         "target. TDX guests are x86-64.",
-        "Build for x86_64 (Debian(..., arch='x86_64')), or drop EfiStub and the qemu target "
-        "from the aarch64 image.",
+        tundravm_sets("the architecture"),
         (_rule_recipe_arch_unsupported,),
     ),
     Rule(
@@ -1640,9 +1596,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "error",
         "A shipped file holds what looks like a secret, baked into every copy of the image "
         "and every registry that holds it.",
-        "Deliver it at boot: a Secret with a SecretFile target, written by the profile's "
-        "ExternalDelivery. If it is not a secret, pass allow_secret=True to the "
-        "declaration.",
+        "Deliver it at boot: declare a Secret and pass it in the service's argv or "
+        "environment=, where it is the path the service reads it at and binds itself.",
         (_rule_secret_in_file,),
     ),
     Rule(
@@ -1650,9 +1605,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "error",
         "A unit's environment or command line holds what looks like a secret, baked into "
         "every copy of the image.",
-        "Deliver it at boot: a Secret with a SecretEnv target, written by the profile's "
-        "ExternalDelivery. If it is not a secret, pass allow_secret=True to the "
-        "declaration.",
+        "Deliver it at boot: declare a Secret and pass it in the service's argv or "
+        "environment=, where it is the path the service reads it at and binds itself.",
         (_rule_secret_in_env,),
     ),
     Rule(
@@ -1760,15 +1714,15 @@ _REGISTRY: tuple[Rule, ...] = (
         "warning",
         "A unit that only works on one cloud has no ConditionVirtualization= for it, while "
         "the profile's UKI also boots elsewhere, where it runs and fails.",
-        "Add conditions=(Condition.virtualization(ID),) to the Service or Task (or "
-        "ConditionVirtualization=ID to the unit text) so it stays inert elsewhere.",
+        "Gate it on its cloud, so it stays inert elsewhere: Service(..., unit=DropIn("
+        'extra={"Unit": {"ConditionVirtualization": "ID"}})).',
         _UNIT_TEXT,
     ),
     # ── the image file's own declarations ──
     Rule(
         "service-runs-as-root",
         "info",
-        "A Service or Task runs as root, so a compromise owns the whole guest.",
+        "A service runs as root, so a compromise owns the whole guest.",
         "Drop user= to run as a system user named after the unit (declared for you); "
         'grant one capability with Hardening.preset("static", capabilities=(...)) if it '
         "needs one.",
@@ -1800,20 +1754,20 @@ _REGISTRY: tuple[Rule, ...] = (
         "unit-raw",
         "info",
         "A service is hand-written unit text instead of a typed Service.",
-        "Declare Service(NAME, command, ...): the compiler renders the unit, its ordering "
-        "after needs= and its enablement.",
+        "Declare Service(NAME, argv, ...): the compiler renders the unit, its ordering "
+        "after requires= and its enablement.",
     ),
     Rule(
         "unit-as-file",
         "info",
-        "A unit file is shipped as a File, so enabled=, needs= and the unit lint skip it.",
-        "Ship it as Unit(name, text).",
+        "A unit file is shipped as a File, so tundravm neither renders, orders nor lints it.",
+        "Declare it as a Service(...); its timer= and socket= render those units.",
     ),
     Rule(
         "setting-raw",
         "info",
-        "A raw mkosi Setting has a typed spelling.",
-        "Declare the typed field the message names; Setting is for keys tundravm has no field for.",
+        "An mkosi setting sets a key tundravm already sets itself.",
+        "Drop it from Mkosi(settings=); it is for keys tundravm does not set.",
     ),
     Rule(
         "hook-covered",
@@ -1825,16 +1779,16 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "mkosi-configure-script",
         "error",
-        "A Setting adds mkosi ConfigureScripts, which rewrite the configuration after "
+        "An mkosi setting adds ConfigureScripts, which rewrite the configuration after "
         "`mkosi summary` resolved it, so the summary would not describe the build.",
-        "Declare what the script would set as typed declarations or Settings.",
+        CONFIGURE_SCRIPT_HINT,
     ),
     Rule(
         "mkosi-environment-passthrough",
         "error",
-        "A Setting passes the host's environment into the build, so the build depends on "
-        "the machine it runs on.",
-        "Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
+        "An mkosi setting passes the host's environment into the build, so the build "
+        "depends on the machine it runs on.",
+        ENVIRONMENT_HINT,
     ),
     # ── the lock, the toolchain, the host and the committed tree ──
     Rule(
@@ -2169,7 +2123,6 @@ TYPED_SETTINGS: dict[tuple[str, str], str] = {
     ("Content", "CleanPackageMetadata"): "Debian(clean_package_metadata=...)",
 }
 """mkosi keys a typed field sets, and that field (lint ``setting-raw``)."""
-_VARIANT_SETTING = " The field is image-wide: keep the setting when only this profile needs it."
 _CHROOT = "mkosi-chroot "
 _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"groupadd\b.*?(?P<name>[a-z_][a-z0-9_-]*)$"), 'Group("{name}")'),
@@ -2180,9 +2133,10 @@ _COVERED: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         'User("{name}", groups={groups})',
     ),
-    (re.compile(r"systemctl\s+enable\s+(?P<name>\S+)$"), 'Unit("{name}", enabled=True)'),
-    (re.compile(r"systemctl\s+disable\s+(?P<name>\S+)$"), 'Unit("{name}", enabled=False)'),
-    (re.compile(r"systemctl\s+mask\s+(?P<name>\S+)$"), 'Unit("{name}", masked=True)'),
+    (
+        re.compile(r"systemctl\s+enable\s+(?P<name>[^\s.]+)(?:\.service)?$"),
+        'Service("{name}", argv)',
+    ),
 )
 """Build-time commands a declaration already runs, and that declaration (``hook-covered``)."""
 
@@ -2232,7 +2186,7 @@ def _unreproducible_setting(setting: Any, variant: str) -> Iterator[Diagnostic]:
             "resolved it",
             subject=subject,
             profile=variant,
-            hint="Declare what the script would set as typed declarations or Settings.",
+            hint=CONFIGURE_SCRIPT_HINT,
         )
     passed = [v for v in setting.values if "=" not in v]
     if setting.key == "PassEnvironment" or (setting.key == "Environment" and passed):
@@ -2243,7 +2197,7 @@ def _unreproducible_setting(setting: Any, variant: str) -> Iterator[Diagnostic]:
             "into the build",
             subject=subject,
             profile=variant,
-            hint="Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
+            hint=ENVIRONMENT_HINT,
         )
 
 
@@ -2261,12 +2215,7 @@ def _declaration_findings(item: object, variant: str) -> Iterator[Diagnostic]:
                     message=f"Setting {item.section}.{item.key} has a typed spelling: {typed}",
                     subject=f"{item.section}.{item.key}",
                     profile=variant,
-                    hint=f"Declare {typed} instead; Setting is for keys tundravm has no field for."
-                    + (
-                        _VARIANT_SETTING
-                        if variant and typed.startswith(("Mkosi", "Debian"))
-                        else ""
-                    ),
+                    hint=f"Drop it from Mkosi(settings=): tundravm sets {item.key}= itself.",
                 ),
                 item,
             )

@@ -108,8 +108,7 @@ def test_settings_the_tree_writes_itself_are_refused() -> None:
         (Run("groupadd -r eth"), 'Group("eth")'),
         (Hook("u", "postinst", "mkosi-chroot useradd --system app"), 'User("app")'),
         (Run("usermod -a -G tdx,disk app"), 'User("app", groups=("tdx", "disk"))'),
-        (Run("systemctl enable foo.service"), 'Unit("foo.service", enabled=True)'),
-        (Run("systemctl mask foo.service"), 'Unit("foo.service", masked=True)'),
+        (Run("systemctl enable foo.service"), 'Service("foo", argv)'),
         (BootStep("s", "mkdir -p /var/lib/app && chown app /var/lib/app"), "RuntimeDirectory"),
     ],
 )

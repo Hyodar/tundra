@@ -12,7 +12,7 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT
-from tundravm._reference import MODULES
+from tundravm._reference import MODULES, lint_markdown
 
 PACKAGE = Path(tundravm.__file__).parent
 EXAMPLES = REPO_ROOT / "examples"
@@ -168,6 +168,20 @@ RENAMED_KEYWORDS = {
     },
 }
 """Keyword arguments of these calls that no longer exist, with their replacement."""
+INTERNAL_MODEL = {
+    "Unit(": re.compile(r"(?<![\w.])Unit\("),
+    "Fragment, Recipe": re.compile(r"\b(?:Fragment|Recipe)\b"),
+    "SecretEnv, SecretFile, Secrets(), ExternalDelivery": re.compile(
+        r"\bSecret(?:Env|File)\b|\bSecrets\(|\bExternalDelivery\b"
+    ),
+    "Debloat": re.compile(r"\bDebloat\b"),
+    "needs=": re.compile(r"\bneeds="),
+    "Key(, Disk(": re.compile(r"(?<![\w.])(?:Key|Disk)\("),
+    "Setting": re.compile(r"\bSetting\b"),
+    "Task, BootStep, Condition": re.compile(r"\bTask\b|\bBootStep\b|\bCondition\."),
+}
+"""The internal model's names, which no lint fix or finding hint names: an image file cannot
+write them (a fix it cannot express says tundravm sets it)."""
 DOCS = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]
 """The current docs; ``docs/design`` keeps the dated design records as written."""
 CLI_DOCS = [
@@ -436,3 +450,56 @@ def test_renamed_guard_passes_the_current_spellings() -> None:
         'Repository("r", URL, "s", priority=10)\nRuntimeInit("x")\n'
     )
     assert _renamed(source) == []
+
+
+def _internal(text: str) -> list[str]:
+    return [what for what, pattern in INTERNAL_MODEL.items() if pattern.search(text)]
+
+
+def _hint_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
+    """``(line, text)`` of the strings a finding's hint is built from: ``hint=`` of a
+    ``Diagnostic`` or a ``report``, the hint of ``_finding``, and module-level ``*_HINT``."""
+    for node in ast.walk(tree):
+        parts: list[ast.AST] = []
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+            if name in ("Diagnostic", "report"):
+                parts = [k.value for k in node.keywords if k.arg == "hint"]
+            elif name == "_finding" and len(node.args) == 6:
+                parts = [node.args[5]]
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id.endswith("_HINT") for t in node.targets
+        ):
+            parts = [node.value]
+        for part in parts:
+            for leaf in ast.walk(part):
+                if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str):
+                    yield leaf.lineno, leaf.value
+
+
+def test_lint_fixes_and_hints_name_the_public_api() -> None:
+    found = [f"lint.md: {what}" for what in _internal(lint_markdown())]
+    found += [
+        f"{path.relative_to(PACKAGE)}:{line}: {what}: {text[:80]!r}"
+        for path in sorted(PACKAGE.rglob("*.py"))
+        for line, text in _hint_strings(ast.parse(path.read_text(encoding="utf-8")))
+        for what in _internal(text)
+    ]
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ship it as Unit(name, text).",
+        "Keep it with Debloat(keep_units_extra=(UNIT,)).",
+        "or drop it from needs=.",
+        "Declare Key(NAME, ...) in the same profile.",
+        "a Secret with a SecretEnv target, written by the profile's ExternalDelivery",
+        "Declare the step or the Task in the profile.",
+        'Add conditions=(Condition.virtualization("google"),).',
+        "Setting is for keys tundravm has no field for.",
+    ],
+)
+def test_internal_model_names_are_caught(text: str) -> None:
+    assert _internal(text)

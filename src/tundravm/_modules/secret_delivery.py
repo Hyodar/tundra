@@ -13,7 +13,7 @@ from tundravm._modules.base import TUNDRA_TOOLS, Module
 from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
 from tundravm._source import GitSource, GoBuild, Install, SourceBuild
 from tundravm._units.render import render
-from tundravm.diagnostics import Diagnostic
+from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
 from tundravm.models import SecretSpec, ships_unit
 
@@ -201,17 +201,11 @@ class SecretDelivery(Module):
         }
         if store in disks:
             return
-        declared = ", ".join(sorted(disks)) or "none"
         yield Diagnostic(
             severity="warning",
             code="secret-store-undefined",
-            message=(
-                f"secrets are stored on disk {store!r}, which no Disk in this profile declares"
-            ),
-            hint=(
-                f"Declared disks: {declared}. Declare Disk({store!r}, ...) in this profile, "
-                "pass Secrets(store=) one of the declared disks, or store=None."
-            ),
+            message=(f"secrets are stored on disk {store!r}, which this profile does not declare"),
+            hint=tundravm_sets("where the secrets are stored"),
             profile=profile,
             subject=store,
         )
@@ -230,22 +224,10 @@ class SecretDelivery(Module):
                         f"secret {spec.name!r} goes to {noun} {target.location}, which the "
                         f"{self.provider!r} provider does not write at boot{only}"
                     ),
-                    hint=self._unsupported_hint(target.kind),
+                    hint=tundravm_sets("where each secret is delivered"),
                     profile=profile,
                     subject=spec.name,
                 )
-
-    def _unsupported_hint(self, kind: str) -> str:
-        if self.external:
-            return (
-                f"Add {kind!r} to ExternalDelivery({self.provider!r}, supports=) if it writes "
-                "the target, or remove the target from the Secret."
-            )
-        return (
-            f"Declare Secrets(delivery=ExternalDelivery('NAME', supports=({kind!r},))) naming "
-            "what writes it at boot (a cloud secret store, a custom unit), or remove the "
-            "target and reach the VM with the SSH key Secrets() delivers."
-        )
 
     def _check_services(self, image: Lowered, profile: str) -> Iterator[Diagnostic]:
         state = image.state.effective_profile(profile)
@@ -257,14 +239,10 @@ class SecretDelivery(Module):
                 severity="error",
                 code="secret-env-service-unknown",
                 message=(
-                    f"a SecretEnv delivers to service {service!r}, which this profile "
-                    "neither generates, ships nor enables"
+                    f"a secret is delivered into the environment of service {service!r}, "
+                    "which this profile neither generates, ships nor enables"
                 ),
-                hint=(
-                    f"Declare Service({service.removesuffix('.service')!r}, ...) or "
-                    f"Unit({service!r}, ...) in this profile, Unit({service!r}, "
-                    "enabled=True) for a packaged unit, or fix the SecretEnv's service=."
-                ),
+                hint=tundravm_sets("which service a secret is delivered to"),
                 profile=profile,
                 subject=service,
             )

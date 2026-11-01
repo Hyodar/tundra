@@ -327,8 +327,8 @@ def _cloud_glue(
             f"{unit.name} only works on {_GLUE_TARGET[kind]} but has no "
             f"ConditionVirtualization={kind}; the profile's UKI also boots on "
             f"{', '.join(others)}",
-            f'Add conditions=(Condition.virtualization("{kind}"),) to the Service/Task (or '
-            f"ConditionVirtualization={kind} to the unit text) so it stays inert elsewhere.",
+            "Gate it on its cloud, so it stays inert elsewhere: Service(..., unit=DropIn("
+            f'extra={{"Unit": {{"ConditionVirtualization": "{kind}"}}}})).',
         )
 
 
