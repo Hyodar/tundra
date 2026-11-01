@@ -33,10 +33,10 @@ carries its notes in the tagged tree. Nothing is committed by the workflow.
 $ uv tool install git+https://github.com/Hyodar/tundra@v2.0.0
 ```
 
-The tag pins the release, and so does the wheel attached to it. Its images build `tools/`
-at the tag's commit, with no clone. mkosi is not on PyPI, so the wheel names mkosi 27.1 by
-its git commit, which PyPI refuses: leave the `pypi` environment uncreated until mkosi is
-on PyPI.
+The tag pins the release, and so does the wheel attached to it. An image built with either
+builds `tools/` from the repository at the tag's commit, so no checkout of tundravm is
+needed. mkosi is not on PyPI, so the wheel names mkosi 27.1 by its git commit. PyPI refuses
+such a dependency: leave the `pypi` environment uncreated until mkosi is on PyPI.
 
 Beside the wheel, a Debian 13 or Ubuntu 24.04 host needs four packages for `dev`, and
 `doctor` names the command for each one missing:

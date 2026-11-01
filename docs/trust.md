@@ -1,9 +1,10 @@
 # Trust, limits and recovery
 
 What a tundravm image defends against, where it stops, and what to do when something
-breaks. Each claim is labelled: **implemented** (in the code on master, with tests),
-**proven** (also run for real in CI) or **design** (specified in the v2 plan, not built).
-The [guide](guide.md#what-is-proven-today) has the same split per feature.
+breaks. Each claim is labelled **implemented** (in the code on master, with tests) or
+**proven** (also run for real in CI). What is not built says so, with the gate of
+[the v2 plan](design/plan-v2-2026-10-30.md) that builds it. The
+[guide](guide.md#what-is-proven-today) has the same split per feature.
 
 ## Threat model
 
@@ -43,13 +44,13 @@ How the last row works (plan 6.1):
   and the management port still answers on a refused boot.
 - The gate checks that a quote path exists, not that a quote verifies: `tdxs` makes the
   first quote and the verifier judges it. The gate stops a production build serving where
-  TDX is missing by mistake. The release predicate is what keeps production secrets from a
-  host you do not trust.
+  TDX is missing by mistake. What keeps production secrets from a host you do not trust is
+  the release rule under [Delivering secrets](guide.md#delivering-secrets).
 
 The boot probe a development profile carries (`run --probe`) checks from inside the guest
 that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress
 refused, sandboxes under their ceilings, no module or kernel symbol beyond the declared
-ones, host keys root-owned. It catches a broken image, not an attacker: it runs inside the
+ones, host keys root-owned. It catches a broken image, not an attacker. It runs inside the
 guest it checks, so a compromised guest can print `ok` for anything, and it reads no
 register. Evidence is the quote `attest` verifies. A production profile carries no probe.
 
@@ -70,8 +71,8 @@ under `unchecked`. MRTD and RTMR0 values carry the firmware they belong to, and 
 an RTMR0 from different firmware never match together.
 
 Every package in the UKI comes from one pinned Debian snapshot, so the snapshot is part
-of the measured identity: an unpinned archive would give a rebuild other bytes and other
-registers, and a moved snapshot is a new image whose measurements need approving again.
+of the measured identity. A moved snapshot is a new image, whose measurements need
+approving again.
 
 `attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
 quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
@@ -190,10 +191,10 @@ Approve the new build's policy before the upgrade: copy its `measurements.json` 
 The volume outlives the VM. Deploy the same build again and attach the existing disk:
 
 ```console
-$ tundravm deploy gcp --build build/prover/production/<id> --volume data=existing:<disk>
-$ tundravm attest prover-2 --policy policies/prover-gcp.json
-$ tundravm secrets unlock prover-2 data
-$ tundravm secrets deliver prover-2 --policy policies/prover-gcp.json api-token=@token.txt
+$ tundravm deploy gcp --build build/attested-node/production/<id> --volume data=existing:<disk>
+$ tundravm attest attested-node-2 --policy policies/attested-node-gcp.json
+$ tundravm secrets unlock attested-node-2 data
+$ tundravm secrets deliver attested-node-2 --policy policies/attested-node-gcp.json logs-client=@logs-client.pem
 ```
 
 Make sure the old instance is stopped first: two instances must never hold one volume.
