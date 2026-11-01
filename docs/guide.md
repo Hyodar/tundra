@@ -451,10 +451,12 @@ image = Image(
 A change names a declaration that exists, or the image does not resolve. Removing a
 service removes its unit, its user, its firewall rule and the dependencies nothing else
 uses. A component's service is `component.service("name").ref`. An edit takes the keywords
-of the value's own constructor and is checked like a new value. What decides other units
-(`readiness=`, a credential bound or unbound, `unit=`, a timer turned on or off, another
-built binary, a state moved onto a volume, another `user=` for a directory on one) is
-refused: remove the value and add the new one in `add=`.
+of the value's own constructor and is checked like a new value. Editing any `Service`
+keyword but `name=` builds what the service declared so would (probe, credential waits,
+drop-in, timer, firewall rule, dependents' ordering) and drops what it no longer needs.
+Refused: another built binary, a credential bound through argv or `environment=` (bind it
+in `credentials=`), another `user=` for a directory on a volume, dropping a required
+readiness.
 
 How profiles lower: tundravm resolves every profile's whole image, writes what all of them
 build once in the shared `payload/`, and puts what each builds beyond that in

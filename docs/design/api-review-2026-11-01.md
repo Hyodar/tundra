@@ -25,7 +25,7 @@ reverses a decision already taken, weakens an opinion, or touches a section 6 co
 | 6 | `Service(quotes=True)` for `requires=[EVIDENCE]` plus `groups=["tdx"]` | S | **Done** on `leftovers-4`: lowering adds both; `Raiko` and example 06 use it |
 | 7 | The image collects the volumes and secrets its services bind | L | **Do**: S here, since lowering already reads `image.volumes` and `image.secrets` |
 | 8 | A secret reference binds itself | L | **Done** later the same day, in the smaller form (a `Secret` as an argv element or an `environment=` value); an edit that binds or unbinds one is refused |
-| 9 | A profile edit may change readiness, credentials and units, regenerating them | L | **Refusal side done** later the same day; editing `readiness=`, `credentials=` and `unit=` **still later**: each adds or drops units outside the one declaration an edit rewrites (a probe, delivery waits, a drop-in), so `_image/_lower.py` would rebuild the unit graph per profile |
+| 9 | A profile edit may change readiness, credentials and units, regenerating them | L | **Done** later the same day (below): a profile lowers its services as it sees them, and the difference is its overlay |
 | 10 | `AttestedTLS` binds its key to the quote, with a verified client | L | **Do later**: gate 3 (tundra-tools, `attestation.py`); the image side does not change |
 
 Codex's rejections, which stand: one mixed content list instead of slots; exposed ports
@@ -108,11 +108,18 @@ Service("app", [APP, "--token-file", token.path], credentials=[token])  # before
 Service("app", [APP, "--token-file", token])                            # after
 ```
 
-**9. What an edit regenerates.** Every keyword an edit accepts was compiled for a plain, a
-timer, a socket and a volume service: each regenerates the unit, timer, socket or firewall
-it affects, except `user=` on a service whose state is a volume directory, which changed
-`User=` while the boot step still prepared the directory for the old user. That edit is
-refused (share the directory through a group, or add a new service).
+**9. What an edit regenerates.** A profile lowers every service it inherits twice, as its
+parent sees them and as it does, and the difference is its change: an edit of each unit
+that differs, a removal of each that is gone, the new ones in its overlay. So every
+`Service` keyword but `name=` is editable, and builds what the image would have built had
+it declared the service so: `readiness=Notify()` drops the probe unit (it moves into the
+overlays of the profiles that keep it) and its dependents wait for the service itself;
+`credentials=` adds `LoadCredential=` and the delivery wait; `unit=` the drop-in;
+`timer=` the timer, on or off; `expose=` the profile's firewall. Refused, for what they
+mean: another built binary, a credential bound through argv or `environment=` (a profile
+binds in `credentials=`), another `user=` for a directory on a volume (the boot step
+prepares it for one owner; share it through a group), and dropping a readiness another
+service requires. `tests/compiler/edit-overlays/` holds one overlay per kind.
 
 ## Also seen, not ranked
 
