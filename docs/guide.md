@@ -911,8 +911,8 @@ $ tundravm run stop demo-1
 ```
 
 `run` boots `qemu.raw` through OVMF from its ESP on a snapshot and
-forwards from `127.0.0.1` every TCP port the image accepts and the management
-port 8745, on the same port when free and unprivileged. `--mode` is required:
+forwards from `127.0.0.1` every TCP port the image accepts (8745 where the key delivery
+listens), on the same port when free and unprivileged. `--mode` is required:
 
 | Mode | Boots | Evidence |
 |---|---|---|

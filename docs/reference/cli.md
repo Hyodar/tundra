@@ -234,7 +234,7 @@ usage: tundravm run [-h] [--json] [--traceback] [--mode {simulated,tdx}] [--dev]
 tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]
     boot qemu.raw through OVMF from its ESP on a snapshot (the build is never
     written), forward every TCP port the image's firewall accepts or its services
-    declare, and the management port :8745, from 127.0.0.1, and write
+    declare (:8745 only where the key delivery listens) from 127.0.0.1, and write
     .tundravm/instances/<image>-<n>/.
     simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`; a
       production build boots fail-closed (tdx-evidence.service refuses, no service

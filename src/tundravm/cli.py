@@ -478,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
         "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]\n"
         "    boot qemu.raw through OVMF from its ESP on a snapshot (the build is never\n"
         "    written), forward every TCP port the image's firewall accepts or its services\n"
-        "    declare, and the management port :8745, from 127.0.0.1, and write\n"
+        "    declare (:8745 only where the key delivery listens) from 127.0.0.1, and write\n"
         "    .tundravm/instances/<image>-<n>/.\n"
         "    simulated: no TDX (KVM if usable, else TCG), verdicts are `simulated`; a\n"
         "      production build boots fail-closed (tdx-evidence.service refuses, no service\n"

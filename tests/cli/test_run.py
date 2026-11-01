@@ -89,7 +89,7 @@ def test_run_detached_writes_a_receipt_and_never_the_build(
     build = receipt["build"]
     assert isinstance(build, dict) and build["id"] == dev_built.id
     ports = receipt["ports"]
-    assert isinstance(ports, dict) and {"8080", "8745"} <= set(ports)
+    assert isinstance(ports, dict) and "8080" in ports and "8745" not in ports
     command = receipt["command"]
     assert isinstance(command, list)
     disk = f"file={dev_built.path.resolve() / 'qemu.raw'},format=raw,if=virtio,snapshot=on"
@@ -282,3 +282,21 @@ def test_run_forwards_what_the_input_chain_accepts_not_where_the_output_chain_se
         "\tchain output {\n\t\tip daddr 127.0.0.1 tcp dport 19582 accept\n\t}\n}\n"
     )
     assert Build(tmp_path, {"ports": [8080]}).tcp_ports() == (8080, 8745)
+
+
+@pytest.mark.parametrize(
+    ("rules", "declared", "forwarded"),
+    [
+        ("", [8080], [8080]),
+        ('tcp dport 8745 accept comment "secret-delivery"', [8080], [8080, 8745]),
+        ("tcp dport { 22, 8545 } accept", [], [22, 8545]),
+    ],
+)
+def test_forwards_open_only_what_the_firewall_accepts_or_a_service_declares(
+    tmp_path: Path, rules: str, declared: list[int], forwarded: list[int]
+) -> None:
+    conf = tmp_path / "tree/payload/mkosi.extra/etc/nftables.conf"
+    conf.parent.mkdir(parents=True)
+    conf.write_text(f"table inet filter {{\n\tchain input {{\n\t\t{rules}\n\t}}\n}}\n")
+    build = Build(tmp_path, {"ports": declared})
+    assert sorted(instances.forwards(build)) == forwarded

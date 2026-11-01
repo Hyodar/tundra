@@ -113,7 +113,7 @@ def deploy(
         DeployRequest(profile=build.image, target=target, artifact_path=artifact, parameters=params)  # type: ignore[arg-type]
     )
     instance = create(root, build, kind="deploy", platform=target, mode="tdx")
-    ports = sorted({*build.tcp_ports(), MANAGEMENT_PORT})
+    ports = build.tcp_ports()
     metadata = dict(result.metadata)
     instance.data.update(
         {

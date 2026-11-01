@@ -45,6 +45,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `show` leads with the image, then production; with a build, its report and boot probe checks; `--diff` compares two builds.
 - `run --mode simulated|tdx` is explicit, and a production build boots fail-closed without TDX; `run --probe` and `run probe INSTANCE` read the boot probe every development profile carries, write `probe.json` and exit 1 on a failed check.
 - With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded.
+- `run` forwards, and `deploy`'s firewall line names, 8745 only where the image's firewall opens it.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
 - `attest` verifies fresh evidence and delivers nothing; `secrets` attests again first.
 - `doctor` prints one row per capability with its fix; `build:go` blocks without `go`.

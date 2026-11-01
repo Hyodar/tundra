@@ -10,7 +10,8 @@ the serial console of a local VM. An instance id is ``<image>-<n>``.
 path), on a snapshot so the build directory is never written, with every TCP port the
 image's firewall accepts or its services declare (the manifest's ``ports``) forwarded from
 ``127.0.0.1`` (the same port when it is free and
-unprivileged; the management port :data:`MANAGEMENT_PORT` among them). ``simulated`` uses
+unprivileged; the management port :data:`MANAGEMENT_PORT` only where the firewall opens it
+for the key delivery). ``simulated`` uses
 KVM when ``/dev/kvm`` is usable, TCG otherwise, and appends the console settings to the
 UKI's command line through SMBIOS; ``tdx`` boots TDVF with a ``tdx-guest`` object and
 appends nothing, and is refused where ``doctor --for tdx`` is not ready. A production build
@@ -206,8 +207,7 @@ def free_port(preferred: int | None = None) -> int:
 
 def forwards(build: Build) -> dict[int, int]:
     """Guest TCP port to host port for every port the image accepts or declares."""
-    guest_ports = set(build.tcp_ports()) | {MANAGEMENT_PORT}
-    return {port: free_port(port) for port in sorted(guest_ports)}
+    return {port: free_port(port) for port in build.tcp_ports()}
 
 
 def _firmware(mode: Mode) -> tuple[str, str | None]:
