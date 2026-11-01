@@ -1,24 +1,23 @@
-"""The example's kernel: ``examples/nethermind_base.py``'s ``Kernel.build`` as a ``Recipe``.
+"""A kernel with a config of its own: gregkh/linux 6.13.12 from ``yocto.config``.
 
-The example's ``Image`` also builds the evidence service and the runtime tools from
-``tools/``, which a kernel boot needs none of, so this recipe declares the kernel it lowers
-to: gregkh/linux at the example's ``KERNEL_VERSION`` with its config as the base and nothing
-else (``Kernel.build(config=)`` adds only ``CONFIG_MODULES=n``), and the same ``BootProbe`` as
-:mod:`tests.fixtures.kernel.recipe`. CI's ``kernel`` workflow builds it as a second matrix
-entry, so the drivers check runs on the example's config as well as Debian's.
+``Kernel.build(VERSION, Git(...), config=CONFIG)`` lowers to this: the config as the base
+and nothing else (``Kernel.build(config=)`` adds only ``CONFIG_MODULES=n``), with the same
+``BootProbe`` as :mod:`tests.fixtures.kernel.recipe`. The config is the yocto one the
+nethermind-tdx images built from. CI's ``kernel`` workflow builds it as a second matrix
+entry, so the drivers check runs on a config of its own as well as Debian's.
 """
 
 from __future__ import annotations
 
 import re
-
-from examples.nethermind_base import KERNEL_CONFIG, KERNEL_VERSION
+from pathlib import Path
 
 from tests.fixtures.kernel.recipe import SEED, SNAPSHOT, BootProbe
 from tundravm.declarative import Debian, Git, Kernel, Mkosi, Recipe, Variant
 
-VERSION = KERNEL_VERSION
-_LOCALVERSION = re.search(r'^CONFIG_LOCALVERSION="(.*)"$', KERNEL_CONFIG.read_text(), re.M)
+VERSION = "6.13.12"
+CONFIG = Path(__file__).with_name("yocto.config")
+_LOCALVERSION = re.search(r'^CONFIG_LOCALVERSION="(.*)"$', CONFIG.read_text(), re.M)
 RELEASE = VERSION + (_LOCALVERSION.group(1) if _LOCALVERSION else "")
 """What ``uname -r`` prints: the config appends its ``CONFIG_LOCALVERSION``."""
 
@@ -30,7 +29,7 @@ recipe = Recipe(
         Kernel(
             VERSION,
             Git("https://github.com/gregkh/linux", f"v{VERSION}"),
-            base=KERNEL_CONFIG,
+            base=CONFIG,
         ),
         BootProbe(),
     ),

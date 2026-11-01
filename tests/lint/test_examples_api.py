@@ -1,9 +1,9 @@
-"""Every example is a documented recipe that loads, lints clean and compiles deterministically."""
+"""Every stage of the example is an image file that loads, lints clean and compiles
+deterministically."""
 
 import ast
 import importlib
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -19,15 +19,9 @@ INTERNAL_MODULES = ("tundravm._modules", "tundravm._options", "tundravm._source"
 INHERENT_WARNINGS = frozenset({"source-unpinned"})
 """Warning codes an example may report: unpinned refs clear with ``tundravm lock``."""
 
-COMMAND = re.compile(r"^\s+tundravm (\w+) (\S+)", re.MULTILINE)
-
 EXAMPLES = pytest.mark.parametrize(
     "path", EXAMPLE_RECIPES, ids=lambda path: path.relative_to(REPO_ROOT).as_posix()
 )
-
-
-def _relative(path: Path) -> str:
-    return path.relative_to(REPO_ROOT).as_posix()
 
 
 def _recipe(path: Path) -> Recipe:
@@ -90,16 +84,6 @@ def test_examples_import_each_public_name_from_its_home() -> None:
 
 
 @EXAMPLES
-def test_example_docstring_teaches_and_lists_three_commands(path: Path) -> None:
-    doc = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8"))) or ""
-    assert "Teaches" in doc, f"{path.name}: say what the example teaches"
-    commands = COMMAND.findall(doc)
-    assert len(commands) == 3, f"{path.name}: list three commands, found {commands}"
-    recipes = {target for _, target in commands if target.startswith("examples/")}
-    assert recipes == {_relative(path)}, f"{path.name}: commands name another recipe"
-
-
-@EXAMPLES
 def test_example_binds_an_image_or_the_internal_recipe(path: Path) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     bound = {
@@ -145,12 +129,8 @@ def test_examples_name_no_backend(path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert isinstance(loaded.backend, LimaMkosiBackend) and loaded.backend_origin == "env"
 
 
-@pytest.mark.parametrize(
-    "path",
-    [path for path in EXAMPLE_RECIPES if path.name[0].isdigit()],
-    ids=lambda path: path.name,
-)
-def test_teaching_example_builds_the_same_identity_twice(
+@pytest.mark.parametrize("path", EXAMPLE_RECIPES[:1], ids=lambda path: path.name)
+def test_the_first_stage_builds_the_same_identity_twice(
     path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)

@@ -2,7 +2,7 @@
 
 Provides ``Cache.declare()`` for defining cached build artifacts and
 ``Cache.wrap()`` for generating shell scripts with automatic cache
-check/restore/store logic matching the upstream nethermind-tdx pattern.
+check/restore/store logic.
 
 Path helpers (``Build.build_path``, ``Build.dest_path``, ``Build.chroot_path``)
 produce typed wrappers for ``$BUILDROOT/build/``, ``$DESTDIR/`` and ``/build/``

@@ -65,7 +65,7 @@ def test_the_service_template_app_compiles(here: Path, cli: Cli) -> None:
     go = shutil.which("go")
     if go is None:
         pytest.skip("no go on PATH to vet and build the service template's app/")
-    assert cli("new", "demo").code == EXIT_OK
+    assert cli("new", "demo", "--template", "service").code == EXIT_OK
     for argv in (("vet", "./..."), ("build", "-o", os.devnull, "./...")):
         done = subprocess.run(
             [go, *argv], cwd=here / "demo" / "app", capture_output=True, text=True, check=False
@@ -113,7 +113,7 @@ def test_an_empty_directory_is_used(here: Path, cli: Cli) -> None:
     assert cli("new", "demo").code == EXIT_OK
 
 
-@pytest.mark.parametrize("template", ["service", "prover"])
+@pytest.mark.parametrize("template", ["node", "service", "prover"])
 def test_the_generated_tests_use_the_public_api_and_pass(
     here: Path, cli: Cli, template: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

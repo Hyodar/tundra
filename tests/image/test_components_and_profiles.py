@@ -87,11 +87,11 @@ def test_a_component_is_a_frozen_keyword_only_dataclass() -> None:
 def test_the_fragment_is_named_after_the_class() -> None:
     assert Database().name == "database"
 
-    class TaikoClient(Component):
+    class NodeExporter(Component):
         def compose(self) -> Iterator[object]:
             return iter(())
 
-    assert TaikoClient().name == "taiko-client"
+    assert NodeExporter().name == "node-exporter"
 
     class Named(Component, name="given"):
         def compose(self) -> Iterator[object]:

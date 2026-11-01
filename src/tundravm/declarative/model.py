@@ -1965,7 +1965,7 @@ class Local:
         location = caller_location().rpartition(":")[0]
         base = Path(location).parent if location else Path.cwd()
         directory = (base / self.path).resolve()
-        project = _project_directory(base)
+        project = project_directory(base)
         if not directory.is_relative_to(project):
             raise _fail(
                 self,
@@ -1991,7 +1991,7 @@ def recorded_local(path: str, directory: Path | None = None) -> Local:
     return found
 
 
-def _project_directory(base: Path) -> Path:
+def project_directory(base: Path) -> Path:
     """The nearest directory at or above *base* holding a ``pyproject.toml``, else *base*."""
     here = base.resolve()
     return next((d for d in (here, *here.parents) if (d / "pyproject.toml").is_file()), here)

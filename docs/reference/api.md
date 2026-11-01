@@ -794,56 +794,6 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 |---|---|
 | `JournalExport.service(proxy: Proxy \| None = None) -> Service` | The `journal-export` service, through *proxy* when given. |
 
-### `Lighthouse`
-
-*dataclass*
-
-```python
-Lighthouse(
-    *,
-    execution: Endpoint,
-    jwt: Secret | Generated,
-    checkpoint_sync_url: str | None = None,
-    network: str = 'hoodi',
-    state: VolumeDirectory | None = None,
-    http_port: int = 5052,
-    expose_p2p: bool = False,
-    resources: Resources | None = None,
-    source: dm.Http = Http(url='https://github.com/sigp/lighthouse/releases/download/v8.3.2/lighthouse-v8.3.2-x86_64-unknown-linux-gnu.tar.gz', sha256='ea914e932462d6a93ad78c21377d70f995e05ac224248be0b58c2f4d6740439a'),
-)
-```
-
-| Member | Does |
-|---|---|
-| `Lighthouse.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `lighthouse-checkpoint-missing`, `lighthouse-volatile-state`. |
-| `Lighthouse.http` | The beacon node API, on the loopback. |
-| `Lighthouse.outbound() -> Egress` | The p2p ports, the checkpoint URL's `HOST:PORT` and *execution* when it is not on the loopback. |
-
-### `Nethermind`
-
-*dataclass*
-
-```python
-Nethermind(
-    *,
-    jwt: Secret | Generated,
-    state: VolumeDirectory | None = None,
-    config: str = 'hoodi',
-    source: dm.Git = Git(url='https://github.com/NethermindEth/nethermind.git', ref='1.32.3', subdir=None, submodules=False),
-    rpc_port: int = 8545,
-    engine_port: int = 8551,
-    resources: Resources | None = None,
-)
-```
-
-| Member | Does |
-|---|---|
-| `Nethermind.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `nethermind-volatile-state`: a database on the volatile root resyncs every boot. |
-| `Nethermind.engine_api` | The Engine API a consensus driver calls with the shared JWT. |
-| `Nethermind.outbound() -> Egress` | The p2p port, over TCP and UDP (discovery); its RPC and Engine API are loopback. |
-| `Nethermind.rpc` | JSON-RPC over HTTP. |
-| `Nethermind.ws` | JSON-RPC over WebSocket, on the RPC port. |
-
 ### `Network`
 
 *dataclass*
@@ -981,7 +931,7 @@ ServiceReady(unit: str, probe: Readiness | None = None)
 ServiceRef(unit: str, probe: Readiness | None = None, service: Service | None = None)
 ```
 
-A service a component composed, named from outside: `nethermind.service("nethermind")`.
+A service a component composed, named from outside: `node.service("node")`.
 
 | Member | Does |
 |---|---|
@@ -1022,28 +972,6 @@ A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")
 | Member | Does |
 |---|---|
 | `StaticAddress.version` | 4 or 6. |
-
-### `TaikoClient`
-
-*dataclass*
-
-```python
-TaikoClient(
-    *,
-    engine: Endpoint,
-    rpc: Endpoint,
-    jwt: Secret,
-    chain: Secret,
-    l1: Sequence[str] = (),
-    source: dm.Git = Git(url='https://github.com/NethermindEth/surge-taiko-mono', ref='feat/tdx-proving', subdir='packages/taiko-client', submodules=False),
-)
-```
-
-The `taiko-client` driver: follows L1 and drives the execution client's Engine API, so the L2 chain advances.
-
-| Member | Does |
-|---|---|
-| `TaikoClient.outbound() -> Egress` | *l1* (TCP 443 without it), and *engine* and *rpc* when they are not on the loopback. |
 
 ### `Tdxs`
 

@@ -38,10 +38,9 @@ def test_resolves_next_to_the_module_from_any_working_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assets = Resources.from_module("examples.nethermind_base")
-    assert assets.root == REPO / "examples"
-    path = assets.file("nethermind-base/kernel/kernel-yocto.config")
-    assert path == REPO / "examples" / "nethermind-base" / "kernel" / "kernel-yocto.config"
+    assets = Resources.from_module("tests.fixtures.kernel.example")
+    assert assets.root == REPO / "tests" / "fixtures" / "kernel"
+    assert assets.file("yocto.config") == REPO / "tests" / "fixtures" / "kernel" / "yocto.config"
 
 
 def test_an_installed_package_and_its_submodules(installed: Path) -> None:

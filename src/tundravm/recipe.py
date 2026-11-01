@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from ._reporting import display_path
 from .backends.base import BuildBackend
-from .declarative.model import Recipe
+from .declarative.model import Recipe, project_directory
 from .errors import TdxError, ValidationError
 
 if TYPE_CHECKING:
@@ -91,9 +91,10 @@ def load_recipe(
        ``build`` or whose return annotation is ``Recipe``, if exactly one exists.
 
     The file runs with ``__name__`` set to a private module name, so an
-    ``if __name__ == "__main__":`` block is not executed. The file's directory and
-    every entry of *extra_paths* are importable while it runs, so sibling helper
-    modules and project-local packages resolve.
+    ``if __name__ == "__main__":`` block is not executed. The file's directory, its
+    project's (the nearest directory at or above it holding a ``pyproject.toml``) and
+    every entry of *extra_paths* are importable while it runs, so sibling helper modules
+    and the project's own packages resolve from any working directory.
     """
     return load_file(path, attribute=attribute, extra_paths=extra_paths).recipe
 
@@ -137,7 +138,8 @@ def import_recipe_module(recipe_path: Path, *, extra_paths: Sequence[str | Path]
         )
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    with _import_paths(str(recipe_path.parent), *(str(Path(p).resolve()) for p in extra_paths)):
+    roots = (recipe_path.parent, project_directory(recipe_path.parent))
+    with _import_paths(*map(str, roots), *(str(Path(p).resolve()) for p in extra_paths)):
         keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
         try:
             _exec_source(recipe_path, module)

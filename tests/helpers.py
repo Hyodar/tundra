@@ -19,10 +19,9 @@ from tundravm.templates import render_app_files, render_recipe_template
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ATTESTED_NODE = REPO_ROOT / "examples" / "attested-node"
-EXAMPLE_RECIPES = tuple(
-    path for path in sorted((REPO_ROOT / "examples").glob("*.py")) if path.name != "__init__.py"
-)
-"""The top-level example recipe files (the attested node lives in its own directory)."""
+EXAMPLE_RECIPES = tuple(sorted((ATTESTED_NODE / "stages").glob("*.py")))
+"""The attested node's stages, in order; its ``image.py`` is the last one, built from
+``signer/`` beside it."""
 GATE_FILES = frozenset({execution.GATE_SCRIPT, execution.GATE_DROPIN, instance_key.SCRIPT_PATH})
 """What the execution gate and the instance key add to every lowered profile."""
 

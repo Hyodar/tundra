@@ -56,7 +56,7 @@ def test_show_lists_what_the_service_template_declares(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert cli("new", "demo").code == EXIT_OK
+    assert cli("new", "demo", "--template", "service").code == EXIT_OK
     monkeypatch.chdir(tmp_path / "demo")
     result = cli("show")
     assert result.code == EXIT_OK, result.err

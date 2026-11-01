@@ -4,8 +4,6 @@ against the committed attested node tree, which holds it."""
 from __future__ import annotations
 
 import pytest
-from examples.nethermind_base import EFI_STUB_VERSION
-from examples.nethermind_base import SNAPSHOT as BASE_SNAPSHOT
 
 from tests.helpers import ATTESTED_NODE
 from tundravm.declarative import (
@@ -36,9 +34,11 @@ from tundravm.declarative.utils import (
 from tundravm.errors import ValidationError
 
 GOLDEN = ATTESTED_NODE / "mkosi"
+BASE_SNAPSHOT = "20251113T083151Z"
+EFI_STUB_VERSION = "255.4-1"
 SNAPSHOT = "https://snapshot.debian.org/archive/debian/20251113T083151Z/"
 PLATFORM = Debian("trixie", snapshot=BASE_SNAPSHOT, boot=None)
-"""The base example's archive, without its packages: the files the fragments render
+"""A trixie archive, without its packages: the files the fragments render
 depend on the snapshot (backports sources, the EFI stub URL)."""
 GENERIC = ("payload/mkosi.conf", "payload/mkosi.conf.d/", "payload/mkosi.build.d/")
 """What every fragment touches (its packages, its build hooks): not the fragment's own files."""

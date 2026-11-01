@@ -1,39 +1,58 @@
-"""Attested node: Nethermind, and its block responses signed by a key this boot generated.
+"""attested-node: operating it, stage 6 of the guide and image.py.
 
-Nethermind follows Hoodi, the youngest public testnet it ships a configuration for: the
-smallest state an Ethereum node syncs with a consensus client, which drives it over the
-Engine API on the loopback with ``jwt``, generated at boot. ``signer/`` signs each block
-response with the instance key; requests reach it only through the attested TLS ingress.
-
-    tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
+Adds what running it takes: the journal shipped with a delivered client certificate, a
+staging profile that edits one file, a bench profile that is never shipped, and the
+Azure and GCP disks of the same payload. The dev profile's boot probe checks it all.
 """
 
-from tundravm import Image, RootFS, Service
-from tundravm.components import DevAccess, Egress, Nethermind, Network
+from components.lighthouse import Lighthouse
+from components.nethermind import Nethermind
+
+from tundravm import Debian, File, Image, Profile, RootFS, Service
+from tundravm.components import DevAccess, Egress, JournalExport, Network, Observability
 from tundravm.ports import AttestedTLS
-from tundravm.secrets import Generated, InstanceKey
+from tundravm.secrets import Generated, InstanceKey, Secret
 from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, Volume
-from tundravm.systemd import TcpProbe
+from tundravm.systemd import Resources, TcpProbe
 
 data = Volume("data", unlock=OperatorKey())
 jwt = Generated("jwt")
 nethermind = Nethermind(jwt=jwt, config="hoodi", state=data.directory("nethermind"))
+lighthouse = Lighthouse(
+    execution=nethermind.engine_api,
+    jwt=jwt,
+    checkpoint_sync_url="https://checkpoint-sync.hoodi.ethpandaops.io",
+    state=data.directory("lighthouse"),
+)
+program = GoBinary("signer", Local("signer"))
 signer = Service(
     "signer",
-    [GoBinary("signer", Local("signer")), "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
+    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
     credentials=[InstanceKey()],
     requires=[nethermind.rpc],
     readiness=TcpProbe(8547),
+    resources=Resources(memory_max="256M"),
+    hardening="static",
 )
+motd = File.text("/etc/motd", "attested-node: Nethermind and Lighthouse on Hoodi\n")
+logs = JournalExport("https://logs.example:19532", credential=Secret("logs-client"))
 
 image = Image(
     "attested-node",
-    components=[nethermind],
+    base=Debian("trixie", snapshot="20261018T082309Z"),
+    packages=["ca-certificates"],
+    files=[motd],
+    components=[nethermind, lighthouse],
     services=[signer],
     ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
     network=Network(egress=Egress()),
     rootfs=RootFS.verity(),
+    observability=Observability(logs=logs),
     targets=("qemu", "azure", "gcp"),
+    profiles={
+        "staging": Profile(changes=[motd.ref.edit(content="attested-node: staging\n")]),
+        "bench": Profile(add=["fio"], production=False),
+    },
     dev=DevAccess(password="tdx"),
 )

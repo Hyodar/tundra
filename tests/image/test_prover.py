@@ -1,5 +1,5 @@
-"""Plan section 3.1's prover as a file, the attested node over the component library, and
-the backend the loader picks for an image file that names none."""
+"""Plan section 3.1's prover as a file, and the backend the loader picks for an image file
+that names none."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 import tundravm
 from tests.compiler.test_native_tree import by_image, mkosi_summary
-from tests.helpers import ATTESTED_NODE, REPO_ROOT
+from tests.helpers import REPO_ROOT
 from tundravm import capabilities
 from tundravm._image import recipe_of
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
@@ -18,7 +18,7 @@ from tundravm.capabilities import Host
 from tundravm.declarative import lock
 from tundravm.errors import ValidationError
 from tundravm.recipe import BACKEND_ENV, load_file
-from tundravm.testing import assert_clean, plan
+from tundravm.testing import assert_clean
 from tundravm.testing._model import compile_tree
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -113,28 +113,6 @@ def test_the_prover_locks_without_the_network(prover_file: Path) -> None:
     assert tools == {"tdxs", "key-generation", "disk-encryption", "attested-endpoint"}
 
 
-# ── The attested node ───────────────────────────────────────────────
-
-
-def test_the_attested_node_is_a_short_image_over_the_component_library() -> None:
-    source = (ATTESTED_NODE / "image.py").read_text(encoding="utf-8")
-    assert len(source.splitlines()) <= 40
-    assert "tundravm.declarative" not in source and "examples." not in source
-    image = tundravm.load(ATTESTED_NODE / "image.py")
-    assert [type(c).__name__ for c in image.components] == ["Nethermind"]
-    assert image.targets == ("qemu", "azure", "gcp")
-
-
-def test_the_attested_node_resolves_every_profile_and_wrapper() -> None:
-    tree = ATTESTED_NODE / "mkosi"
-    images = by_image(mkosi_summary(tree, "--dependency=azure", "--dependency=gcp"))
-    assert list(images) == ["default-initrd", "payload", "azure", "gcp", "main"]
-    assert images["payload"]["ImageId"] == "attested-node"
-    planned = plan(tundravm.load(ATTESTED_NODE / "image.py"), "production")
-    for unit in ("nethermind", "signer", "attested-tls-8546", "tdxs"):
-        assert planned.service(unit).get("Service", "User") == unit
-
-
 # ── Backend selection ───────────────────────────────────────────────────
 
 
@@ -166,4 +144,4 @@ def test_tundravm_backend_and_an_explicit_backend_win(
     assert isinstance(bound.backend, LimaMkosiBackend) and bound.backend_origin == "recipe"
     monkeypatch.setenv(BACKEND_ENV, "docker")
     with pytest.raises(ValidationError, match="not a build backend"):
-        load_file(REPO_ROOT / "examples" / "01_minimal.py")
+        load_file(REPO_ROOT / "examples" / "attested-node" / "stages" / "01-boot.py")

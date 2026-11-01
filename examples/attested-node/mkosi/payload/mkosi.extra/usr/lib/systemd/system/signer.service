@@ -34,6 +34,7 @@ SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 UMask=0077
+MemoryMax=256M
 
 [Install]
 WantedBy=minimal.target

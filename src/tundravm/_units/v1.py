@@ -18,7 +18,7 @@ MINIMAL_TARGET = (
     "[Install]\n"
     "WantedBy=default.target"
 )
-"""``/etc/systemd/system/minimal.target`` of nethermind-tdx's skeleton (no final newline)."""
+"""The ``/etc/systemd/system/minimal.target`` every image's skeleton ships (no final newline)."""
 
 SERIAL_CONSOLE = """\
 [Unit]

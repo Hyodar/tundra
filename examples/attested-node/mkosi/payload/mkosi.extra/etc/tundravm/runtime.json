@@ -12,11 +12,23 @@
   "management_port": 8745,
   "rootfs": "verity",
   "schema": 1,
-  "secrets": [],
+  "secrets": [
+    {
+      "location": "/run/tundravm/credentials/logs-client",
+      "name": "logs-client",
+      "required": true,
+      "rotation": "restart",
+      "source": null,
+      "units": [
+        "journal-export.service"
+      ]
+    }
+  ],
   "volumes": [
     {
       "device": "/dev/disk/by-id/*-tundravm-data",
       "directories": [
+        "/persistent/data/lighthouse",
         "/persistent/data/nethermind"
       ],
       "filesystem": "ext4",

@@ -28,9 +28,11 @@ EXPLICIT_BACKENDS: dict[str, tuple[str, str]] = {
 """``render_recipe_template(backend=KIND)``: the class and the instance a file that must build
 with one backend, whatever the host, binds to ``backend``."""
 
-TemplateName = Literal["minimal", "service", "cloud", "prover"]
+TemplateName = Literal["node", "minimal", "service", "cloud", "prover"]
 
 TEMPLATES: dict[str, str] = {
+    "node": "stage 1 of the guide's attested node: Debian from one snapshot, the TEE "
+    "baseline, filtered egress and a dev profile, before any workload",
     "minimal": "the starter: one package, one file, one service, one qemu target",
     "service": "an App component (your Go program in app/, built from that directory and run "
     "as a sandboxed service, its readiness and a lint rule) plus a dev profile",
@@ -39,10 +41,10 @@ TEMPLATES: dict[str, str] = {
     "prover": "the web page for qemu, azure and gcp behind an attested TLS ingress, its state "
     "on a volume an operator unlocks, and a token delivered after attestation",
 }
-"""Template name -> one-line description; ``new --template`` offers ``service`` and
-``prover``, and the tests render all four."""
+"""Template name -> one-line description; ``new --template`` offers ``node`` (the default),
+``service`` and ``prover``, and the tests render all five."""
 
-DEFAULT_TEMPLATE: TemplateName = "service"
+DEFAULT_TEMPLATE: TemplateName = "node"
 
 _HEADER = r'''"""$title image ($template template).
 
@@ -52,6 +54,25 @@ Build:  uv run tundravm build $filename --dev
 Run:    uv run tundravm run --mode simulated --dev
 """
 
+'''
+
+_NODE = r'''"""$title: the boot, stage 1 of the guide.
+
+Debian $release from one snapshot, with systemd, the TEE baseline (NTS time, a volatile
+journal, sysctl hardening), DHCP, a firewall that drops inbound traffic nothing exposes,
+filtered egress, and a dev profile with a serial console and root password "tdx".
+"""
+
+from tundravm import Debian, Image
+from tundravm.components import DevAccess, Egress, Network
+
+image = Image(
+    "$title",
+    base=Debian("$release", snapshot="20261018T082309Z"),
+    packages=["ca-certificates"],
+    network=Network(egress=Egress()),
+    dev=DevAccess(password="tdx"),
+)
 '''
 
 _MINIMAL = r"""from tundravm import File, Image, Service
@@ -356,6 +377,7 @@ image = Image(
 """
 
 _SOURCES: dict[str, str] = {
+    "node": _NODE,
     "minimal": _HEADER + _MINIMAL,
     "service": _HEADER
     + "from collections.abc import Iterator\n\n"
@@ -375,7 +397,7 @@ _SOURCES: dict[str, str] = {
 }
 
 RECIPE_TEMPLATE = _SOURCES[DEFAULT_TEMPLATE]
-"""The default (``service``) template's ``$``-placeholder source."""
+"""The default (``node``) template's ``$``-placeholder source."""
 
 TEST_TEMPLATE = r'''"""Tests for $filename: check, compile and the committed mkosi/ tree."""
 
@@ -399,8 +421,8 @@ $lint_call
 
 def test_compiles_every_profile() -> None:
     for profile in PROFILES:
-        app = plan(IMAGE, profile).service("app")
-        assert app.user == "app"
+        service = plan(IMAGE, profile).service("$service")
+        assert service.user == "$service"
 
 
 def test_matches_committed_tree() -> None:
@@ -656,6 +678,7 @@ jobs:
 """
 
 TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
+    "node": ("production", "dev"),
     "minimal": ("production", "dev"),
     "service": ("production", "dev"),
     "cloud": ("production", "dev"),
@@ -664,6 +687,7 @@ TEMPLATE_VARIANTS: dict[str, tuple[str, ...]] = {
 """The profiles each template declares."""
 
 EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
+    "node": ("source-unpinned",),
     "minimal": ("source-unpinned",),
     "service": ("source-unpinned",),
     "cloud": ("source-unpinned",),
@@ -673,6 +697,7 @@ EXPECTED_FINDINGS: dict[str, tuple[str, ...]] = {
 ``source-unpinned``."""
 
 _ALLOW_COMMENTS: dict[str, str] = {
+    "node": "        # A tundravm checkout's tools/ is unpinned until `tundravm lock`.\n",
     "minimal": "        # A tundravm checkout's tools/ is unpinned until `tundravm lock`.\n",
     "service": "        # app/ (and a checkout's tools/) until `tundravm lock` pins them.\n",
     "cloud": "        # The EFI stub stays unpinned until `tundravm lock` pins its sha256.\n",
@@ -741,8 +766,9 @@ def render_test_module(*, filename: str, template: str = DEFAULT_TEMPLATE) -> st
         lint_call = f"        assert_clean({subject})"
     names = [f'"{name}"' for name in TEMPLATE_VARIANTS[template]]
     profiles = ", ".join(names) + ("," if len(names) == 1 else "")
+    service = "tdxs" if template == "node" else "app"
     return Template(TEST_TEMPLATE).substitute(
-        filename=filename, lint_call=lint_call, profiles=profiles
+        filename=filename, lint_call=lint_call, profiles=profiles, service=service
     )
 
 

@@ -134,7 +134,7 @@ def test_from_policy_rejects_bad_policies(tmp_path: Path) -> None:
 
 
 def test_the_committed_example_policy_is_a_marked_placeholder() -> None:
-    policy = read_policy(REPO_ROOT / "examples" / "peer.policy.json")
+    policy = read_policy(REPO_ROOT / "tests" / "fixtures" / "peer.policy.json")
     assert policy["tool"] == "placeholder" and policy["note"] == PLACEHOLDER_NOTE
     with pytest.raises(MeasurementError):
-        Tdxs.from_policy(REPO_ROOT / "examples" / "peer.policy.json")
+        Tdxs.from_policy(REPO_ROOT / "tests" / "fixtures" / "peer.policy.json")

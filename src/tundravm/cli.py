@@ -115,7 +115,7 @@ COMMANDS = (
 )
 RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "probe")
 DEPLOY_ACTIONS = ("status", "logs", "mode", "upgrade", "rollback")
-NEW_TEMPLATES = ("service", "prover")
+NEW_TEMPLATES = ("node", "service", "prover")
 DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 
 QUICKSTART = """\
@@ -308,9 +308,9 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument(
         "--template",
         choices=NEW_TEMPLATES,
-        default="service",
-        help="service: your Go program in app/ as a sandboxed web service, and a dev profile "
-        "(default); prover: a "
+        default="node",
+        help="node: stage 1 of the guide's attested node, the boot (default); service: your "
+        "Go program in app/ as a sandboxed web service, and a dev profile; prover: a "
         "service behind attested TLS, its state on an operator-unlocked volume, a secret.",
     )
     new.add_argument("--ci", action="store_true", help=f"Also write {WORKFLOW_PATH}.")

@@ -59,8 +59,6 @@ COMPONENTS = [
     "Endpoint",
     "Firewall",
     "JournalExport",
-    "Lighthouse",
-    "Nethermind",
     "Network",
     "Observability",
     "PrometheusRemoteWrite",
@@ -71,7 +69,6 @@ COMPONENTS = [
     "ServiceRef",
     "SshAccess",
     "StaticAddress",
-    "TaikoClient",
     "Tdxs",
     "TeeBase",
 ]
@@ -277,12 +274,9 @@ def test_the_component_library_is_components() -> None:
     shipped = [
         "DevAccess",
         "Firewall",
-        "Lighthouse",
-        "Nethermind",
         "Network",
         "Observability",
         "SshAccess",
-        "TaikoClient",
         "Tdxs",
         "TeeBase",
     ]
@@ -290,6 +284,9 @@ def test_the_component_library_is_components() -> None:
         value = getattr(components, name)
         assert issubclass(value, components.Component), name
         assert value.__module__.startswith("tundravm.components._"), name
+    # Application components are the image author's: an example carries the ones it needs.
+    for name in ("Nethermind", "Lighthouse", "TaikoClient", "Raiko"):
+        assert not hasattr(components, name), name
 
 
 def test_the_internal_model_is_not_exported() -> None:

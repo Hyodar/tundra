@@ -11,6 +11,7 @@ from tundravm.declarative import (
     Fragment,
     Listen,
     Mount,
+    Package,
     Recipe,
     Service,
     Task,
@@ -187,12 +188,15 @@ def test_variant_overlay_adds_edits_and_removes_shapes() -> None:
     assert (removed.root / "payload/mkosi.profiles/default" / mount).is_file()
 
 
-def test_example_03_health_check_runs_only_from_its_timer() -> None:
-    """The units the 03 re-record moved: the service lost [Install], the timer is typed."""
-    from tests.helpers import REPO_ROOT
-    from tundravm.declarative import load
-
-    tree = compile_tree(load(REPO_ROOT / "examples" / "03_components.py", extra_paths=[REPO_ROOT]))
+def test_a_scheduled_task_runs_only_from_its_timer() -> None:
+    """A task with a schedule is a oneshot without [Install], started by its typed timer."""
+    probe = Task(
+        "healthcheck",
+        "/usr/bin/curl -fsS -o /dev/null http://127.0.0.1:9090/-/healthy",
+        description="Probe the service",
+        schedule=Every("1min", first="1min"),
+    )
+    tree = compile_tree(_recipe(Package("curl"), probe))
     service = tree.unit("healthcheck")
     assert "Type=oneshot\n" in service and "[Install]" not in service
     assert "User=healthcheck\n" in service and "ProtectSystem=strict\n" in service

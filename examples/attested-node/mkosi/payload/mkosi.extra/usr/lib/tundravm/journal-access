@@ -1,0 +1,7 @@
+#!/bin/sh
+# tundravm Observability: the journal readable by the systemd-journal group.
+for directory in /run/log/journal /var/log/journal; do
+    [ -d "$directory" ] || continue
+    chgrp -R systemd-journal "$directory"
+    find "$directory" -type d -exec chmod g+rxs {} +
+done

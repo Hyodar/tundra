@@ -178,7 +178,7 @@ class Endpoint:
 
 @dataclass(frozen=True, slots=True)
 class ServiceRef:
-    """A service a component composed, named from outside: ``nethermind.service("nethermind")``.
+    """A service a component composed, named from outside: ``node.service("node")``.
 
     ``.ready`` waits for it and ``.ref`` is what a :class:`~tundravm.Profile`
     edits or removes, so a caller changes one service of a component without the
@@ -281,7 +281,7 @@ class Component(Located, metaclass=_ComponentMeta):
     says what it sends to, so an image's ``Egress`` accepts it without being told.
 
     Its name, which ``show`` and every diagnostic about it print, comes from the class
-    (``TaikoClient`` is ``taiko-client``), from an ``id`` or ``name`` field when it has
+    (``NodeExporter`` is ``node-exporter``), from an ``id`` or ``name`` field when it has
     one, or from ``class X(Component, name="x")``. ``class X(Component, build_network=True)``
     says its builds fetch dependencies while the image is built (``cargo fetch``,
     ``dotnet restore``), so an image holding it builds with the network on, which the

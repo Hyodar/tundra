@@ -18,7 +18,7 @@ from tundravm.testing import assert_tree
 from tundravm.testing._model import assert_tree_matches
 
 GOLDEN = ATTESTED_NODE / "mkosi"
-PROFILES = ("production", "dev")
+PROFILES = ("production", "staging", "bench", "dev")
 
 
 @pytest.fixture(scope="module")
@@ -39,7 +39,11 @@ def test_the_attested_node_declares_the_golden_profiles(node: Recipe) -> None:
         "gcp",
         "payload",
     ]
-    assert sorted(p.name for p in (GOLDEN / "payload" / "mkosi.profiles").iterdir()) == ["dev"]
+    assert sorted(p.name for p in (GOLDEN / "payload" / "mkosi.profiles").iterdir()) == [
+        "bench",
+        "dev",
+        "staging",
+    ]
     for wrapper in ("", "mkosi.images/azure/", "mkosi.images/gcp/"):
         repart = sorted(p.name for p in (GOLDEN / f"{wrapper}mkosi.repart").iterdir())
         assert repart == ["00-esp.conf", "10-root.conf", "11-root-verity.conf"], wrapper

@@ -4,7 +4,7 @@ Each is a :class:`Composite`: a :class:`Fragment` whose configuration is its own
 dataclass fields, so ``EfiStub(snapshot=SNAPSHOT, version="257.13-1~deb13u1")`` reads like a
 declaration and goes wherever a ``Fragment`` does.
 
-The committed ``examples/signing-proxy/mkosi`` tree pins their output.
+The committed ``examples/attested-node/mkosi`` tree pins their output.
 """
 
 from __future__ import annotations

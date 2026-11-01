@@ -1,0 +1,42 @@
+[Unit]
+Description=journal-export.service
+After=credential-logs-client.service tdx-evidence.service
+Requires=credential-logs-client.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/systemd/systemd-journal-upload --url=https://logs.example:19532 --save-state=/var/lib/journal-export/state --key=${CREDENTIALS_DIRECTORY}/logs-client --cert=${CREDENTIALS_DIRECTORY}/logs-client
+User=journal-export
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/var/lib/journal-export
+LoadCredential=logs-client:/run/tundravm/credentials/logs-client
+StateDirectory=journal-export
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target

@@ -1,0 +1,3 @@
+# The attested node is a tundravm project: its image files import components/ from here.
+[tool.tundravm]
+image = "image.py"

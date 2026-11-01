@@ -16,7 +16,7 @@ from tundravm.errors import ErrorCode, LockfileError, SourceError
 from tundravm.recipe import load_recipe
 
 PROVER = "https://github.com/example/prover"
-NETHERMIND = "https://github.com/NethermindEth/nethermind"
+NODE = "https://github.com/example/node"
 TOOL = "https://example.com/tool-1.0.tar.gz"
 SHA = "c" * 40
 DIGEST = "d" * 64
@@ -29,8 +29,8 @@ recipe = Recipe(
     items=(
         Build("prover", Git({PROVER!r}, "feat/tdx"), script="make",
               install=(Install("prover", "/usr/bin/prover"),)),
-        Build("nethermind", Git({NETHERMIND!r}, "master"), script="make",
-              install=(Install("nethermind", "/usr/bin/nethermind"),)),
+        Build("node", Git({NODE!r}, "master"), script="make",
+              install=(Install("node", "/usr/bin/node"),)),
         Build("tool", Http({TOOL!r}), script="make",
               install=(Install("tool", "/usr/bin/tool"),)),
     ),
@@ -82,7 +82,7 @@ def test_lock_attempts_every_source_and_reports_each_failure(image_file: Path) -
     with pytest.raises(LockfileError) as caught:
         lock(load_recipe(image_file), resolver=upstream)
     error = caught.value
-    assert sorted(upstream.calls) == sorted([PROVER, NETHERMIND, TOOL])
+    assert sorted(upstream.calls) == sorted([PROVER, NODE, TOOL])
     assert error.code == ErrorCode.LOCKFILE
     assert error.args[0].splitlines() == [
         "Cannot lock: 2 sources could not be resolved:",
@@ -100,13 +100,13 @@ def test_lock_attempts_every_source_and_reports_each_failure(image_file: Path) -
 
 def test_other_resolver_errors_are_collected_too(image_file: Path) -> None:
     def flaky(source: Source) -> str:
-        if source.url == NETHERMIND:
+        if source.url == NODE:
             raise TimeoutError("timed out")
         return SHA if isinstance(source, GitSource) else DIGEST
 
     with pytest.raises(LockfileError) as caught:
         lock(load_recipe(image_file), resolver=flaky)
-    assert f"  nethermind: git {NETHERMIND} @ master: timed out" in str(caught.value)
+    assert f"  node: git {NODE} @ master: timed out" in str(caught.value)
     assert "2 of 3 sources resolved; nothing written." in str(caught.value)
 
 

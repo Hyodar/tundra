@@ -1,7 +1,7 @@
 # Kernels built from source, too slow for every push: tests/fixtures/kernel/recipe.py compiles
 # Debian trixie's 6.12 kernel from its own cloud-amd64 config with CONFIG_MODULES=n, the way
-# Kernel.build(...) does, and tests/fixtures/kernel/example.py the kernel
-# examples/nethermind_base.py builds from its own config. Each build's drivers check asserts
+# Kernel.build(...) does, and tests/fixtures/kernel/example.py one from its own
+# config. Each build's drivers check asserts
 # every driver the qemu, azure and gcp targets need is built in (=y) and the denied ones are
 # off; each job uploads the config before and after olddefconfig, the check's report and the
 # diff summary, then boots qemu.raw under QEMU with OVMF until the fixture's probe has

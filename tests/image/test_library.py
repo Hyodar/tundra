@@ -1,14 +1,13 @@
-"""``tundravm.components``: the baseline an image implies, replaced by passing one, and the
-workloads whose exports wire into each other."""
+"""``tundravm.components``: the baseline an image implies, replaced by passing one, and
+components whose exports wire into each other."""
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import Any
+from collections.abc import Iterator
 
 import pytest
 
-from tundravm import Image, Service
+from tundravm import Image, Package, Service
 from tundravm._image import lower, recipe_of
 from tundravm.components import (
     EVIDENCE,
@@ -18,14 +17,11 @@ from tundravm.components import (
     Endpoint,
     Firewall,
     JournalExport,
-    Lighthouse,
-    Nethermind,
     Network,
     Observability,
     PrometheusRemoteWrite,
     Proxy,
     SshAccess,
-    TaikoClient,
     Tdxs,
     TeeBase,
 )
@@ -35,6 +31,7 @@ from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
 from tundravm.sources import Git
 from tundravm.storage import OperatorKey, Volume
+from tundravm.systemd import TcpProbe
 from tundravm.testing import PlannedImage, plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -42,18 +39,44 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 MIRROR = Git("https://mirror.example/tools.git", "v1.2.0")
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
-jwt = Secret("jwt")
-chain = Secret("taiko-chain")
-execution = Nethermind(jwt=jwt, state=data.directory("nethermind"))
-driver = TaikoClient(engine=execution.engine_api, rpc=execution.rpc, jwt=jwt, chain=chain)
-CHECKPOINT = "https://checkpoint.example"
-beacon = Lighthouse(execution=execution.engine_api, jwt=jwt, checkpoint_sync_url=CHECKPOINT)
+token = Secret("db-token")
+
+
+class Db(Component, build_network=True):
+    """A database on the loopback, its state on the volume, ready once its port answers."""
+
+    port: int = 5432
+
+    @property
+    def endpoint(self) -> Endpoint:
+        return self.service("db").endpoint(self.port)
+
+    def compose(self) -> Iterator[object]:
+        yield Package("busybox")
+        yield Service(
+            "db",
+            ["/usr/bin/busybox", "nc", "-lk", "-p", str(self.port)],
+            readiness=TcpProbe(self.port),
+            state=data.directory("db"),
+        )
+
+
+class Client(Component):
+    """A client of *db* that reads *token*."""
+
+    db: Endpoint
+    token: Secret
+
+    def compose(self) -> Iterator[object]:
+        yield Service("client", ["/usr/bin/busybox", "nc", self.db, self.token], requires=[self.db])
+
+
+db = Db()
+client = Client(db=db.endpoint, token=token)
 
 
 def stack(**changes: object) -> Image:
-    fields: dict[str, object] = {
-        "components": [execution, driver],
-    }
+    fields: dict[str, object] = {"components": [db, client]}
     fields.update(changes)
     return Image("stack", **fields)  # type: ignore[arg-type]
 
@@ -71,61 +94,36 @@ def _after(planned: PlannedImage, unit: str) -> list[str]:
 
 
 def test_endpoints_carry_their_readiness_across_components(planned: PlannedImage) -> None:
-    assert execution.engine_api.url == "http://127.0.0.1:8551/"
-    assert execution.ws.url == "ws://127.0.0.1:8545/"
-    assert execution.rpc.ready == execution.service("nethermind").ready
-    # The driver waits for what proves Nethermind ready (its probe), not for its exec.
-    assert "nethermind-ready.service" in _after(planned, "taiko-client.service")
-    assert planned.unit("nethermind-ready.service").get("Service", "Type") == "oneshot"
+    assert db.endpoint.url == "http://127.0.0.1:5432/"
+    assert db.endpoint.ready == db.service("db").ready
+    # The client waits for what proves the database ready (its probe), not for its exec.
+    assert "db-ready.service" in _after(planned, "client.service")
+    assert planned.unit("db-ready.service").get("Service", "Type") == "oneshot"
+    assert planned.service("client").values("Service", "LoadCredential") == (
+        "db-token:/run/tundravm/credentials/db-token",
+    )
+    assert planned.service("db").get("Service", "WorkingDirectory") == "/persistent/db"
+    # A class that says build_network=True builds with the network on: the tree says so.
+    assert recipe_of(stack()).mkosi.build_network
 
 
 def test_component_readiness_names_what_proves_it() -> None:
     assert Tdxs().readiness() == (EVIDENCE,)
-    assert execution.readiness() == (execution.service("nethermind").ready,)
+    assert db.readiness() == (db.service("db").ready,)
     assert Network().readiness() == (Network().online,)
     service = Service("x", ["/usr/bin/x"], requires=[Tdxs().ready])
     planned = plan(Image("x", services=[service]), "production")
     assert "tdxs.service" in _after(planned, "x.service")
 
 
-def test_the_workloads_pin_their_sources_and_read_their_secrets(planned: PlannedImage) -> None:
-    builds = lower(stack()).source_builds()
-    assert {"nethermind", "taiko-client"} <= set(builds)
-    nethermind = planned.service("nethermind")
-    assert "--JsonRpc.JwtSecretFile=${CREDENTIALS_DIRECTORY}/jwt" in (nethermind.exec_start or "")
-    assert nethermind.get("Service", "WorkingDirectory") == "/persistent/nethermind"
-    assert nethermind.get("Service", "MemoryDenyWriteExecute") is None  # the dotnet preset
-    driver_unit = planned.service("taiko-client")
-    assert driver_unit.values("Service", "LoadCredential") == (
-        "jwt:/run/tundravm/credentials/jwt",
-        "taiko-chain:/run/tundravm/credentials/taiko-chain",
-    )
-    assert "--l2.auth=http://127.0.0.1:8551/" in (driver_unit.exec_start or "")
-    # Their builds fetch crates, modules and NuGet packages: the tree says so.
-    assert recipe_of(stack()).mkosi.build_network
-
-
 def test_component_checks_report_what_the_contract_warns_about() -> None:
-    volatile = Image("x", components=[Nethermind(jwt=jwt)])
-    found = {d.code for d in plan(volatile, "production").lint()}
-    assert "nethermind-volatile-state" in found
     clockless = Image("x", components=[TeeBase(time=False)])
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
     unchecked = Image("x", components=[Tdxs(validator="tdx")])
     assert "tdxs-validator-unchecked" in {d.code for d in plan(unchecked).lint()}
-    blind = Lighthouse(execution=execution.engine_api, jwt=jwt)
-    found = {d.code for d in plan(Image("x", components=[execution, blind])).lint()}
-    assert {"lighthouse-checkpoint-missing", "lighthouse-volatile-state"} <= found
 
 
 PCS = "api.trustedservices.intel.com:443"
-REMOTE = Endpoint("10.0.0.7", 8545, ready=execution.rpc.ready)
-TAIKO: dict[str, Any] = {
-    "engine": execution.engine_api,
-    "rpc": execution.rpc,
-    "jwt": jwt,
-    "chain": chain,
-}
 
 
 @pytest.mark.parametrize(
@@ -149,21 +147,6 @@ TAIKO: dict[str, Any] = {
         (
             Observability(logs=JournalExport("https://logs.example"), proxy="10.0.0.9:3128"),
             Egress(hosts=["10.0.0.9:3128"]),
-        ),
-        (execution, Egress([TCP(30303), UDP(30303)])),
-        (driver, Egress([TCP(443)])),
-        (
-            TaikoClient(engine=REMOTE, rpc=REMOTE, jwt=jwt, chain=chain),
-            Egress([TCP(443)], ["10.0.0.7:8545"]),
-        ),
-        (
-            TaikoClient(**TAIKO, l1=["l1.example:8546", "10.0.0.9:5052"]),
-            Egress(hosts=["l1.example:8546", "10.0.0.9:5052"]),
-        ),
-        (beacon, Egress([TCP(9000), UDP(9000), UDP(9001)], ["checkpoint.example:443"])),
-        (
-            Lighthouse(execution=REMOTE, jwt=jwt, checkpoint_sync_url="http://10.0.0.9:5052"),
-            Egress([TCP(9000), UDP(9000), UDP(9001)], ["10.0.0.9:5052", "10.0.0.7:8545"]),
         ),
         (SshAccess(from_delivery=True), Egress()),
         (DevAccess(password="tdx"), Egress()),
@@ -193,14 +176,6 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
 @pytest.mark.parametrize(
     ("make", "message"),
     [
-        (lambda: Nethermind(jwt="jwt"), "Secret the image declares"),  # type: ignore[arg-type]
-        (
-            lambda: TaikoClient(
-                engine=Endpoint("127.0.0.1", 1), rpc=execution.rpc, jwt=jwt, chain=chain
-            ),
-            "readiness",
-        ),
-        (lambda: TaikoClient(**TAIKO, l1="l1.example:8546"), "a list of HOST:PORT"),
         (
             lambda: Observability(logs=JournalExport("https://l.example"), proxy="p.example:80"),
             "proxy 'p.example:80' is not IP:PORT",
@@ -208,10 +183,6 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
         (lambda: Proxy("p.example", 3128), "is not an IP address"),
         (lambda: Proxy("10.0.0.9", 3128, tls_name="10.0.0.9"), "is an address"),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
-        (lambda: replace(beacon, network="goerli"), "not one Lighthouse ships"),
-        (lambda: replace(beacon, checkpoint_sync_url="checkpoint.example"), "http"),
-        (lambda: replace(beacon, jwt="jwt"), "secret the execution client reads"),  # type: ignore[arg-type]
-        (lambda: replace(beacon, execution=Endpoint("127.0.0.1", 8551)), "readiness"),
     ],
 )
 def test_component_configuration_is_checked(make: object, message: str) -> None:
@@ -223,7 +194,7 @@ def test_component_configuration_is_checked(make: object, message: str) -> None:
 
 
 def test_an_explicit_tdxs_builds_the_evidence_and_the_volume_tools_from_its_source() -> None:
-    image = stack(components=[execution, driver, Tdxs(source=MIRROR)])
+    image = stack(components=[db, client, Tdxs(source=MIRROR)])
     builds = lower(image).source_builds()
     for name in ("tdxs", "key-generation", "disk-encryption", "attested-endpoint"):
         assert builds[name].source.url == MIRROR.url, name

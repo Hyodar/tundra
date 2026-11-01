@@ -1,8 +1,8 @@
 """Boot a built-kernel fixture: a kernel compiled with every driver in.
 
 ``tests/fixtures/kernel/recipe.py`` builds its payload's kernel from source (Debian's
-``cloud-amd64`` config, ``CONFIG_MODULES=n``), ``tests/fixtures/kernel/example.py`` the
-example's (``examples/nethermind_base.py``); the build's drivers check already asserted
+``cloud-amd64`` config, ``CONFIG_MODULES=n``), ``tests/fixtures/kernel/example.py`` one
+from its own config; the build's drivers check already asserted
 every target's drivers ``=y``. This boots ``qemu.raw`` through its ESP under QEMU with OVMF
 and reads what the fixture's ``boot-probe`` task printed: the release, no module file, the
 drivers registered and the file systems the root layouts and volumes mount.
