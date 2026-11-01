@@ -1,9 +1,10 @@
 """The boot probe (plan 5.2 item 7): the checklist a development profile compiles in.
 
 One image declaring a service that exposes a TCP and a UDP port under a preset sandbox, a
-scheduled one, a volume, an egress filter, a built kernel and ``dev=DevAccess(...)``: its
-dev profile's ``/usr/lib/tundravm/probe`` is compared with ``probe-dev.sh`` beside this
-file (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it), and its production profile carries none.
+scheduled one, a volume, an egress filter, an ``Observability``, a built kernel and
+``dev=DevAccess(...)``: its dev profile's ``/usr/lib/tundravm/probe`` is compared with
+``probe-dev.sh`` beside this file (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it), and its
+production profile carries none.
 """
 
 from __future__ import annotations
@@ -14,7 +15,14 @@ from pathlib import Path
 import tundravm
 from tundravm import Image, Kernel, Service
 from tundravm._modules import probe
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components import (
+    DevAccess,
+    Egress,
+    JournalExport,
+    Network,
+    Observability,
+    PrometheusRemoteWrite,
+)
 from tundravm.declarative import Git
 from tundravm.ports import TCP, UDP
 from tundravm.storage import OperatorKey, Volume
@@ -41,6 +49,10 @@ def test_a_dev_profile_compiles_the_checks_its_declarations_imply(tmp_path: Path
             ),
             Service("tick", ["/usr/bin/tick"], timer=Every("15m")),
         ],
+        observability=Observability(
+            logs=JournalExport("https://logs.example:19532"),
+            metrics=PrometheusRemoteWrite("https://10.0.0.9/api/v1/write"),
+        ),
         network=Network(egress=Egress(ports=[UDP(9), TCP(443)], hosts=["192.0.2.0/24"])),
         kernel=Kernel.build(
             "6.12.48", Git("https://example.com/linux.git", "v6.12.48"), config=config

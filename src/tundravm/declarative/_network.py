@@ -195,12 +195,17 @@ def _egress_rules(firewall: Firewall) -> list[str]:
     anywhere = [rule for rule in firewall.egress_rules if rule.host is None]
     hosts = [rule for rule in firewall.egress_rules if rule.host is not None]
     for rule in [*sorted(anywhere, key=_port_order), *hosts]:
-        match = [] if rule.host is None else [f"{_family(rule.host)} daddr {rule.host}"]
-        if rule.port is not None:
-            match.append(f"{rule.port.protocol} dport {rule.port.number}")
         comment = _comment([rule.comment]) if rule.origins else "egress"
-        rules.append(f'{" ".join(match)} accept comment "{comment}"')
+        rules.append(f'{egress_match(rule)} accept comment "{comment}"')
     return rules
+
+
+def egress_match(rule: EgressRule) -> str:
+    """*rule*'s match in the output chain, as ``nft list ruleset`` prints it back."""
+    match = [] if rule.host is None else [f"{_family(rule.host)} daddr {rule.host}"]
+    if rule.port is not None:
+        match.append(f"{rule.port.protocol} dport {rule.port.number}")
+    return " ".join(match)
 
 
 def _family(host: str) -> str:

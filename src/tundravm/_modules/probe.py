@@ -23,6 +23,15 @@ The checks, each only when its declaration exists (:func:`derive`):
   device when it has a key;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
+- ``observability:UNIT``: with an ``Observability``, ``journal-export.service`` active and
+  connected to its sink's port (the proxy's with one: the upload streams while it follows
+  the journal) or with an upload's cursor saved, or restarting after an upload its journal
+  names failing (the sink away), in place of its ``service:`` check;
+  ``metrics-export.service`` active with its configuration accepted by ``promtool check
+  config --agent``, or without promtool by the agent's own ``Completed loading of
+  configuration file``; ``observability:no-wait``: no other service requires or is ordered
+  after either; ``observability:egress``: the output-chain rules the sinks (or the proxy)
+  asked for are loaded (``nft list chain``);
 - ``hardening:UNIT``: ``systemd-analyze security UNIT`` under the preset's ceiling
   (:data:`~tundravm.declarative.systemd.CEILINGS`), for a service whose sandbox is exactly
   a preset;
@@ -46,13 +55,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlsplit
 
 from tundravm.models import ServiceSpec, unit_name
 
 from . import execution
 
 if TYPE_CHECKING:
-    from tundravm.declarative.model import Declaration, EgressRule
+    from tundravm.declarative.model import Declaration, EgressRule, Firewall
 
 UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
@@ -84,7 +94,19 @@ SYMBOLS: dict[str, str] = {
 
 Verdict = Literal["ok", "fail", "skip"]
 Helper = Literal[
-    "service", "active", "port", "volume", "egress", "hardening", "symbols", "modules", "keys"
+    "service",
+    "active",
+    "port",
+    "volume",
+    "egress",
+    "upload",
+    "agent",
+    "nowait",
+    "rules",
+    "hardening",
+    "symbols",
+    "modules",
+    "keys",
 ]
 
 
@@ -169,10 +191,13 @@ def derive(
         Check("mode", f"{execution.MODE_FILE} says simulated or tdx", ""),
         Check("rtmr", "RTMR0..2 against measurements.json (skipped: needs a quote)", ""),
     ]
+    firewall = next((i for i in items if isinstance(i, Firewall) and i.egress == "filter"), None)
+    exporters, observed = _observability(items, firewall)
     hardened: list[Check] = []
     for item in items:
         if isinstance(item, Service) and item.enabled:
-            checks += _service(item)
+            if unit_name(item.name) not in exporters:
+                checks += _service(item)
             sandbox = item.sandbox
             found = None if sandbox is None or item.name.endswith("@") else ceiling(sandbox)
             if found is not None:
@@ -223,7 +248,6 @@ def derive(
                     ("runtime-init.service",),
                 )
             )
-    firewall = next((i for i in items if isinstance(i, Firewall) and i.egress == "filter"), None)
     if firewall is not None:
         denied = _denied(firewall.egress_rules)
         if denied is not None:
@@ -237,6 +261,7 @@ def derive(
                     ("nftables.service",),
                 )
             )
+    checks += observed
     checks += hardened
     off = sorted(option for option in set(kernel_off) if option in SYMBOLS)
     if off:
@@ -302,6 +327,97 @@ def _service(item: object) -> list[Check]:
             (unit, f"{stem}-ready.service"),
         )
     ]
+
+
+def _observability(
+    items: Sequence[Declaration], firewall: Firewall | None
+) -> tuple[frozenset[str], list[Check]]:
+    """The exporters an ``Observability`` renders among *items*, and their checks: each
+    running (or retrying a sink), its configuration taken by the program itself, no service
+    waiting on it and, with a filtering *firewall*, the rules its sinks asked for loaded."""
+    from tundravm.components._observability import LOGS_SERVICE, METRICS_SERVICE
+    from tundravm.declarative._network import egress_match
+    from tundravm.declarative.model import Service
+
+    logs_unit, metrics_unit = unit_name(LOGS_SERVICE), unit_name(METRICS_SERVICE)
+    services = {
+        unit_name(item.name): item
+        for item in items
+        if isinstance(item, Service) and item.enabled and not item.name.endswith("@")
+    }
+    found = {unit: s for unit, s in services.items() if unit in (logs_unit, metrics_unit)}
+    if not found:
+        return frozenset(), []
+    checks: list[Check] = []
+    units = list(found)
+    logs = found.get(logs_unit)
+    if logs is not None:
+        unit = logs_unit
+        url = _flag(logs.exec_start, "--url")
+        state = _flag(logs.exec_start, "--save-state")
+        proxy = logs.env.get("https_proxy" if url.startswith("https:") else "http_proxy")
+        port = _port(proxy or url)
+        checks.append(
+            Check(
+                f"observability:{unit}",
+                f"{unit} is active or retrying; systemd-journal-upload streams to {url}, "
+                "or names it failing",
+                f"probe_upload {unit} {_quote(url)} {state} {port}",
+                "upload",
+                (unit,),
+            )
+        )
+    metrics = found.get(metrics_unit)
+    if metrics is not None:
+        unit = metrics_unit
+        config = _flag(metrics.exec_start, "--config.file")
+        checks.append(
+            Check(
+                f"observability:{unit}",
+                f"{unit} is active; Prometheus takes {config} (promtool, else its log)",
+                f"probe_agent {unit} {config}",
+                "agent",
+                (unit,),
+            )
+        )
+    others = [unit for unit in services if unit not in found]
+    checks.append(
+        Check(
+            "observability:no-wait",
+            f"no service waits on {', '.join(units)}",
+            " ".join(["probe_nowait", *units, "--", *others]),
+            "nowait",
+            tuple(units),
+        )
+    )
+    rules = [
+        rule
+        for rule in (() if firewall is None else firewall.egress_rules)
+        if any(who == "observability" for who, _ in rule.origins)
+    ]
+    if rules:
+        checks.append(
+            Check(
+                "observability:egress",
+                f"the output chain accepts {', '.join(map(str, rules))} (the sinks' egress)",
+                " ".join(["probe_rules", *(_quote(egress_match(rule)) for rule in rules)]),
+                "rules",
+                ("nftables.service",),
+            )
+        )
+    return frozenset(found), checks
+
+
+def _port(url: str) -> int:
+    """The TCP port *url* connects to."""
+    parts = urlsplit(url)
+    return parts.port or (443 if parts.scheme == "https" else 80)
+
+
+def _flag(argv: str | Sequence[str], name: str) -> str:
+    """The value of ``NAME=VALUE`` in *argv*."""
+    words = argv.split() if isinstance(argv, str) else argv
+    return next(word.partition("=")[2] for word in words if word.startswith(f"{name}="))
 
 
 def _denied(rules: Sequence[EgressRule]) -> tuple[str, int] | None:
@@ -453,6 +569,131 @@ probe_egress() {
         *"not permitted"*) ok "refused by the output chain (Operation not permitted)" ;;
         *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
     esac
+}
+""",  # noqa: E501
+    "upload": f"""\
+probe_upload() {{
+    hex=$(printf '%04X' "$4")
+    waited=0
+    while :; do
+        state=$(systemctl show -P ActiveState "$1")
+        if [ "$state" = active ] && grep -q '^LAST_CURSOR=' "$3" 2>/dev/null; then
+            ok "active, uploaded to $2 (its cursor is in $3)"
+            return
+        fi
+        sockets=" "
+        for fd in /proc/"$(systemctl show -P MainPID "$1")"/fd/*; do
+            link=$(readlink "$fd" 2>/dev/null) || continue
+            case $link in socket:\\[*\\]) link=${{link#socket:[}} sockets="$sockets${{link%]}} " ;; esac
+        done
+        for table in /proc/net/tcp /proc/net/tcp6; do
+            [ "$state" = active ] && [ -r "$table" ] || continue
+            while read -r _ _ remote st _ _ _ _ _ inode _; do
+                case $sockets in *" $inode "*) ;; *) continue ;; esac
+                if [ "$st" = 01 ] && [ "${{remote##*:}}" = "$hex" ]; then
+                    ok "active, streaming to $2 (its connection to port $4 is open)"
+                    return
+                fi
+            done <"$table"
+        done
+        [ "$waited" -ge {WAIT_SECONDS} ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    sub=$(systemctl show -P SubState "$1")
+    said=$(journalctl -b -q -o cat -u "$1" 2>/dev/null | grep -F "Upload to $2" | tail -n 1)
+    case $state/$sub in
+        active/*) fail "active, but not connected to port $4 after {WAIT_SECONDS}s and nothing uploaded: systemd-journal-upload reads no journal${{said:+ ($said)}}; journalctl -u $1 says why" ;;
+        */auto-restart*)
+            if [ -n "$said" ]; then
+                ok "retrying every 5s: $said"
+            else
+                fail "restarting without trying $2: systemd-journal-upload refuses its arguments; journalctl -u $1 says why"
+            fi
+            ;;
+        *) fail "$state ($sub): an exporter retries an unreachable sink, it does not stop; journalctl -u $1 says why" ;;
+    esac
+}}
+""",  # noqa: E501
+    "agent": f"""\
+probe_agent() {{
+    if command -v promtool >/dev/null 2>&1; then
+        if ! said=$(promtool check config --agent --syntax-only "$2" 2>&1); then
+            fail "promtool check config --agent $2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
+            return
+        fi
+        parsed="promtool check config --agent accepts $2"
+    else
+        waited=0
+        while :; do
+            said=$(journalctl -b -q -o cat -u "$1" 2>/dev/null |
+                grep -E 'Completed loading of configuration file|Error loading config' | tail -n 1)
+            [ -n "$said" ] || [ "$waited" -ge {WAIT_SECONDS} ] && break
+            sleep 1
+            waited=$((waited + 1))
+        done
+        case $said in
+            *"Error loading config"*)
+                fail "Prometheus refuses $2: $said"
+                return
+                ;;
+            "")
+                fail "Prometheus logged no 'Completed loading of configuration file' in {WAIT_SECONDS}s: journalctl -u $1 says why"
+                return
+                ;;
+        esac
+        parsed="Prometheus loaded $2"
+    fi
+    state=$(systemctl show -P ActiveState "$1")
+    retry=$(journalctl -b -q -o cat -u "$1" 2>/dev/null | grep -F 'retrying' | tail -n 1)
+    if [ "$state" = active ]; then
+        ok "active, $parsed${{retry:+; retrying the sink: $retry}}"
+    else
+        fail "$state ($(systemctl show -P SubState "$1")): $parsed, but the agent does not run; journalctl -u $1 says why"
+    fi
+}}
+""",  # noqa: E501
+    "nowait": """\
+probe_nowait() {
+    exporters=
+    while [ "$1" != -- ]; do
+        exporters="$exporters $1"
+        shift
+    done
+    shift
+    waiting=
+    for exporter in $exporters; do
+        after=" $(systemctl show --value -p RequiredBy,RequisiteOf,BoundBy,Before "$exporter" | tr '\\n' ' ') "
+        for unit in "$@"; do
+            case $after in *" $unit "*) waiting="$waiting $unit ($exporter)" ;; esac
+        done
+    done
+    if [ -z "$waiting" ]; then
+        ok "$# services start without waiting on them"
+    else
+        fail "waiting:$waiting: nothing may wait on an exporter, whose sink can be away; drop it from that service's requires="
+    fi
+}
+""",  # noqa: E501
+    "rules": """\
+probe_rules() {
+    if ! command -v nft >/dev/null 2>&1; then
+        skip "no nft in the image"
+        return
+    fi
+    if ! chain=$(nft list chain inet filter output 2>&1); then
+        fail "nft list chain inet filter output: $(echo "$chain" | tail -n 1); systemctl status nftables.service"
+        return
+    fi
+    missing=
+    for rule in "$@"; do
+        case $chain in *"$rule accept"*) ;; *) missing="$missing, $rule" ;; esac
+    done
+    if [ -z "$missing" ]; then
+        ok "$# rules loaded"
+    else
+        fail "the output chain lacks ${missing#, }: nftables.service did not load /etc/nftables.conf; systemctl status nftables.service"
+    fi
 }
 """,  # noqa: E501
     "hardening": """\

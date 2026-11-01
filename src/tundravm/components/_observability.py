@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from tundravm._image._component import Component
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
-from tundravm._image._values import Egress, Package, egress_host
+from tundravm._image._values import Egress, File, Package, egress_host
 from tundravm.declarative import model as dm
 from tundravm.declarative.config import ConfigFile
 from tundravm.diagnostics import Rule
@@ -27,10 +27,32 @@ from tundravm.errors import ValidationError
 
 __all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite"]
 
+LOGS_SERVICE = "journal-export"
+"""The journal uploader's service."""
+
+METRICS_SERVICE = "metrics-export"
+"""The Prometheus agent's service."""
+
 METRICS_CONFIG = "/etc/tundravm/metrics-export.yml"
 """The Prometheus agent's configuration."""
 
 _NODE_EXPORTER_DEFAULTS = "/etc/default/prometheus-node-exporter"
+
+JOURNAL_ACCESS = "/usr/lib/tundravm/journal-access"
+"""What ``journal-export`` runs as root before the uploader: the journal's directories and
+files to the ``systemd-journal`` group the uploader runs in, the directories setgid so the
+files journald writes later stay in it. systemd's tmpfiles.d, which does this elsewhere, is
+not in the image, and ``systemd-tmpfiles-setup.service`` is masked."""
+
+_JOURNAL_ACCESS_SCRIPT = """\
+#!/bin/sh
+# tundravm Observability: the journal readable by the systemd-journal group.
+for directory in /run/log/journal /var/log/journal; do
+    [ -d "$directory" ] || continue
+    chgrp -R systemd-journal "$directory"
+    find "$directory" -type d -exec chmod g+rxs {} +
+done
+"""
 
 
 def _check_url(owner: object, url: object) -> None:
@@ -119,12 +141,13 @@ class JournalExport:
             argv += [f"--key={self.credential.path}", f"--cert={self.credential.path}"]
         url = _proxy_url(proxy)
         return Service(
-            "journal-export",
+            LOGS_SERVICE,
             argv,
             credentials=[] if self.credential is None else [self.credential],
             state="journal-export",
             groups=["systemd-journal"],
             environment={} if url is None else {"https_proxy": url, "http_proxy": url},
+            unit=dm.DropIn(exec_start_pre=(f"+/bin/sh {JOURNAL_ACCESS}",)),
         )
 
 
@@ -185,7 +208,7 @@ class PrometheusRemoteWrite:
     def service(self) -> Service:
         """The ``metrics-export`` service: Prometheus in agent mode."""
         return Service(
-            "metrics-export",
+            METRICS_SERVICE,
             [
                 "/usr/bin/prometheus",
                 "--enable-feature=agent",
@@ -254,6 +277,7 @@ class Observability(Component):
     def compose(self) -> Iterator[object]:
         if self.logs is not None:
             yield Package("systemd-journal-remote")
+            yield File(JOURNAL_ACCESS, _JOURNAL_ACCESS_SCRIPT, mode=0o755)
             # The packaged uploader reads /etc; ours runs from its own unit and arguments.
             yield dm.Unit("systemd-journal-upload.service", masked=True)
             yield self.logs.service(self.proxy)
