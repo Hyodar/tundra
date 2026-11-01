@@ -418,3 +418,17 @@ def test_a_built_kernel_refuses_modules_it_would_drop() -> None:
     source = Git("https://github.com/gregkh/linux", "v6.12.1")
     with pytest.raises(ValidationError, match="a built kernel has every driver built in"):
         Kernel("6.12.1", source, config=Path("kernel.config"), modules=["tdx_guest"])
+
+
+@pytest.mark.parametrize(
+    ("platform", "target", "reported"),
+    [("azure", "azure", True), ("gcp", "gcp", True), ("swtpm", "qemu", False)],
+)
+def test_volume_tpm_on_cloud_points_a_cloud_sealed_volume_at_an_attested_release(
+    platform: str, target: str, reported: bool
+) -> None:
+    seal = TpmSeal(platform=platform, pcrs=[7], recovery="none")  # type: ignore[arg-type]
+    volume = Volume("cache", mount="/cache", unlock=seal)
+    image = Image("x", volumes=[volume], targets=(target,))  # type: ignore[arg-type]
+    found = {d.code for d in plan(image, "production").lint()}
+    assert ("volume-tpm-on-cloud" in found) is reported

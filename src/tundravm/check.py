@@ -1323,6 +1323,16 @@ _REGISTRY: tuple[Rule, ...] = (
         "Give the delivery unit= (the unit that writes them) or ready_path= (a file it "
         "writes when done), and wait for it with needs=[delivery.ready].",
     ),
+    Rule(
+        "volume-tpm-on-cloud",
+        "info",
+        "A volume's key is sealed to a cloud's vTPM (Azure's paravisor, Google's "
+        "hypervisor), so the platform, not an attested release, decides who opens it; "
+        "today's key-gen binds no PCR.",
+        "Unlock it with OperatorKey() (an operator sends the key after attesting the "
+        "instance) or BrokerKey(url, audience=...) (a key broker does); keep TpmSeal when "
+        "that platform's vTPM is a boundary you accept.",
+    ),
     # ── components ──
     Rule(
         "rule-undeclared",

@@ -517,12 +517,11 @@ image = Image(
 
 ### Volumes
 
-`Volume(name, mount=, unlock=)` is a LUKS2 volume with ext4 inside. The image says its
-name, its mount point and how it unlocks. Its size and the disk are deployment
-configuration (`deploy --volume data=create:100GiB`). The image finds the disk by name
-through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order. It formats a volume only
-while it carries no initialisation token, so an unlock failure is never permission to
-format.
+`Volume(name, mount=, unlock=)` is a LUKS2 volume with ext4 inside. Its size and the disk
+are deployment configuration (`deploy --volume data=create:100GiB`). The image finds the
+disk by name through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order. It formats
+a volume only while it carries no initialisation token: an unlock failure never permits
+formatting.
 
 `unlock=` is the trust decision and has no default:
 
@@ -532,8 +531,9 @@ format.
 | `TpmSeal(platform=, pcrs=, recovery="none")` | a random key sealed to one stated vTPM: `azure`, `gcp` or `swtpm` | `key-gen` seals without a PCR policy today; `pcrs` is recorded, enforced in gate 3 |
 | `BrokerKey(url, audience=)` | a key broker releases the key after attestation | the pull client is gate 3; until then the image waits as for an operator |
 
-`TpmSeal` is refused for `targets=` that boot with another vTPM, since one payload boots on
-every target and a key sealed on one platform does not open on another.
+`TpmSeal` is refused for `targets=` that boot with another vTPM: one payload boots on every
+target, and a key sealed on one platform does not open on another. On a cloud it is a
+`volume-tpm-on-cloud` info: that platform's vTPM decides who opens it.
 
 `data.directory("raiko")` is a directory on the volume. A service binds it with
 `state=`, and the image creates it, owned by that service, once the volume is open. The

@@ -174,7 +174,11 @@ class _Lowering:
             for lowered in self.content(declaration)
         ]
         if runtime:
-            body.append(RuntimeFragment(RUNTIME_FRAGMENT, items=tuple(runtime)))
+            body.append(
+                RuntimeFragment(
+                    RUNTIME_FRAGMENT, items=tuple(runtime), checks=(self.runtime.check,)
+                )
+            )
         if image.kernel.built:
             body.append(self.kernel())
         body.extend(self.mkosi())

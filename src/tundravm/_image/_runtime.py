@@ -26,6 +26,7 @@ import shlex
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
+from tundravm._location import declared_at, display_location
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Dynamic, Hardening
 from tundravm.errors import ValidationError
@@ -34,7 +35,7 @@ from ._component import Component, composed
 from ._ingress import TLS, AttestedTLS
 from ._secrets import CREDENTIALS_DIRECTORY, RUNTIME_DIRECTORY, BrokerKey, Secret
 from ._service import Service
-from ._storage import OperatorKey, TpmSeal, Volume, VolumeDirectory
+from ._storage import TPM_PLATFORMS, OperatorKey, TpmSeal, Volume, VolumeDirectory
 from ._values import MANAGEMENT_PORT
 
 __all__ = [
@@ -183,6 +184,29 @@ class Runtime:
         return bool(self.secrets) or any(
             isinstance(volume.unlock, (OperatorKey, BrokerKey)) for volume in self.volumes
         )
+
+    def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
+        """``volume-tpm-on-cloud``: a volume sealed to a cloud's vTPM, whose trust boundary
+        is the platform's, where an operator or a broker could release the key instead."""
+        found: list[dm.Diagnostic] = []
+        for volume in self.volumes:
+            unlock = volume.unlock
+            if not isinstance(unlock, TpmSeal) or unlock.platform not in resolved.targets:
+                continue
+            found.append(
+                dm.Diagnostic(
+                    "volume-tpm-on-cloud",
+                    "info",
+                    f"volume {volume.name!r} unlocks with a key sealed to "
+                    f"{TPM_PLATFORMS[unlock.platform]}, and today's key-gen binds it to no PCR",
+                    subject=volume.name,
+                    location=display_location(declared_at(volume)),
+                    hint="To release the key only to an instance that attested, unlock it "
+                    "with OperatorKey() (an operator sends it each boot) or BrokerKey(url, "
+                    "audience=...) (a key broker does, unattended).",
+                )
+            )
+        return tuple(found)
 
     # ── Per service ──────────────────────────────────────────────────
 

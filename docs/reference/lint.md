@@ -81,6 +81,7 @@ Every code tundravm itself reports. `tundravm check --explain CODE` prints one r
 | `unit-section-invalid` | error | A unit has a section its type does not allow, which systemd ignores. | Move its directives to [Unit], [Install] or the unit type's own section. |
 | `unit-value-invalid` | error | A unit gives a directive a value it does not accept, so systemd keeps the default. | Use a value the directive accepts; the message names what is wrong with it. |
 | `user-group-undefined` | error | A user joins a group that nothing creates, so useradd fails during the build. | Declare the Group in the same profile, or drop it from the user's groups=. |
+| `volume-tpm-on-cloud` | info | A volume's key is sealed to a cloud's vTPM (Azure's paravisor, Google's hypervisor), so the platform, not an attested release, decides who opens it; today's key-gen binds no PCR. | Unlock it with OperatorKey() (an operator sends the key after attesting the instance) or BrokerKey(url, audience=...) (a key broker does); keep TpmSeal when that platform's vTPM is a boundary you accept. |
 
 ## Shipped components
 
