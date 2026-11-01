@@ -1,4 +1,4 @@
-"""``deploy upgrade``: plan 6.8's order, with a fake cloud, SSH session and validator."""
+"""``deploy upgrade``: plan 6.8's order, with a fake cloud, attested endpoint and validator."""
 
 from __future__ import annotations
 
@@ -12,13 +12,33 @@ from pathlib import Path
 import pytest
 
 from tests.cli.conftest import Cli
-from tests.cli.test_attest import PEER, FakeIssuer, FakeValidator, _tcp
+from tests.cli.test_attest import PEER, FakeValidator, _tcp
 from tests.cli.test_deploy import FakeCloud, cloud, prover_build  # noqa: F401 (fixtures)
-from tests.cli.test_secrets import FakeSsh
+from tests.cli.test_secrets import REGISTERS
 from tundravm import bootstrap, deployments
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK
 from tundravm.deploy.gcp import GcpDeployAdapter
+from tundravm.testing import FakeEndpoint
+from tundravm.testing._endpoint import FakeSession
+
+
+def _logged(endpoint: FakeEndpoint, order: list[str]) -> bootstrap.Connector:
+    """*endpoint*'s sessions, each POST recorded in *order*."""
+
+    def connect(host: str, port: int) -> FakeSession:
+        session = endpoint.connect(host, port)
+        request = session.request
+
+        def logged(method: str, path: str, body: bytes | None = None) -> tuple[int, bytes]:
+            if method == "POST":
+                order.append(f"endpoint {path}")
+            return request(method, path, body)
+
+        session.request = logged  # type: ignore[method-assign]
+        return session
+
+    return connect
 
 
 def test_upgrade_runs_the_replacement_in_order(
@@ -38,19 +58,14 @@ def test_upgrade_runs_the_replacement_in_order(
     assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     order: list[str] = []
-    ssh = FakeSsh(FakeIssuer())
-
-    def logged_ssh(argv: Sequence[str], stdin: bytes) -> subprocess.CompletedProcess[bytes]:
-        order.append(f"ssh {argv[-1].split()[0]}")
-        return ssh(argv, stdin)
+    endpoint = FakeEndpoint(platform="tdx", mode="tdx", registers=REGISTERS)
 
     def logged_cloud(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         if list(argv[:3]) == ["gcloud", "compute", "instances"] and argv[3] != "describe":
             order.append(f"gcloud {argv[3]}")
         return cloud(argv)
 
-    monkeypatch.setattr(bootstrap, "_run_ssh", logged_ssh)
-    monkeypatch.setattr(bootstrap, "_post", lambda url, body: 200)
+    monkeypatch.setattr(bootstrap, "_tls", _logged(endpoint, order))
     monkeypatch.setattr(deployments, "run_captured", logged_cloud)
     monkeypatch.setattr(
         deployments, "get_adapter", lambda target: GcpDeployAdapter(runner=logged_cloud)
@@ -83,11 +98,12 @@ def test_upgrade_runs_the_replacement_in_order(
     assert "upgraded prover-1 -> prover-2" in result.out
     steps = [line.split(" ", 1)[0] for line in result.out.splitlines() if line[:1].isdigit()]
     assert steps == ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]
-    assert order.index("gcloud create") < order.index("ssh socat")
-    assert order.index("ssh umask") < order.index("gcloud stop")
+    assert order.index("gcloud create") < order.index("endpoint /ssh-key")
+    assert order.index("endpoint /credentials") < order.index("gcloud stop")
     assert order.index("gcloud stop") < order.index("gcloud detach-disk")
     assert order.index("gcloud detach-disk") < order.index("gcloud attach-disk")
-    assert order.index("gcloud attach-disk") < order.index("ssh cat")
+    assert order.index("gcloud attach-disk") < order.index("endpoint /unlock")
+    assert endpoint.received == {"api-token": b"value"}
     old = json.loads((prover / ".tundravm/instances/prover-1/instance.json").read_text())
     new = json.loads((prover / ".tundravm/instances/prover-2/instance.json").read_text())
     assert old["state"] == "retired" and old["successor"] == "prover-2"
@@ -104,8 +120,8 @@ def test_a_candidate_that_does_not_attest_keeps_the_old_instance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:d").code == 0
-    monkeypatch.setattr(bootstrap, "_run_ssh", FakeSsh(FakeIssuer()))
-    monkeypatch.setattr(bootstrap, "_post", lambda url, body: 200)
+    endpoint = FakeEndpoint(platform="tdx", mode="tdx", registers=REGISTERS)
+    monkeypatch.setattr(bootstrap, "_tls", endpoint.connect)
     key = tmp_path / "op"
     key.write_text("k")
     key.with_name("op.pub").write_text("ssh-ed25519 " + base64.b64encode(bytes(51)).decode())

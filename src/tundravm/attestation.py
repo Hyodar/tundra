@@ -35,6 +35,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import secrets
 import socket
@@ -84,6 +85,9 @@ CHECKS_NOTE = (
 )
 TIMEOUT_S = 30.0
 SIMULATOR = "simulator"
+SIMULATOR_KEY = b"tundra-simulator-secret-key"
+"""The fixed HMAC key of tdxs's simulator issuer: its tag proves the structure of a
+simulated quote (the report data it carries), never where it came from."""
 ATTESTATION_SCHEMA = "tundravm.attestation/2"
 """The ``schema`` of the record :meth:`Attestation.save` (``attest --output``) writes.
 Version 2 adds the ``partial`` verdict: a version 1 record could say ``trusted`` without the
@@ -290,8 +294,8 @@ class Attestation:
     ``simulated``), read over the session; ``None`` when not read. The guest says it, so it
     can only make evidence ``simulated``, never the reverse."""
     instance_key: str | None = None
-    """The guest's instance public key (``/run/tundravm/instance-key.pub``), read over the
-    session; ``None`` when not read. The quote does not bind it yet (gate 3)."""
+    """The guest's instance public key (``/run/tundravm/instance-key.pub``) the attested
+    endpoint's quote binds; ``None`` without one (an issuer the operator relays)."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -379,7 +383,7 @@ class Attestation:
             "guest_mode": self.guest_mode,
             "instance_key": None
             if self.instance_key is None
-            else {"public": self.instance_key, "bound_to_quote": False},
+            else {"public": self.instance_key, "bound_to_quote": True},
             "issuer": self.issuer,
             "nonce": {
                 "value": self.nonce,
@@ -471,6 +475,7 @@ def attest(
     *,
     validator: str | None = None,
     nonce: str | bytes | None = None,
+    user_data: bytes = b"",
     allow_simulated: bool = False,
     accept_partial: bool = False,
     production: bool = False,
@@ -485,17 +490,21 @@ def attest(
     ``tcp://HOST:PORT``; both speak tdxs's JSON lines. *policy* is a file
     ``measure --export-policy`` wrote, or its dict; a placeholder policy is
     refused. *nonce* (hex or bytes; default 32 random bytes) must come back in
-    the quote's full 64-byte ``report_data``. With *validator* the document and
+    the quote's full 64-byte ``report_data``, with *user_data* (the attested endpoint's
+    binding: ``report_data`` is ``SHA-256(user_data || nonce)``). With *validator* the
+    document and
     nonce go to that tdxs validator, whose answer decides authenticity
     (``trusted``/``untrusted``); without it the verdict is
     ``measurements-match`` or ``measurements-mismatch``. Either needs MRTD, RTMR0,
     RTMR1 and RTMR2 each checked: a policy that cannot predict the platform registers
     (qemu, portable) needs its ``platform_approval``, else the verdict is ``partial``
     (*accept_partial* lets it pass). An azure policy is refused: its image measurements
-    are vTPM PCRs, which this path does not verify. A simulator issuer's
-    verdict is ``simulated`` at best; *allow_simulated* lets it pass. *production* checks
-    for a production build: simulated evidence never passes, and a quote of a TD with the
-    ``DEBUG`` attribute is ``untrusted``. *guest_mode* is what the guest's execution gate
+    are vTPM PCRs, which this path does not verify. A simulator issuer's quote is checked
+    for its structure only (its tag under :data:`SIMULATOR_KEY`), its registers are the
+    simulator's constants and are not compared, and its verdict is ``simulated`` at best;
+    *allow_simulated* lets it pass. *production* checks for a production build: simulated
+    evidence never passes, and a quote of a TD with the ``DEBUG`` attribute is
+    ``untrusted``. *guest_mode* is what the guest's execution gate
     recorded; ``simulated`` makes the evidence simulated.
     *transport* and *validator_transport* replace the network and *clock* the wall
     clock ``observed_at`` reads (tests; ``SOURCE_DATE_EPOCH`` is not honoured, since a
@@ -526,12 +535,12 @@ def attest(
     challenge = _nonce_bytes(nonce)
     observed = (clock or _now)().astimezone(UTC).strftime(TIME_FORMAT)
     send = transport if transport is not None else connect(issuer)
-    reply = _call(send, issuer, "issue", {"userData": "", "nonce": challenge.hex()})
+    reply = _call(send, issuer, "issue", {"userData": user_data.hex(), "nonce": challenge.hex()})
     encoded = str(reply.get("document") or "")
     document = _document(encoded, issuer)
     platform = str(document.get("platform") or "")
     raw = _b64(document.get("raw_quote"), "raw_quote")
-    wanted = report_data_for(b"", challenge)
+    wanted = report_data_for(user_data, challenge)
     meta: Mapping[str, object] | None = None
     if platform == SIMULATOR:
         meta = _call(send, issuer, "metadata", {})
@@ -542,7 +551,7 @@ def attest(
     if validator is not None:
         judge = validator_transport if validator_transport is not None else connect(validator)
         status, rejection, answer = _validate(judge, validator, encoded, challenge)
-    checks = _checks(expected, actual)
+    checks = _checks({} if platform == SIMULATOR else expected, actual)
     artifact = data.get("artifact")
     return Attestation(
         issuer=issuer,
@@ -560,7 +569,7 @@ def attest(
         allow_simulated=allow_simulated,
         accept_partial=accept_partial,
         document=encoded,
-        user_data="",
+        user_data=user_data.hex(),
         metadata=None if meta is None else dict(meta),
         validator_reply=answer,
         policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
@@ -590,6 +599,12 @@ def _measured(
     ``metadata`` and first 32 bytes (no attributes)."""
     if platform == SIMULATOR:
         # The simulator binds only the 32-byte hash; its padding is implicit.
+        tag = hmac.new(SIMULATOR_KEY, raw[:32], hashlib.sha256).digest()
+        if len(raw) != 64 or not hmac.compare_digest(raw[32:], tag):
+            raise MeasurementError(
+                f"The simulated quote from {endpoint} is malformed: its tag does not verify.",
+                hint="A simulator quote is the report data's 32 bytes and their HMAC tag.",
+            )
         registers = _metadata_registers(meta or {}, endpoint)
         return "metadata", None, registers, raw[:32] + bytes(32), False
     quote = parse_quote(raw)
@@ -866,7 +881,7 @@ def read_attestation(
             artifact = given.get("artifact")
             scheme = given.get("scheme")
     status, why, endpoint, reply, problems = _recorded_judgement(data.get("validator"))
-    checks = _checks(expected, actual)
+    checks = _checks({} if platform == SIMULATOR else expected, actual)
     derived = Attestation(
         issuer=str(data.get("issuer") or ""),
         platform=platform or "unknown",
@@ -1138,9 +1153,8 @@ def _signature_line(result: Attestation) -> str:
     return f"signature invalid ({result.validator}): {result.validator_error}"
 
 
-INSTANCE_KEY_NOTE = "not yet bound to the quote"
-"""What ``attest`` says beside the instance public key until tundra-tools binds it into the
-quote's ``report_data`` (gate 3)."""
+INSTANCE_KEY_NOTE = "bound to the quote"
+"""What ``attest`` says beside the instance public key: the endpoint's binding holds it."""
 
 
 def render_attestation(result: Attestation, fmt: str) -> str:
@@ -1186,6 +1200,7 @@ __all__ = [
     "ATTESTATION_SCHEMA",
     "CHECKS_NOTE",
     "REGISTERS",
+    "SIMULATOR_KEY",
     "TRUST_NOTE",
     "VERDICTS",
     "Attestation",

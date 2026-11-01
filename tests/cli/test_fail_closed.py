@@ -4,9 +4,8 @@ production build in a simulated instance gets nothing, whatever it answers.
 The negative tests of the release predicate that need no TDX host are here: simulation,
 partial coverage and every mode, build kind and verdict (``test_release_predicate``), and
 debug attributes (``test_production_delivery_refuses_debug_attributes``). A replayed
-quote fails the nonce check (``test_attest.py``); the replay and wrong-recipient-key tests
-of plan 6.3 need the attested endpoint's channel binding, which is gate 3's protocol in
-``tools/`` and does not exist yet.
+quote fails the nonce check (``test_attest.py``); relay, replay and wrong-key against the
+attested endpoint's channel binding are ``test_secrets.py::test_delivery_is_refused``.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ import pytest
 from tests.cli.conftest import Cli
 from tests.cli.test_attest import NONCE, PEER, UNAPPROVED, FakeIssuer, FakeValidator
 from tests.cli.test_attest import tdx_quote as quote_bytes
-from tests.cli.test_secrets import SIMULATED, TOKEN, FakeSsh
+from tests.cli.test_secrets import REGISTERS, SIMULATED, TOKEN
 from tundravm import bootstrap, instances
 from tundravm.attestation import (
     Attestation,
@@ -31,6 +30,7 @@ from tundravm.attestation import (
 )
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.testing import FakeEndpoint
 
 FAIL_CLOSED = (
     "a production build in a simulated instance is fail-closed: its services never "
@@ -193,16 +193,9 @@ def test_deliver_and_unlock_refuse_a_production_build_in_a_simulated_instance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Refused before the management port, SSH or the passphrase prompt is touched."""
-    ssh = FakeSsh(FakeIssuer("simulator"))
-    posted: list[str] = []
-
-    def post(url: str, body: bytes) -> int:
-        posted.append(url)
-        return 200
-
-    monkeypatch.setattr(bootstrap, "_run_ssh", ssh)
-    monkeypatch.setattr(bootstrap, "_post", post)
+    """Refused before the attested endpoint or the passphrase prompt is touched."""
+    endpoint = FakeEndpoint()
+    monkeypatch.setattr(bootstrap, "_tls", endpoint.connect)
     policy = tmp_path / "policy.json"
     policy.write_text(json.dumps(SIMULATED))
     token = tmp_path / "token.txt"
@@ -213,18 +206,18 @@ def test_deliver_and_unlock_refuse_a_production_build_in_a_simulated_instance(
     monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b"never asked\n")))
     unlock = cli("secrets", "unlock", production.id, "data")
     assert unlock.code == EXIT_SDK_ERROR and "fail-closed" in unlock.err
-    assert ssh.calls == [] and posted == []
+    assert endpoint.sessions == []
     events = [
         json.loads(line) for line in (production.path / "events.jsonl").read_text().splitlines()
     ]
     assert [event["event"] for event in events] == ["delivery-refused", "unlock-refused"]
 
 
-def test_attest_reads_the_guest_gate_mode_over_the_session(
+def test_attest_reads_the_guest_gate_mode_from_the_evidence(
     prover: Path, cli: Cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``attest`` takes ``/run/tundravm/mode`` from the guest; ``simulated`` there makes a
-    TDX instance's evidence simulated, which a production build never accepts."""
+    """The evidence carries ``/run/tundravm/mode``; ``simulated`` there makes a TDX
+    instance's evidence simulated, which a production build never accepts."""
     assert cli("lock").code == EXIT_OK
     assert cli("build").code == EXIT_OK
     build = Build.open((prover / "build/prover/latest-production").resolve())
@@ -233,22 +226,11 @@ def test_attest_reads_the_guest_gate_mode_over_the_session(
     )
     found.data["ports"] = {"8745": 18745, "22": 2222}
     found.save()
-
-    class Guest(FakeSsh):
-        def __call__(self, argv, stdin):  # type: ignore[no-untyped-def]
-            result = super().__call__(argv, stdin)
-            if "/run/tundravm/mode" in argv[-1]:
-                result.stdout = b"simulated\n"
-            return result
-
-    monkeypatch.setattr(bootstrap, "_run_ssh", Guest(FakeIssuer()))
-    monkeypatch.setattr(bootstrap, "_post", lambda url, body: 200)
-    key = tmp_path / "operator"
-    key.write_text("private\n")
-    key.with_name("operator.pub").write_text("ssh-ed25519 AAAA op@example\n")
+    endpoint = FakeEndpoint(platform="tdx", mode="simulated", registers=REGISTERS)
+    monkeypatch.setattr(bootstrap, "_tls", endpoint.connect)
     policy = tmp_path / "peer.json"
     policy.write_text(json.dumps(PEER))
-    result = cli("attest", found.id, "--policy", policy, "--identity", key, "--json")
+    result = cli("attest", found.id, "--policy", policy, "--json")
     assert result.code != EXIT_OK
     report = json.loads(result.out)
     assert report["verdict"] == "simulated" and report["guest_mode"] == "simulated"

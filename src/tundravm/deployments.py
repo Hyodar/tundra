@@ -335,7 +335,6 @@ def upgrade(
             candidate,
             policy,
             credentials,
-            identity=identity,
             validator=validator,
             **bootstrap_options,
         )
@@ -367,7 +366,6 @@ def upgrade(
                 candidate,
                 name,
                 functools.partial(passphrases, name),
-                identity=identity,
                 validator=validator,
                 **bootstrap_options,
             )
@@ -436,7 +434,6 @@ def rollback(
             previous,
             policy,
             credentials,
-            identity=identity,
             validator=validator,
             **bootstrap_options,
         )
@@ -457,7 +454,6 @@ def rollback(
                 previous,
                 name,
                 functools.partial(passphrases, name),
-                identity=identity,
                 validator=validator,
                 **bootstrap_options,
             )
