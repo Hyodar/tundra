@@ -1077,15 +1077,16 @@ over your SSH key (`--identity`). The policy is a build's `measurements.json`, o
 
 | Verdict | Means |
 |---|---|
-| `trusted` | a `tdxs` validator (`--validator`) accepted the quote, the nonce is bound, and MRTD, RTMR0, RTMR1 and RTMR2 all matched |
+| `trusted` | a `tdxs` validator (`--validator`) accepted the quote, the nonce is bound, and MRTD and RTMR0 to RTMR2 all matched |
 | `partial` | nothing disagreed, but one of the four had no accepted value |
 | `measurements-match` | the registers matched; no validator checked the signature |
 | `measurements-mismatch` | a register or the nonce did not match; no validator checked |
-| `simulated` | the simulator: binding checked, registers not; simulated instances only |
+| `simulated` | the simulator: binding checked, registers not; its key is published |
 | `untrusted` | the validator rejected the quote, a validated quote did not match, or a production build's TD has the `DEBUG` attribute |
 
-An Azure policy is refused: the TDX quote on Azure measures its paravisor, and the image is
-measured into the vTPM.
+A dev build attests `simulated` by default: without TDX it takes the simulator
+issuer, which production never ships; `run status` and `run mode` name it. An Azure
+policy is refused: its quote measures the paravisor, not the image.
 
 ### Delivering secrets
 

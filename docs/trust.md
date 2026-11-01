@@ -37,8 +37,10 @@ How the last row works (plan 6.1):
   `tdx-evidence: refused: no TDX quote path` on the console, and systemd starts none of the
   gated services. There is no fallback.
 - In a development profile (`dev=`, `Profile(production=False)`), no quote path records
-  `simulated` and the services run. `attest` reads the mode over the session: `simulated`
-  makes the evidence simulated, and never the other way round.
+  `simulated`, the services run, and `tdxs` takes the `simulator` issuer the profile ships
+  beside the real one, so a dev build attests `simulated` under QEMU. A production profile
+  ships the real issuer only. `attest` reads the mode over the session: `simulated` makes
+  the evidence simulated, and never the other way round.
 - Not gated: boot tasks and probes, `Unit` declarations, mounts, `runtime-init` (keys,
   disks, secret delivery: the control plane) and the cloud glue. The console stays readable
   and the management port still answers on a refused boot.
@@ -117,7 +119,7 @@ with its nonce, once per value per boot.
 |---|---|---|
 | `tdx`, `gcp` | the session ends in a TD whose registers matched the policy; with `--validator`, a genuine quote (`trusted`) | without a validator, Intel's signature |
 | `azure` | nothing: `attest` refuses Azure policies | |
-| `simulator` | the binding and the quote's structure | where it runs: `simulated`, never production |
+| `simulator` | the binding and the quote's structure | what runs, or where: its key is published; `simulated`, never production |
 
 `AttestedTLS` still serves a certificate no quote vouches for, and no TDX host has run the
 protocol yet (gate 2).

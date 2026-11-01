@@ -307,7 +307,8 @@ The negative tests, one table each:
 | simulated in production | a production build on TDX answered with simulator evidence: nothing sent | |
 | debug attributes | a production build's TD with `DEBUG`: nothing sent | |
 
-The fixture's dev profile carries `Tdxs(issuer="simulator")` and a `Secrets` block on 8745
+The fixture's dev profile carries `Tdxs()`, which its profile starts with the simulator
+issuer under QEMU, and a `Secrets` block on 8745
 with one optional secret, so the probe gains `endpoint:8745` (evidence answers the nonce it
 was given) and `fixture-boot` runs, after `run --probe`, `attest fixture-1 --policy
 measurements.json` (verdict `simulated`, `known_hosts` written) and `secrets deliver
@@ -327,9 +328,16 @@ result is not recorded here.
   to the quote" until gate 3 binds it.
 - The gate's `tdx` branch has run only against stand-in paths. No TDX guest has booted a
   gated image (gate 2).
-- A dev profile on QEMU records `simulated`, but an `Image`'s `tdxs` still issues as `tdx`
-  and has no quote to give, so `attest` of a simulated `Image` fails at the issuer unless
-  the image configures the `simulator` issuer itself, as the fixture does.
+- ~~A dev profile on QEMU records `simulated`, but an `Image`'s `tdxs` still issues as
+  `tdx`~~: every development profile now ships the simulator issuer beside the real one and
+  `/usr/lib/tundravm/tdxs-issuer` picks by `/run/tundravm/mode`; the fixture's dev profile
+  holds a plain `Tdxs()`. Run `41323120051` on `ci/simulated-attest` (at `f088c32`) booted
+  it: the console says `tdxs-issuer: no TDX quote path; issuing simulated quotes`, `run mode`
+  says `issuer simulator`, the probe ends `21 ok, 0 fail, 1 skip` with `endpoint:8745 ok
+  listening, evidence answers nonce ...` (the check's pattern had lost its quotes and failed
+  on good evidence, run `41321005006`), `attest --policy measurements.json` answers
+  `verdict: simulated` with `reasons: simulated, platform-unverified, image-unverified` and
+  the note on what that does not prove, and `secrets deliver` writes `greeting-token`.
 - ~~`Image` builds are not booted in CI~~: since `tools-monorepo` the `templates` and
   `boot` jobs build and boot them from `tools/` (run `41311483505`); the first green `boot`
   is run `41313287454`.
