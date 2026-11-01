@@ -12,8 +12,11 @@ import pytest
 
 import tundravm
 from tests.helpers import REPO_ROOT
+from tundravm import File, Image, Package, Profile, Service
 from tundravm._reference import MODULES, lint_markdown
 from tundravm.check import RULES
+from tundravm.systemd import Every
+from tundravm.testing import plan
 
 PACKAGE = Path(tundravm.__file__).parent
 EXAMPLES = REPO_ROOT / "examples"
@@ -200,6 +203,9 @@ INTERNAL_MODEL = {
         r"\bUnitReady\b|(?<![\w.])Ready\(|\bRoot\(\)|\bDynamic\(\)"
     ),
     "Firewall(collect=, ssh=)": re.compile(r"\b(?:collect|ssh)=(?!=)"),
+    "File(stage, path), Package(name, role)": re.compile(
+        r"\bFile(?:Tree)?\(\w+, /|\bPackage\([\w.+-]+, \w+\)"
+    ),
     "an internal module path": re.compile(
         r"\btundravm\.(?:declarative|_(?!reference\b)\w+)\b|\b_(?:image|modules|units)\.[a-z_]+\b"
     ),
@@ -541,6 +547,8 @@ def test_lint_fixes_and_hints_name_the_public_api() -> None:
         "Wait for it with needs=[UnitReady(unit)] or Ready('disks').",
         "Run as user=Root() when the unit must.",
         "See tundravm._modules.init, or tundravm.declarative.utils.",
+        "profile 'dev' edits File(extra, /etc/motd), which it does not inherit",
+        "profile 'dev' removes Package(jq, runtime), which it does not inherit",
     ],
 )
 def test_internal_model_names_are_caught(text: str) -> None:
@@ -559,6 +567,23 @@ def test_internal_model_names_are_caught(text: str) -> None:
 )
 def test_public_spellings_pass_the_internal_model_guard(text: str) -> None:
     assert _internal(text) == []
+
+
+def test_resolve_messages_name_the_value_an_image_file_wrote() -> None:
+    motd = File.text("/etc/motd", "x\n")
+    ghost = Service("ghost", ["/usr/bin/ghost"])
+    tick = Service("tick", ["/usr/bin/tick"], timer=Every("1h"))
+    edit, removal = motd.ref.edit(mode=0o600), Package("jq").ref.remove()
+    profile = Profile(changes=[edit, ghost.ref.edit(user="www"), tick.ref.remove(), removal])
+    image = Image("x", profiles={"s": profile})
+    found = [d for d in plan(image, "s").lint() if d.code in ("edit-missing", "remove-missing")]
+    assert [d.subject for d in found] == [
+        "File('/etc/motd')",
+        "Service('ghost')",
+        "Service('tick')",
+        "Package('jq')",
+    ]
+    assert [what for d in found for what in _internal(d.message)] == []
 
 
 @pytest.mark.parametrize("code", PUBLIC_RULES)

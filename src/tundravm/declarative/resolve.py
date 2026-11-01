@@ -7,6 +7,7 @@ only for malformed input (unknown variants, ``inherits`` cycles).
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
@@ -131,10 +132,43 @@ def ref_identity(ref: Ref) -> Identity:
     return (ref.kind, *ref.identity)
 
 
+_SPOKEN_ALONE = {
+    "Debloat": "debloat",
+    "RuntimeTools": "runtime tools",
+    "Kernel": "Kernel",
+    "Firewall": "firewall",
+}
+"""How a message names a declaration a profile has at most one of."""
+
+
 def describe(ident: Identity) -> str:
-    """``Package(curl, runtime)`` for an identity."""
+    """The value an identity names, as an image file spells it: ``Service('app')`` for
+    the unit a service (or a scheduled one) lowers to, ``File('/etc/motd')``,
+    ``Tree('/srv/www')``, ``Package('curl')``, ``Volume('data')``, ``Mkosi`` for a setting;
+    what has no public spelling is named in words (``user 'app'``, ``unit ssh.socket``)."""
     kind, *key = ident
-    return f"{kind}({', '.join(key)})" if key else kind
+    if not key:
+        return _SPOKEN_ALONE.get(kind, kind.lower())
+    if kind in ("Service", "Task") and key[0].endswith(".service"):
+        return f"Service({key[0].removesuffix('.service')!r})"
+    if kind == "Unit":
+        return f"Service.packaged({key[0]!r})" if key[0].endswith(".service") else f"unit {key[0]}"
+    if kind in ("File", "Template"):
+        return f"File({key[1]!r})"
+    if kind == "FileTree":
+        return f"Tree({key[1]!r})"
+    if kind == "Package":
+        return f"Package({key[0]!r})"
+    if kind == "Disk":
+        return f"Volume({key[0]!r})"
+    if kind == "Setting":
+        return f"Mkosi(settings={{{key[1]!r}: ...}})"
+    if kind == "Build":
+        return f"source build {key[0]!r}"
+    if kind == "Mount":
+        return f"the mount at {key[0]}"
+    words = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", kind).lower()
+    return f"{words} {key[0]!r}"
 
 
 @dataclass(slots=True)
@@ -257,8 +291,8 @@ class _Resolution:
             if current is None:
                 self.report(
                     "edit-missing" if isinstance(change, Edit) else "remove-missing",
-                    f"profile {variant.name!r} {verb} {change.target}, which it does not inherit",
-                    subject=str(change.target),
+                    f"profile {variant.name!r} {verb} {describe(key)}, which it does not inherit",
+                    subject=describe(key),
                     at=change,
                 )
             elif isinstance(change, Edit):
@@ -267,8 +301,8 @@ class _Resolution:
                 except ValidationError as exc:
                     self.report(
                         "edit-invalid",
-                        f"profile {variant.name!r} edits {change.target}: {exc.args[0]}",
-                        subject=str(change.target),
+                        f"profile {variant.name!r} edits {describe(key)}: {exc.args[0]}",
+                        subject=describe(key),
                         at=change,
                     )
                     continue
@@ -477,8 +511,8 @@ def _check_references(state: _Resolution, items: Sequence[Declaration]) -> None:
             if ref_identity(ref) not in present:
                 state.report(
                     code,
-                    f"{describe(identity(item))} references {ref}, which profile "
-                    f"{state.variant!r} does not declare",
+                    f"{describe(identity(item))} references {describe(ref_identity(ref))}, "
+                    f"which profile {state.variant!r} does not declare",
                     subject=item.ref.identity[-1],
                     at=item,
                 )

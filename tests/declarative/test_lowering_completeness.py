@@ -162,8 +162,8 @@ def _own_setting_beside_removals_and_standalones(config: Path) -> Recipe:
         (
             _own_settings_and_kernels,
             (
-                "'small' (it has its own Setting(Output, CompressOutput))",
-                "'unseeded' (it has its own Setting(Output, Seed))",
+                "'small' (it has its own Mkosi(settings={'CompressOutput': ...}))",
+                "'unseeded' (it has its own Mkosi(settings={'Seed': ...}))",
                 "'lts' (it has its own Kernel",
                 "'bare' (it has its own Kernel",
             ),
@@ -172,7 +172,7 @@ def _own_setting_beside_removals_and_standalones(config: Path) -> Recipe:
         ),
         (
             _own_setting_beside_removals_and_standalones,
-            ("'seeded' (it has its own Setting(Output, Seed))",),
+            ("'seeded' (it has its own Mkosi(settings={'Seed': ...}))",),
             ("'slim'", "'rescue'", "'ok'"),
             "make the profile an image of its own",
         ),

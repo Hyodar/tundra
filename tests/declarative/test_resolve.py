@@ -159,7 +159,7 @@ def test_changes_need_an_inherited_identity_and_valid_values() -> None:
     found = lint(recipe)
     assert codes(found) == ["edit-missing", "remove-missing", "edit-invalid"]
     assert found[0].message == (
-        "profile 'default' edits Unit(jq.service), which it does not inherit"
+        "profile 'default' edits Service.packaged('jq.service'), which it does not inherit"
     )
     assert "size 0 must be positive" in found[2].message
 
@@ -247,7 +247,7 @@ def test_a_service_and_a_unit_writing_one_unit_file_collide() -> None:
     [found] = lint(Recipe("r", items=(service, unit)))
     assert found.code == "unit-collision" and found.severity == "error"
     assert found.subject == "app.service"
-    assert "Unit(app.service) and Service(app.service)" in found.message
+    assert "Service.packaged('app.service') and Service('app')" in found.message
     first, second = (display_location(item.declared_at) for item in (service, unit))
     assert f"(declared at {first})" in found.message and found.location == second
     # A Unit that only controls the packaged unit (no text) writes no file.
@@ -279,7 +279,10 @@ def test_disk_and_secret_store_references() -> None:
     )
     found = tuple(d for d in lint(recipe) if d.code != "network-missing")  # the SSH key step
     assert codes(found) == ["disk-key-undefined", "secret-store-undefined"]
-    assert found[0].message == "Disk(d) references Key(k), which profile 'default' does not declare"
+    assert (
+        found[0].message
+        == "Volume('d') references key 'k', which profile 'default' does not declare"
+    )
     # A ref names the identity: another Key("k") value is the one the disk uses.
     other = Recipe("r", items=(Key("k", output="/run/other"), disk, Secrets(store=disk)))
     resolved = resolve(other, variant="default")

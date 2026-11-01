@@ -170,7 +170,7 @@ def test_payload_has_source_builds_only_when_declared() -> None:
 def test_duplicate_source_build_name_is_rejected() -> None:
     recipe = _recipe(_build(), _build("dev"))
     found = lint(recipe)
-    assert [(d.code, d.subject) for d in found] == [("identity-collision", "Build(tool)")]
+    assert [(d.code, d.subject) for d in found] == [("identity-collision", "source build 'tool'")]
     with pytest.raises(ValidationError, match="identity-collision"):
         lower(recipe)
 

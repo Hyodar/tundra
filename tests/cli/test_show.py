@@ -66,7 +66,7 @@ def test_show_json_has_the_sections_show_prints(project: Path, cli: Cli) -> None
 def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli) -> None:
     payload = json.loads(cli("show", "demo.py", "--json").out)
     rows = {row["declaration"]: row["origins"] for row in payload["provenance"]["production"]}
-    (origin,) = rows["File(extra, /srv/www/index.html)"]
+    (origin,) = rows["File('/srv/www/index.html')"]
     assert origin["action"] == "declared" and origin["location"].startswith("demo.py:")
     assert (origin["profile"], origin["components"]) == ("image", [])
 

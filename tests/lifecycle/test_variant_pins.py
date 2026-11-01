@@ -46,7 +46,7 @@ def _resolve(source: object) -> str:
 
 def test_a_variant_cannot_build_another_source_of_a_payload_build() -> None:
     other = Variant("dev", changes=(STABLE.ref.edit(source=Git(URL, "dev")),))
-    with pytest.raises(ValidationError, match=r"'dev' \(it replaces Build\(app\)\)"):
+    with pytest.raises(ValidationError, match=r"'dev' \(it replaces source build 'app'\)"):
         lower(_recipe(other))
 
 

@@ -294,7 +294,7 @@ def test_a_profile_edits_a_service_by_its_public_keywords(
         ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
         ("db", {"readiness": None}, "requires 'db.service', which declares no readiness"),
         ("db", None, "requires 'db.service', which the profile removes"),
-        ("ghost", {"user": "www"}, "edits Service(ghost.service), which it does not inherit"),
+        ("ghost", {"user": "www"}, "edits Service('ghost'), which it does not inherit"),
     ],
 )
 def test_what_a_service_edit_still_refuses(

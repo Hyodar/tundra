@@ -226,7 +226,7 @@ def _stale() -> dict[str, Diagnostic]:
         ),
         (lambda: "Bound(port=9090)" in _stale()["other"].message, True),
         (
-            lambda: "changes File(extra, /etc/bound.port) inside it" in _stale()["edited"].message,
+            lambda: "changes File('/etc/bound.port') inside it" in _stale()["edited"].message,
             True,
         ),
     ],
