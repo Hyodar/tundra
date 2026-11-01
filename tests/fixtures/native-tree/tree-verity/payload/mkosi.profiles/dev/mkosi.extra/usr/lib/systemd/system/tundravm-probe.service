@@ -1,6 +1,6 @@
 [Unit]
 Description=Check what this profile's declarations promise
-After=tdx-evidence.service greeter.service greeter-ready.service web.service web-ready.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service
+After=tdx-evidence.service greeter.service greeter-ready.service web.service web-ready.service tick.timer nftables.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service
 
 [Service]
 Type=oneshot

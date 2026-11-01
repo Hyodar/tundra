@@ -196,6 +196,7 @@ def test_tree_has_the_native_shape() -> None:
         "payload/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.postinst.d/50-postinst.sh",
         "payload/mkosi.profiles/dev/mkosi.conf",
+        "payload/mkosi.profiles/dev/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.profiles/dev/mkosi.postinst.d/50-postinst.sh",
     ]
     for script in (
@@ -337,9 +338,15 @@ def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
 
 
 def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
+    """The overlay adds SSH and the egress-filtering firewall, with the firewall's modules."""
     dev = FIXTURE / "tree-initramfs/payload/mkosi.profiles/dev"
+    modules = "".join(
+        f"    {m}\n" for m in ("crc32c_generic", "nf_tables", "nft_ct", "nft_reject_inet")
+    )
     assert (dev / "mkosi.conf").read_text(encoding="utf-8") == (
-        "[Output]\nImageId=%i-dev\n\n[Content]\nPackages=\n    openssh-server\n"
+        "[Output]\nImageId=%i-dev\n\n[Content]\nKernelModules=\n"
+        + modules
+        + "Packages=\n    nftables\n    openssh-server\n"
     )
     keys = (dev / "mkosi.extra/etc/ssh/authorized_keys.d/root").read_text(encoding="utf-8")
     assert keys.startswith("ssh-ed25519 ")

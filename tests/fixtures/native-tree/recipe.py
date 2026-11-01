@@ -17,7 +17,8 @@ the half the derived boot probe cannot be: it runs in the production profile, wh
 no ``tundravm-probe.service``, and it reads what no declaration states (the root's layers,
 the built programs). The ``dev`` profile's derived probe checks the rest (``web`` and
 ``greeter`` active and sandboxed, :data:`WEB_PORT` bound, the curated modules, the SSH host
-key) and CI's ``fixture-boot`` job runs it with ``tundravm run --probe``.
+key, a refused egress datagram, the ``tick`` timer) and CI's ``fixture-boot`` job runs it
+with ``tundravm run --probe``.
 """
 
 from __future__ import annotations
@@ -28,7 +29,10 @@ from typing import Literal
 from tundravm.declarative import (
     Debian,
     Declaration,
+    Every,
     File,
+    Firewall,
+    Fragment,
     Git,
     Hardening,
     Local,
@@ -142,6 +146,23 @@ class Web(Composite):
         )
 
 
+DEV = Fragment(
+    "dev",
+    items=(
+        SshAccess(authorized_keys=(DEV_KEY,)),
+        Firewall(egress="filter"),
+        Task(
+            "tick", "/usr/bin/true", description="A trivial scheduled job", schedule=Every("1min")
+        ),
+    ),
+)
+"""What the ``dev`` variant adds: SSH by public key, a firewall whose output chain allows
+nothing beyond DHCP (the fixture fetches nothing once built), and a scheduled job, so the
+derived probe boots its ``egress:`` and ``timer:`` checks. No ``Volume``: ``run`` attaches
+disks only for an ``Image``'s runtime manifest, and ``disk-setup`` builds from tundra-tools,
+which this fixture's CI job cannot read."""
+
+
 def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
     """The fixture recipe with the payload's root filesystem in *root*."""
     return Recipe(
@@ -161,7 +182,7 @@ def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
             Variant("default", outputs=("qemu",)),
             Variant("azure", outputs=("azure",)),
             Variant("gcp", outputs=("gcp",)),
-            Variant("dev", add=SshAccess(authorized_keys=(DEV_KEY,)), release=False),
+            Variant("dev", add=DEV, release=False),
         ),
     )
 

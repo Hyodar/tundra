@@ -1,0 +1,9 @@
+[Unit]
+Description=A trivial scheduled job
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

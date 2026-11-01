@@ -216,7 +216,8 @@
           }
         ],
         "FinalizeScripts": [
-          "<tree>/payload/mkosi.finalize.d/50-finalize.sh"
+          "<tree>/payload/mkosi.finalize.d/50-finalize.sh",
+          "<tree>/payload/mkosi.profiles/dev/mkosi.finalize.d/50-finalize.sh"
         ],
         "Firmware": "auto",
         "Format": "uki",
@@ -238,7 +239,11 @@
           "tdx_guest",
           "virtio_blk",
           "virtio_net",
-          "virtio_scsi"
+          "virtio_scsi",
+          "crc32c_generic",
+          "nf_tables",
+          "nft_ct",
+          "nft_reject_inet"
         ],
         "MachineId": null,
         "ManifestFormat": [
@@ -254,6 +259,7 @@
           "dmidecode",
           "kmod",
           "linux-image-amd64",
+          "nftables",
           "openssh-server",
           "passwd",
           "systemd",

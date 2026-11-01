@@ -29,6 +29,10 @@ probe_service() {
         fail "$state ($result): journalctl -u $1 says why"
     fi
 }
+probe_active() {
+    state=$(systemctl show -P ActiveState "$1")
+    if [ "$state" = active ]; then ok active; else fail "$state: $2"; fi
+}
 probe_port() {
     hex=$(printf '%04X' "$2")
     want=0A
@@ -49,6 +53,20 @@ probe_port() {
         waited=$((waited + 1))
     done
     fail "nothing listens on $2/$1 after 30s: the service must bind every port expose= names, or drop it from expose="
+}
+probe_egress() {
+    if ! command -v bash >/dev/null 2>&1; then
+        skip "no bash to send a datagram with"
+        return
+    fi
+    if said=$(bash -c 'printf x >"/dev/udp/$0/$1"' "$1" "$2" 2>&1); then
+        fail "a datagram to $1:$2/udp left the guest: the output chain does not drop it; systemctl status nftables.service, and check Network(egress=Egress(...))"
+        return
+    fi
+    case $said in
+        *"not permitted"*) ok "refused by the output chain (Operation not permitted)" ;;
+        *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
+    esac
 }
 probe_hardening() {
     if ! command -v systemd-analyze >/dev/null 2>&1; then
@@ -131,14 +149,18 @@ check=service:greeter.service
 probe_service greeter.service
 check=service:web.service
 probe_service web.service
+check=timer:tick.timer
+probe_active tick.timer 'the timer must be enabled; systemctl status names why it is not'
 check=port:8080/tcp
 probe_port tcp 8080
+check=egress:192.0.2.1:9
+probe_egress 192.0.2.1 9
 check=hardening:greeter.service
 probe_hardening greeter.service 2.5 static
 check=hardening:web.service
 probe_hardening web.service 2.5 static
 check=kernel:modules
-probe_modules crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
+probe_modules crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 say "done $passed ok $failed fail"
