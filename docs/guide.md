@@ -115,10 +115,10 @@ $ tundravm doctor --for build
 ## The attested node, stage by stage
 
 The example, `examples/attested-node/`, is an Ethereum node on Hoodi that signs its block
-responses inside the TD. Six stages under `stages/` build it up. Each stage is a
-complete image file that adds to the one before. The last is `image.py`, whose `mkosi/`
-tree is committed. [`dev`](#run) builds any stage's dev profile and boots it. It prints the
-boot probe, the checklist a dev build runs at boot ([The boot probe](#the-boot-probe)):
+responses inside the TD. Six stages under `stages/` build it up, each a complete image
+file adding to the one before. The last is `image.py`, whose `mkosi/` tree is committed.
+[`dev`](#run) builds any stage's dev profile, boots it and prints [the boot
+probe](#the-boot-probe), the checklist a dev build runs at boot:
 
 ```console
 $ tundravm dev examples/attested-node/stages/01-boot.py
@@ -983,7 +983,7 @@ $ tundravm verify latest --require-signature --allowed-signers allowed_signers
 
 It checks that the manifest is canonical, its id is its digest and its directory's name,
 every artifact, input and the tree hash to what it records, nothing else is there, and the
-UKI and root hash are the recorded ones. Each check is `ok`, `failed`, `missing` or
+UKI and root hash match. Each check is `ok`, `failed`, `missing` or
 `unchecked`. `--rebuild` builds the recorded inputs again and compares; it runs the
 project's code, so it is never implied.
 
@@ -1010,13 +1010,13 @@ $ tundravm run stop demo-1
 
 `dev` is `build --dev` then `run --mode simulated --probe`: the probe's table, then the
 console until Ctrl-C stops the instance. It reuses the latest development build while the
-image, the lock and its `Local` sources are unchanged, and says why it builds;
-`--no-follow` returns after the probe. `run` boots `qemu.raw` through OVMF from its ESP on
-a snapshot and forwards from `127.0.0.1` every TCP port the image accepts (8745 where the
-key delivery listens). `--mode simulated` boots without TDX (KVM when
-usable, else TCG), verdicts `simulated`; `--mode tdx` boots TDVF with a `tdx-guest`
+image, lock and `Local` sources are unchanged, and says why it builds; a rebuild reuses
+mkosi's base tree and compiler caches, never in production. `--no-follow` returns after the
+probe. `run` boots `qemu.raw` through OVMF from its ESP on a snapshot and forwards from
+`127.0.0.1` every TCP port the image accepts (8745 where the key delivery listens).
+`--mode simulated` boots without TDX (KVM when usable, else TCG), verdicts `simulated`; `--mode tdx` boots TDVF with a `tdx-guest`
 object, refused unless `doctor --for tdx` is ready. A production build boots `simulated`
-fail-closed: no service starts, and `run status` says so; a dev build runs its services.
+fail-closed: no service starts, `run status` says so; a dev build runs its services.
 
 The instance is `.tundravm/instances/<image>-<n>/`: `instance.json`,
 `events.jsonl` (one record per action, never a value), `console.log`, a sparse 16 GiB disk

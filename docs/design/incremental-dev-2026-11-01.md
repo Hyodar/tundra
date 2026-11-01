@@ -1,9 +1,9 @@
 # Incremental dev builds: where a dev rebuild's time goes
 
-Date: 2026-11-01. Status: section 1 is measured; section 2 records what landed, section 3
-the measured result. Scope: `tundravm dev`, the inner loop (edit the image file, build the
-dev profile, boot, probe). Today any change rebuilds the whole image from the Debian
-snapshot; the change is usually one service, one file or one Go program.
+Date: 2026-11-01. Status: measured. Section 1 is the cost before, section 2 what landed,
+section 3 the result. Scope: `tundravm dev`, the inner loop (edit the image file, build the
+dev profile, boot, probe). Before this change any change rebuilt the whole image from the
+Debian snapshot; the change is usually one service, one file or one Go program.
 
 ## 1. Before
 
@@ -48,5 +48,44 @@ those to the key itself (section 2).
 
 | Commit | What | Measured |
 |---|---|---|
+| a development build keeps mkosi's base tree in an incremental cache | `--incremental=yes` under `build/<image>/.work/.mkosi/incremental/`, `CacheKey=` extended with what mkosi's manifest leaves out; a production build carries no key and never names the directory | mkosi 1m41s to 13.9s on a one-line change |
+| a development build says what it reused from mkosi's cache | `cached:` or `caching:` next to `built`, `incremental` in the manifest and `show BUILD` | `caching: packages (Debian 20261018T082309Z, 165 packages) for the next build`, then `cached: ...` |
+| a development build keeps the Go and cargo caches in mkosi's build directory | `BuildDirectory=` under the cache, `GOCACHE` and cargo's `build.build-dir` in it | the three source builds take 2.5 s of the rebuild |
 
 ## 3. After
+
+Scratch run 41326359420 (branch `ci/incremental-dev`, job 124907144762, 2026-11-01 16:27),
+a temporary step in `fixture-boot` before its usual builds: `tundravm dev --no-follow` on a
+clean build root, a one-line change to the fixture (the timer's description), `dev
+--no-follow` again, then a third change built with `build --dev -v`. The time lines:
+
+```
+building: no dev build yet
+caching: packages (Debian 20261018T082309Z, 165 packages) for the next build
+time  checkouts 0.4s  prefetch 18.6s  mkosi 2m29s  measurements 1.6s  total 2m51s
+
+building: image changed
+cached: packages (Debian 20261018T082309Z, 165 packages)
+time  checkouts 0.0s  prefetch 0.1s  mkosi 13.9s  measurements 1.5s  total 16.8s
+```
+
+The first build is the workspace's first, so it also builds the tools tree and fetches
+the toolchains: its 2m29s of mkosi matches section 1's cold production build (2m27s), so
+storing the cache costs nothing measurable. The second is the inner loop: 1m44s before,
+16.8 s after, mkosi 1m41s to 13.9 s. The verbose third build (mkosi 13.5 s) splits it:
+
+| Step | Time |
+|---|---|
+| copy the cached tree and build overlay | 0.9 s |
+| the three source builds, restored from `build/` | 2.5 s |
+| extra trees and postinstall scripts | 2.1 s |
+| users, presets, kernel module filters | 1.6 s |
+| finalize scripts | 1.2 s |
+| cpio, zstd and the UKI | 2.8 s |
+| the main image: extra trees, repart, the ESP | 1.5 s |
+
+The same job's usual steps then built the production profile (mkosi 1m23s, no `cached:`
+line: it carries no key, so it never reads the dev cache) and the dev profile again (mkosi
+14.2 s, `cached:`). The run failed later, on the `run probe` step's `endpoint:8745`
+check, the nonce match that `fix: the probe's endpoint check matches the nonce in the
+evidence's JSON` corrected on master; the boot tests passed.

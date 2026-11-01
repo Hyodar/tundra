@@ -412,7 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile", default=None, metavar="P", help="The profile (default: production)."
     )
     which.add_argument(
-        "--dev", action="store_true", help="The dev profile (DevAccess): non-production."
+        "--dev",
+        action="store_true",
+        help="The dev profile (DevAccess): non-production, incremental.",
     )
     build.add_argument(
         "--target",
@@ -447,7 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--clean-cache",
         action="store_true",
-        help="Drop the image's workspace first (fetched sources, mkosi's tools tree and cache).",
+        help="Drop the image's workspace first (fetched sources, mkosi's tools tree, its caches).",
     )
     build.add_argument("-v", "--verbose", action="store_true", help="Echo mkosi's output.")
 
@@ -562,7 +564,9 @@ def build_parser() -> argparse.ArgumentParser:
         "build: the probe's table, then the console until Ctrl-C, which stops the instance\n"
         "and keeps the build. The latest development build is run as it is while nothing\n"
         "it was built from changed (the image, the lock, a Local source's content); one\n"
-        "line says which changed, or which build it reuses. Exit 1 on a failed check, 0\n"
+        "line says which changed, or which build it reuses. A build is incremental: mkosi\n"
+        "keeps the base tree and the compiler caches under build/, and the next build\n"
+        "says what it reused (`cached: packages (...)`). Exit 1 on a failed check, 0\n"
         "after the stop. --no-follow returns right after the probe, the instance running\n"
         "(scripts, CI); --mode tdx boots with TDX where `doctor --for tdx` is ready.",
         image,

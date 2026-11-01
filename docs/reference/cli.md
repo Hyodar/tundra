@@ -165,7 +165,7 @@ options:
   -h, --help        show this help message and exit
   --traceback       Raise errors with the Python traceback.
   --profile P       The profile (default: production).
-  --dev             The dev profile (DevAccess): non-production.
+  --dev             The dev profile (DevAccess): non-production, incremental.
   --target T[,T]    Build these of the image's targets= (default: all of them); qemu is always
                     built.
   --reproduce       Build again in an independent workspace and record the comparison; exit 1 when
@@ -173,8 +173,8 @@ options:
   --tree-only DIR   Only write the mkosi tree to DIR.
   --offline         No network: build only what the lock pins.
   --sign KEY        Sign the manifest with this SSH key.
-  --clean-cache     Drop the image's workspace first (fetched sources, mkosi's tools tree and
-                    cache).
+  --clean-cache     Drop the image's workspace first (fetched sources, mkosi's tools tree, its
+                    caches).
   -v, --verbose     Echo mkosi's output.
 
 loading the image file:
@@ -280,7 +280,9 @@ sources re-pinned, the report printed), then `run --mode simulated --probe` on t
 build: the probe's table, then the console until Ctrl-C, which stops the instance
 and keeps the build. The latest development build is run as it is while nothing
 it was built from changed (the image, the lock, a Local source's content); one
-line says which changed, or which build it reuses. Exit 1 on a failed check, 0
+line says which changed, or which build it reuses. A build is incremental: mkosi
+keeps the base tree and the compiler caches under build/, and the next build
+says what it reused (`cached: packages (...)`). Exit 1 on a failed check, 0
 after the stop. --no-follow returns right after the probe, the instance running
 (scripts, CI); --mode tdx boots with TDX where `doctor --for tdx` is ready.
 
