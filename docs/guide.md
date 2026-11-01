@@ -19,7 +19,7 @@ gate 3's `run --mode` separation. Gate 2 and the rest of gate 3 are not.
 
 | Area | State |
 |---|---|
-| The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds of the initramfs layout give identical digests |
+| The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds give identical digests, both layouts' `azure.vhd` included |
 | Building an `Image` in CI | needs the `TUNDRA_TOOLS_TOKEN` secret (see [CI](#ci)): every image builds tundra-tools, a private repository the CI token cannot read |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The twelve commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |

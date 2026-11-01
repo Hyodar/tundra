@@ -320,7 +320,9 @@ jobs:
     # Gate 1 and 5 evidence: the fixture's azure and gcp profiles each built twice through
     # tundravm, the second time in an independent workspace (`build --reproduce`: its own
     # sources, the Local crate copied again, mkosi state and tree); every artifact must
-    # match, which exits 1 otherwise.
+    # match, which exits 1 otherwise. The verity layout's azure profile is built twice too:
+    # its azure.vhd carries the erofs root and verity hash partitions, which verity-cloud
+    # checks are kept byte for byte but builds once.
     # The comparison is recorded in each build directory's observations.json, and each
     # build directory is then verified against its manifest.
     runs-on: ubuntu-24.04
@@ -351,6 +353,13 @@ jobs:
               --reproduce
             uv run tundravm verify latest
           done
+
+      - name: Lock, then build the verity layout's azure profile twice and compare
+        run: |
+          uv run tundravm lock tests/fixtures/native-tree/recipe.py --attr verity_recipe
+          uv run tundravm build tests/fixtures/native-tree/recipe.py --attr verity_recipe \
+            --profile azure --reproduce
+          uv run tundravm verify latest
 
       - name: Collect the manifests and the comparisons
         if: always()
