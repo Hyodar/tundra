@@ -92,7 +92,7 @@ from .state import (
     StateBuilder,
     inject_after_init,
 )
-from .utils import Backports, EfiStub, _snapshot_archive
+from .utils import Backports, EfiStub, _security_archive, _snapshot_archive
 
 BACKPORTS_SOURCES = "/etc/apt/sources.list.d/debian-backports.sources"
 """Where :class:`Backports` sources go in the build sandbox."""
@@ -656,8 +656,10 @@ def _kernel_base(kernel: Kernel, platform: Platform | None) -> dict[str, Any]:
             f"DebianConfig {base.version}: the platform pins no snapshot to fetch it from.",
             hint="Pass Debian(snapshot='20261018T082309Z') or DebianConfig(snapshot=...).",
         )
+    security = _security_archive(archive)
     return {
         "base_deb": base.url(_snapshot_archive(archive)),
+        "base_deb_mirrors": () if security is None else (base.security_url(security),),
         "base_deb_sha256": base.sha256,
         "base_member": base.member,
     }

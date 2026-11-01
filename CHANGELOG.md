@@ -64,7 +64,8 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.
 - The ESP is a fixed 128 MiB; a UKI over 126 MiB fails, naming `RootFS.verity()`.
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
-- `examples/nethermind_base.py`'s kernel config builds in every driver a target needs; a weekly workflow builds it and Debian's 6.12.111.
+- `examples/nethermind_base.py`'s kernel config builds in every driver a target needs; a weekly workflow builds it and Debian's newest 6.12 (6.12.113, from the security pool).
+- `DebianConfig` reads the snapshot's main pool, then its security pool, which alone carries a kernel shipped as a security update.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
 - `GoBinary` builds the module root unless `package=` names a sub-command.
 - **Breaking:** `Tdxs` and the volume and delivery tools build from `tools/` of this repository (`Git(url, sdk_commit, subdir="tools")`, or the checkout's `tools/` as a `Local`), not `Hyodar/tundra-tools` master; `Git(subdir=)` must name a directory of the commit.

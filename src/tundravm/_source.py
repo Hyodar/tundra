@@ -36,7 +36,7 @@ import tomllib
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -141,6 +141,8 @@ class HttpSource:
 
     url: str
     sha256: str | None = field(default=None, kw_only=True)
+    mirrors: tuple[str, ...] = field(default=(), kw_only=True)
+    """URLs of the same file, read in order when *url* answers 404 (the sha256 pins it)."""
 
     kind: Literal["http"] = field(default="http", init=False, repr=False)
 
@@ -2266,12 +2268,25 @@ def _git(source: GitSource, *args: str) -> None:
         )
 
 
+def _open(source: HttpSource) -> Any:
+    """The response of *source*'s url, else of the first mirror that does not answer 404."""
+    *first, last = (source.url, *source.mirrors)
+    for url in first:
+        try:
+            return urlopen(url, timeout=_NETWORK_TIMEOUT)
+        except HTTPError as exc:
+            exc.close()
+            if exc.code != 404:
+                raise
+    return urlopen(last, timeout=_NETWORK_TIMEOUT)
+
+
 def _download(source: HttpSource, pin: str, dest: Path) -> None:
     described = source.describe()
     file = dest / source.filename
     digest = hashlib.sha256()
     try:
-        with urlopen(source.url, timeout=_NETWORK_TIMEOUT) as response, file.open("wb") as out:
+        with _open(source) as response, file.open("wb") as out:
             while chunk := response.read(1 << 20):
                 digest.update(chunk)
                 out.write(chunk)
@@ -2392,7 +2407,7 @@ def _download_digest(source: HttpSource) -> str:
     """The sha256 of the file at *source*'s url."""
     described = source.describe()
     try:
-        with urlopen(source.url, timeout=_NETWORK_TIMEOUT) as response:
+        with _open(source) as response:
             return hashlib.sha256(response.read()).hexdigest()
     except HTTPError as exc:
         exc.close()

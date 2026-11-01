@@ -414,6 +414,8 @@ class Kernel:
     """A local base config: the start of the composed config (``config_file`` is the whole one)."""
     base_deb: str | None = None
     """The Debian ``linux-config`` package whose *base_member* is the base config."""
+    base_deb_mirrors: tuple[str, ...] = ()
+    """Where *base_deb* is read when its pool lacks it: the snapshot's security pool."""
     base_deb_sha256: str | None = None
     base_member: str | None = None
     options: tuple[tuple[str, str], ...] = ()

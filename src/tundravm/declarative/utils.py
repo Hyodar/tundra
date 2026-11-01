@@ -185,6 +185,11 @@ def _snapshot_archive(snapshot: str) -> str:
     return snapshot if "/" in snapshot else _join(_SNAPSHOT_ROOT, f"archive/debian/{snapshot}")
 
 
+def _security_archive(snapshot: str) -> str | None:
+    """The ``debian-security`` archive of a snapshot ID; ``None`` for an archive URL."""
+    return None if "/" in snapshot else _join(_SNAPSHOT_ROOT, f"archive/debian-security/{snapshot}")
+
+
 @component
 class EfiStub(Composite):
     """``systemd-boot-efi`` *version* from the Debian *snapshot*, for a pinned EFI stub.

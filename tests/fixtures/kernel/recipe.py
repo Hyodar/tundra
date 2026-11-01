@@ -38,10 +38,10 @@ from tundravm.declarative.utils import Composite
 
 SNAPSHOT = "20261018T082309Z"
 SEED = "0f6b1c2e-7a5d-4c3b-9e81-2d4a6b8c0e13"
-VERSION = "6.12.111"
-"""The stable release Debian trixie's ``linux`` 6.12.111-1 packages: the newest whose
-``linux-config-6.12`` :data:`SNAPSHOT`'s pool holds (6.12.113-1 is in the security pool
-only, which ``DebianConfig`` does not read)."""
+VERSION = "6.12.113"
+"""The stable release Debian trixie's ``linux`` 6.12.113-1 packages: the newest
+``linux-config-6.12`` at :data:`SNAPSHOT`, in its security pool only (the main pool has
+6.12.111-1)."""
 RELEASE = VERSION
 """What ``uname -r`` prints: Debian's config sets no ``CONFIG_LOCALVERSION``."""
 

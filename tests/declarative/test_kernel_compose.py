@@ -74,6 +74,10 @@ def test_debian_config_names_the_package_and_member() -> None:
     config = DebianConfig("6.12.48-1")
     assert config.url(f"https://snapshot.debian.org/archive/debian/{SNAPSHOT}") == DEB
     assert config.member == "./usr/src/linux-config-6.12/config.amd64_none_cloud-amd64.xz"
+    lowered = lower(_recipe(Kernel("6.12.48", SOURCE, base=config))).kernel
+    assert lowered is not None and lowered.base_deb == DEB
+    security = DEB.replace("/debian/", "/debian-security/").replace("/pool/", "/pool/updates/")
+    assert lowered.base_deb_mirrors == (security,)
     with pytest.raises(ValidationError, match="kernel ABI"):
         DebianConfig("6.12.48+deb13")
 

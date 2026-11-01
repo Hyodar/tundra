@@ -319,7 +319,9 @@ class Lowered:
             return {}
         found: dict[str, KernelFile] = {}
         if kernel.base_deb is not None:
-            source = HttpSource(kernel.base_deb, sha256=kernel.base_deb_sha256)
+            source = HttpSource(
+                kernel.base_deb, sha256=kernel.base_deb_sha256, mirrors=kernel.base_deb_mirrors
+            )
             found["kernel-config"] = KernelFile("kernel-config", source)
         for patch in kernel.patches:
             if patch.url is not None:

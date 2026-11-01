@@ -22,6 +22,7 @@ from tundravm.backends.base import MountSpec, Requirement
 from tundravm.declarative import (
     Build,
     Cargo,
+    DebianConfig,
     Dotnet,
     Git,
     Go,
@@ -872,6 +873,24 @@ def test_backends_pass_no_network_setting(tmp_path: Path) -> None:
     local = LocalLinuxBackend(privilege="none").arguments(request)
     lima = LimaMkosiBackend(cpus=2, memory="4GiB", disk="40GiB")._mkosi_args(request)
     assert not any(arg.startswith("--with-network") for arg in (*local, *lima))
+
+
+@pytest.mark.parametrize(
+    ("pools", "read"),
+    [(("main",), "main"), (("security",), "security"), (("main", "security"), "main")],
+)
+def test_a_debian_config_is_read_from_the_main_pool_then_the_security_pool(
+    tmp_path: Path, snapshot: tuple[str, str], pools: tuple[str, ...], read: str
+) -> None:
+    archive, _ = snapshot
+    config = DebianConfig("6.12.113-1")
+    urls = {"main": config.url(f"{archive}/main"), "security": config.security_url(archive)}
+    for pool in pools:
+        path = tmp_path / "www" / urls[pool].split("/", 3)[3]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(pool.encode())
+    source = _source.HttpSource(urls["main"], mirrors=(urls["security"],))
+    assert _source._download_digest(source) == hashlib.sha256(read.encode()).hexdigest()
 
 
 # ── EfiStub ──────────────────────────────────────────────────────────

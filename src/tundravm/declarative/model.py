@@ -2132,8 +2132,10 @@ class DebianConfig:
 
     *version* is the Debian ``linux`` package version (``apt-cache policy
     linux-config-6.12``); the config is ``config.<arch>_none_<flavor>.xz`` of
-    ``linux-config-<major.minor>`` in the pool of *snapshot* (default: the platform's).
-    ``tundravm lock`` pins the package's sha256, ``tundravm build`` downloads it on the host.
+    ``linux-config-<major.minor>`` in the pools of *snapshot* (default: the platform's):
+    the main pool first, then the security pool, which alone carries a kernel Debian ships
+    as a security update until the next point release. ``tundravm lock`` pins the package's
+    sha256, ``tundravm build`` downloads it on the host.
     """
 
     version: str
@@ -2171,11 +2173,16 @@ class DebianConfig:
         return f"./usr/src/linux-config-{self.series}/config.{self.arch}_none_{self.flavor}.xz"
 
     def url(self, archive: str) -> str:
-        """The package in the pool of the snapshot *archive* (an archive URL)."""
-        return (
-            f"{archive.rstrip('/')}/pool/main/l/linux/"
-            f"linux-config-{self.series}_{self.version}_{self.arch}.deb"
-        )
+        """The package in the main pool of the snapshot *archive* (an archive URL)."""
+        return f"{archive.rstrip('/')}/pool/main/l/linux/{self._deb}"
+
+    def security_url(self, archive: str) -> str:
+        """The package in the pool of the snapshot security *archive* (an archive URL)."""
+        return f"{archive.rstrip('/')}/pool/updates/main/l/linux/{self._deb}"
+
+    @property
+    def _deb(self) -> str:
+        return f"linux-config-{self.series}_{self.version}_{self.arch}.deb"
 
 
 @dataclass(frozen=True, slots=True)
