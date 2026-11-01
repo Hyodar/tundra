@@ -32,7 +32,7 @@ SECRET_ENV_DIRECTORY = "/run/secrets"
 """Where a service's ``SecretEnv`` values are delivered, one ``<service>.env`` file each."""
 _UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
-BUILTIN_SECRET_PROVIDER = "tundra-tools"
+BUILTIN_SECRET_PROVIDER = "tundravm"
 """The provider of a ``Secrets`` without ``delivery=``: ``secret-delivery`` from ``tools/``."""
 
 BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(

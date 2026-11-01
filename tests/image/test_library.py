@@ -40,7 +40,7 @@ from tundravm.testing import PlannedImage, plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
-MIRROR = Git("https://mirror.example/tundra-tools.git", "v1.2.0")
+MIRROR = Git("https://mirror.example/tools.git", "v1.2.0")
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 jwt = Secret("jwt")

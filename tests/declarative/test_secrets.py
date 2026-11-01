@@ -43,7 +43,7 @@ def test_external_delivery_validates_its_name_and_kinds() -> None:
     listed = ExternalDelivery("vault-agent", ["file"])  # type: ignore[arg-type]
     assert Secrets(delivery=listed).delivery == ExternalDelivery("vault-agent", ("file",))
     with pytest.raises(ValidationError, match="built-in provider's name"):
-        ExternalDelivery("tundra-tools")
+        ExternalDelivery("tundravm")
     with pytest.raises(ValidationError, match="supports must name 'file' and/or 'env'"):
         ExternalDelivery("vault-agent", ("ssh-key",))  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="supports must name"):

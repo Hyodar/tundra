@@ -338,7 +338,7 @@ def test_keep_modules_keeps_the_path_out_of_finalize() -> None:
 # j. secrets
 #
 # A Secret needs a delivery target, and the target needs a provider that writes it:
-# the built-in tundra-tools one provisions only the SSH key (secret-target-unsupported).
+# the built-in secret-delivery provisions only the SSH key (secret-target-unsupported).
 
 
 @pytest.mark.parametrize(

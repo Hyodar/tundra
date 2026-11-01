@@ -97,7 +97,7 @@ UNAPPROVED = policy(RTMR1=R1, RTMR2=R2)
 
 
 class FakeIssuer:
-    """Answers tdxs ``issue``/``metadata`` envelopes like ``tundra-tools`` tdxs does."""
+    """Answers tdxs ``issue``/``metadata`` envelopes like the ``tdxs`` of ``tools/`` does."""
 
     def __init__(self, platform: str = "tdx", **quote: object) -> None:
         self.platform = platform

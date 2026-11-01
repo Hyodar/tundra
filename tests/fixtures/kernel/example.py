@@ -1,9 +1,9 @@
 """The example's kernel: ``examples/nethermind_base.py``'s ``Kernel.build`` as a ``Recipe``.
 
-The example's ``Image`` builds the evidence service from tundra-tools, which CI cannot read,
-so this recipe declares the kernel it lowers to: gregkh/linux at the example's
-``KERNEL_VERSION`` with its config as the base and nothing else (``Kernel.build(config=)``
-adds only ``CONFIG_MODULES=n``), and the same ``BootProbe`` as
+The example's ``Image`` also builds the evidence service and the runtime tools from
+``tools/``, which a kernel boot needs none of, so this recipe declares the kernel it lowers
+to: gregkh/linux at the example's ``KERNEL_VERSION`` with its config as the base and nothing
+else (``Kernel.build(config=)`` adds only ``CONFIG_MODULES=n``), and the same ``BootProbe`` as
 :mod:`tests.fixtures.kernel.recipe`. CI's ``kernel`` workflow builds it as a second matrix
 entry, so the drivers check runs on the example's config as well as Debian's.
 """

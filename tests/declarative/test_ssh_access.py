@@ -19,7 +19,7 @@ from tundravm.declarative.utils import SshAccess, TeeBase
 from tundravm.errors import ValidationError
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample me@host"
-TOOLS = RuntimeTools(Git("https://github.com/Hyodar/tundra-tools", "a" * 40))
+TOOLS = RuntimeTools(Git("https://example.com/tools.git", "a" * 40))
 
 
 def _files(*items: object) -> dict[str, str]:

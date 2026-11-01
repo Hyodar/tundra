@@ -5,8 +5,8 @@ built in: this recipe declares that kernel directly, from Debian's own config fo
 release (``DebianConfig``, the ``cloud-amd64`` flavor, which ``tundravm lock`` pins) and
 :data:`FRAGMENT`, so the build records what ``olddefconfig`` does to Debian's ``=m`` drivers
 under ``CONFIG_MODULES=n`` and its drivers check proves every target's are built in. It is a
-``Recipe`` rather than an ``Image`` because an image builds the evidence service from
-tundra-tools, which CI cannot read.
+``Recipe`` rather than an ``Image`` because an image also builds the evidence service
+and the runtime tools from ``tools/``, which a kernel boot needs none of.
 
 The ``default`` variant has the qemu, azure and gcp outputs. ``BootProbe`` prints the
 kernel release, how many module files the root carries and which drivers and file systems

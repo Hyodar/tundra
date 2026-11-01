@@ -5,8 +5,8 @@ The negative tests of the release predicate that need no TDX host are here: simu
 partial coverage and every mode, build kind and verdict (``test_release_predicate``), and
 debug attributes (``test_production_delivery_refuses_debug_attributes``). A replayed
 quote fails the nonce check (``test_attest.py``); the replay and wrong-recipient-key tests
-of plan 6.3 need the attested endpoint's channel binding, which is tundra-tools' gate 3
-protocol and does not exist yet.
+of plan 6.3 need the attested endpoint's channel binding, which is gate 3's protocol in
+``tools/`` and does not exist yet.
 """
 
 from __future__ import annotations

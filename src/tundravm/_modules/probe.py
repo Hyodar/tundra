@@ -829,7 +829,7 @@ esac
 _RTMR = f"""\
 check=rtmr
 if [ "$mode" = {execution.TDX} ]; then
-    skip "the guest reads RTMR0..2 only from a quote, which tdxs (tundra-tools) makes; tundravm attest INSTANCE --policy FILE compares them with measurements.json"
+    skip "the guest reads RTMR0..2 only from a quote, which tdxs makes; tundravm attest INSTANCE --policy FILE compares them with measurements.json"
 else
     skip "no TDX: a simulated guest has no registers to compare with measurements.json"
 fi

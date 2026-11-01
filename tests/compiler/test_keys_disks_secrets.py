@@ -1,4 +1,4 @@
-"""Keys, disks and secrets lower to the tundra-tools builds, configs and runtime-init steps."""
+"""Keys, disks and secrets lower to the ``tools/`` builds, configs and runtime-init steps."""
 
 import json
 from collections.abc import Callable

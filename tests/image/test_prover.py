@@ -91,7 +91,7 @@ def test_the_prover_lints_clean_apart_from_unpinned_sources(prover_file: Path) -
 
 
 def test_the_prover_locks_without_the_network(prover_file: Path) -> None:
-    """Every tundra-tools build is the one pinnable evidence source the hermetic resolver
+    """Every build from ``tools/`` is the one pinnable evidence source the hermetic resolver
     pins; Raiko is the only other source."""
     recipe = recipe_of(tundravm.load(prover_file))
     pins = {"https://github.com/NethermindEth/raiko.git": "2" * 40}

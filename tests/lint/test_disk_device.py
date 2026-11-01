@@ -17,7 +17,7 @@ from tundravm.declarative import (
     lower,
 )
 
-TOOLS = RuntimeTools(Git("https://github.com/Hyodar/tundra-tools", "a" * 40))
+TOOLS = RuntimeTools(Git("https://example.com/tools.git", "a" * 40))
 KEY = Key("key_persistent", output="/run/keys/persistent")
 
 
