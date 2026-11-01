@@ -140,6 +140,9 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - Every code `check` reports is a registered rule with a severity, what it checks and how
   to fix it. `check --explain CODE ...` prints them, and a text report ends with the
   `--explain` command naming its codes.
+- `check`'s text report prints a finding several profiles share as one line naming them
+  (`[dev, production]`), and a hint consecutive findings share once after them. `--json`,
+  the GitHub annotations and the Markdown table keep one finding per profile and subject.
 - Where each removed verb went:
 
   | Removed | Now |

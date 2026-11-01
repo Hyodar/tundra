@@ -1643,19 +1643,38 @@ def _where(d: Diagnostic) -> str:
 
 
 def render(diagnostics: Sequence[Diagnostic]) -> str:
-    """Human-readable report, one line per finding plus a summary line."""
+    """Human-readable report, one line per finding plus a summary line.
+
+    A finding several profiles share is one line naming them (``[dev, production]``), and
+    a hint consecutive findings share follows the last of them, once.
+    """
     if not diagnostics:
         return "no findings"
+    merged = _merged(diagnostics)
     lines: list[str] = []
-    for d in diagnostics:
+    for index, (d, where) in enumerate(merged):
         subject = f" {d.subject}" if d.subject else ""
-        lines.append(f"{d.severity} {d.code} [{_where(d)}]{subject}: {d.message}")
+        lines.append(f"{d.severity} {d.code} [{where}]{subject}: {d.message}")
         if d.location:
             lines.append(f"    at: {d.location}")
-        if d.hint:
-            lines.append(f"    hint: {d.hint}")
+        following = merged[index + 1][0].hint if index + 1 < len(merged) else None
+        if d.hint and d.hint != following:
+            run = 1
+            while run <= index and merged[index - run][0].hint == d.hint:
+                run += 1
+            shared = f" (all {run} above)" if run > 1 else ""
+            lines.append(f"    hint{shared}: {d.hint}")
     lines.append(render_summary(diagnostics))
     return "\n".join(lines)
+
+
+def _merged(diagnostics: Sequence[Diagnostic]) -> list[tuple[Diagnostic, str]]:
+    """*diagnostics* in order, those that differ only in their profile as one, each with
+    the profiles it is in (``dev, production``)."""
+    groups: dict[Diagnostic, list[str]] = {}
+    for d in diagnostics:
+        groups.setdefault(replace(d, variant=""), []).append(_where(d))
+    return [(d, ", ".join(dict.fromkeys(where))) for d, where in groups.items()]
 
 
 def explain(codes: Sequence[str]) -> str:

@@ -486,6 +486,23 @@ def test_render_text_and_dict() -> None:
     }
 
 
+def test_render_joins_profiles_and_states_a_shared_hint_once() -> None:
+    def unpinned(name: str, profile: str) -> Diagnostic:
+        return Diagnostic("source-unpinned", "warning", name, name, profile, hint="lock")
+
+    found = [unpinned("a", "dev"), unpinned("b", "dev"), unpinned("a", "prod")]
+    found.append(Diagnostic("variant-empty", "info", "m", variant="prod", hint="drop it"))
+    assert render(found).splitlines() == [
+        "warning source-unpinned [dev, prod] a: a",
+        "warning source-unpinned [dev] b: b",
+        "    hint (all 2 above): lock",
+        "info variant-empty [prod]: m",
+        "    hint: drop it",
+        "0 errors, 3 warnings, 1 info",
+    ]
+    assert len(render_github(found, "image.py").splitlines()) == len(found) + 1
+
+
 def test_a_source_location_is_rendered_where_it_is_known() -> None:
     placed = Diagnostic("app-port", "warning", "port 80", variant="default", location="node.py:27")
     plain = Diagnostic("lock-stale", "warning", "w")
