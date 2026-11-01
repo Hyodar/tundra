@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
 from tundravm.backends.base import (
+    BUILD_DIRNAME,
     INCREMENTAL_DIRNAME,
     MountSpec,
     Requirement,
@@ -275,7 +276,8 @@ class LimaMkosiBackend:
             f"--output-directory={MKOSI_OUTPUT_DIR}",
         ]
         if request.cache_key is not None:
-            args.extend(incremental_args(request.cache_key))
+            build = f"{self.cache_dir(request)}/{BUILD_DIRNAME}"
+            args.extend(incremental_args(request.cache_key, build))
         if request.sources_dir is not None:
             # under the build directory, so the VM sees it through the same mount
             args.extend(

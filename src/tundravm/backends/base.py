@@ -150,11 +150,40 @@ separates cache entries."""
 
 CACHE_MANIFEST_SUFFIX = ".manifest"
 
+BUILD_DIRNAME = "build"
+"""``<incremental>/build``: mkosi's ``BuildDirectory=`` of a development build, kept across
+builds and bound at :data:`BUILDDIR` in every build script and ``mkosi-chroot``; under its
+``BuildKey=`` subdirectory the source hooks keep their artifact caches (``$BUILDDIR`` is
+their cache root once it exists), ``go`` its build cache and ``cargo`` its build
+directory. A production build sets no build directory, so its hooks cache in the build
+overlay mkosi discards."""
 
-def incremental_args(key: str) -> list[str]:
-    """The mkosi options that make a build incremental under *key* (``BakeRequest.cache_key``);
-    the cache directory itself is the backend's."""
-    return ["--incremental=yes", f"--cache-key={CACHE_KEY.format(key=key)}"]
+BUILDDIR = "/work/build"
+"""Where mkosi 27.1 binds ``BuildDirectory=`` for build scripts and inside ``mkosi-chroot``
+(``run_build_scripts``: ``BUILDDIR`` and ``CHROOT_BUILDDIR``)."""
+
+TOOLCHAIN_CACHES = (
+    ("GOCACHE", f"{BUILDDIR}/go-build"),
+    ("CARGO_BUILD_BUILD_DIR", f"{BUILDDIR}/cargo-build/{{workspace-path-hash}}"),
+)
+"""The compiler caches a development build keeps in the build directory, as the
+environment its build scripts and ``mkosi-chroot`` get: Go's build cache, and cargo's
+build directory (``build.build-dir``, cargo 1.91; the binary stays in ``target/``, where the
+hook installs it from; an older cargo ignores the variable). Each is passed with
+``PassEnvironment=`` too, so the payload subimage, whose hooks compile, inherits it."""
+
+
+def incremental_args(key: str, build_dir: str) -> list[str]:
+    """The mkosi options that make a build incremental under *key* (``BakeRequest.cache_key``)
+    with *build_dir* (a path as mkosi sees it) as its ``BuildDirectory=``; the cache
+    directory itself is the backend's."""
+    return [
+        "--incremental=yes",
+        f"--cache-key={CACHE_KEY.format(key=key)}",
+        f"--build-directory={build_dir}",
+        *(f"--environment={name}={value}" for name, value in TOOLCHAIN_CACHES),
+        *(f"--pass-environment={name}" for name, _ in TOOLCHAIN_CACHES),
+    ]
 
 
 def cache_manifests(

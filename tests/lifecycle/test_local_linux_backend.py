@@ -116,9 +116,10 @@ def test_only_a_keyed_request_builds_incrementally_and_from_its_own_cache_direct
     tmp_path: Path, cache_key: str | None, incremental: bool
 ) -> None:
     """A production request names no key: mkosi's cache directory is ``.mkosi/cache``
-    (repository metadata) and ``Incremental=`` stays off; a development request builds
-    with ``--incremental=yes`` under ``.mkosi/incremental`` and mkosi's cache key suffixed
-    with tundravm's."""
+    (repository metadata), ``Incremental=`` stays off and no build directory or compiler
+    cache persists; a development request builds with ``--incremental=yes`` under
+    ``.mkosi/incremental``, mkosi's cache key suffixed with tundravm's, its build directory
+    kept there, and Go's and cargo's caches in it, passed down to the payload subimage."""
     request = replace(_request(tmp_path), cache_key=cache_key)
 
     argv = LocalLinuxBackend().arguments(request)
@@ -127,7 +128,15 @@ def test_only_a_keyed_request_builds_incrementally_and_from_its_own_cache_direct
     assert f"--cache-directory={state / ('incremental' if incremental else 'cache')}" in argv
     assert ("--incremental=yes" in argv) is incremental
     assert (f"--cache-key=&d~&r~&a~&I~{cache_key}" in argv) is incremental
-    assert not any(arg.startswith("--cache-key") for arg in argv) or incremental
+    assert (f"--build-directory={state / 'incremental' / 'build'}" in argv) is incremental
+    assert ("--environment=GOCACHE=/work/build/go-build" in argv) is incremental
+    assert (
+        "--environment=CARGO_BUILD_BUILD_DIR=/work/build/cargo-build/{workspace-path-hash}" in argv
+    ) is incremental
+    assert ("--pass-environment=GOCACHE" in argv) is incremental
+    assert ("--pass-environment=CARGO_BUILD_BUILD_DIR" in argv) is incremental
+    for prefix in ("--cache-key", "--build-directory", "--environment", "--pass-environment"):
+        assert any(arg.startswith(prefix) for arg in argv) is incremental, prefix
 
 
 @linux_only

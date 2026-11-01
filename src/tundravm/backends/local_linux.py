@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Literal
 from tundravm._reporting import format_size
 from tundravm.backends.base import (
     BOOT_PAYLOAD_NAME,
+    BUILD_DIRNAME,
     INCREMENTAL_DIRNAME,
     MountSpec,
     Requirement,
@@ -226,7 +227,8 @@ class LocalLinuxBackend:
             f"--cache-directory={self.cache_dir(request)}",
         ]
         if request.cache_key is not None:
-            argv.extend(incremental_args(request.cache_key))
+            build = self.cache_dir(request) / BUILD_DIRNAME
+            argv.extend(incremental_args(request.cache_key, str(build)))
         if request.sources_dir is not None:
             argv.extend(
                 build_sources_args(
