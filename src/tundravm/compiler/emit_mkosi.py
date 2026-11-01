@@ -165,6 +165,14 @@ clusters and 126 MiB of data at this size, room for a UKI up to about 125 MiB (t
 fixture's initramfs UKI is about 65 MiB, its verity one 43 MiB, the templates' at most
 72 MiB). A larger UKI fails the disk's build (``mcopy``: disk full); ``RootFS.verity()``
 keeps the OS out of the UKI."""
+ESP_BYTES = 128 << 20
+""":data:`ESP_SIZE` in bytes."""
+ESP_CLUSTERS = 258078
+"""The data clusters (512 bytes each) mkfs.fat makes of :data:`ESP_SIZE` with
+:data:`ESP_MKFS_ENVIRONMENT`'s options."""
+UKI_CAPACITY = (ESP_CLUSTERS - 3) * 512
+"""The largest UKI the ESP holds: every cluster but the three of the root directory,
+``EFI/`` and ``EFI/BOOT/``."""
 ESP_PARTITION = f"""\
 [Partition]
 Type=esp

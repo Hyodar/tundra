@@ -3,17 +3,23 @@
 :class:`FakeMkosi` replaces ``invoke`` and ``needs_sudo`` on the adapter module, so a real
 backend runs its whole command construction, summary handling and artifact collection while
 nothing forks and nothing needs privileges: each call is recorded, ``summary --json``
-returns a canned payload and ``build`` writes placeholder outputs into the
-``--output-directory`` it was given.
+returns a canned payload and ``build`` writes small stand-ins into the
+``--output-directory`` it was given: a PE UKI (:func:`fake_uki`) the measurement replays,
+GPT disks (:func:`fake_disk`) and the GCP tarball around one, so a fake build measures,
+reports and diffs as a real one does.
 """
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
 import platform
 import shutil
+import struct
 import subprocess
 import sys
+import tarfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,10 +130,7 @@ class FakeMkosi:
             WRAPPER_OUTPUTS[t] for t in call.options("--dependency") if t in WRAPPER_OUTPUTS
         ]
         for name in (*self.outputs, *wrappers):
-            (directory / name).write_text(
-                f"fake mkosi build: {' '.join(call.options('--profile'))} output={name}\n",
-                encoding="utf-8",
-            )
+            (directory / name).write_bytes(_output(name, call.options("--profile")))
 
     def install(self, setattr: Callable[[object, str, object], None]) -> FakeMkosi:
         """Put this fake in place of the adapter's ``invoke`` and ``needs_sudo`` using
@@ -137,6 +140,87 @@ class FakeMkosi:
         setattr(_mkosi, "invoke", self.invoke)
         setattr(_mkosi, "needs_sudo", self.needs_sudo)
         return self
+
+
+_ALIGN = 0x200
+ESP_TYPE = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")
+"""The ESP's partition type GUID, as a GPT entry stores it."""
+
+
+def _aligned(size: int) -> int:
+    return (size + _ALIGN - 1) // _ALIGN * _ALIGN
+
+
+def fake_pe(sections: Sequence[tuple[str, bytes]]) -> bytes:
+    """A minimal valid PE32+ image holding *sections* (name, data), in file order."""
+    count = len(sections)
+    size_of_headers = _aligned(0x40 + 24 + 240 + 40 * count)
+    offset = size_of_headers
+    table = b""
+    body = b""
+    for name, data in sections:
+        raw = _aligned(len(data))
+        table += struct.pack(
+            "<8sIIIIIIHHI", name.encode(), len(data), offset, raw, offset, 0, 0, 0, 0, 0x40000040
+        )
+        body += data.ljust(raw, b"\0")
+        offset += raw
+    dos = b"MZ".ljust(0x3C, b"\0") + struct.pack("<I", 0x40)
+    coff = b"PE\0\0" + struct.pack("<HHIIIHH", 0x8664, count, 0, 0, 0, 240, 0x22)
+    optional = bytearray(240)
+    struct.pack_into("<H", optional, 0, 0x20B)
+    struct.pack_into("<I", optional, 60, size_of_headers)
+    struct.pack_into("<I", optional, 108, 16)
+    head = (dos + coff + bytes(optional) + table).ljust(size_of_headers, b"\0")
+    return head + body
+
+
+def fake_uki(cmdline: bytes = b"console=ttyS0", stub: int = 257) -> bytes:
+    """A UKI: stub text, ``.sdmagic``, ``.osrel``, ``.cmdline``, ``.initrd``, ``.linux`` (a PE)."""
+    linux = fake_pe([(".text", b"kernel")])
+    return fake_pe(
+        [
+            (".text", b"stub"),
+            (".sdmagic", f"#### LoaderInfo: systemd-stub {stub} ####".encode()),
+            (".osrel", b"ID=test\n"),
+            (".cmdline", cmdline),
+            (".initrd", b"initrd"),
+            (".linux", linux),
+        ]
+    )
+
+
+def fake_disk(disk_guid: bytes = b"\x12" * 16) -> bytes:
+    """The first 34 sectors of a GPT disk with one ESP entry."""
+    head = bytearray(34 * 512)
+    header = bytearray(92)
+    header[:8] = b"EFI PART"
+    header[56:72] = disk_guid
+    struct.pack_into("<II", header, 80, 128, 128)
+    head[512 : 512 + 92] = header
+    head[1024 : 1024 + 16] = ESP_TYPE
+    struct.pack_into("<QQ", head, 1024 + 32, 2048, 4095)
+    return bytes(head)
+
+
+def _output(name: str, profiles: Sequence[str]) -> bytes:
+    """What a fake build of *profiles* writes as *name*: a UKI whose command line names them,
+    a disk with a line naming them after its partition table, the GCP tarball around one,
+    and that line alone for anything else."""
+    line = f"fake mkosi build: {' '.join(profiles)} output={name}\n".encode()
+    if name.endswith(".efi"):
+        return fake_uki(f"console=ttyS0 fake.profiles={','.join(profiles)}".encode())
+    if name.endswith((".raw", ".vhd")):
+        return fake_disk() + line
+    if name.endswith(".tar.gz"):
+        disk = fake_disk() + line
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w", format=tarfile.GNU_FORMAT) as archive:
+            member = tarfile.TarInfo("disk.raw")
+            member.size = len(disk)
+            archive.addfile(member, io.BytesIO(disk))
+        return gzip.compress(buffer.getvalue(), mtime=0)
+    return line
 
 
 def _summary(call: FakeCall) -> dict[str, Any]:

@@ -48,7 +48,7 @@ from typing import Any, Literal, cast
 
 from . import __version__
 from . import manifest as mf
-from ._reporting import Reporter
+from ._reporting import Event, Reporter
 from ._source import SOURCES_DIRNAME, CargoBuild, GoBuild, SourceBuild, toolchain_record
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
@@ -300,6 +300,7 @@ def build(
     work = image_root / WORK
     started = time.monotonic()
     started_at = _now()
+    recorder = _Recorder(reporter)
     with _exclusive(image_root), tempfile.TemporaryDirectory(prefix="tundravm-lock-") as tmp:
         frozen = Path(tmp) / LOCK_NAME
         write_lock(locked, frozen)
@@ -312,10 +313,13 @@ def build(
             locked=locked,
             backend=None,
             build=work,
-            reporter=reporter,
+            reporter=recorder,
             lock_source=frozen,
             offline=offline,
         )
+        measuring = time.monotonic()
+        measurements = _measurements(artifacts)
+        recorder.phases["measurements"] = time.monotonic() - measuring
         reproduction = None
         if reproduce:
             reproduction = _reproduce(
@@ -332,6 +336,7 @@ def build(
                 project_sha256,
                 work,
                 artifacts,
+                measurements,
                 incoming,
                 ports,
             )
@@ -348,6 +353,8 @@ def build(
                 "runner": _runner(scoped.backend),
                 "lock_written": written,
                 "reproduction": reproduction,
+                "phases": recorder.durations(),
+                "sources": recorder.sources,
             }
             mf.write_canonical(incoming / mf.OBSERVATIONS, observations)
             _freeze(incoming)
@@ -358,6 +365,35 @@ def build(
                 _remove(incoming)
         _point(image_root / LATEST[kind], final)
     return Outcome(Build.open(final), created, written, reproduction)
+
+
+PHASES = {"fetch": "checkouts", "prefetch": "prefetch", "build": "mkosi"}
+"""The bake phases ``observations.json`` records the duration of, by the name it records."""
+
+
+class _Recorder:
+    """A reporter that forwards every event to *reporter* and keeps what the build report
+    reads from ``observations.json``: how long each phase of :data:`PHASES` took, and per
+    source whether its checkout and its dependency cache were fetched or found."""
+
+    def __init__(self, reporter: Reporter | None) -> None:
+        self._reporter = reporter
+        self.phases: dict[str, float] = {}
+        self.sources: dict[str, dict[str, str]] = {}
+
+    def emit(self, event: Event) -> None:
+        extra = event.extra
+        if event.kind == "phase" and extra.get("status") == "ok" and extra.get("phase") in PHASES:
+            name = PHASES[extra["phase"]]
+            self.phases[name] = self.phases.get(name, 0.0) + float(extra.get("duration_s", 0))
+        if "name" in extra and ("checkout" in extra or "deps" in extra):
+            found = self.sources.setdefault(extra["name"], {})
+            found.update({key: extra[key] for key in ("checkout", "deps") if key in extra})
+        if self._reporter is not None:
+            self._reporter.emit(event)
+
+    def durations(self) -> dict[str, float]:
+        return {name: round(seconds, 3) for name, seconds in self.phases.items()}
 
 
 def _current_lock(
@@ -538,6 +574,7 @@ def _assemble(
     project_sha256: str,
     work: Path,
     artifacts: Sequence[Artifact],
+    measurements: Mapping[str, Any],
     out: Path,
     ports: Sequence[int] = (),
 ) -> dict[str, Any]:
@@ -551,7 +588,6 @@ def _assemble(
             hint="Run the build with --verbose and read mkosi's output.",
             context={"workspace": str(work)},
         )
-    measurements = _measurements(artifacts)
     qemu = _with_package_manifest(by_target["qemu"])
     sbom_record = _sbom(qemu, locked, img, out)
     packages = _packages(qemu, out)

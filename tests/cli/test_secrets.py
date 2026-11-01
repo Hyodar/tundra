@@ -148,9 +148,20 @@ def test_attest_through_an_operator_relayed_issuer(
 
 
 def test_a_measurements_file_without_a_prediction_is_refused(
-    instance: instances.Instance, cli: Cli, key: Path, ssh: FakeSsh, posted: object
+    instance: instances.Instance,
+    cli: Cli,
+    key: Path,
+    ssh: FakeSsh,
+    posted: object,
+    tmp_path: Path,
 ) -> None:
-    measurements = instance.build.path / "measurements.json"
+    payload = json.loads((instance.build.path / "measurements.json").read_text())
+    payload["records"] = [
+        {"target": r["target"], "boot": r["boot"], "state": "unknown", "reason": "no GPT"}
+        for r in payload["records"]
+    ]
+    measurements = tmp_path / "measurements.json"
+    measurements.write_text(json.dumps(payload))
     result = cli("attest", instance.id, "--policy", measurements, "--identity", key)
     assert result.code == EXIT_SDK_ERROR
     assert "has no qemu disk prediction (unknown)" in result.err

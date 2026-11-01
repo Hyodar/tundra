@@ -44,7 +44,9 @@ class Event:
     output lines are ``log`` events with ``extra["source"] == "backend"``;
     forwarded :class:`StructuredLogger` records have ``source == "logger"``;
     a backend's informational notices (e.g. adding a tools tree) have
-    ``source == "notice"`` and are shown unless quiet.
+    ``source == "notice"`` and are shown unless quiet. A fetch's notices about one source
+    carry its lock name as ``extra["name"]`` and either ``extra["checkout"]`` (``fetched``,
+    ``copied`` or ``cached``) or ``extra["deps"]`` (the dependency prefetch's outcome).
     """
 
     kind: EventKind

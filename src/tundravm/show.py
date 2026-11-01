@@ -5,8 +5,9 @@ profile's packages, files, units, sources, kernel, what each declaration came fr
 default profile first and the others as declared), :func:`image_units` the unit
 files its tree holds and :func:`image_tree` the tree's files. For a build directory
 :func:`build_report` is its manifest read back with its provenance (inputs, toolchain,
-observations) and every guarantee the build does not give; ``--units``, ``--tree`` and
-``--measurements`` read the build's own ``tree/`` and ``measurements.json``.
+observations) and every guarantee the build does not give, led by :func:`report`, what
+``build`` prints at its end; ``--units``, ``--tree`` and ``--measurements`` read the build's
+own ``tree/`` and ``measurements.json``.
 
 :func:`diff_builds` compares two builds by what an operator approves: packages (mkosi's
 manifest), files and units (the trees), the boot payload (the UKI and the root hash), the
@@ -25,7 +26,10 @@ from typing import Any
 from . import manifest as mf
 from ._describe import describe, render
 from ._location import display_location
+from ._reporting import format_duration, format_size
+from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME
 from .builds import Build
+from .compiler.emit_mkosi import ESP_BYTES, UKI_CAPACITY
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
 from .declarative.model import Recipe
@@ -149,24 +153,137 @@ def _json(path: Path) -> dict[str, Any] | None:
 
 
 def build_report(build: Build) -> dict[str, object]:
-    """The manifest with the observations and the signature's presence (not its check)."""
+    """The manifest with the observations, the signature's presence (not its check) and the
+    build :func:`report`."""
     return {
         "path": str(build.path),
         "manifest": dict(build.manifest),
         "observations": _json(build.path / mf.OBSERVATIONS),
         "signed": (build.path / mf.SIGNATURE).is_file(),
+        "report": report(build),
     }
 
 
-def _toolchain(record: Mapping[str, Any]) -> str:
-    """A source's Go or Rust toolchain record, as ``show BUILD`` prints it."""
-    if record.get("state") == "missing":
-        return f"missing: {record.get('reason')}"
-    if record.get("sum"):
-        return f"{record.get('name')}  {record.get('sum')}"
-    if record.get("rustc"):
-        return f"{record.get('channel')}  {record.get('rustc')}"
-    return f"{record.get('name')} ({record.get('reason')})"
+REPORT_PHASES = ("checkouts", "prefetch", "mkosi", "measurements")
+"""The phases the report times, in the order a build runs them; ``total`` follows."""
+
+
+def report(build: Build) -> dict[str, Any]:
+    """What *build* fetched, made and took, read from its manifest and ``observations.json``.
+
+    ``artifacts``: the UKI and each target's disk with its size and sha256, the UKI with the
+    room the fixed ESP leaves it. ``sources``: each locked source with its ref, pin and the
+    Go or Rust toolchain its prefetch recorded, and whether this build fetched its checkout
+    and dependencies or found them (``-`` where the build directory does not say). ``time``:
+    seconds per phase and in total (``None`` for a phase that did not run).
+    """
+    m = build.manifest
+    observed = _json(build.path / mf.OBSERVATIONS) or {}
+    found = _mapping(observed.get("sources"))
+    index = m.get("artifacts") or {}
+    names = [
+        BOOT_PAYLOAD_NAME,
+        *(ARTIFACT_NAMES[t] for t in m.get("targets", ()) if t in ARTIFACT_NAMES),
+    ]
+    artifacts: list[dict[str, Any]] = []
+    for name in names:
+        record = index.get(name)
+        if not isinstance(record, dict) or "size" not in record:
+            continue
+        row: dict[str, Any] = {"name": name, "size": record["size"], "sha256": record["sha256"]}
+        if name == BOOT_PAYLOAD_NAME:
+            row["esp"] = {"size": ESP_BYTES, "left": UKI_CAPACITY - int(record["size"])}
+        artifacts.append(row)
+    sources = []
+    for source in m.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        state = found.get(str(source.get("name"))) or {}
+        sources.append(
+            {
+                "name": source.get("name"),
+                "kind": source.get("kind"),
+                "ref": source.get("ref"),
+                "pin": source.get("pin"),
+                "toolchain": _toolchain(source),
+                "checkout": state.get("checkout"),
+                "deps": _deps(state.get("deps")),
+            }
+        )
+    phases = _mapping(observed.get("phases"))
+    time = {name: phases.get(name) for name in REPORT_PHASES}
+    time["total"] = observed.get("duration_s")
+    return {"artifacts": artifacts, "sources": sources, "time": time}
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _toolchain(source: Mapping[str, Any]) -> str | None:
+    """The Go or Rust toolchain a source's prefetch recorded: the release (``go1.25.0``,
+    ``1.91.0``), ``local``/``debian`` when its source pins none, ``missing`` without one."""
+    for key in ("go_toolchain", "rust_toolchain"):
+        record = source.get(key)
+        if isinstance(record, dict):
+            if record.get("state") == "missing":
+                return "missing"
+            return str(record.get("channel") or record.get("name"))
+    return None
+
+
+def _deps(outcome: object) -> str | None:
+    """A dependency prefetch's outcome (``go: prefetched``, ``cargo: kept``, ``skipped (no
+    host go)``...) as the report's ``fetched``, ``cached``, ``skipped``, ``incomplete`` or
+    ``failed``."""
+    if not isinstance(outcome, str):
+        return None
+    if outcome.startswith(("skipped", "failed")):
+        return outcome.split(" ", 1)[0]
+    if ": incomplete" in outcome:
+        return "incomplete"
+    return "cached" if outcome.endswith(": kept") else "fetched"
+
+
+def render_report(found: Mapping[str, Any]) -> list[str]:
+    """The :func:`report` as text: one row per artifact, the sources table, the time row."""
+    lines = []
+    for row in found["artifacts"]:
+        esp = row.get("esp")
+        room = (
+            f"  ESP {format_size(esp['size'])}, {format_size(max(esp['left'], 0))} left"
+            if esp
+            else ""
+        )
+        size = format_size(int(row["size"]))
+        lines.append(f"  {row['name']:<12} {size:>10}  sha256 {str(row['sha256'])[:16]}{room}")
+    columns = ("name", "kind", "ref", "pin", "toolchain", "checkout", "deps")
+    rows = [
+        [f"  {source['name']}", *(_cell(source, key) for key in columns[1:])]
+        for source in found["sources"]
+    ]
+    if rows:
+        table = [["source", *columns[1:]], *rows]
+        widths = [max(len(cells[i]) for cells in table) for i in range(len(columns))]
+        for cells in table:
+            text = "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
+            lines.append(text.rstrip())
+    time = found["time"]
+    cells = [
+        f"{name} {'-' if time.get(name) is None else format_duration(float(time[name]))}"
+        for name in (*REPORT_PHASES, "total")
+    ]
+    lines.append("time  " + "  ".join(cells))
+    return lines
+
+
+def _cell(source: Mapping[str, Any], key: str) -> str:
+    """A sources-table cell: the pin, and a ref that is the pin itself (a commit), short."""
+    value = source.get(key)
+    if not value:
+        return "-"
+    short = key == "pin" or (key == "ref" and value == source.get("pin"))
+    return str(value)[:12] if short else str(value)
 
 
 def render_build(build: Build) -> str:
@@ -174,12 +291,10 @@ def render_build(build: Build) -> str:
     lines = [
         f"build {build.id}  {m['image']} {m['profile']} ({m['kind']})",
         f"  path          {build.path}",
+        *render_report(report(build)),
         f"  targets       {', '.join(m['targets'])}",
         f"  rootfs        {m.get('rootfs')}",
     ]
-    uki = m.get("uki") or {}
-    if "sha256" in uki:
-        lines.append(f"  uki           payload.efi {str(uki['sha256'])[:16]}")
     if m.get("root_hash"):
         lines.append(f"  root hash     {m['root_hash']}")
     lines.append(f"  digest        {str(m.get('recipe_digest'))[:16]}")
@@ -193,29 +308,10 @@ def render_build(build: Build) -> str:
             part.get("path") if part.get("state") != "missing" else f"missing: {part.get('reason')}"
         )
         lines.append(f"  {key:<13} {shown}")
-    lines.append("  artifacts")
-    for name, record in sorted((m.get("artifacts") or {}).items()):
-        if name.startswith(f"{mf.INPUTS}/"):
-            continue
-        lines.append(
-            f"    {name:<22} {str(record.get('sha256', ''))[:16]}  {record.get('size', '')}"
-        )
-    lines.append("  measurements")
-    for name, state in sorted(((m.get("measurements") or {}).get("records") or {}).items()):
-        lines.append(f"    {name:<22} {state}")
     toolchain = m.get("toolchain") or {}
     lines.append(
         f"  toolchain     tundravm {toolchain.get('tundravm')}, backend {toolchain.get('backend')}"
     )
-    for key, title in (("go_toolchain", "go toolchains"), ("rust_toolchain", "rust toolchains")):
-        records = [
-            (str(source.get("name")), source[key])
-            for source in m.get("sources") or []
-            if isinstance(source, dict) and isinstance(source.get(key), dict)
-        ]
-        if records:
-            lines.append(f"  {title}")
-        lines.extend(f"    {name:<22} {_toolchain(record)}" for name, record in records)
     observed = _json(build.path / mf.OBSERVATIONS) or {}
     if observed:
         runner = observed.get("runner") or {}
@@ -426,5 +522,7 @@ __all__ = [
     "render_files",
     "render_image",
     "render_measurements",
+    "render_report",
     "render_units",
+    "report",
 ]

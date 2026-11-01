@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -66,15 +67,44 @@ def test_every_file_is_read_only(built: Build) -> None:
             assert not stat.S_IMODE(path.stat().st_mode) & 0o222, path
 
 
-def test_the_output_names_the_directory_and_what_it_does_not_check(project: Path, cli: Cli) -> None:
+REPORT = """\
+built build/demo/production/<hex>
+  payload.efi     4.5 KiB  sha256 <hex>  ESP 128.0 MiB, 126.0 MiB left
+  qemu.raw       17.0 KiB  sha256 <hex>
+  azure.vhd      17.0 KiB  sha256 <hex>
+  gcp.tar.gz      <size>  sha256 <hex>
+source  kind  ref     pin           toolchain  checkout  deps
+  tdxs  git   master  111111111111  local      fetched   fetched
+time  checkouts <t>  prefetch <t>  mkosi <t>  measurements <t>  total <t>
+  unchecked: RTMR3: outside the policy: no event schema is defined for RTMR3
+"""
+"""What ``build`` prints of a fake build of every target: hex digests, the gzip's size and
+durations masked."""
+
+
+def _masked(text: str) -> str:
+    text = re.sub(r"\b[0-9a-f]{16}\b", "<hex>", text)
+    text = re.sub(r"\d+(?:\.\d+s|m\d\ds|h\d\dm)", "<t>", text)
+    return re.sub(r"(gcp\.tar\.gz) +[\d.]+ \w?B", r"\1      <size>", text)
+
+
+def test_the_build_report(project: Path, cli: Cli) -> None:
+    """``build`` ends with the report (artifacts, sources, time) and what it does not check;
+    ``show BUILD`` prints the same report; a later build finds its checkouts cached."""
+    (project / "demo.py").write_text(EVERY_CLOUD, encoding="utf-8")
     assert cli("lock").code == EXIT_OK
     result = cli("build")
     assert result.code == EXIT_OK, result.err
-    lines = result.out.splitlines()
-    assert lines[0].startswith("built build/demo/production/")
-    assert any(line.startswith("  qemu.raw ") for line in lines)
-    assert "  unchecked: measurements qemu/uki: unknown" in lines  # the fake UKI is no PE
+    assert _masked(result.out) == REPORT
     assert "[production]" in result.err  # progress goes to stderr
+    report = "\n".join(result.out.splitlines()[1:-1])
+    assert report in cli("show", "latest").out
+    (project / "demo.py").write_text(EVERY_CLOUD.replace('"busybox"]', '"busybox", "jq"]'))
+    assert cli("lock").code == EXIT_OK
+    again = cli("build").out.splitlines()
+    assert [line.split()[-2:] for line in again if line.startswith("  tdxs ")] == [
+        ["cached", "cached"]
+    ]
 
 
 def test_an_identical_build_leaves_the_directory_untouched(

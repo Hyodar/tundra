@@ -1,8 +1,6 @@
 """``measure`` schemes on real (synthetic) UKIs and disks; an artifact that is no UKI."""
 
 import hashlib
-import struct
-from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,84 +28,27 @@ from tundravm.measure import (
 )
 from tundravm.measure.policy import read_policy
 from tundravm.models import ArtifactRef, ProfileBuildResult
+from tundravm.testing._fake_mkosi import fake_disk, fake_uki
 
-_ALIGN = 0x200
 ALL_SCHEMES: tuple[MeasurementBackend, ...] = ("qemu", "gcp", "azure", "portable")
-ESP_TYPE = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")
-
-
-def _align(size: int) -> int:
-    return (size + _ALIGN - 1) // _ALIGN * _ALIGN
-
-
-def build_pe(sections: Sequence[tuple[str, bytes]]) -> bytes:
-    """A minimal valid PE32+ image holding *sections* (name, data)."""
-    count = len(sections)
-    size_of_headers = _align(0x40 + 24 + 240 + 40 * count)
-    offset = size_of_headers
-    table = b""
-    body = b""
-    for name, data in sections:
-        raw = _align(len(data))
-        table += struct.pack(
-            "<8sIIIIIIHHI", name.encode(), len(data), offset, raw, offset, 0, 0, 0, 0, 0x40000040
-        )
-        body += data.ljust(raw, b"\0")
-        offset += raw
-    dos = b"MZ".ljust(0x3C, b"\0") + struct.pack("<I", 0x40)
-    coff = b"PE\0\0" + struct.pack("<HHIIIHH", 0x8664, count, 0, 0, 0, 240, 0x22)
-    optional = bytearray(240)
-    struct.pack_into("<H", optional, 0, 0x20B)
-    struct.pack_into("<I", optional, 60, size_of_headers)
-    struct.pack_into("<I", optional, 108, 16)
-    head = (dos + coff + bytes(optional) + table).ljust(size_of_headers, b"\0")
-    return head + body
-
-
-def build_uki(cmdline: bytes = b"console=ttyS0", stub: int = 257) -> bytes:
-    """A UKI: stub text, ``.sdmagic``, ``.osrel``, ``.cmdline``, ``.initrd``, ``.linux`` (a PE)."""
-    linux = build_pe([(".text", b"kernel")])
-    return build_pe(
-        [
-            (".text", b"stub"),
-            (".sdmagic", f"#### LoaderInfo: systemd-stub {stub} ####".encode()),
-            (".osrel", b"ID=test\n"),
-            (".cmdline", cmdline),
-            (".initrd", b"initrd"),
-            (".linux", linux),
-        ]
-    )
-
-
-def build_disk_head(disk_guid: bytes = b"\x12" * 16) -> bytes:
-    """The first 34 sectors of a GPT disk with one ESP entry."""
-    head = bytearray(34 * 512)
-    header = bytearray(92)
-    header[:8] = b"EFI PART"
-    header[56:72] = disk_guid
-    struct.pack_into("<II", header, 80, 128, 128)
-    head[512 : 512 + 92] = header
-    head[1024 : 1024 + 16] = ESP_TYPE
-    struct.pack_into("<QQ", head, 1024 + 32, 2048, 4095)
-    return bytes(head)
 
 
 @pytest.fixture
 def uki(tmp_path: Path) -> Path:
     path = tmp_path / "linux.efi"
-    path.write_bytes(build_uki())
+    path.write_bytes(fake_uki())
     return path
 
 
 @pytest.fixture
 def disk(tmp_path: Path) -> Path:
     path = tmp_path / "disk.raw"
-    path.write_bytes(build_disk_head() + bytes(4096))
+    path.write_bytes(fake_disk() + bytes(4096))
     return path
 
 
 def _baked(tmp_path: Path) -> Artifact:
-    """The qemu artifact of a build against the fake mkosi: a placeholder file, no disk."""
+    """The qemu artifact of a build against the fake mkosi."""
     recipe = Recipe("measured", items=(Package("curl"), Package("linux-image-amd64")))
     (artifact,) = bake(
         recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build"
@@ -204,14 +145,17 @@ def test_measure_of_a_real_uki_round_trips_through_the_policy(tmp_path: Path, uk
 
 def _no_uki(tmp_path: Path, variant: str) -> Artifact:
     """The *variant* artifact of a qemu ``default`` and a ``gcp`` variant built against the
-    fake mkosi (placeholder files, no UKI)."""
+    fake mkosi, its boot payload overwritten with bytes that are no UKI."""
     recipe = Recipe(
         "measured",
         items=(Package("curl"), Package("linux-image-amd64")),
         variants=(Variant("default", outputs=("qemu",)), Variant("gcp", outputs=("gcp",))),
     )
     built = bake(recipe, lock=lock(recipe), backend=Backend("local"), build=tmp_path / "build")
-    return next(a for a in built if a.profile == variant)
+    artifact = next(a for a in built if a.profile == variant)
+    assert artifact.boot_payload is not None
+    Path(artifact.boot_payload).write_bytes(b"no UKI")
+    return replace(artifact, boot_payload_sha256=hashlib.sha256(b"no UKI").hexdigest())
 
 
 @pytest.mark.parametrize(
@@ -232,7 +176,7 @@ def test_an_artifact_that_is_no_uki_is_refused_for_every_scheme(
 
     error = caught.value
     assert error.code == "E_MEASUREMENT"
-    assert "is not a PE/EFI image" in str(error)  # the fake build's boot payload is no UKI
+    assert "is not a PE/EFI image" in str(error)
     assert error.hint is not None and "UKI (.efi)" in error.hint
 
 

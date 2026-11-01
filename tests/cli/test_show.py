@@ -68,12 +68,12 @@ def test_show_a_build(built: Build, cli: Cli) -> None:
     first = result.out.splitlines()[0]
     assert first == f"build {built.id}  demo production (production)"
     assert "  signed        no" in result.out
-    assert "    - measurements qemu/uki: unknown" in result.out
     assert "reproduction  not attempted" in result.out
     report = json.loads(cli("show", built.id, "--json").out)
     assert report["schema"] == "tundravm.show/1"
     assert report["manifest"]["id"] == built.id and report["signed"] is False
     assert report["observations"]["id"] == built.id
+    assert [row["name"] for row in report["report"]["artifacts"]] == ["payload.efi", "qemu.raw"]
 
 
 GO_RELEASE = {
@@ -105,19 +105,8 @@ image = replace(image, services=[*image.services, Service("probe", [probe])])
 @pytest.mark.parametrize(
     ("added", "kind", "release", "shown"),
     [
-        (
-            "",
-            "go",
-            GO_RELEASE,
-            "  go toolchains\n    tdxs                   go1.25.0  h1:toolchain=\n",
-        ),
-        (
-            PROBE,
-            "cargo",
-            RUST_RELEASE,
-            "  rust toolchains\n    probe                  1.91.0  "
-            "rustc 1.91.0 (f8297e351 2025-10-28)\n",
-        ),
+        ("", "go", GO_RELEASE, ("tdxs", "go1.25.0")),
+        (PROBE, "cargo", RUST_RELEASE, ("probe", "1.91.0")),
     ],
     ids=["go", "rust"],
 )
@@ -128,11 +117,10 @@ def test_a_build_records_and_shows_each_sources_toolchain(
     added: str,
     kind: str,
     release: dict[str, object],
-    shown: str,
+    shown: tuple[str, str],
 ) -> None:
-    """The toolchain the host prefetch recorded is the manifest's, by source, and show names
-    it: Go's with the checksum the checksum database vouched for, Rust's by what its rustc
-    says."""
+    """The toolchain the host prefetch recorded is the manifest's, by source, and show's
+    sources table names its release."""
     with (project / "demo.py").open("a", encoding="utf-8") as demo:
         demo.write(added)
 
@@ -149,7 +137,9 @@ def test_a_build_records_and_shows_each_sources_toolchain(
     key = "go_toolchain" if kind == "go" else "rust_toolchain"
     sources = json.loads(cli("show", "latest", "--json").out)["manifest"]["sources"]
     assert [source[key] for source in sources if key in source] == [release]
-    assert shown in cli("show", "latest").out
+    rows = [line.split() for line in cli("show", "latest").out.splitlines()]
+    name, toolchain = shown
+    assert [row[4] for row in rows if row[:1] == [name]] == [toolchain]
 
 
 def test_show_a_build_by_path(built: Build, cli: Cli) -> None:
@@ -164,8 +154,8 @@ def test_show_a_builds_units_tree_and_measurements(built: Build, cli: Cli) -> No
         line.endswith("  mkosi.conf") or " mkosi.conf " in line for line in tree.out.splitlines()
     )
     measured = cli("show", "latest", "--measurements")
-    assert "qemu/uki  payload.efi  unknown" in measured.out
-    assert "qemu/disk  qemu.raw  unknown" in measured.out
+    assert "qemu/uki  payload.efi  predicted" in measured.out
+    assert "qemu/disk  qemu.raw  predicted" in measured.out
     records = json.loads(cli("show", "latest", "--measurements", "--json").out)
     assert records["measurements"]["schema"] == "tundravm.measurements/1"
 
@@ -195,14 +185,16 @@ def test_diff_of_the_production_and_development_builds(dev_built: Build, cli: Cl
     assert lines[0].endswith(f"-> {dev_built.id}")
     assert "packages: unknown (neither build has a package manifest)" in lines
     assert "  + payload/mkosi.profiles/dev/mkosi.conf" in lines
-    assert "boot payload: uki" in lines
+    assert "boot payload: uki, cmdline" in lines
     report = json.loads(cli("show", "--diff", "latest", "latest-development", "--json").out)
     assert report["schema"] == "tundravm.show/1"
     diff = report["diff"]
     assert diff["new"]["id"] == dev_built.id
     assert {f["path"] for f in diff["files"]} >= {"payload/mkosi.profiles/dev/mkosi.conf"}
-    assert set(diff["boot"]) == {"uki"}
-    assert diff["measurements"] == {} and diff["coverage"] == {}
+    assert set(diff["boot"]) == {"uki", "cmdline"}
+    assert set(diff["measurements"]) == {"qemu/disk", "qemu/uki"}
+    assert set(diff["measurements"]["qemu/uki"]["registers"]) == {"RTMR1", "RTMR2"}
+    assert diff["coverage"] == {}
 
 
 def test_a_build_against_itself_differs_in_nothing(built: Build, cli: Cli) -> None:

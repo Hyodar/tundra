@@ -1053,9 +1053,8 @@ def _cmd_build(args: argparse.Namespace, out: TextIO) -> int:
         print(f"lock written: {found.lockfile} (commit it)", file=out)
     state = "built" if outcome.created else "already built (identical; left untouched)"
     print(f"{state} {result.path}", file=out)
-    for name, record in sorted(result.manifest["artifacts"].items()):
-        if "/" not in name:
-            print(f"  {name:<20} {str(record.get('sha256', ''))[:16]}", file=out)
+    for line in show.render_report(show.report(result)):
+        print(line, file=out)
     for item in result.manifest.get("unchecked", ()):
         print(f"  unchecked: {item}", file=out)
     if outcome.reproduction is not None:

@@ -38,8 +38,9 @@ class FakeSources:
     ``fetch_source`` writes :data:`CHECKOUT_FILE` into the new checkout; a fake checkout
     answers git's ``rev-parse`` with its pin and ``status`` with a clean tree, so a second
     build reuses it. A dependency prefetch records an empty, complete cache, so an offline
-    build reuses it too; a Go build's toolchain is ``local`` and a Cargo build's
-    ``debian`` (a fake checkout has no go.mod or rust-toolchain.toml). *fetched* lists
+    build reuses it too and a second prefetch keeps it; a Go build's toolchain is ``local``
+    and a Cargo build's ``debian`` (a fake checkout has no go.mod or rust-toolchain.toml).
+    *fetched* lists
     every checkout made, in order.
     """
 
@@ -70,6 +71,8 @@ class FakeSources:
         if marker is None or not isinstance(build.build, _source.LanguageBuild):
             return None
         deps = Path(root) / _source.DEPS_DIRNAME
+        if (deps / marker).is_file():
+            return f"{build.build.deps}: kept"
         (deps / build.build.deps).mkdir(parents=True, exist_ok=True)
         record: dict[str, object] = {
             "build": build.key,

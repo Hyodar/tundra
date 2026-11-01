@@ -45,8 +45,7 @@ def test_the_manifest_binds_the_directory(built: Build) -> None:
     assert payload["lock"]["sha256"] == mf.sha256_file(built.path / "inputs/tundravm.lock")
     assert payload["packages"] == {"state": "missing", "reason": "mkosi wrote no package manifest"}
     assert payload["kind"] == "production"
-    assert payload["measurements"]["records"] == {"qemu/disk": "unknown", "qemu/uki": "unknown"}
-    assert "measurements qemu/uki: unknown" in payload["unchecked"]
+    assert payload["measurements"]["records"] == {"qemu/disk": "predicted", "qemu/uki": "predicted"}
     assert payload["root_hash"] is None and payload["rootfs"] == "initramfs"
     sources = json.loads((built.path / "inputs/sources.json").read_text())["sources"]
     assert payload["sources"] == sources and sources[0]["pin"] == "1" * 40
@@ -105,7 +104,7 @@ def test_an_untouched_build_verifies(built: Build, cli: Cli) -> None:
         "sbom": "ok",
         "packages": "missing",
         "summary": "ok",
-        "measurements": "unchecked",
+        "measurements": "ok",
         "reproduction": "unchecked",
         "signature": "missing",
     }

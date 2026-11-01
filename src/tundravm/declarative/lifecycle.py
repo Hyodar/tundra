@@ -846,11 +846,15 @@ def fetch_image(
             )
             copies.setdefault((source_build.source, source.pin), source.path)
             fetched.append(source)
-        prefetches = [
-            (index, source_build)
-            for index, source_build in enumerate(builds.values())
-            if isinstance(source_build, SourceBuild)
-        ]
+    prefetches = [
+        (index, source_build)
+        for index, source_build in enumerate(builds.values())
+        if isinstance(source_build, SourceBuild) and source_build.deps_marker(fetched[index].pin)
+    ]
+    if not prefetches:
+        return tuple(fetched)
+    noun = "dependency cache" if len(prefetches) == 1 else "dependency caches"
+    with progress.phase("prefetch", f"prefetch {len(prefetches)} {noun}", profile=None):
         if not offline:
             pinned = {b.key: checkout_rust_toolchain(b, fetched[i].path) for i, b in prefetches}
             require_host_rustup({key: rust for key, rust in pinned.items() if rust is not None})
@@ -876,9 +880,16 @@ def _prefetch(
         return None
     message = f"{build.key}: deps: {outcome}"
     if outcome.startswith("failed") or ": incomplete" in outcome:
-        progress.emit("warning", None, f"{message}; the build downloads them", level="warning")
+        progress.emit(
+            "warning",
+            None,
+            f"{message}; the build downloads them",
+            level="warning",
+            name=build.key,
+            deps=outcome,
+        )
     else:
-        progress.emit("log", None, message, source="notice")
+        progress.emit("log", None, message, source="notice", name=build.key, deps=outcome)
     return outcome
 
 
@@ -924,7 +935,14 @@ def _checkout(
     ref = build.source.ref if isinstance(build.source, GitSource) else None
     result = FetchedSource(build.key, build.source.kind, build.source.url, pin, path, ref=ref)
     if is_fetched(path, pin, build.source, name=build.key):
-        progress.emit("log", None, f"{build.key}: {pin[:12]} already fetched", source="notice")
+        progress.emit(
+            "log",
+            None,
+            f"{build.key}: {pin[:12]} already fetched",
+            source="notice",
+            name=build.key,
+            checkout="cached",
+        )
         return replace(result, cached=True)
     donor = copies.get((build.source, pin))
     if offline and donor is None:
@@ -949,7 +967,12 @@ def _checkout(
         shutil.rmtree(scratch, ignore_errors=True)
     how = "fetched" if donor is None else f"copied from {donor.name}:"
     progress.emit(
-        "log", None, f"{build.key}: {how} {build.source.describe()} at {pin[:12]}", source="notice"
+        "log",
+        None,
+        f"{build.key}: {how} {build.source.describe()} at {pin[:12]}",
+        source="notice",
+        name=build.key,
+        checkout="fetched" if donor is None else "copied",
     )
     return result
 

@@ -170,8 +170,12 @@ jobs:
           uv run tundravm verify latest
           uv run tundravm verify latest-development
           uv run tundravm show latest
-          uv run tundravm show latest | grep -E '^    git-codereview +go1\.26\.0  h1:'
-          uv run tundravm show latest | grep -E '^    rust-probe +1\.91\.0  rustc 1\.91\.0 '
+          uv run tundravm show latest | grep -E '^  git-codereview +git +\S+ +\S+ +go1\.26\.0 '
+          uv run tundravm show latest | grep -E '^  rust-probe +git +\S+ +\S+ +1\.91\.0 '
+          uv run tundravm show latest --json | jq -e '.manifest.sources[]
+            | select(.name == "git-codereview") | .go_toolchain.sum | startswith("h1:")'
+          uv run tundravm show latest --json | jq -e '.manifest.sources[]
+            | select(.name == "rust-probe") | .rust_toolchain.rustc | startswith("rustc 1.91.0 ")'
           uv run tundravm show latest --measurements
           uv run tundravm show --diff latest latest-development
 
