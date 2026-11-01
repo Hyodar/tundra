@@ -26,6 +26,6 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
     assert "dialect" not in lockfile.image["compiler"]
     assert lockfile.image["profiles"]["default"]["outputs"] == ["qemu"]
     assert lockfile.image["profiles"]["dev"]["outputs"] == ["qemu"]
-    assert lockfile.dependencies["default"] == ["curl"]
-    assert lockfile.dependencies["dev"] == ["curl", "jq"]
+    assert lockfile.dependencies["default"] == ["curl", "openssl"]
+    assert lockfile.dependencies["dev"] == ["curl", "jq", "openssl"]
     assert lockfile.image_digest

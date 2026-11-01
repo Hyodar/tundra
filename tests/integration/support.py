@@ -16,7 +16,7 @@ from typing import IO
 
 import pytest
 
-from tundravm._modules import execution
+from tundravm._modules import execution, instance_key
 from tundravm.testing import BootResult, boot_unavailable, build_unavailable
 from tundravm.testing._boot import DEFAULT_MARKERS, console_lines, on_console
 
@@ -136,9 +136,10 @@ def probe_lines(console: str, what: str) -> list[str]:
 GATE = execution.GATE_UNIT
 GATED = ("web.service", "greeter.service")
 """The fixture's units made from a ``Service``: each requires the execution gate."""
-FAIL_CLOSED_MARKERS = (*DEFAULT_MARKERS, PROBE_DONE, execution.REFUSED)
+FAIL_CLOSED_MARKERS = (*DEFAULT_MARKERS, PROBE_DONE, execution.REFUSED, instance_key.CONSOLE)
 """What a production boot of the fixture without TDX prints: the target is reached, the
-probe (a boot task, not gated) finished, and the gate refused."""
+probe (a boot task, not gated) finished, the gate refused, and the instance key (made before
+the gate) printed its public key."""
 FAIL_CLOSED_UNITS = ("boot-probe", GATE, *GATED)
 """The units such a boot waits for, started or failed."""
 
@@ -156,7 +157,9 @@ def assert_fail_closed(result: BootResult) -> None:
     for unit in GATED:
         assert unit in result.failed and unit not in result.started, f"{unit}\n{summary}"
     assert on_console(result.console, f"Dependency failed for {GATED[0]}"), summary
-    assert {"minimal.target", "boot-probe.service"} <= set(result.started), summary
+    assert {"minimal.target", "boot-probe.service", instance_key.UNIT} <= set(result.started), (
+        summary
+    )
     assert set(result.failed) == {GATE, *GATED}, summary
 
 

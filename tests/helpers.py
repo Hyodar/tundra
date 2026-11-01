@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from tundravm._modules import execution
+from tundravm._modules import execution, instance_key
 from tundravm._source import GitSource, HttpSource, Resolver, checkout_identity
 from tundravm.cli import main
 from tundravm.declarative import Lock, Recipe, lower
@@ -23,12 +23,12 @@ EXAMPLE_RECIPES = tuple(
     path for path in sorted((REPO_ROOT / "examples").glob("*.py")) if path.name != "__init__.py"
 )
 """The top-level example recipe files (the surge flagship lives in its own directory)."""
-GATE_FILES = frozenset({execution.GATE_SCRIPT, execution.GATE_DROPIN})
-"""What the execution gate adds to every lowered profile (``tundravm._modules.execution``)."""
+GATE_FILES = frozenset({execution.GATE_SCRIPT, execution.GATE_DROPIN, instance_key.SCRIPT_PATH})
+"""What the execution gate and the instance key add to every lowered profile."""
 
 
 def own_files(files: list[FileEntry]) -> list[FileEntry]:
-    """*files* without the execution gate's, which every profile ships."""
+    """*files* without the execution gate's and the instance key's, which every profile ships."""
     return [entry for entry in files if entry.path not in GATE_FILES]
 
 

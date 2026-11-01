@@ -255,7 +255,8 @@ def test_payload_subimage_includes_the_payload_directory() -> None:
     assert payload.startswith(
         "[Output]\nFormat=uki\nOutput=payload\nSeed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70\n"
     )
-    assert "Packages=\n    passwd\n" in payload  # the account tools: no concern declared them
+    # the instance key's openssl and the account tools: no concern declared them
+    assert "Packages=\n    openssl\n    passwd\n" in payload
     assert (tree / "payload/mkosi.conf.d/20-greeter.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    curl\n"
     )

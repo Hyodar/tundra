@@ -205,6 +205,9 @@ jobs:
           grep -m 2 -E 'sink: remote-write batch [0-9]+ [1-9][0-9]* bytes' "$console"
           grep -F 'sink: proxy carries 127.0.0.2:19580' "$console"
           grep -F 'sink: proxy carries 127.0.0.2:19581' "$console"
+          grep -E 'tundravm-instance-key: pub 0[23][0-9a-f]{64}' "$console"
+          jq -e '.results[] | select(.check == "key:instance") | .verdict == "ok"' \
+            .tundravm/instances/fixture-1/probe.json
           curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
 
       - name: Stop the instance

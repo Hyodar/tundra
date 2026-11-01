@@ -32,6 +32,7 @@ mkosi-chroot systemctl enable tundravm-credentials.service
 mkosi-chroot systemctl enable attested-tls-443.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable tdx-evidence.service
+mkosi-chroot systemctl enable tundravm-instance-key.service
 mkosi-chroot systemctl enable runtime-init.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -57,6 +58,7 @@ ln -sf "/etc/systemd/system/tundravm-credentials.service" "$BUILDROOT/etc/system
 ln -sf "/etc/systemd/system/attested-tls-443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
 

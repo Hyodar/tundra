@@ -210,6 +210,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     builder.execution_gate(
         default.name, release=default.release, default=default.release, ships=True
     )
+    builder.instance_key(default.name)
     payload = builder.state.ensure_profile(default.name)
     declared = set(payload.packages)
     builder.targets(default.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
@@ -242,6 +243,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             builder.execution_gate(
                 variant.name, release=variant.release, default=default.release, ships=True
             )
+            builder.instance_key(variant.name)
             builder.targets(variant.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
             overlays.append(variant.name)
             continue

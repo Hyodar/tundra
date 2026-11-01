@@ -250,6 +250,23 @@ probe_keys() {
         ok "$directory root:root $3, ${1##*/} root:root 600"
     fi
 }
+probe_instance_key() {
+    if [ ! -s "$1" ] || [ ! -s "$2" ]; then
+        fail "no $1 or $2: tundravm-instance-key.service did not make them; journalctl -u tundravm-instance-key.service"
+        return
+    fi
+    set -- "$1" "$2" $(stat -c '%U:%G %a' "$1")
+    pub=$(cat "$2")
+    made=$(openssl ec -in "$1" -pubout -conv_form compressed -outform DER 2>/dev/null |
+        tail -c 33 | od -An -v -tx1 | tr -d ' \n')
+    if [ "$3" != root:root ] || [ "$4" != 600 ]; then
+        fail "$1 is $3 $4: the instance key must be root:root 0600; only tundravm-instance-key.service writes it"
+    elif [ "$made" != "$pub" ]; then
+        fail "$2 is not the public key of $1: something besides tundravm-instance-key.service wrote one; journalctl -u tundravm-instance-key.service"
+    else
+        ok "root:root 600, pub $pub"
+    fi
+}
 check=mode
 mode=$(cat /run/tundravm/mode 2>/dev/null || true)
 case $mode in
@@ -294,4 +311,6 @@ check=kernel:modules
 probe_modules crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
+check=key:instance
+probe_instance_key /run/tundravm/instance-key.pem /run/tundravm/instance-key.pub
 say "done $passed ok $failed fail"

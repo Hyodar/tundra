@@ -22,7 +22,14 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
-from tundravm._modules import DiskEncryption, DiskSpec, KeyGeneration, KeySpec, SecretDelivery
+from tundravm._modules import (
+    DiskEncryption,
+    DiskSpec,
+    KeyGeneration,
+    KeySpec,
+    SecretDelivery,
+    instance_key,
+)
 from tundravm._modules import execution as gate
 from tundravm._modules import probe as probe_module
 from tundravm._modules.base import Module, tools_source
@@ -357,6 +364,14 @@ class StateBuilder:
             profile.services.append(gate.service(gate.execution(default)))
         if release != default:
             _add_file(profile, gate.GATE_DROPIN, gate.dropin(gate.execution(release)))
+
+    def instance_key(self, name: str) -> None:
+        """Give profile *name* the instance key's generator (``tundravm._modules.instance_key``):
+        its script, its unit and ``openssl``. The profiles that ship the gate ship it."""
+        profile = self.state.ensure_profile(name)
+        _add_file(profile, instance_key.SCRIPT_PATH, instance_key.SCRIPT, "0755")
+        profile.services.append(instance_key.service())
+        profile.packages.add(instance_key.PACKAGE)
 
     def probe(self, name: str, probe: Probe) -> None:
         """Give profile *name* the boot probe (``tundravm._modules.probe``): its script,

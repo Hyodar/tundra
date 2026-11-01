@@ -41,7 +41,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   (``/sys/module/*/holders``);
 - ``host-keys``: the SSH host key directory is ``root:root`` and writable by root only, the
   key ``root:root 0600`` (plan 5.2 item 2: root-owned, read-only to everything else; the
-  root is a tmpfs or erofs, which carry no ``chattr +i``).
+  root is a tmpfs or erofs, which carry no ``chattr +i``);
+- ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
+  ``root:root 0600`` and its public key file holds its public key.
 
 The probe runs inside the guest it checks: it proves what the guest says of itself, which a
 compromised guest could fake. It is a development aid, not evidence.
@@ -59,7 +61,7 @@ from urllib.parse import urlsplit
 
 from tundravm.models import ServiceSpec, unit_name
 
-from . import execution
+from . import execution, instance_key
 
 if TYPE_CHECKING:
     from tundravm.declarative.model import Declaration, EgressRule, Firewall
@@ -107,6 +109,7 @@ Helper = Literal[
     "symbols",
     "modules",
     "keys",
+    "instance",
 ]
 
 
@@ -296,6 +299,15 @@ def derive(
                 ("ssh-host-keys.service",),
             )
         )
+    checks.append(
+        Check(
+            "key:instance",
+            f"{instance_key.KEY} root:root 0600, {instance_key.PUBLIC} its public key",
+            f"probe_instance_key {instance_key.KEY} {instance_key.PUBLIC}",
+            "instance",
+            (instance_key.UNIT,),
+        )
+    )
     return Probe(tuple(checks))
 
 
@@ -783,6 +795,25 @@ probe_keys() {
         ok "$directory root:root $3, ${1##*/} root:root 600"
     fi
 }
+""",  # noqa: E501
+    "instance": f"""\
+probe_instance_key() {{
+    if [ ! -s "$1" ] || [ ! -s "$2" ]; then
+        fail "no $1 or $2: {instance_key.UNIT} did not make them; journalctl -u {instance_key.UNIT}"
+        return
+    fi
+    set -- "$1" "$2" $(stat -c '%U:%G %a' "$1")
+    pub=$(cat "$2")
+    made=$(openssl ec -in "$1" -pubout -conv_form compressed -outform DER 2>/dev/null |
+        tail -c 33 | od -An -v -tx1 | tr -d ' \\n')
+    if [ "$3" != root:root ] || [ "$4" != 600 ]; then
+        fail "$1 is $3 $4: the instance key must be root:root 0600; only {instance_key.UNIT} writes it"
+    elif [ "$made" != "$pub" ]; then
+        fail "$2 is not the public key of $1: something besides {instance_key.UNIT} wrote one; journalctl -u {instance_key.UNIT}"
+    else
+        ok "root:root 600, pub $pub"
+    fi
+}}
 """,  # noqa: E501
 }
 

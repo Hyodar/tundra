@@ -92,6 +92,7 @@ def test_describe_structure() -> None:
         "iproute2",
         "jq",
         "nvme-cli",
+        "openssl",
         "systemd",
         "udev",
     ]
@@ -183,6 +184,7 @@ def test_describe_per_variant() -> None:
         "iproute2",
         "jq",
         "nvme-cli",
+        "openssl",
         "systemd",
         "udev",
         "waagent",
@@ -226,7 +228,7 @@ def test_summary_contains_key_strings() -> None:
 
     assert text.startswith("profile=default  debian/trixie (x86_64)  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
-    assert "Packages (7): curl dmidecode iproute2 jq nvme-cli systemd udev" in text
+    assert "Packages (8): curl dmidecode iproute2 jq nvme-cli openssl systemd udev" in text
     assert "Build packages (1): gcc" in text
     assert "debian-security  https://deb.example/security  trixie-security  main  prio=10" in text
     assert re.search(r"\n  /etc/motd +0644  12B  sha256:a948904f2f0f\n", text)
@@ -248,7 +250,10 @@ def test_summary_contains_key_strings() -> None:
     azure_text = render(describe(image, profile="azure"))
     assert "profile=azure" in azure_text
     assert "Extends: default\n" in azure_text
-    assert "Packages (8): curl dmidecode iproute2 jq nvme-cli systemd udev waagent" in azure_text
+    assert (
+        "Packages (9): curl dmidecode iproute2 jq nvme-cli openssl systemd udev waagent"
+        in azure_text
+    )
     assert "Extends" not in text
     for internal in ("variant=", "Inherits", "Fragments", "Policy:"):
         assert internal not in text and internal not in azure_text
@@ -265,9 +270,12 @@ def test_summary_omits_empty_sections() -> None:
     )
     text = render(describe(lower(recipe), profile="bare"))
 
-    assert "Packages" not in text
-    # what every profile ships: the execution gate, its script and its unit
-    assert "Files (1):\n  /usr/lib/tundravm/tdx-evidence  0755" in text
-    assert "Services (1):\n  tdx-evidence.service  /usr/lib/tundravm/tdx-evidence" in text
+    # what every profile ships: the execution gate and the instance key, each a script, a
+    # unit and (the instance key) openssl
+    assert "Packages (1): openssl\n" in text
+    assert "Files (2):\n  /usr/lib/tundravm/instance-key  0755" in text
+    assert re.search(r"\n  /usr/lib/tundravm/tdx-evidence +0755", text)
+    assert "Services (2):\n  tdx-evidence.service  " in text
+    assert "\n  tundravm-instance-key.service  /bin/sh /usr/lib/tundravm/instance-key" in text
     assert "Hooks" not in text
     assert "Debloat: disabled" in text
