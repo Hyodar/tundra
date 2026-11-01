@@ -54,8 +54,10 @@ class FakeEndpoint:
     """The endpoint of one boot: what it accepts, what it received.
 
     *platform* ``simulator`` signs simulator quotes; ``tdx`` builds TDX quotes with
-    *registers* and *debug*. *mode* is the guest gate's recorded mode. :attr:`received`,
-    :attr:`unlocked` and :attr:`ssh_keys` hold what was written, one per name per boot."""
+    *registers* and *debug*. *mode* is the guest gate's recorded mode. *listeners* maps
+    each attested TLS port to the DER SubjectPublicKeyInfo of its certificate key, which the
+    evidence binds. :attr:`received`, :attr:`unlocked` and :attr:`ssh_keys` hold what was
+    written, one per name per boot."""
 
     platform: Literal["simulator", "tdx"] = "simulator"
     registers: Mapping[str, bytes] = field(default_factory=dict)
@@ -64,6 +66,7 @@ class FakeEndpoint:
     credentials: tuple[str, ...] = ("api-token",)
     volumes: tuple[str, ...] = ("data",)
     ssh_key: bool = True
+    listeners: Mapping[int, bytes] = field(default_factory=dict)
     misbehave: Misbehaviour | None = None
     received: dict[str, bytes] = field(default_factory=dict)
     unlocked: dict[str, bytes] = field(default_factory=dict)
@@ -84,7 +87,14 @@ class FakeEndpoint:
         if self.misbehave == "replay":
             nonce = self.first_nonce
         key = os.urandom(91) if self.misbehave == "wrong-key" else session.key
-        user_data = binding(nonce, key, [HOST_KEY], bytes.fromhex(INSTANCE_KEY))
+        bound_ports = sorted(self.listeners)
+        user_data = binding(
+            nonce,
+            key,
+            [HOST_KEY],
+            bytes.fromhex(INSTANCE_KEY),
+            [self.listeners[port] for port in bound_ports],
+        )
         bound = report_data_for(user_data, nonce)
         metadata = None
         if self.platform == "simulator":
@@ -113,6 +123,10 @@ class FakeEndpoint:
             "tls_public_key": base64.b64encode(key).decode(),
             "ssh_host_keys": [HOST_KEY],
             "instance_public_key": INSTANCE_KEY,
+            "attested_tls": [
+                {"port": port, "public_key": base64.b64encode(self.listeners[port]).decode()}
+                for port in bound_ports
+            ],
             "mode": self.mode,
             "accepts": {
                 "credentials": list(self.credentials),

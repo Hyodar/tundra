@@ -1737,6 +1737,7 @@ FakeEndpoint(
     credentials: tuple[str, ...] = ('api-token',),
     volumes: tuple[str, ...] = ('data',),
     ssh_key: bool = True,
+    listeners: Mapping[int, bytes] = dict(),
     misbehave: Misbehaviour | None = None,
     received: dict[str, bytes] = dict(),
     unlocked: dict[str, bytes] = dict(),

@@ -494,6 +494,7 @@ class StateBuilder:
                 provider=BUILTIN_SECRET_PROVIDER if entry.delivery is None else entry.delivery.name,
                 provider_supports=() if entry.delivery is None else entry.delivery.supports,
                 volumes=_unlocked_volumes(disks, keys),
+                attested_tls=entry.attested_tls,
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary

@@ -107,13 +107,15 @@ in place of a value.
 
 ### What first contact proves
 
-An image with a volume or a secret runs the attested endpoint on port 8745, with a TLS key
-made in memory at start. Its evidence is a quote whose user data is
-`sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public key)`. `attest` sends a
-fresh nonce and refuses evidence for another nonce (a replay) or another TLS key than its
-session's (a relay), then judges the quote; on success it writes the bound host keys as
-`known_hosts`. `secrets deliver` and `unlock` verify again and write only on that session,
-with its nonce, once per value per boot.
+An image with a volume, a secret or an `AttestedTLS` ingress runs the attested endpoint on
+port 8745, with a TLS key made in memory at start. Its evidence is a quote whose user data
+is `sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public key ‖ one
+certificate key per AttestedTLS port)`, each part prefixed with its length as a big-endian
+uint32, the keys as DER SubjectPublicKeyInfo and the ports ascending (`Binding` in
+`tools/pkg/endpoint`). `attest` sends a fresh nonce and refuses evidence for another nonce
+(a replay) or another TLS key than its session's (a relay), then judges the quote; on
+success it writes the bound host keys as `known_hosts`. `secrets deliver` and `unlock`
+verify again and write only on that session, with its nonce, once per value per boot.
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|

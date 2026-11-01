@@ -47,6 +47,13 @@ type Accepts struct {
 	SSHKey      bool     `json:"ssh_key"`
 }
 
+// ListenerKey is one attested TLS port's certificate key as the evidence states it: the
+// base64 DER SubjectPublicKeyInfo the quote binds for that port.
+type ListenerKey struct {
+	Port      int    `json:"port"`
+	PublicKey string `json:"public_key"`
+}
+
 // Evidence is the GET /evidence answer: the quote and every piece of material it binds.
 type Evidence struct {
 	Purpose           string          `json:"purpose"`
@@ -57,6 +64,7 @@ type Evidence struct {
 	TLSPublicKey      string          `json:"tls_public_key"`
 	SSHHostKeys       []string        `json:"ssh_host_keys"`
 	InstancePublicKey string          `json:"instance_public_key"`
+	AttestedTLS       []ListenerKey   `json:"attested_tls"`
 	Mode              string          `json:"mode"`
 	Accepts           Accepts         `json:"accepts"`
 }
@@ -224,7 +232,12 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	userData := Binding(nonce, s.spki, hostKeys, instanceKey)
+	ingressKeys, err := ReadListenerKeys(s.cfg.AttestedTLS)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	userData := Binding(nonce, s.spki, hostKeys, instanceKey, ingressKeys)
 	document, err := s.quoter.Issue(r.Context(), userData, nonce)
 	if err != nil {
 		s.log.Error("no quote", "error", err)
@@ -250,6 +263,12 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 	if hostKeys == nil {
 		hostKeys = []string{}
 	}
+	listeners := make([]ListenerKey, 0, len(ingressKeys))
+	for i, key := range ingressKeys {
+		listeners = append(listeners, ListenerKey{
+			Port: s.cfg.AttestedTLS[i].Port, PublicKey: base64.StdEncoding.EncodeToString(key),
+		})
+	}
 	answer(w, Evidence{
 		Purpose:           Purpose,
 		Nonce:             hex.EncodeToString(nonce),
@@ -259,6 +278,7 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 		TLSPublicKey:      base64.StdEncoding.EncodeToString(s.spki),
 		SSHHostKeys:       hostKeys,
 		InstancePublicKey: hex.EncodeToString(instanceKey),
+		AttestedTLS:       listeners,
 		Mode:              mode,
 		Accepts:           s.accepts(),
 	})

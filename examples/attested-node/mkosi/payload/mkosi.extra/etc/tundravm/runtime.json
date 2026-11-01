@@ -2,7 +2,7 @@
   "control_plane": "attested endpoint: TLS bound to the quote",
   "ingress": [
     {
-      "binding": "self-signed per boot; quote binding is gate 3",
+      "binding": "a key pair per boot; the attested endpoint's quote binds its key",
       "kind": "attested-tls",
       "port": 8546,
       "unit": "attested-tls-8546.service",

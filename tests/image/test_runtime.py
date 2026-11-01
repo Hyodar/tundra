@@ -367,11 +367,24 @@ def test_attested_tls_is_the_only_way_in(planned: PlannedImage) -> None:
     relay = planned.unit("attested-tls-443.service")
     command = relay.get("Service", "ExecStart") or ""
     assert command.startswith("/usr/bin/socat OPENSSL-LISTEN:443,")
+    assert "cert=${CREDENTIALS_DIRECTORY}/cert,key=${CREDENTIALS_DIRECTORY}/key" in command
     assert command.endswith(" TCP:127.0.0.1:8080")
-    assert "openssl req -x509" in " ".join(relay.values("Service", "ExecStartPre"))
+    assert relay.values("Service", "LoadCredential") == (
+        "cert:/run/tundravm/attested-tls/443/cert.pem",
+        "key:/run/tundravm/attested-tls/443/key.pem",
+    )
     assert relay.get("Service", "AmbientCapabilities") == "CAP_NET_BIND_SERVICE"
     assert relay.get("Service", "User") == "attested-tls-443"
     assert {"socat", "openssl"} <= set(planned.packages)
+    # The key pair is made each boot by a root oneshot the relay and the endpoint follow.
+    key = planned.unit("attested-tls-443-key.service")
+    assert key.get("Service", "ExecStart") == "/bin/sh /usr/lib/tundravm/attested-tls-key 443"
+    assert key.get("Service", "User") is None and key.get("Service", "Type") == "oneshot"
+    assert "attested-tls-443-key.service" in _after(planned, "attested-tls-443.service")
+    assert "attested-tls-443-key.service" in _after(planned, "tundravm-endpoint.service")
+    config = planned.file("/etc/tdx/secrets.yaml").text
+    assert "attested_tls:\n  - port: 443\n" in config
+    assert 'certificate: "/run/tundravm/attested-tls/443/cert.pem"' in config
     manifest = json.loads(planned.file("/etc/tundravm/runtime.json").text)
     assert manifest["ingress"][0]["kind"] == "attested-tls"
     assert manifest["ingress"][0]["upstream"] == "http://127.0.0.1:8080/"

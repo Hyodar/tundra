@@ -44,6 +44,7 @@ mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
+mkosi-chroot systemctl enable attested-tls-8546-key.service
 mkosi-chroot systemctl enable attested-tls-8546.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable tdx-evidence.service
@@ -77,6 +78,7 @@ ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/s
 ln -sf "/etc/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/attested-tls-8546-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-8546.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

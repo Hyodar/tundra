@@ -2143,7 +2143,9 @@ class Secrets(Declared):
     which takes the operator's SSH key and writes ``SecretFile`` targets, each only on the
     TLS session a fresh quote bound (``BUILTIN_SECRET_CAPABILITIES``): a ``SecretEnv``
     entry needs an :class:`ExternalDelivery` that writes it (lint:
-    ``secret-target-unsupported``).
+    ``secret-target-unsupported``). *attested_tls* names the attested TLS ports whose
+    certificate key, made at boot under ``/run/tundravm/attested-tls/<port>``, every quote
+    binds after the instance key, in port order.
     """
 
     name: str = "secrets"
@@ -2155,10 +2157,27 @@ class Secrets(Declared):
     ssh_directory: str = "/root/.ssh"
     ssh_key_path: str | None = "/etc/root_key"
     delivery: ExternalDelivery | None = None
+    attested_tls: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "entries")
+        _freeze(self, "attested_tls")
         _require_name(self, self.name)
+        for port in self.attested_tls:
+            if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+                raise _fail(
+                    self,
+                    f"attested_tls= holds {port!r}, not a port number.",
+                    hint="Pass the attested TLS ports whose certificate keys the quote binds, "
+                    "as numbers: attested_tls=(8546,).",
+                )
+        if len(set(self.attested_tls)) != len(self.attested_tls):
+            raise _fail(
+                self,
+                "attested_tls= names a port twice.",
+                hint="Name each attested TLS port once in attested_tls=.",
+            )
+        object.__setattr__(self, "attested_tls", tuple(sorted(self.attested_tls)))
         if self.delivery is not None and not isinstance(self.delivery, ExternalDelivery):
             raise _fail(
                 self,

@@ -3,13 +3,18 @@ package endpoint
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -36,11 +41,27 @@ func (q *fakeQuoter) Metadata(context.Context) (json.RawMessage, error) {
 }
 
 type fixture struct {
-	t      *testing.T
-	dir    string
-	addr   string
-	quoter *fakeQuoter
-	server *Server
+	t        *testing.T
+	dir      string
+	addr     string
+	quoter   *fakeQuoter
+	server   *Server
+	listener []byte
+}
+
+// certificate writes a self-signed PEM certificate to path, as an attested TLS port's key
+// unit does, and returns the DER SubjectPublicKeyInfo of its key.
+func certificate(t *testing.T, path string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must(t, err)
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	must(t, err)
+	must(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644))
+	spki, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	must(t, err)
+	return spki
 }
 
 func start(t *testing.T) *fixture {
@@ -50,6 +71,7 @@ func start(t *testing.T) *fixture {
 	must(t, os.WriteFile(filepath.Join(dir, "instance-key.pub"), []byte("02"+strings.Repeat("ab", 32)+"\n"), 0o644))
 	must(t, os.WriteFile(filepath.Join(dir, "mode"), []byte("simulated\n"), 0o644))
 	must(t, syscall.Mkfifo(filepath.Join(dir, "data.fifo"), 0o600))
+	spki := certificate(t, filepath.Join(dir, "cert.pem"))
 	cfg := &Config{
 		Listen:      "127.0.0.1:0",
 		QuoteSocket: "/nonexistent",
@@ -58,6 +80,7 @@ func start(t *testing.T) *fixture {
 		ModeFile:    filepath.Join(dir, "mode"),
 		Credentials: []Credential{{Name: "jwt", Path: filepath.Join(dir, "jwt")}},
 		Volumes:     []Volume{{Name: "data", Pipe: filepath.Join(dir, "data.fifo")}},
+		AttestedTLS: []Listener{{Port: 8546, Certificate: filepath.Join(dir, "cert.pem")}},
 		SSH:         &SSHConfig{Dir: filepath.Join(dir, "ssh")},
 	}
 	must(t, cfg.Validate())
@@ -68,7 +91,7 @@ func start(t *testing.T) *fixture {
 	must(t, err)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { listener.Close() })
-	return &fixture{t: t, dir: dir, addr: listener.Addr().String(), quoter: quoter, server: server}
+	return &fixture{t: t, dir: dir, addr: listener.Addr().String(), quoter: quoter, server: server, listener: spki}
 }
 
 func must(t *testing.T, err error) {
@@ -116,13 +139,16 @@ func credentials(n string, values map[string]string) map[string]any {
 }
 
 func TestBindingSeparatesItsParts(t *testing.T) {
+	one, two := [][]byte{{1}}, [][]byte{{2}}
 	cases := []struct {
 		name string
 		a, b []byte
 	}{
-		{"nonce against key", Binding([]byte("ab"), []byte("c"), nil, nil), Binding([]byte("a"), []byte("bc"), nil, nil)},
-		{"host keys", Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 A"}, nil), Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 B"}, nil)},
-		{"instance key", Binding([]byte("n"), []byte("k"), nil, []byte{2}), Binding([]byte("n"), []byte("k"), nil, []byte{3})},
+		{"nonce against key", Binding([]byte("ab"), []byte("c"), nil, nil, nil), Binding([]byte("a"), []byte("bc"), nil, nil, nil)},
+		{"host keys", Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 A"}, nil, nil), Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 B"}, nil, nil)},
+		{"instance key", Binding([]byte("n"), []byte("k"), nil, []byte{2}, nil), Binding([]byte("n"), []byte("k"), nil, []byte{3}, nil)},
+		{"ingress key against none", Binding([]byte("n"), []byte("k"), nil, nil, one), Binding([]byte("n"), []byte("k"), nil, nil, nil)},
+		{"ingress key order", Binding([]byte("n"), []byte("k"), nil, nil, [][]byte{one[0], two[0]}), Binding([]byte("n"), []byte("k"), nil, nil, [][]byte{two[0], one[0]})},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -139,7 +165,7 @@ func TestEvidenceBindsTheSessionKey(t *testing.T) {
 	peer, err := x509.MarshalPKIXPublicKey(state.PeerCertificates[0].PublicKey)
 	must(t, err)
 	instance, _ := hex.DecodeString("02" + strings.Repeat("ab", 32))
-	want := Binding(bytes.Repeat([]byte{1}, 32), peer, []string{"ssh-ed25519 AAAAhost"}, instance)
+	want := Binding(bytes.Repeat([]byte{1}, 32), peer, []string{"ssh-ed25519 AAAAhost"}, instance, [][]byte{f.listener})
 	checks := []struct {
 		name string
 		ok   bool
@@ -148,6 +174,8 @@ func TestEvidenceBindsTheSessionKey(t *testing.T) {
 		{"the issuer was asked for it", bytes.Equal(f.quoter.userData, want)},
 		{"the nonce comes back", found.Nonce == nonce(1)},
 		{"the key is the session's", found.TLSPublicKey == base64.StdEncoding.EncodeToString(peer)},
+		{"the attested TLS port's key is bound", len(found.AttestedTLS) == 1 && found.AttestedTLS[0].Port == 8546 &&
+			found.AttestedTLS[0].PublicKey == base64.StdEncoding.EncodeToString(f.listener)},
 		{"the mode is the gate's", found.Mode == "simulated"},
 		{"simulator metadata is attached", string(found.Metadata) != ""},
 		{"accepts names the credentials", len(found.Accepts.Credentials) == 1 && found.Accepts.SSHKey},

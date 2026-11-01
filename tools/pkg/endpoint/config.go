@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,8 +27,17 @@ type Config struct {
 	Credentials []Credential `yaml:"credentials"`
 	// Volumes are the volumes POST /unlock takes a passphrase for.
 	Volumes []Volume `yaml:"volumes"`
+	// AttestedTLS are the attested TLS ports whose certificate key the quote binds, kept
+	// in ascending port order.
+	AttestedTLS []Listener `yaml:"attested_tls"`
 	// SSH is where POST /ssh-key writes the operator's key; nil takes none.
 	SSH *SSHConfig `yaml:"ssh"`
+}
+
+// Listener is one attested TLS port and the PEM certificate its key unit writes at boot.
+type Listener struct {
+	Port        int    `yaml:"port"`
+	Certificate string `yaml:"certificate"`
 }
 
 // Credential is one delivered value: written to Path (mode Mode, owned by Owner).
@@ -102,6 +112,14 @@ func (c *Config) Validate() error {
 	if c.SSH != nil && !filepath.IsAbs(c.SSH.Dir) {
 		return fmt.Errorf("ssh.dir %q is not absolute", c.SSH.Dir)
 	}
+	ports := map[int]bool{}
+	for _, l := range c.AttestedTLS {
+		if l.Port < 1 || l.Port > 65535 || ports[l.Port] || !filepath.IsAbs(l.Certificate) {
+			return fmt.Errorf("attested_tls port %d is invalid, repeated or has no absolute certificate", l.Port)
+		}
+		ports[l.Port] = true
+	}
+	sort.Slice(c.AttestedTLS, func(i, j int) bool { return c.AttestedTLS[i].Port < c.AttestedTLS[j].Port })
 	return nil
 }
 

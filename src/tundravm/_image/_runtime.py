@@ -12,11 +12,13 @@ values become the declarations the tools and systemd already understand:
   key a fresh quote bound, plus one boot unit per secret that finishes once it has arrived;
 - a :class:`~tundravm.secrets.Generated` secret is a root boot oneshot that writes random
   hex under ``/run/tundravm/secrets``, which every service binding it requires;
-- a volume an operator unlocks, or any secret, brings the control plane: that
-  ``Secrets`` block is the attested endpoint on the management port (evidence,
-  credentials, unlock, the operator's SSH key), and ``SshAccess(from_delivery=True)`` lets
-  only that key in;
-- an ingress is a ``socat`` TLS relay unit with its firewall port;
+- a volume an operator unlocks, any secret or an ``AttestedTLS`` ingress brings the
+  control plane: that ``Secrets`` block is the attested endpoint on the management port
+  (evidence, credentials, unlock, the operator's SSH key), and
+  ``SshAccess(from_delivery=True)`` lets only that key in;
+- an ingress is a ``socat`` TLS relay unit with its firewall port; an ``AttestedTLS`` one
+  also has a root oneshot making its key pair and certificate each boot, which the relay
+  reads as credentials and the endpoint's quotes bind;
 - ``/etc/tundravm/runtime.json`` records all of it for the tools that deliver.
 
 Nothing here writes a secret or a key into the image.
@@ -30,6 +32,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from tundravm._location import declared_at, display_location
+from tundravm._modules import attested_tls
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Dynamic, Hardening, Root
 from tundravm.errors import ValidationError
@@ -186,9 +189,22 @@ class Runtime:
 
     @property
     def control_plane(self) -> bool:
-        """Whether the image waits for an operator: a secret, or a volume it unlocks."""
-        return bool(self.secrets) or any(
-            isinstance(volume.unlock, (OperatorKey, BrokerKey)) for volume in self.volumes
+        """Whether the image runs the attested endpoint: a secret, a volume an operator
+        unlocks, or an attested TLS ingress whose certificate its quotes bind."""
+        return (
+            bool(self.secrets)
+            or bool(self.attested)
+            or any(isinstance(volume.unlock, (OperatorKey, BrokerKey)) for volume in self.volumes)
+        )
+
+    @property
+    def attested(self) -> tuple[AttestedTLS, ...]:
+        """The attested TLS ingress, in port order: the quote binds each one's key."""
+        return tuple(
+            sorted(
+                (way for way in self.ingress if isinstance(way, AttestedTLS)),
+                key=lambda way: way.port,
+            )
         )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
@@ -251,13 +267,15 @@ class Runtime:
     def declarations(self) -> tuple[dm.Declaration | Component, ...]:
         """Everything the contracts add to the image (a component is lowered as one)."""
         found: list[dm.Declaration | Component] = []
-        if self.volumes or self.secrets:
+        if self.volumes or self.control_plane:
             found.append(dm.RuntimeTools(self.tools))
         for volume in self.volumes:
             found.extend(self.volume(volume))
         found.extend(_generate(item) for item in self.generated())
         if self.control_plane:
             found.extend(self.delivery())
+        if self.attested:
+            found.append(dm.File(attested_tls.SCRIPT_PATH, attested_tls.SCRIPT, mode=0o755))
         for way in self.ingress:
             found.extend(self.relay(way))
         if self.volumes or self.secrets or self.ingress:
@@ -320,7 +338,13 @@ class Runtime:
             )
             for secret in self.secrets
         )
-        yield dm.Secrets(CONTROL_PLANE, entries=entries, port=MANAGEMENT_PORT, ssh_key_path=None)
+        yield dm.Secrets(
+            CONTROL_PLANE,
+            entries=entries,
+            port=MANAGEMENT_PORT,
+            ssh_key_path=None,
+            attested_tls=tuple(way.port for way in self.attested),
+        )
         yield SshAccess(from_delivery=True)
         for secret in self.secrets:
             yield _wait(
@@ -330,7 +354,9 @@ class Runtime:
             )
 
     def relay(self, way: AttestedTLS | TLS) -> Iterator[dm.Declaration]:
-        """The TLS listener relaying *way*'s port to its upstream."""
+        """The TLS listener relaying *way*'s port to its upstream; an attested one with
+        the root oneshot that makes its key pair each boot (:mod:`._modules.attested_tls`),
+        whose script :meth:`declarations` ships once."""
         yield dm.Package("socat")
         name = way.unit.removesuffix(".service")
         upstream = f"TCP:{way.upstream.address}"
@@ -339,22 +365,32 @@ class Runtime:
             capabilities=("CAP_NET_BIND_SERVICE",) if way.port < 1024 else (),
         )
         if isinstance(way, AttestedTLS):
-            yield dm.Package("openssl")
-            keys = "${RUNTIME_DIRECTORY}"
+            yield dm.Package(attested_tls.PACKAGE)
+            key_unit = attested_tls.unit(way.port)
+            yield dm.Task(
+                key_unit.removesuffix(".service"),
+                ("/bin/sh", attested_tls.SCRIPT_PATH, str(way.port)),
+                description=f"Generate this boot's TLS key for :{way.port}",
+                user=Root(),
+                timeout="60s",
+                needs=(),
+                hardening=Hardening.strict(protect_system="full", network="none"),
+                directives={"Service": {"StandardOutput": "journal+console"}},
+            )
             listen = (
                 f"OPENSSL-LISTEN:{way.port},reuseaddr,fork,verify=0,"
-                f"cert={keys}/cert.pem,key={keys}/key.pem"
+                "cert=${CREDENTIALS_DIRECTORY}/cert,key=${CREDENTIALS_DIRECTORY}/key"
             )
             yield dm.Service(
                 name,
                 ("/usr/bin/socat", listen, upstream),
                 description=f"Attested TLS on :{way.port} to {way.upstream.url}",
-                exec_start_pre=(
-                    "/usr/bin/openssl req -x509 -newkey ec -pkeyopt "
-                    "ec_paramgen_curve:prime256v1 -nodes -days 30 -subj /CN=tundravm "
-                    f"-keyout {keys}/key.pem -out {keys}/cert.pem",
-                ),
-                runtime=name,
+                credentials={
+                    "cert": attested_tls.certificate(way.port),
+                    "key": attested_tls.key(way.port),
+                },
+                requires=(key_unit,),
+                after=(key_unit,),
                 ports=(dm.Port(way.port),),
                 needs=(),
                 hardening=hardening,

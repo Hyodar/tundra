@@ -51,21 +51,19 @@ class AttestedTLS(Located):
 
     ``AttestedTLS(8546, upstream=signer.endpoint(8547))`` opens *port* in the firewall and nothing
     else: the upstream must listen on the loopback and expose no port of its own, so this
-    is the only way requests reach it (the image refuses anything else). The listener
-    generates its key pair inside the guest at every start and never stores it.
+    is the only way requests reach it (the image refuses anything else).
 
-    What the image does today: reserve the port, run the relay (``socat``'s OpenSSL
-    listener, as its own unprivileged user with only ``CAP_NET_BIND_SERVICE``), open the
-    firewall rule, and record the ingress in the runtime manifest.
-
-    What gate 3 adds (tools/, plan section 6.3): the attested endpoint on :8745
-    binds the listener's public key into the quote's ``report_data``
-    (``sha512(purpose ‖ nonce ‖ public key ‖ SSH host keys)``), so ``tundravm attest``
-    hands the client a certificate it can verify against the operator's policy and a
-    relayed quote cannot authenticate another connection. The client verifier policy,
-    client authorisation and renewal are part of that contract. Until then the
-    certificate is self-signed per boot and a client pins it on first contact, which
-    ``attest`` reports as unverified.
+    The image reserves the port, runs the relay (``socat``'s OpenSSL listener, as its own
+    unprivileged user with only ``CAP_NET_BIND_SERVICE``), opens the firewall rule and
+    records the ingress in the runtime manifest. A root oneshot makes the listener's key
+    pair and self-signed certificate at every boot, on tmpfs only, and the relay reads
+    them as credentials. The ingress brings the control plane: the attested endpoint on
+    :8745 binds the certificate's key into every quote's user data, after the instance
+    key, one part per port in port order, so a client that verified a quote can check the
+    certificate it sees is the one that TD made (``tundravm attest INSTANCE --policy FILE
+    --tls PORT``, or ``tools/cmd/attested-client`` in a relying party's own code). The
+    certificate proves which TD terminates the connection, nothing about who connects:
+    client authorisation stays the upstream's.
     """
 
     port: int
@@ -87,7 +85,7 @@ class AttestedTLS(Located):
             "port": self.port,
             "upstream": self.upstream.url,
             "unit": self.unit,
-            "binding": "self-signed per boot; quote binding is gate 3",
+            "binding": "a key pair per boot; the attested endpoint's quote binds its key",
         }
 
 

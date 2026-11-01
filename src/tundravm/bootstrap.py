@@ -1,11 +1,11 @@
 """``attest`` and ``secrets``: the operator's side of the attested endpoint (plan 6.3).
 
-An image with a volume or a secret runs ``attested-endpoint`` (``tools/``) on the management
-port :data:`~tundravm.instances.MANAGEMENT_PORT`. It makes a TLS key pair at start and
-serves ``GET /evidence?nonce=``: a quote whose ``report_data`` is
+An image with a volume, a secret or an attested TLS ingress runs ``attested-endpoint``
+(``tools/``) on the management port :data:`~tundravm.instances.MANAGEMENT_PORT`. It makes a
+TLS key pair at start and serves ``GET /evidence?nonce=``: a quote whose ``report_data`` is
 ``SHA-256(binding || nonce)``, where ``binding`` (the quote's user data) is
-``SHA-512(purpose, nonce, the TLS key, the SSH host keys, the instance public key)``, each
-part length-prefixed (:func:`binding`).
+``SHA-512(purpose, nonce, the TLS key, the SSH host keys, the instance public key, each
+attested TLS port's certificate key)``, each part length-prefixed (:func:`binding`).
 
 - :func:`attest` opens one TLS session, sends a fresh nonce, and refuses evidence that does
   not answer that nonce (a replay), that binds another TLS key than this session's (a
@@ -60,13 +60,21 @@ TIMEOUT_S = 60.0
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
-def binding(nonce: bytes, tls_key: bytes, host_keys: Sequence[str], instance_key: bytes) -> bytes:
+def binding(
+    nonce: bytes,
+    tls_key: bytes,
+    host_keys: Sequence[str],
+    instance_key: bytes,
+    ingress_keys: Sequence[bytes] = (),
+) -> bytes:
     """The 64-byte user data a quote of the endpoint carries (``tools/pkg/endpoint``):
     SHA-512 over :data:`PURPOSE`, *nonce*, *tls_key* (DER SubjectPublicKeyInfo), the sorted
-    ``type base64`` *host_keys* joined by newlines and *instance_key*, each part prefixed
-    with its length as a big-endian uint32."""
+    ``type base64`` *host_keys* joined by newlines, *instance_key* and each of
+    *ingress_keys* (the DER SubjectPublicKeyInfo of an attested TLS port's certificate key,
+    in port order), each part prefixed with its length as a big-endian uint32."""
     digest = hashlib.sha512()
-    for part in (PURPOSE.encode(), nonce, tls_key, "\n".join(host_keys).encode(), instance_key):
+    parts = (PURPOSE.encode(), nonce, tls_key, "\n".join(host_keys).encode(), instance_key)
+    for part in (*parts, *ingress_keys):
         digest.update(struct.pack(">I", len(part)) + part)
     return digest.digest()
 
@@ -177,6 +185,9 @@ class Evidence:
     instance_key: str
     mode: str | None
     accepts: Mapping[str, Any] = field(default_factory=dict)
+    attested_tls: tuple[tuple[int, bytes], ...] = ()
+    """Each attested TLS port and the DER SubjectPublicKeyInfo of the certificate key the
+    quote binds for it, in port order."""
 
     @property
     def credentials(self) -> tuple[str, ...]:
@@ -239,7 +250,13 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
         instance_key = str(said.get("instance_public_key") or "")
         host_keys = tuple(str(k) for k in said.get("ssh_host_keys") or ())
         instance_bytes = bytes.fromhex(instance_key)
-    except ValueError as exc:
+        listeners = tuple(
+            sorted(
+                (int(item["port"]), base64.b64decode(str(item["public_key"]), validate=True))
+                for item in said.get("attested_tls") or ()
+            )
+        )
+    except (KeyError, TypeError, ValueError) as exc:
         raise AttestationError(f"The evidence from {where} is malformed: {exc}.", hint="") from exc
     hint = "Something between this host and the instance answered for it; attest again."
     if said.get("purpose") != PURPOSE:
@@ -256,7 +273,7 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
             "Refused: the quote binds another TLS key than this session's (a relayed quote).",
             hint=hint,
         )
-    if binding(nonce, key, host_keys, instance_bytes) != user_data:
+    if binding(nonce, key, host_keys, instance_bytes, [k for _, k in listeners]) != user_data:
         raise AttestationError(
             "Refused: the bound material does not hash to the quote's user data.", hint=hint
         )
@@ -272,6 +289,7 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
         instance_key=instance_key,
         mode=str(said.get("mode") or "") or None,
         accepts=accepts if isinstance(accepts, Mapping) else {},
+        attested_tls=listeners,
     )
 
 

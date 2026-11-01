@@ -33,7 +33,7 @@ Built into production:
     disk-encryption    local tundravm:tools    pinned=-
     key-generation     local tundravm:tools    pinned=-
     tdxs               local tundravm:tools    pinned=-
-  Files (29):
+  Files (30):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  69B  sha256:c94c854fc0e2
     /etc/nftables.conf                                                                       0755  1619B  sha256:775d340ab757
@@ -45,9 +45,9 @@ Built into production:
     /etc/tdx/disk-setup.yaml                                                                 0644  235B  sha256:8b40e4123e3d
     /etc/tdx/key-gen.yaml                                                                    0644  140B  sha256:7638ac64d41a
     /etc/tdx/secrets.json                                                                    0644  307B  sha256:452df7d4bb74
-    /etc/tdx/secrets.yaml                                                                    0644  367B  sha256:38bbdaa61675
+    /etc/tdx/secrets.yaml                                                                    0644  454B  sha256:6b202e5ad6d2
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
-    /etc/tundravm/runtime.json                                                               0644  968B  sha256:0cea9de4f1f1
+    /etc/tundravm/runtime.json                                                               0644  987B  sha256:1ac2959cebb3
     /srv/www/index.html                                                                      0644  16B  sha256:75186e1a779a
     /usr/bin/azure-complete-provisioning                                                     0755  2517B  sha256:fd3d32e3d33f
     /usr/lib/systemd/system/gcp-forwarded-ips.timer                                          0644  152B  sha256:2725564dde76
@@ -55,6 +55,7 @@ Built into production:
     /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
     /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
     /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
+    /usr/lib/tundravm/attested-tls-key                                                       0755  1000B  sha256:bf53e52e308c
     /usr/lib/tundravm/gcp/forwarded-ips                                                      0755  1235B  sha256:a708f93eac75
     /usr/lib/tundravm/gcp/hostname                                                           0755  607B  sha256:9763439d3eb8
     /usr/lib/tundravm/gcp/resolv.conf                                                        0644  49B  sha256:93e93b1c49be
@@ -65,7 +66,7 @@ Built into production:
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (3): app attested-tls-443 tdxs
   Groups (1): tdx
-  Enabled units (18): azure-complete-provisioning.service gcp-metadata-dns.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443.service nftables.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (19): azure-complete-provisioning.service gcp-metadata-dns.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (2): gcp-forwarded-ips.service tdxs.service
   Masked units (8): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
   Firewall (6):
