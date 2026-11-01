@@ -33,7 +33,7 @@ from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, TpmSeal, Volume
 
 # The Go program in app/, beside this file: the argv's first element pulls its build in.
-APP = GoBinary("app", Local("app"), package=".")
+APP = GoBinary("app", Local("app"))
 
 # The data an operator protects: it opens only once they have attested this instance.
 data = Volume("data", unlock=OperatorKey())

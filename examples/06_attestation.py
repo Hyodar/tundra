@@ -38,7 +38,7 @@ PEER_POLICY = Resources.from_module(__name__).file("peer.policy.json")
 app = Service(
     "app",
     [
-        GoBinary("app", Local("app"), package="."),
+        GoBinary("app", Local("app")),
         "--tdxs-socket",
         "/var/tdxs.sock",
         "--listen",

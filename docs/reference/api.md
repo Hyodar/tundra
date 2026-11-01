@@ -1241,7 +1241,7 @@ GoBinary(
     name: str,
     source: Git | Http | Local,
     *,
-    package: str,
+    package: str = '.',
     install: str | None = None,
     env: Mapping[str, str] = FrozenMap(),
     tags: tuple[str, ...] = (),

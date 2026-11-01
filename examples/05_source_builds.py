@@ -34,7 +34,6 @@ PROMETHEUS = "v2.53.0"
 node_exporter = GoBinary(
     "node-exporter",
     Http(f"https://github.com/prometheus/node_exporter/archive/refs/tags/v{NODE_EXPORTER}.tar.gz"),
-    package=".",
     install="/usr/bin/node_exporter",
     env={"CGO_ENABLED": "0"},
     cache_namespace=f"node-exporter-{NODE_EXPORTER}",

@@ -185,7 +185,7 @@ class App(Component):
         return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
 
     def compose(self) -> Iterator[Service]:
-        server = GoBinary("server", Local("app"), package=".")
+        server = GoBinary("server", Local("app"))
         # Runs as system user "app" (declared for you), sandboxed by the "static" preset,
         # restarted on failure. expose= is what the image's firewall opens; readiness= is
         # what another service's requires=[app.http] would wait for.
@@ -297,9 +297,9 @@ class App(Component):
     """The app: a page busybox httpd serves on the loopback, its state on an encrypted
     volume and a token delivered after attestation.
 
-    Swap in your program: build it with ``GoBinary("app", Local("app"), package=".")`` as
-    the service template does, or a CargoBinary or a Package, and point the service at it;
-    it reads the token at ``self.token.path``. `tundravm show` lists it as component ``app``.
+    Swap in your program: build it with ``GoBinary("app", Local("app"))`` as the service
+    template does, or a CargoBinary or a Package, and point the service at it; it reads the
+    token at ``self.token.path``. `tundravm show` lists it as component ``app``.
     """
 
     version: str

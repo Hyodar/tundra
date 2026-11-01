@@ -120,7 +120,6 @@ def test_go_binary_lowers_like_the_hand_written_build() -> None:
     binary = GoBinary(
         "node-exporter",
         TARBALL,
-        package=".",
         install="/usr/bin/node_exporter",
         env={"CGO_ENABLED": "0"},
         cache_namespace="node-exporter-1.8.2",
@@ -137,14 +136,14 @@ def test_go_binary_installs_at_usr_bin_name_by_default() -> None:
     assert isinstance(build, Build) and build.install == (Install("build/tool", "/usr/bin/tool"),)
     assert binary.executable == "/usr/bin/tool" and binary.name == "tool"
     with pytest.raises(ValidationError, match="absolute file path"):
-        GoBinary("tool", TARBALL, package=".", install="bin/tool")
+        GoBinary("tool", TARBALL, install="bin/tool")
 
 
 def test_editing_the_build_behind_an_executable_is_reported() -> None:
     from tundravm.declarative import Variant
     from tundravm.declarative.resolve import lint
 
-    binary = GoBinary("tool", TARBALL, package=".")
+    binary = GoBinary("tool", TARBALL)
     service = Service("tool", f"{binary.executable} --serve")
     moved = Install("build/tool", "/opt/tool")
     variants = (

@@ -174,7 +174,7 @@ LOCAL = """\
 from tundravm import Image, Service
 from tundravm.sources import GoBinary, Local
 
-app = GoBinary("app", Local("app"), package=".")
+app = GoBinary("app", Local("app"))
 
 image = Image("demo", services=[Service("app", [app])])
 """

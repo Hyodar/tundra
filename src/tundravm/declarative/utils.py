@@ -445,7 +445,8 @@ class GoBinary(Composite):
     """A Go program built from *source* and installed at :attr:`executable`.
 
     The ``Build`` named *name* runs ``go build -trimpath -buildvcs=false`` of *package*
-    (``Go``; ``CGO_ENABLED=0`` unless *cgo*) into ``build/<file name of install>`` and
+    (the module root by default, ``"./cmd/server"`` for a sub-command; ``Go``;
+    ``CGO_ENABLED=0`` unless *cgo*) into ``build/<file name of install>`` and
     installs it at *install* (``/usr/bin/<name>`` by default). ``executable`` is that path,
     the first element of a ``Service`` argv: ``Service(name, [binary.executable, "--flag"])``.
     Component name: *name*.
@@ -454,7 +455,7 @@ class GoBinary(Composite):
     name: str
     source: Git | Http | Local
     _: KW_ONLY
-    package: str
+    package: str = "."
     install: str | None = None
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     tags: tuple[str, ...] = ()
