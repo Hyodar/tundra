@@ -372,7 +372,9 @@ Stage 5 puts attested TLS on 8546 in front of it:
 The ingress opens 8546; beside it, only the control plane's 8745 and 22 are open.
 `quotes=True` lets the signer ask the evidence service for a quote over its key. It starts
 only once one is issued. `GET /quote?nonce=HEX` answers one, so a client can check the key
-it verifies with.
+it verifies with. The endpoint's quote binds the listener's certificate too, which
+`tundravm attest attested-node-1 --policy FILE --tls 8546` or `go run
+./tools/cmd/attested-client --dev https://127.0.0.1:8546` checks.
 
 ### 6. Operating it
 
@@ -691,14 +693,13 @@ hex to `/run/tundravm/secrets/<name>`, which every service binding it reads.
 ### Ingress
 
 `AttestedTLS(8546, upstream=signer.endpoint(8547))` is the confidential way in. It opens
-8546. The upstream must listen on the loopback and expose no port of its own, or the image
-is refused, so the ingress is the only path to it. Today the relay is `socat`'s
-OpenSSL listener, as its own user with only `CAP_NET_BIND_SERVICE`, with a self-signed
-certificate generated in the guest at every start, which no quote binds yet: a client
-pins it on first contact.
+8546; the upstream listens on the loopback and exposes no port, so the ingress is the
+only path to it. The relay is `socat`'s OpenSSL listener under its own user, serving a
+certificate made at boot whose key the attested endpoint's quote binds
+([trust](trust.md#what-first-contact-proves)).
 
-`TLS(port, upstream=, certificate=secret)` is ordinary HTTPS with a certificate you deliver
-as a secret. Nothing about it is attested.
+`TLS(port, upstream=, certificate=secret)` is ordinary HTTPS with a delivered certificate;
+nothing about it is attested.
 
 ### The root filesystem
 
@@ -727,10 +728,10 @@ credential=))` ships the journal and node metrics, as [stage 6](#6-operating-it)
 
 ### The control plane
 
-An image with a volume or a secret runs the attested endpoint on port 8745, which needs
-nothing on a volume ([trust](trust.md#what-first-contact-proves)), and SSH on 22, for the
-key `attest` hands over. `/etc/tundravm/runtime.json` records every volume, secret and
-ingress.
+An image with a volume, a secret or `AttestedTLS` runs the attested endpoint on port 8745,
+which needs nothing on a volume ([trust](trust.md#what-first-contact-proves)), and SSH on
+22, for the key `attest` hands over. `/etc/tundravm/runtime.json` records every volume,
+secret and ingress.
 
 ## Sources and toolchains
 

@@ -44,17 +44,17 @@ How the last row works (plan 6.1):
 - Not gated: boot tasks and probes, `Unit` declarations, mounts, `runtime-init` (keys,
   disks, secret delivery: the control plane) and the cloud glue. The console stays readable
   and the management port still answers on a refused boot.
-- The gate checks that a quote path exists, not that a quote verifies: `tdxs` makes the
-  first quote and the verifier judges it. The gate stops a production build serving where
-  TDX is missing by mistake. What keeps production secrets from a host you do not trust is
-  the release rule under [Delivering secrets](guide.md#delivering-secrets).
+- The gate checks that a quote path exists, not that a quote verifies: it stops a
+  production build serving where TDX is missing by mistake. What keeps production secrets
+  from a host you do not trust is the release rule under
+  [Delivering secrets](guide.md#delivering-secrets).
 
 The boot probe a development profile carries (`run --probe`) checks from inside the guest
 that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress
-refused, sandboxes under their ceilings, no module or kernel symbol beyond the declared
-ones, host keys root-owned. It catches a broken image, not an attacker. It runs inside the
-guest it checks, so a compromised guest can print `ok` for anything, and it reads no
-register. Evidence is the quote `attest` verifies. A production profile carries no probe.
+refused, sandboxes under their ceilings, modules, symbols and host keys as declared,
+attested TLS certificates bound. It catches a broken image, not an attacker: it runs inside
+the guest it checks, so a compromised guest can print `ok` for anything. Evidence is the
+quote `attest` verifies. A production profile carries no probe.
 
 ### What the quote covers
 
@@ -109,12 +109,12 @@ in place of a value.
 
 An image with a volume, a secret or an `AttestedTLS` ingress runs the attested endpoint on
 port 8745, with a TLS key made in memory at start. Its evidence is a quote whose user data
-is `sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public key ‖ one
-certificate key per AttestedTLS port)`, each part prefixed with its length as a big-endian
-uint32, the keys as DER SubjectPublicKeyInfo and the ports ascending (`Binding` in
-`tools/pkg/endpoint`). `attest` sends a fresh nonce and refuses evidence for another nonce
-(a replay) or another TLS key than its session's (a relay), then judges the quote; on
-success it writes the bound host keys as `known_hosts`. `secrets deliver` and `unlock`
+is `sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public key ‖
+AttestedTLS certificate keys)`: length-prefixed parts (big-endian uint32), keys as
+DER SubjectPublicKeyInfo, ports ascending (`Binding` in `tools/pkg/endpoint`). `attest`
+sends a fresh nonce and refuses evidence for another nonce (a replay) or another TLS key
+than its session's (a relay), then judges the quote; on success it writes the bound host
+keys as `known_hosts`. `secrets deliver` and `unlock`
 verify again and write only on that session, with its nonce, once per value per boot.
 
 | Issuer | First contact proves | It does not prove |
@@ -123,11 +123,10 @@ verify again and write only on that session, with its nonce, once per value per 
 | `azure` | nothing: `attest` refuses Azure policies | |
 | `simulator` | the binding and the quote's structure | what runs, or where: its key is published; `simulated`, never production |
 
-`AttestedTLS` still serves a certificate no quote vouches for, and no TDX host has run the
-protocol yet (gate 2).
-
-Each image makes that key pair (`InstanceKey()`); until the quote binds it, a signature
-under it proves this boot, not what signed.
+An `AttestedTLS` port serves a certificate made at boot whose key that evidence binds.
+`attest --tls PORT` and `tools/cmd/attested-client` refuse a certificate without that key,
+on the evidence the policy judged, so the connection ends in that TD. It proves nothing of
+the client or the upstream. No TDX host has run it yet (gate 2).
 
 ## Platform limits
 
@@ -151,14 +150,14 @@ More limits that are not platform-specific:
 - **`TpmSeal`.** `key-gen` seals the key in the vTPM's NV storage without a PCR policy
   today; the image records `pcrs=` for gate 3 to enforce. `recovery="none"` is the only
   method: if the vTPM state is lost, the data is gone.
-- **`BrokerKey`.** The pull client is not built. The image waits for the value as it waits
-  for an operator, and an operator can stand in for the broker over the attested endpoint.
+- **`BrokerKey`.** The pull client is not built: the image waits as for an operator, who
+  can stand in for the broker over the attested endpoint.
 - **The kernel.** `Kernel.default()` is Debian's `linux-image-amd64` with a curated module
   set. A weekly CI workflow builds and boots one `Kernel.build` with every target's drivers
   built in; the tested kernel matrix of plan 6.7 is not published yet.
 - **No boot-time tmpfiles.** The debloat masks them: nothing unmeasured rewrites paths.
-- **The tools.** The evidence service, the endpoint and the key and disk tools build from
-  `tools/` at the SDK's own commit, and the lock pins that source like any other.
+- **The tools.** The evidence service, the endpoint, the key and disk tools build from
+  `tools/` at the SDK's commit, pinned by the lock like any source.
 
 ## Recovery
 
