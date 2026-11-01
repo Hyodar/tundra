@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from tests.unit_corpus import constant_units, emitted_units, golden_units
+from tests.unit_corpus import constant_units, golden_units
 from tundravm._units.parse import Conversion, Mode, convert, rendered, semantic
 from tundravm.declarative import (
     Calendar,
@@ -68,8 +66,10 @@ def test_repository_units_round_trip(mode: Mode) -> None:
 
 
 @pytest.mark.parametrize("mode", ["exact", "semantic"])
-def test_emitted_units_round_trip(tmp_path_factory: pytest.TempPathFactory, mode: Mode) -> None:
-    units = list(emitted_units(Path(tmp_path_factory.mktemp("templates"))))
+def test_emitted_units_round_trip(
+    emitted_unit_corpus: tuple[tuple[str, str], ...], mode: Mode
+) -> None:
+    units = list(emitted_unit_corpus)
     typed, raw = _corpus(units, mode, pair=True)
     assert typed > 0
     print(f"{mode}: {typed} typed, {raw} raw of {len(units)} emitted units")

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from tests.unit_corpus import constant_units, emitted_units, golden_units
+from tests.unit_corpus import constant_units, golden_units
 from tundravm._units import Directive, Other, UnitText
 
 TRICKY = {
@@ -52,7 +50,7 @@ def test_repository_unit_round_trips(name: str, text: str) -> None:
     assert UnitText.parse(text).text == text, name
 
 
-def test_every_emitted_unit_round_trips(tmp_path_factory: pytest.TempPathFactory) -> None:
-    units = emitted_units(Path(tmp_path_factory.mktemp("templates")))
+def test_every_emitted_unit_round_trips(emitted_unit_corpus: tuple[tuple[str, str], ...]) -> None:
+    units = emitted_unit_corpus
     assert len(units) > 50
     assert [name for name, text in units if UnitText.parse(text).text != text] == []

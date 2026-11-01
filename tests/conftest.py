@@ -104,3 +104,12 @@ def short_tmp_path() -> Iterator[Path]:
     path = Path(tempfile.mkdtemp(prefix="tvm-"))
     yield path
     shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def emitted_unit_corpus(tmp_path_factory: pytest.TempPathFactory) -> tuple[tuple[str, str], ...]:
+    """``tests.unit_corpus.emitted_units``: every unit file of every example's, the surge
+    recipe's and every template's compiled tree, compiled once per session."""
+    from tests.unit_corpus import emitted_units
+
+    return emitted_units(tmp_path_factory.mktemp("templates"))
