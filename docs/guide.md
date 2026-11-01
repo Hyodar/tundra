@@ -383,7 +383,14 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
 -from tundravm import Debian, Image, RootFS, Service
 -from tundravm.components import DevAccess, Egress, Network
 +from tundravm import Debian, File, Image, Profile, RootFS, Service
-+from tundravm.components import DevAccess, Egress, JournalExport, Network, Observability
++from tundravm.components import (
++    DevAccess,
++    Egress,
++    JournalExport,
++    Network,
++    Observability,
++    PrometheusRemoteWrite,
++)
  from tundravm.ports import AttestedTLS
 -from tundravm.secrets import Generated, InstanceKey
 +from tundravm.secrets import Generated, InstanceKey, Secret
@@ -402,6 +409,7 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
 +    timer=Every("1h"),
 +)
 +logs = JournalExport(credential=Secret("logs-client"))
++metrics = PrometheusRemoteWrite(credential=Secret("metrics-token"))
  
 @@
      base=Debian("trixie", snapshot="20261018T082309Z"),
@@ -414,7 +422,7 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
      ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
 @@
      rootfs=RootFS.verity(),
-+    observability=Observability(logs=logs),
++    observability=Observability(logs=logs, metrics=metrics),
 +    targets=("qemu", "azure", "gcp"),
 +    profiles={
 +        "staging": Profile(changes=[motd.ref.edit(content="attested-node: staging\n")]),
@@ -423,12 +431,12 @@ Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it
      dev=DevAccess(password="tdx"),
 ```
 
-`JournalExport` ships the journal. It names no `url=`, because the receiver is a
-deployment fact. Until `url=` names yours, the journal goes to `journal-sink`, a receiver
-in the guest, so a dev boot shows the export working. A production profile reports
-`observability-sink-unset` until then. Once `url=` is set, the delivered certificate
-authenticates the upload. `sync-status` runs hourly and puts Lighthouse's sync status in
-the journal.
+`Observability` ships the journal and the node metrics. Neither sink names a `url=`,
+because the receiver is a deployment fact. Until each `url=` names yours, the export goes
+to a receiver in the guest (`journal-sink`, `metrics-sink`), so a dev boot shows it
+working. A production profile reports `observability-sink-unset` until then. Once `url=`
+is set, the delivered credential authenticates the export. `sync-status` runs hourly and
+puts Lighthouse's sync status in the journal.
 `staging` edits one file. `bench` adds `fio`, and `production=False` keeps it out of
 production builds. `targets=` adds the Azure and GCP disks of the same payload.
 
@@ -567,8 +575,8 @@ unless said, which replaces the package's own; beside it only `requires=`, a pro
 `readiness=`, `expose=` and `unit=DropIn(...)` apply. A capability the daemon needs is a
 `Hardening.preset("static", capabilities=["CAP_SYS_TIME"])` deviation; one it lacks shows
 at boot, as the probe's `service:` failure naming it. The example runs no packaged unit:
-the one it could, the node exporter, comes with `Observability(metrics=)`, and declaring
-it beside that is an `identity-collision`.
+the one it would, the node exporter, comes with [stage 6](#6-operating-it)'s
+`Observability(metrics=)`, and declaring it beside that is an `identity-collision`.
 
 ## Components
 
@@ -709,9 +717,9 @@ names, `"logs.example:443"` opens 443 to any address. A production profile witho
 an `egress-unfiltered` warning. `Observability(proxy="IP:PORT")` reaches every sink
 through that one address.
 
-`Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(url, credential=))`
-ships the journal, as [stage 6](#6-operating-it) does, and node metrics. An `http://` sink
-is a lint warning: it carries the logs in the clear.
+`Observability(logs=JournalExport(url=, credential=), metrics=PrometheusRemoteWrite(url=,
+credential=))` ships the journal and node metrics, as [stage 6](#6-operating-it) does. An
+`http://` sink is a lint warning: it carries the logs in the clear.
 
 ### The control plane
 

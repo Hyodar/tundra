@@ -1,17 +1,24 @@
 """attested-node: operating it, stage 6 of the guide and image.py.
 
-Adds what running it takes: the journal shipped (to an in-guest receiver until url= names
-the deployment's, which then takes a delivered client certificate), Lighthouse's sync
-status in it every hour, a staging profile that edits one file, a bench profile that is
-never shipped, and the Azure and GCP disks of the same payload. The dev profile's boot
-probe checks it all.
+Adds what running it takes: the journal and the node metrics shipped (to receivers in the
+guest until url= names the deployment's, which then take a delivered credential),
+Lighthouse's sync status in the journal every hour, a staging profile that edits one file,
+a bench profile that is never shipped, and the Azure and GCP disks of the same payload.
+The dev profile's boot probe checks it all.
 """
 
 from components.lighthouse import Lighthouse
 from components.nethermind import Nethermind
 
 from tundravm import Debian, File, Image, Profile, RootFS, Service
-from tundravm.components import DevAccess, Egress, JournalExport, Network, Observability
+from tundravm.components import (
+    DevAccess,
+    Egress,
+    JournalExport,
+    Network,
+    Observability,
+    PrometheusRemoteWrite,
+)
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Generated, InstanceKey, Secret
 from tundravm.sources import GoBinary, Local
@@ -46,6 +53,7 @@ sync = Service(
     timer=Every("1h"),
 )
 logs = JournalExport(credential=Secret("logs-client"))
+metrics = PrometheusRemoteWrite(credential=Secret("metrics-token"))
 
 image = Image(
     "attested-node",
@@ -57,7 +65,7 @@ image = Image(
     ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
     network=Network(egress=Egress()),
     rootfs=RootFS.verity(),
-    observability=Observability(logs=logs),
+    observability=Observability(logs=logs, metrics=metrics),
     targets=("qemu", "azure", "gcp"),
     profiles={
         "staging": Profile(changes=[motd.ref.edit(content="attested-node: staging\n")]),

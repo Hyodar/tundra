@@ -832,7 +832,7 @@ The export path for logs and metrics: `image.observability` takes it.
 
 | Member | Does |
 |---|---|
-| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's journal never leaves the VM. |
+| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM. |
 | `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one. |
 
 ### `PrometheusRemoteWrite`
@@ -841,7 +841,7 @@ The export path for logs and metrics: `image.observability` takes it.
 
 ```python
 PrometheusRemoteWrite(
-    url: str,
+    url: str | None = None,
     credential: Secret | None = None,
     interval: str = '30s',
     buffer: str = '1h',
@@ -852,8 +852,9 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 
 | Member | Does |
 |---|---|
-| `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*, through *proxy* when given. |
-| `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, through *proxy*. |
+| `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
+| `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
+| `PrometheusRemoteWrite.sink() -> Service` | `metrics-sink`: the in-guest receiver, plain HTTP on the loopback. |
 
 ### `Proxy`
 

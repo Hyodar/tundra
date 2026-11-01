@@ -20,7 +20,8 @@ from tundravm.testing import plan
 
 ALLOWED = frozenset({"source-unpinned", "observability-sink-unset"})
 """The warnings a stage reports: ``tundravm lock`` pins its sources, and stage 6's
-production profiles ship the journal nowhere until the operator passes ``url=``."""
+production profiles ship the journal and the metrics to in-guest receivers until the
+operator passes each ``url=``."""
 
 
 def _names(path: Path) -> tuple[set[str], set[str]]:
@@ -49,7 +50,7 @@ def test_new_writes_the_first_stage_and_image_py_is_the_last() -> None:
     last = EXAMPLE_RECIPES[-1].read_text(encoding="utf-8")
     image = (ATTESTED_NODE / "image.py").read_text(encoding="utf-8")
     assert image == last.replace('Local("../signer")', 'Local("signer")')
-    assert len(image.splitlines()) <= 70
+    assert len(image.splitlines()) <= 80
 
 
 def test_the_image_resolves_every_profile_and_wrapper() -> None:

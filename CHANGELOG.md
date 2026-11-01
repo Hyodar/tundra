@@ -40,6 +40,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential, bound by naming it in argv or `environment=`; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
 - Every image generates a fresh secp256k1 instance key at boot (tmpfs, root-only); `InstanceKey()` (`tundravm.secrets`) hands it to a service as a credential, `instance-key-exposed` refuses anything else naming it, and `run status`, `attest` and `show` print its public key and who takes it.
 - `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it, such as the Engine API JWT an execution client and its consensus client share.
+- `JournalExport()` and `PrometheusRemoteWrite()` without `url=` ship to a receiver in the guest (`journal-sink`, Debian's `systemd-journal-remote`; `metrics-sink`, Prometheus's remote-write receiver), both on the loopback, so a dev boot shows each export working; the credential binds once `url=` names the deployment's receiver, and a production profile reports `observability-sink-unset` until then.
 - **Breaking:** a relative host path in an image file (`File.copy(src, ...)`, `Tree(src, ...)`, `Kernel.build(config=, patches=)`, `AptRepository(key=Path(...))`) is beside the file that declares it, as `Local` is, not the working directory, so a build reads the same files from any directory.
 - An image file imports modules from its own directory and its project's (the nearest `pyproject.toml`), from any working directory: a project carries its own components.
 - `Mkosi(settings=)` writes each key in its mkosi section, and a key tundravm writes is refused with the public slot that sets it.
@@ -50,7 +51,6 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks and collateral, and `Observability(proxy=)` sends through one proxy.
-- `JournalExport()` without `url=` ships the journal to `journal-sink`, Debian's `systemd-journal-remote` on the loopback in the guest, so a dev boot shows the export working; a production profile reports `observability-sink-unset` until `url=` names the deployment's receiver, and the credential binds then.
 - `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.
 

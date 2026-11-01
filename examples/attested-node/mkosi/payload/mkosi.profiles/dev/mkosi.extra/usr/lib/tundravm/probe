@@ -153,6 +153,42 @@ probe_upload() {
         *) fail "$state ($sub): an exporter retries an unreachable sink, it does not stop; journalctl -u $1 says why" ;;
     esac
 }
+probe_agent() {
+    if command -v promtool >/dev/null 2>&1; then
+        if ! said=$(promtool check config --agent --syntax-only "$2" 2>&1); then
+            fail "promtool check config --agent $2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
+            return
+        fi
+        parsed="promtool check config --agent accepts $2"
+    else
+        waited=0
+        while :; do
+            said=$(journalctl -b -q -o cat -u "$1" 2>/dev/null |
+                grep -E 'Completed loading of configuration file|Error loading config' | tail -n 1)
+            [ -n "$said" ] || [ "$waited" -ge 30 ] && break
+            sleep 1
+            waited=$((waited + 1))
+        done
+        case $said in
+            *"Error loading config"*)
+                fail "Prometheus refuses $2: $said"
+                return
+                ;;
+            "")
+                fail "Prometheus logged no 'Completed loading of configuration file' in 30s: journalctl -u $1 says why"
+                return
+                ;;
+        esac
+        parsed="Prometheus loaded $2"
+    fi
+    state=$(systemctl show -P ActiveState "$1")
+    retry=$(journalctl -b -q -o cat -u "$1" 2>/dev/null | grep -F 'retrying' | tail -n 1)
+    if [ "$state" = active ]; then
+        ok "active, $parsed${retry:+; retrying the sink: $retry}"
+    else
+        fail "$state ($(systemctl show -P SubState "$1")): $parsed, but the agent does not run; journalctl -u $1 says why"
+    fi
+}
 probe_nowait() {
     exporters=
     while [ "$1" != -- ]; do
@@ -275,6 +311,8 @@ check=service:lighthouse.service
 probe_service lighthouse.service
 check=service:journal-sink.service
 probe_service journal-sink.service
+check=service:metrics-sink.service
+probe_service metrics-sink.service
 check=service:signer.service
 probe_service signer.service
 check=timer:sync-status.timer
@@ -291,8 +329,10 @@ check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=observability:journal-export.service
 probe_upload journal-export.service 'http://127.0.0.1:19532' /var/lib/journal-export/state 19532
+check=observability:metrics-export.service
+probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:no-wait
-probe_nowait journal-export.service -- tdxs.service nethermind.service lighthouse.service journal-sink.service signer.service attested-tls-8546.service
+probe_nowait journal-export.service metrics-export.service -- tdxs.service nethermind.service lighthouse.service journal-sink.service metrics-sink.service signer.service attested-tls-8546.service
 check=hardening:nethermind.service
 probe_hardening nethermind.service 2.7 dotnet
 check=hardening:lighthouse.service
@@ -301,6 +341,10 @@ check=hardening:journal-sink.service
 probe_hardening journal-sink.service 2.5 static
 check=hardening:journal-export.service
 probe_hardening journal-export.service 2.5 static
+check=hardening:metrics-sink.service
+probe_hardening metrics-sink.service 2.5 static
+check=hardening:metrics-export.service
+probe_hardening metrics-export.service 2.5 static
 check=hardening:signer.service
 probe_hardening signer.service 2.5 static
 check=hardening:attested-tls-8546.service

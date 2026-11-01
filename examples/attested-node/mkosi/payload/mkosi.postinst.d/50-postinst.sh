@@ -10,6 +10,9 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-sink
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-sink-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-export
+mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-sink
+mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-sink-ready
+mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
 mkosi-chroot useradd --system --shell /usr/sbin/nologin signer
 mkosi-chroot useradd --system --shell /usr/sbin/nologin signer-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin sync-status
@@ -30,6 +33,10 @@ mkosi-chroot systemctl enable lighthouse-ready.service
 mkosi-chroot systemctl enable journal-sink.service
 mkosi-chroot systemctl enable journal-sink-ready.service
 mkosi-chroot systemctl enable journal-export.service
+mkosi-chroot systemctl enable prometheus-node-exporter.service
+mkosi-chroot systemctl enable metrics-sink.service
+mkosi-chroot systemctl enable metrics-sink-ready.service
+mkosi-chroot systemctl enable metrics-export.service
 mkosi-chroot systemctl enable signer.service
 mkosi-chroot systemctl enable signer-ready.service
 mkosi-chroot systemctl enable sync-status.timer
@@ -59,6 +66,10 @@ ln -sf "/etc/systemd/system/lighthouse-ready.service" "$BUILDROOT/etc/systemd/sy
 ln -sf "/etc/systemd/system/journal-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/journal-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/journal-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/metrics-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/metrics-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/metrics-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/sync-status.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -73,7 +84,7 @@ ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/syste
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
 
-mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service systemd-journal-upload.service systemd-journal-remote.socket systemd-journal-remote.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
+mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service systemd-journal-upload.service systemd-journal-remote.socket systemd-journal-remote.service prometheus.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")

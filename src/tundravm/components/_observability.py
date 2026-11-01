@@ -6,7 +6,9 @@ url, credential=...))`` ships the journal with ``systemd-journal-upload`` and no
 with Prometheus in agent mode (remote write only, no query API). Both run as their own
 users in the preset sandbox, read their credentials as systemd credentials, keep bounded
 buffers, retry on their own, and are required by nothing, so an exporter that cannot
-reach its sink never holds an application back. ``proxy="IP:PORT"`` sends both through
+reach its sink never holds an application back. Either without a ``url`` ships to a
+receiver in the guest, so a dev boot shows the export working before the deployment's
+receiver is known. ``proxy="IP:PORT"`` sends both through
 one fixed-address proxy, the only destination a filtered egress then needs, and
 ``proxy=Proxy(address, port, tls_name=...)`` through one that speaks TLS itself.
 """
@@ -48,6 +50,18 @@ SINK_PORT = 19532
 
 SINK_URL = f"http://127.0.0.1:{SINK_PORT}"
 """Where the uploader reaches the in-guest receiver."""
+
+METRICS_SINK_SERVICE = "metrics-sink"
+"""The in-guest receiver a :class:`PrometheusRemoteWrite` without a URL writes to."""
+
+METRICS_SINK_PORT = 9091
+"""The loopback port :data:`METRICS_SINK_SERVICE` listens on, beside the agent's 9090."""
+
+METRICS_SINK_URL = f"http://127.0.0.1:{METRICS_SINK_PORT}/api/v1/write"
+"""Where the agent reaches the in-guest receiver."""
+
+METRICS_SINK_CONFIG = "/etc/tundravm/metrics-sink.yml"
+"""The in-guest receiver's configuration: it scrapes nothing, so it is empty."""
 
 _NODE_EXPORTER_DEFAULTS = "/etc/default/prometheus-node-exporter"
 
@@ -280,15 +294,22 @@ class PrometheusRemoteWrite(Keywords):
     scrapes the node exporter on the loopback every *interval* and keeps at most *buffer*
     of samples it could not send; in memory, at most four shards of 10000 samples wait,
     retried from one second to one minute apart, a 429 included.
+
+    Without *url* the receiver is in the guest: ``metrics-sink``, Prometheus with its
+    remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A dev
+    boot shows the export working, nothing leaves the VM, *credential* waits unbound for a
+    receiver to present it to, and a production profile reports
+    ``observability-sink-unset`` until *url* names the deployment's receiver.
     """
 
-    url: str
+    url: str | None = None
     credential: Secret | None = None
     interval: str = "30s"
     buffer: str = "1h"
 
     def __post_init__(self) -> None:
-        _check_url(self, self.url)
+        if self.url is not None:
+            _check_url(self, self.url)
         _check_credential(self, self.credential)
         for what in ("interval", "buffer"):
             value = getattr(self, what)
@@ -300,11 +321,12 @@ class PrometheusRemoteWrite(Keywords):
 
     def config(self, proxy: Proxy | None = None) -> dict[str, object]:
         """The agent's configuration: scrape the node exporter, write to *url*, through
-        *proxy* when given."""
-        remote: dict[str, object] = {"url": self.url}
-        if proxy is not None:
+        *proxy* when given; without *url*, to the in-guest :meth:`sink`."""
+        local = self.url is None
+        remote: dict[str, object] = {"url": METRICS_SINK_URL if local else self.url}
+        if proxy is not None and not local:
             remote["proxy_url"] = proxy.url
-        if self.credential is not None:
+        if self.credential is not None and not local:
             remote["authorization"] = {
                 "type": "Bearer",
                 "credentials_file": f"/run/credentials/metrics-export.service/"
@@ -326,8 +348,11 @@ class PrometheusRemoteWrite(Keywords):
         }
 
     def service(self, proxy: Proxy | None = None) -> Service:
-        """The ``metrics-export`` service: Prometheus in agent mode, through *proxy*."""
-        steps = _start_steps(proxy)
+        """The ``metrics-export`` service: Prometheus in agent mode, through *proxy*;
+        without *url*, to the in-guest :meth:`sink`, never through a proxy."""
+        local = self.url is None
+        steps = () if local else _start_steps(proxy)
+        credential = None if local else self.credential
         return Service(
             METRICS_SERVICE,
             [
@@ -338,9 +363,25 @@ class PrometheusRemoteWrite(Keywords):
                 f"--storage.agent.retention.max-time={self.buffer}",
                 "--web.listen-address=127.0.0.1:9090",
             ],
-            credentials=[] if self.credential is None else [self.credential],
+            requires=[self.sink().endpoint(METRICS_SINK_PORT)] if local else [],
+            credentials=[] if credential is None else [credential],
             state="metrics-export",
             unit=dm.DropIn(exec_start_pre=steps) if steps else None,
+        )
+
+    def sink(self) -> Service:
+        """``metrics-sink``: the in-guest receiver, plain HTTP on the loopback."""
+        return Service(
+            METRICS_SINK_SERVICE,
+            [
+                "/usr/bin/prometheus",
+                f"--config.file={METRICS_SINK_CONFIG}",
+                "--web.enable-remote-write-receiver",
+                f"--web.listen-address=127.0.0.1:{METRICS_SINK_PORT}",
+                f"--storage.tsdb.path=/var/lib/{METRICS_SINK_SERVICE}",
+            ],
+            state=METRICS_SINK_SERVICE,
+            readiness=TcpProbe(METRICS_SINK_PORT),
         )
 
 
@@ -385,7 +426,7 @@ class Observability(Component):
         if self.logs is None and self.metrics is None:
             raise ValidationError(
                 "Observability exports nothing.",
-                hint="Pass logs=JournalExport(url) and/or metrics=PrometheusRemoteWrite(url).",
+                hint="Pass logs=JournalExport() and/or metrics=PrometheusRemoteWrite().",
             )
 
     def outbound(self) -> Egress:
@@ -423,6 +464,9 @@ class Observability(Component):
                 _NODE_EXPORTER_DEFAULTS, {"ARGS": "--web.listen-address=127.0.0.1:9100"}
             )
             yield dm.Unit("prometheus-node-exporter.service", enabled=True)
+            if self.metrics.url is None:
+                yield ConfigFile.yaml(METRICS_SINK_CONFIG, {"global": {}}, sort_keys=False)
+                yield self.metrics.sink()
             yield self.metrics.service(proxy)
 
     rules = (
@@ -435,25 +479,28 @@ class Observability(Component):
         Rule(
             "observability-sink-unset",
             "warning",
-            "A production profile ships the journal to the in-guest receiver, so no log "
-            "leaves the VM.",
-            "Pass JournalExport(url=) your systemd-journal-remote receiver's https:// URL.",
+            "A production profile ships its logs or metrics to the in-guest receiver, so "
+            "nothing leaves the VM.",
+            "Pass url= on JournalExport (a systemd-journal-remote receiver) or "
+            "PrometheusRemoteWrite (a remote-write receiver): the deployment's https:// URL.",
         ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``observability-plaintext``: an http:// sink sees what the TD logs in the clear;
-        ``observability-sink-unset``: a production profile's journal never leaves the VM."""
+        ``observability-sink-unset``: a production profile's logs or metrics never leave the
+        VM."""
         found: list[dm.Diagnostic] = []
-        if resolved.production and self.logs is not None and self.logs.url is None:
-            found.append(
-                dm.Diagnostic(
-                    "observability-sink-unset",
-                    "warning",
-                    "JournalExport names no url: the journal goes to the in-guest receiver "
-                    "and never leaves the VM",
+        for sink, what in ((self.logs, "the journal"), (self.metrics, "the node metrics")):
+            if resolved.production and sink is not None and sink.url is None:
+                found.append(
+                    dm.Diagnostic(
+                        "observability-sink-unset",
+                        "warning",
+                        f"{type(sink).__name__} names no url: the in-guest receiver takes "
+                        f"{what}, and nothing leaves the VM",
+                    )
                 )
-            )
         for name, sink in (("logs", self.logs), ("metrics", self.metrics)):
             if sink is not None and sink.url is not None and sink.url.startswith("http://"):
                 found.append(
