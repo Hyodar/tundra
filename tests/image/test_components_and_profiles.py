@@ -264,10 +264,11 @@ def test_a_profile_edits_a_service_by_its_public_keywords(
         ("app", {"environment": {"JWT": Secret("jwt")}}, "unbinds jwt through argv="),
         ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
         ("db", {"readiness": None}, "requires 'db.service', which declares no readiness"),
+        ("db", None, "requires 'db.service', which the profile removes"),
     ],
 )
 def test_what_a_service_edit_still_refuses(
-    target: str, fields: dict[str, object], expected: str
+    target: str, fields: dict[str, object] | None, expected: str
 ) -> None:
     db = Service("db", ["/usr/bin/db"], readiness=TcpProbe(5432))
     api = Service("api", ["/usr/bin/api"], requires=[db.ready])
@@ -278,7 +279,7 @@ def test_what_a_service_edit_still_refuses(
     built = Service("bin", [GoBinary("bin", Local("."))])
     ref = {"app": app.ref, "bin": built.ref, "db": db.ref, "vol": vol.ref}[target]
     with pytest.raises(ValidationError) as caught:
-        change = ref.edit(**fields)
+        change = ref.remove() if fields is None else ref.edit(**fields)
         recipe_of(
             Image("x", services=[db, api, vol, app], profiles={"s": Profile(changes=[change])})
         )

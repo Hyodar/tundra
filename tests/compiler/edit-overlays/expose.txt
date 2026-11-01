@@ -16,7 +16,9 @@ table inet filter {
 		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
 		udp sport 67 udp dport 68 accept comment "DHCPv4 replies"
 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept comment "DHCPv6 replies"
+		tcp dport 22 accept comment "ssh.service"
 		tcp dport 8080 accept comment "api.service"
+		tcp dport 8745 accept comment "secret-delivery"
 		tcp dport 9090 accept comment "api.service"
 	}
 	chain forward {

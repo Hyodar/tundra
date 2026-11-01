@@ -1,0 +1,211 @@
+== production/mkosi.extra/usr/lib/systemd/system/api.service
+[Unit]
+Description=api.service
+After=db-ready.service tdx-evidence.service
+Requires=db-ready.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/api
+User=api
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+== production/mkosi.extra/usr/lib/systemd/system/tick.service
+[Unit]
+Description=tick.service
+After=tdx-evidence.service
+Requires=tdx-evidence.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tick
+User=tick
+TimeoutStartSec=5min
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+== production/mkosi.extra/usr/lib/systemd/system/tick.timer
+[Unit]
+Description=tick
+
+[Timer]
+OnBootSec=1h
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+== production/mkosi.extra/usr/lib/systemd/system/web-ready.service
+[Unit]
+Description=Wait until web.service is ready
+After=web.service
+Requires=web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c "until (exec 3<>/dev/tcp/127.0.0.1/9000) 2>/dev/null; do sleep 0.5; done"
+User=web-ready
+TimeoutStartSec=90s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+== production/mkosi.extra/usr/lib/systemd/system/web.service
+[Unit]
+Description=web.service
+After=credential-key.service tdx-evidence.service
+Requires=credential-key.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/web
+User=web
+LoadCredential=key:/run/tundravm/credentials/key
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
+== production/mkosi.extra/usr/lib/systemd/system/web.service.d/20-tundravm.conf
+[Service]
+Restart=always
+== production/mkosi.postinst.d/50-postinst.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkosi-chroot useradd --system --shell /usr/sbin/nologin api
+mkosi-chroot useradd --system --shell /usr/sbin/nologin tick
+mkosi-chroot useradd --system --shell /usr/sbin/nologin web
+mkosi-chroot useradd --system --shell /usr/sbin/nologin web-ready
+mkosi-chroot systemctl enable api.service
+mkosi-chroot systemctl enable tick.timer
+mkosi-chroot systemctl enable web.service
+mkosi-chroot systemctl enable web-ready.service
+mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
+ln -sf "/etc/systemd/system/api.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tick.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/web-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+== staging/mkosi.conf
+[Output]
+ImageId=%i-staging
+== staging/mkosi.extra/etc/nftables.conf
+#!/usr/sbin/nft -f
+# tundravm Firewall: inbound traffic is dropped unless a rule below accepts it;
+# outbound traffic is not filtered.
+flush ruleset
+
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iifname "lo" accept
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+		udp sport 67 udp dport 68 accept comment "DHCPv4 replies"
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept comment "DHCPv6 replies"
+		tcp dport 22 accept comment "ssh.service"
+		tcp dport 8745 accept comment "secret-delivery"
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+	}
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}

@@ -96,6 +96,8 @@ class _Lowering:
     """Whether the image itself ships curl, which an HTTP probe runs."""
     world: dict[str, Service] = field(default_factory=dict)
     """The services as the profile being lowered sees them, by unit, where it edits them."""
+    removed: frozenset[str] = frozenset()
+    """The units of the services the profile being lowered removes, or its ancestors do."""
     backports: bool = False
     sends: tuple[tuple[str, Egress], ...] | None = None
     runtime: Runtime = field(init=False)
@@ -368,12 +370,12 @@ class _Lowering:
 
     def variant(self, name: str, profile: Profile) -> dm.Variant:
         """One ``Profile`` as the overlay it is."""
-        changes, regenerated, world = self.changes(profile)
+        changes, regenerated, world, removed = self.changes(profile)
         items: list[dm.Declaration | dm.Fragment] = []
-        self.world, curl, self.curl = world, self.curl, False
+        self.world, self.removed, curl, self.curl = world, removed, self.curl, False
         for item in profile.add:
             items.extend(self.content(item))
-        self.world = {}
+        self.world, self.removed = {}, frozenset()
         items.extend(regenerated)
         if any(isinstance(service.readiness, HttpProbe) for service in world.values()):
             self.curl = True
@@ -394,22 +396,35 @@ class _Lowering:
 
     def changes(
         self, profile: Profile
-    ) -> tuple[tuple[dm.Edit | dm.Remove, ...], tuple[dm.Declaration, ...], dict[str, Service]]:
+    ) -> tuple[
+        tuple[dm.Edit | dm.Remove, ...],
+        tuple[dm.Declaration, ...],
+        dict[str, Service],
+        frozenset[str],
+    ]:
         """*profile*'s changes on the declarations their values lower to, the declarations
-        its service edits add, and the services as it sees them, by unit.
+        its service edits add, the services as it sees them, by unit, and the units of the
+        services it and its ancestors remove.
 
         An edit changes what the value its profile sees lowers to: the image's value with
         the edits of the profiles it extends applied, so two edits that land on the same
         directive (``resources=`` and ``shutdown=`` both write ``[Service]`` lines) add up.
         Service edits are lowered together: every service the profile inherits is lowered
         as it sees them, so a dependent of an edited readiness waits for the new probe, and
-        what differs from the inherited lowering is the profile's change.
+        what differs from the inherited lowering is the profile's change. A removed service
+        takes everything it lowers to with it: its unit and user, its probe, its drop-in,
+        its timer, its firewall rules and its waits for credentials.
         """
         current: dict[dm.Ref, object] = {}
         world: dict[str, Service] = {}
+        units = {service.unit_name for service in self.profile_services(profile)}
+        gone: set[str] = set()
         for ancestor in self.ancestors(profile):
             for change in ancestor.changes:
-                if isinstance(change, Edit) and isinstance(change.ref.value, Service):
+                unit = _removed_unit(change, units) if isinstance(change, Remove) else None
+                if unit is not None:
+                    gone.add(unit)
+                elif isinstance(change, Edit) and isinstance(change.ref.value, Service):
                     unit = change.ref.value.unit_name
                     world[unit] = replace(world.get(unit, change.ref.value), **change.fields)  # type: ignore[arg-type]
                 elif isinstance(change, Edit):
@@ -417,8 +432,8 @@ class _Lowering:
                     current[target] = replace(
                         current.get(target, change.ref.value), **change.fields
                     )  # type: ignore[type-var]
-        inherited = dict(world)
-        causes: dict[str, Edit] = {}
+        inherited, inherited_gone = dict(world), frozenset(gone)
+        causes: dict[str, Edit | Remove] = {}
         found: list[dm.Edit | dm.Remove] = []
         position: int | None = None
         for change in profile.changes:
@@ -426,23 +441,43 @@ class _Lowering:
                 found.append(change)
                 continue
             with _at(change):
+                unit = _removed_unit(change, units) if isinstance(change, Remove) else None
+                if isinstance(change, Edit) and isinstance(change.ref.value, Service):
+                    unit = change.ref.value.unit_name
+                if unit is not None:
+                    if unit in gone or (isinstance(change, Remove) and unit in causes):
+                        raise ValidationError(
+                            f"The profile changes {change.ref} beside removing it.",
+                            hint="Keep one change of the service: an edit or its removal.",
+                        )
+                    if isinstance(change, Remove):
+                        gone.add(unit)
+                    else:
+                        self.edit_service(change, world)
+                    causes[unit] = change
+                    position = len(found) if position is None else position
+                    continue
                 if isinstance(change, Remove):
                     found.append(dm.Remove(change.ref.target))
-                    continue
-                if isinstance(change.ref.value, Service):
-                    self.edit_service(change, world)
-                    causes[change.ref.value.unit_name] = change
-                    position = len(found) if position is None else position
                     continue
                 target = change.ref.target
                 before = current.get(target, change.ref.value)
                 after = current[target] = replace(before, **change.fields)  # type: ignore[type-var]
                 found.append(self.edit(change, before, after))
+        removed = frozenset(gone)
         if position is None:
-            return tuple(found), (), world
-        edits, added = self.regenerate(profile, inherited, world, causes)
+            return tuple(found), (), world, removed
+        edits, added = self.regenerate(
+            profile, (inherited, inherited_gone), (world, removed), causes
+        )
         found[position:position] = edits
-        return tuple(found), added, world
+        return tuple(found), added, world, removed
+
+    def profile_services(self, profile: Profile) -> tuple[Service, ...]:
+        """The services *profile* inherits: the image's and its ancestors' additions."""
+        return tuple(
+            services_of((*self.workload(), *(i for a in self.ancestors(profile) for i in a.add)))
+        )
 
     def edit_service(self, change: Edit, world: dict[str, Service]) -> None:
         """Apply *change* to the service it names in *world*, refusing one that changes
@@ -466,18 +501,17 @@ class _Lowering:
     def regenerate(
         self,
         profile: Profile,
-        inherited: dict[str, Service],
-        world: dict[str, Service],
-        causes: dict[str, Edit],
+        inherited: tuple[dict[str, Service], frozenset[str]],
+        world: tuple[dict[str, Service], frozenset[str]],
+        causes: dict[str, Edit | Remove],
     ) -> tuple[list[dm.Edit | dm.Remove], tuple[dm.Declaration, ...]]:
         """What turns the units of the services *profile* inherits, lowered as *inherited*
         sees them, into those lowered as *world* does: an edit of each unit that differs, a
-        removal of each that is gone, and the units that are new."""
-        services = tuple(
-            services_of((*self.workload(), *(i for a in self.ancestors(profile) for i in a.add)))
-        )
-        before = {unit.ref: unit for unit, _ in self.lowered(services, inherited)}
-        after = self.lowered(services, world)
+        removal of each that is gone, and the units that are new. Each pair is the services
+        as a profile sees them and the units of those it removes."""
+        services = self.profile_services(profile)
+        before = {unit.ref: unit for unit, _ in self.lowered(services, *inherited)}
+        after = self.lowered(services, *world)
         edits: list[dm.Edit | dm.Remove] = []
         added: list[dm.Declaration] = []
         for unit, owner in after:
@@ -493,19 +527,22 @@ class _Lowering:
         return edits, tuple(added)
 
     def lowered(
-        self, services: Sequence[Service], world: dict[str, Service]
+        self, services: Sequence[Service], world: dict[str, Service], removed: frozenset[str]
     ) -> list[tuple[dm.Declaration, str]]:
-        """The units of *services* as *world* sees them, each with its service's unit."""
-        self.world = world
+        """The units of *services* as *world* sees them, those *removed* names left out,
+        each with its service's unit."""
+        self.world, self.removed = world, removed
         try:
             found: list[tuple[dm.Declaration, str]] = []
             for service in services:
+                if service.unit_name in removed:
+                    continue
                 seen = world.get(service.unit_name, service)
                 with _at(seen):
                     found.extend((unit, seen.unit_name) for unit in self.units(seen))
             return found
         finally:
-            self.world = {}
+            self.world, self.removed = {}, frozenset()
 
     def ancestors(self, profile: Profile) -> tuple[Profile, ...]:
         """The profiles *profile* extends, the image's nearest first."""
@@ -768,8 +805,22 @@ class _Lowering:
             if isinstance(requirement, dm.UnitOutput):
                 continue
             for handle in _handles(requirement, self.world):
+                if handle.unit in self.removed:
+                    raise ValidationError(
+                        f"Service {item.name!r} requires {handle.unit!r}, which the profile "
+                        "removes.",
+                        hint=f"Remove {item.name!r} too, or edit its requires= in the profile.",
+                    )
                 units.append(_ready_unit(item, handle))
         return tuple(dict.fromkeys(units))
+
+
+def _removed_unit(change: Remove, units: set[str]) -> str | None:
+    """The unit of the service *change* removes, ``None`` when it removes something else."""
+    target = change.ref.target
+    if target.kind in ("Service", "Task") and target.identity[0] in units:
+        return str(target.identity[0])
+    return None
 
 
 def _evidence(item: Service) -> tuple[ServiceReady, ...]:
