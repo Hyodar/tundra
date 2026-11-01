@@ -1,5 +1,5 @@
 {
-  "control_plane": "secret-delivery ssh-key bootstrap, unverified first contact (gate 3: attested endpoint)",
+  "control_plane": "attested endpoint: TLS bound to the quote",
   "ingress": [
     {
       "binding": "self-signed per boot; quote binding is gate 3",

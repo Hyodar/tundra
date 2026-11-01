@@ -100,8 +100,8 @@ def service_ports(service: Service) -> tuple[Port, ...]:
 
 def listening(items: Iterable[Declaration]) -> dict[Port, list[str]]:
     """Port -> what in *items* listens on it, in declaration order: services, enabled units
-    naming ``ports``, and ``Secrets``, whose ``secret-delivery`` boot step takes root's SSH key
-    over HTTP whatever delivers the other secrets."""
+    naming ``ports``, and ``Secrets``, whose attested endpoint serves evidence and takes the
+    operator's SSH key whatever delivers the other secrets."""
     found: dict[Port, list[str]] = {}
     for item in items:
         if isinstance(item, Service):
@@ -112,7 +112,7 @@ def listening(items: Iterable[Declaration]) -> dict[Port, list[str]]:
                 if isinstance(opened, Port):
                     found.setdefault(opened, []).append(unit_name(item.name))
         elif isinstance(item, Secrets) and not _loopback(item.host):
-            found.setdefault(Port(item.port), []).append("secret-delivery")
+            found.setdefault(Port(item.port), []).append("attested-endpoint")
     return found
 
 

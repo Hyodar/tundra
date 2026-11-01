@@ -103,7 +103,7 @@ def test_the_prover_locks_without_the_network(prover_file: Path) -> None:
     payload = json.loads(lock(recipe, resolver=resolver).text())
     builds = payload["image"]["profiles"]["production"]["source_builds"]
     tools = {name for name in builds if name != "raiko"}
-    assert tools == {"tdxs", "key-generation", "disk-encryption", "secret-delivery"}
+    assert tools == {"tdxs", "key-generation", "disk-encryption", "attested-endpoint"}
 
 
 # ── Surge ───────────────────────────────────────────────────────────────

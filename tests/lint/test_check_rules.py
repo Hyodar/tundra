@@ -369,11 +369,10 @@ def test_secret_target_unsupported_by_the_builtin_provider() -> None:
     ]
     assert [(d.severity, d.code, d.subject) for d in found] == [
         ("error", "secret-target-unsupported", "token"),
-        ("error", "secret-target-unsupported", "token"),
     ]
-    [file] = [d for d in found if "file /run/token" in d.message]
-    assert "provisions only the SSH key" in file.message
-    assert file.hint == tundravm_sets("where each secret is delivered")
+    [env] = found
+    assert "environment variable TOKEN" in env.message and "never the environment" in env.message
+    assert env.hint == tundravm_sets("where each secret is delivered")
 
 
 def test_secret_target_unsupported_by_an_external_provider() -> None:

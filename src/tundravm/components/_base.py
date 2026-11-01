@@ -213,8 +213,8 @@ class Firewall(Component):
     """The inbound (and optionally outbound) packet filter, nftables in the image.
 
     Inbound it drops everything except the ports services ``expose=``, an ingress's port,
-    :data:`~tundravm._image._values.MANAGEMENT_PORT` where ``secret-delivery`` takes the
-    operator's SSH key, and *allow* (ports something other than a ``Service`` listens on: a
+    :data:`~tundravm._image._values.MANAGEMENT_PORT` where the attested endpoint listens,
+    and *allow* (ports something other than a ``Service`` listens on: a
     packaged daemon); each rule's comment names what listens. Outbound it
     filters only with *egress*, and then accepts what the baseline and every component's
     ``outbound()`` send as well, each rule commented with who asked for it; a component a
@@ -317,8 +317,8 @@ class SshAccess(Component):
     """Root logs in over SSH with a public key, and with nothing else.
 
     *keys* are public keys baked into the image; *from_delivery* accepts the key the
-    control plane delivers at boot instead (today's ``secret-delivery`` bootstrap on the
-    management port, which ``sshd`` waits for). One of them is required. The port is
+    attested endpoint takes once ``tundravm attest`` verified the quote binding the host
+    keys. One of them is required. The port is
     opened in the firewall; host keys are generated per instance at boot. Exports
     :attr:`port`. Component name: ``ssh-access``.
     """
@@ -493,7 +493,7 @@ class Tdxs(Component):
     image points at a mirror (``Tdxs(source=Git("https://mirror.example/tundra", COMMIT,
     subdir="tools"))``) or also validates peers' quotes (*validator*,
     *expected_measurements*, or :meth:`from_policy`). The same *source* builds the volume
-    and delivery tools (``key-gen``, ``disk-setup``, ``secret-delivery``) when the image has
+    and delivery tools (``key-gen``, ``disk-setup``, ``attested-endpoint``) when the image has
     volumes or secrets, so one input names all of them.
 
     Services that ask for quotes join the ``tdx`` group and require :data:`EVIDENCE`

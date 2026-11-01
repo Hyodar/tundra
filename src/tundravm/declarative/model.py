@@ -1735,11 +1735,11 @@ SecretTargetKind = Literal["file", "env"]
 
 @dataclass(frozen=True, slots=True)
 class ExternalDelivery:
-    """Something other than secret-delivery writes a ``Secrets`` block's targets at boot.
+    """Something other than the attested endpoint writes a ``Secrets`` block's targets.
 
     *name* says what (``"gcp-secret-manager"``, ``"app-secrets.service"``); *supports*
     the target kinds it writes: ``"file"`` (``SecretFile``), ``"env"`` (``SecretEnv``).
-    The SSH key flow still runs through secret-delivery (``Secrets.ready``).
+    The operator's SSH key still goes through the attested endpoint.
 
     Say how to tell it is done with *unit* (a unit the image ships or packages,
     which the ``delivery-<name>`` runtime-init step starts and waits for:
@@ -1803,8 +1803,9 @@ class ExternalDelivery:
 class Secrets(Declared):
     """The secrets a variant expects at boot; *delivery* is who writes their targets.
 
-    ``delivery=None`` is the built-in secret-delivery provider, which provisions only
-    the SSH key (``BUILTIN_SECRET_CAPABILITIES``): a ``SecretFile`` or ``SecretEnv``
+    ``delivery=None`` is the built-in provider, the attested endpoint on *host*:*port*,
+    which takes the operator's SSH key and writes ``SecretFile`` targets, each only on the
+    TLS session a fresh quote bound (``BUILTIN_SECRET_CAPABILITIES``): a ``SecretEnv``
     entry needs an :class:`ExternalDelivery` that writes it (lint:
     ``secret-target-unsupported``).
     """
@@ -1854,11 +1855,11 @@ class Secrets(Declared):
 
     @property
     def ready(self) -> Ready:
-        """The handle of the ``secrets`` runtime-init step: secret-delivery's built-in setup.
+        """The handle of the ``secrets`` runtime-init step: every required ``SecretFile``
+        the attested endpoint writes has arrived.
 
-        It receives the SSH key (and writes the secret configuration); it does
-        not wait for an :class:`ExternalDelivery`, whose own ``delivery.ready``
-        does.
+        It does not wait for an :class:`ExternalDelivery`, whose own ``delivery.ready``
+        does, nor for the operator's SSH key.
         """
         return Ready("secrets")
 

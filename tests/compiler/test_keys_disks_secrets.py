@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
-from tundravm._modules.secret_delivery import CLOSE_DELIVERY_PORT
 from tundravm._source import GitSource
 from tundravm.declarative import (
     BootStep,
@@ -300,17 +299,25 @@ def test_disk_encryption_rejects_conflicting_disks(tmp_path: Path) -> None:
 # ── Secrets ──────────────────────────────────────────────────────────
 
 
-def test_secret_delivery_registers_init_script(tmp_path: Path) -> None:
-    secrets = Secrets(port=9090)
+def test_secret_delivery_runs_the_endpoint_and_waits_for_required_files(tmp_path: Path) -> None:
+    secrets = Secrets(
+        port=9090,
+        entries=(
+            Secret("jwt", targets=(SecretFile("/run/tundravm/credentials/jwt"),)),
+            Secret("opt", targets=(SecretFile("/run/tundravm/credentials/opt"),), required=False),
+        ),
+    )
     tree = _compile(tmp_path, secrets, *_probes(secrets.ready))
 
     script = _step(tree, "secrets")
-    expected = "/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml"
-    assert script.count(expected) == 1
-    # one key, once: the port is dropped as soon as the key is taken
-    assert script.endswith(expected + "\n" + CLOSE_DELIVERY_PORT.format(port=9090))
+    assert "until [ -e /run/tundravm/credentials/jwt ]; do sleep 1; done" in script
+    assert "opt" not in script
     _assert_runs_between_probes(tree, "secrets")
-    assert 'server_url: "0.0.0.0:9090"' in tree.read(SECRET_CONFIG)
+    config = tree.read(SECRET_CONFIG)
+    assert 'listen: "0.0.0.0:9090"' in config and 'name: "opt"' in config
+    unit = tree.read("mkosi.extra/usr/lib/systemd/system/tundravm-endpoint.service")
+    assert "ExecStart=/usr/bin/attested-endpoint --config /etc/tdx/secrets.yaml" in unit
+    assert "runtime-init" not in unit
 
 
 def test_secret_delivery_writes_config_from_declared_secrets(tmp_path: Path) -> None:
@@ -337,10 +344,10 @@ def test_secret_delivery_writes_config_from_declared_secrets(tmp_path: Path) -> 
     tree = _compile(tmp_path, store, secrets)
 
     yaml_content = tree.read(SECRET_CONFIG)
-    assert 'server_url: "127.0.0.1:9090"' in yaml_content
+    assert 'listen: "127.0.0.1:9090"' in yaml_content
     assert 'dir: "/var/lib/app/.ssh"' in yaml_content
     assert 'key_path: "/run/keys/root.pub"' in yaml_content
-    assert 'store_at: "data-disk"' in yaml_content
+    assert '    path: "/run/secrets/jwt.hex"\n    mode: "0440"\n    owner: "app"' in yaml_content
 
     config = json.loads(tree.read(SECRET_MANIFEST))
     assert config["method"] == "http_post"

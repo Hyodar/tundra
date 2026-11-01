@@ -83,13 +83,13 @@ def test_every_declaration_that_builds_from_source_is_a_source_build() -> None:
     disk = Disk("disk_persistent", "/persistent", key=key)
     recipe = Recipe("tools", items=(Tdxs(), key, disk, Secrets(store=disk)))
     assert sorted(_source_builds(recipe)) == [
+        "attested-endpoint",
         "disk-encryption",
         "key-generation",
-        "secret-delivery",
         "tdxs",
     ]
     lines = _hooks(compile(recipe, lock=lock(recipe, resolver=_pin_all))).splitlines()
-    emitted = ("tdxs", "key-generation", "disk-encryption", "secret-delivery")
+    emitted = ("tdxs", "key-generation", "disk-encryption", "attested-endpoint")
     assert len(lines) == 2 * len(emitted)  # each hook follows its `# tundravm build:` marker
     for marker, hook, name in zip(lines[::2], lines[1::2], emitted, strict=True):
         assert json.loads(marker.removeprefix(BUILD_MARKER))["name"] == name

@@ -117,7 +117,7 @@ class Image(Located):
     - *A firewall that drops inbound traffic* except the ports services declare with
       ``expose=``, and the management port
       :data:`~tundravm._image._values.MANAGEMENT_PORT` (8745) in an image with an operator-
-      or broker-unlocked volume, or with secrets, where ``secret-delivery`` listens on it.
+      or broker-unlocked volume, or with secrets, where the attested endpoint listens.
       Escape: ``expose=`` to open a port, ``network=Network(egress=Egress(...))`` to filter
       outbound too.
     - *One generated system user per service*, the preset sandbox and ``Restart=on-failure``.
@@ -149,10 +149,10 @@ class Image(Located):
     - ``observability=Observability(logs=..., metrics=...)``: the authenticated export path.
 
     An image with an ``OperatorKey`` or ``BrokerKey`` volume, or with secrets, also gets
-    today's control-plane bootstrap: ``secret-delivery`` takes the operator's SSH public
-    key on the management port, root SSH accepts only that key, and the operator writes
-    the passphrase and the secrets over it. Gate 3's attested endpoint replaces the write
-    path on the same port; the image's runtime manifest
+    the control plane: the attested endpoint on the management port serves evidence whose
+    quote binds its TLS key, the SSH host keys and the instance public key, and takes the
+    secrets, the passphrase and the operator's SSH public key (which root SSH then accepts,
+    alone) only on that verified session; the image's runtime manifest
     (``/etc/tundravm/runtime.json``) records every volume, secret and ingress it needs.
 
     The starter is the whole contract::

@@ -237,8 +237,11 @@ def test_several_secrets_get_their_own_paths_and_init_steps(tmp_path: Path) -> N
     ]
     assert '"app_token"' in (extra / "secrets-app.json").read_text()
     init = _read(out, "payload/mkosi.extra/usr/lib/runtime-init/secrets")
-    assert "secret-delivery setup /etc/tdx/secrets-app.yaml" in init
-    assert "secret-delivery setup /etc/tdx/secrets-ops.yaml" in init
+    assert "until [ -e /run/app ]" in init and "until [ -e /run/ops ]" in init
+    units = out / "payload/mkosi.extra/usr/lib/systemd/system"
+    app = (units / "tundravm-endpoint-app.service").read_text()
+    assert "--config /etc/tdx/secrets-app.yaml" in app
+    assert (units / "tundravm-endpoint-ops.service").is_file()
     build = _read(out, BUILD_SCRIPT)
     assert build.count("go build") == 1  # one binary serves both
 

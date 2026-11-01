@@ -3,9 +3,9 @@ release them; :class:`Generated` secrets the image makes at boot instead.
 
 A secret is a requirement of the image, never a value in it: the value arrives at run
 time in ``/run/tundravm/credentials/<name>`` and a service reads it as a systemd
-credential. Plan section 6.3 is the contract; the attested channel that writes the file
-is gate 3 (tools/), and today's ``secret-delivery`` manifest is what records the
-requirement in the image.
+credential. Plan section 6.3 is the contract: the attested endpoint writes the file on a
+TLS session whose key a fresh quote bound, and its config records the requirement in the
+image.
 """
 
 from __future__ import annotations

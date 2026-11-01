@@ -14,7 +14,6 @@ from tundravm.declarative import (
     Secrets,
     compile,
     lock,
-    lower,
 )
 from tundravm.errors import ValidationError
 
@@ -54,13 +53,14 @@ def test_external_delivery_validates_its_name_and_kinds() -> None:
         Secrets(delivery="vault-agent")  # type: ignore[arg-type]
 
 
-def test_external_delivery_changes_neither_tree_nor_digest() -> None:
+def test_an_external_delivery_takes_the_files_off_the_endpoint() -> None:
     token = Secret("token", (SecretFile("/run/token"),))
 
-    def recipe(secrets: Secrets) -> Recipe:
-        return Recipe("r", items=(secrets,))
+    def config(secrets: Secrets) -> str:
+        tree = compile(Recipe("r", items=(secrets,)))
+        (entry,) = (e for e in tree.entries if e.path.endswith("/etc/tdx/secrets.yaml"))
+        return (entry.content or b"").decode()
 
-    builtin = recipe(Secrets(entries=(token,)))
-    external = recipe(Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent")))
-    assert lower(builtin).digest() == lower(external).digest()
-    assert compile(builtin).digest == compile(external).digest
+    assert 'path: "/run/token"' in config(Secrets(entries=(token,)))
+    external = Secrets(entries=(token,), delivery=ExternalDelivery("vault-agent"))
+    assert "credentials: []" in config(external)

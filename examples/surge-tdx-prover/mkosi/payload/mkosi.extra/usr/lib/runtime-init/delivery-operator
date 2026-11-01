@@ -1,5 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-
-# operator: start tundravm-credentials.service and wait for its start job
-systemctl start tundravm-credentials.service

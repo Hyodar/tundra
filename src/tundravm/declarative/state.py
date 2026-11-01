@@ -461,6 +461,7 @@ class StateBuilder:
                 env_suffix=None if len(secrets) == 1 else entry.name,
                 provider=BUILTIN_SECRET_PROVIDER if entry.delivery is None else entry.delivery.name,
                 provider_supports=() if entry.delivery is None else entry.delivery.supports,
+                volumes=_unlocked_volumes(disks, keys),
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary
@@ -472,6 +473,7 @@ class StateBuilder:
             for path, dropin in delivery.service_dropins().items():
                 _add_file(profile, path, dropin)
             _runtime_init(profile, delivery.init_script(), "secrets", after)
+            profile.services.append(delivery.service())
             applied.append(delivery)
             external = entry.delivery
             if external is not None and external.waits and external.step not in waited:
@@ -1227,6 +1229,16 @@ def _key_spec(key: Key) -> KeySpec:
         pipe_path=key.pipe,
         persist_in_tpm=key.persist_in_tpm,
     )
+
+
+def _unlocked_volumes(disks: Sequence[Disk], keys: Sequence[Key]) -> tuple[tuple[str, str], ...]:
+    """``(disk, pipe)`` of each disk whose key an operator sends through key-gen's FIFO."""
+    found: list[tuple[str, str]] = []
+    for disk in disks:
+        key = next((k for k in keys if isinstance(disk.key, Ref) and k.ref == disk.key), None)
+        if key is not None and key.strategy == "pipe" and key.pipe:
+            found.append((disk.name, key.pipe))
+    return tuple(found)
 
 
 def _store_name(secrets: Secrets) -> str | None:

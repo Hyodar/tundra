@@ -58,9 +58,9 @@ image see the same packages. The lockfile records it; ``Debian(snapshot=...)`` m
 MANAGEMENT_PORT = 8745
 """The management endpoint's port, which no ingress may take (plan section 6.3).
 
-An image with volumes or secrets runs today's bootstrap on it: ``secret-delivery`` takes the
-operator's SSH public key there, once per boot, and the firewall opens it for that step
-alone. An image without them has nothing listening there and no rule for it.
+An image with volumes or secrets runs the attested endpoint on it (``tools/cmd/
+attested-endpoint``) and the firewall opens it. An image without them has nothing
+listening there and no rule for it.
 """
 
 _OWNER = re.compile(r"[a-z_][a-z0-9_-]{0,31}(:[a-z_][a-z0-9_-]{0,31})?")
