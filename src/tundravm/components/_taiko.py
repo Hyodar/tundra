@@ -27,17 +27,16 @@ TAIKO_CLIENT_SOURCE = dm.Git(
 )
 """The taiko-client of the Surge monorepo; ``tundravm lock`` pins it to a commit."""
 
-_RAIKO_TOOLCHAIN = ("build-essential", "pkg-config", "git", "clang", "cargo", "libssl-dev")
-_RAIKO_ENV = {
-    "RUSTFLAGS": "-C target-cpu=generic -C link-arg=-Wl,--build-id=none "
-    "-C symbol-mangling-version=v0",
-    "CARGO_HOME": "/build/.cargo",
-    "CARGO_PROFILE_RELEASE_LTO": "thin",
-    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
-    "CARGO_PROFILE_RELEASE_PANIC": "abort",
-    "CARGO_PROFILE_RELEASE_INCREMENTAL": "false",
-    "CARGO_TERM_COLOR": "never",
-}
+_RAIKO_BUILD = dm.Cargo(
+    output="raiko-host",
+    package="raiko-host",
+    features=("tdx",),
+    env={"CARGO_PROFILE_RELEASE_LTO": "thin", "CARGO_PROFILE_RELEASE_PANIC": "abort"},
+    packages=("build-essential", "pkg-config", "git", "clang", "cargo", "libssl-dev"),
+)
+"""``cargo auditable build --release --frozen --features tdx --package raiko-host`` with the
+toolchain raiko's ``rust-toolchain`` pins, and the reproducible flags ``Cargo`` adds (generic
+CPU, no build id, v0 symbols, one codegen unit, no incremental build)."""
 _TAIKO_TOOLCHAIN = ("golang", "git", "build-essential")
 _TAIKO_BUILD = (
     'GO111MODULE=on CGO_CFLAGS="-O -D__BLST_PORTABLE__" '
@@ -112,7 +111,9 @@ class Raiko(Component, build_network=True):
     """Raiko, the TDX prover: proves L2 blocks inside the TD and answers on *listen*.
 
     The workload contract: ``raiko-host`` from *source* built with ``cargo`` and the
-    ``tdx`` feature (the build fetches crates, so the image builds with the network on),
+    ``tdx`` feature, with the Rust toolchain the source pins (``tundravm build`` installs it
+    and fetches the crates on the host; the image builds with the network on for raiko's
+    build scripts),
     installed as ``/usr/bin/raiko``, run in the ``tdx`` group after the evidence service
     is ready, since every proof carries a quote. *config* is Raiko's configuration file,
     delivered because it names the L1 and L2 endpoints and their provider keys; *l2_rpc*,
@@ -154,11 +155,8 @@ class Raiko(Component, build_network=True):
         yield dm.Build(
             "raiko",
             self.source,
-            script="cargo fetch && cargo build --release --frozen --features tdx "
-            "--package raiko-host",
-            packages=_RAIKO_TOOLCHAIN,
-            env=_RAIKO_ENV,
-            install=(dm.Install("target/release/raiko-host", "/usr/bin/raiko"),),
+            using=_RAIKO_BUILD,
+            install=(dm.Install(_RAIKO_BUILD.artifact, "/usr/bin/raiko"),),
             cache_namespace=f"raiko-{self.source.ref}",
         )
         host, _, port = self.listen.rpartition(":")
