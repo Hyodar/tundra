@@ -671,8 +671,9 @@ def build_parser() -> argparse.ArgumentParser:
         "convert",
         _cmd_convert,
         "Turn an mkosi tree or systemd unit files into source.",
-        "--from systemd: unit files (a file, or a directory) as typed declarations; units no\n"
-        "typed shape renders stay text, with what blocked them. --from mkosi: the tree\n"
+        "--from systemd: unit files (a file, or a directory) as an Image file, one Service per\n"
+        "service with its drop-ins, timer or socket; where a unit differs from what the image\n"
+        "implies a note says so, and what no slot holds is reported. --from mkosi: the tree\n"
         "resolved by mkosi itself, as an Image file; every setting it cannot carry is\n"
         "reported. Parsing a tree runs its executable mkosi.version or mkosi.configure:\n"
         "refused unless --allow-scripts.",
@@ -685,13 +686,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-scripts",
         action="store_true",
         help="Let mkosi run the tree's scripts while parsing.",
-    )
-    convert.add_argument(
-        "--mode",
-        choices=("exact", "semantic"),
-        default="exact",
-        help="systemd: exact renders the file byte for byte (default); semantic the same "
-        "directives.",
     )
 
     doctor = command(
@@ -1514,7 +1508,7 @@ def _cmd_convert(args: argparse.Namespace, out: TextIO) -> int:
     if args.source == "systemd":
         if args.allow_scripts:
             raise ValidationError("--allow-scripts applies to --from mkosi.", hint="Drop it.")
-        converted = convert.from_systemd(args.path, mode=args.mode)
+        converted = convert.from_systemd(args.path)
     else:
         converted = convert.from_mkosi(args.path, allow_scripts=args.allow_scripts)
     out.write(converted.source)

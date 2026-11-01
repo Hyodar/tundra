@@ -962,14 +962,18 @@ skip on the reason.
 ## Converting systemd units
 
 ```console
-$ tundravm convert ./units --from systemd --mode semantic
+$ tundravm convert ./units --from systemd > image.py
 ```
 
-reads a unit file or a directory of them. A unit the typed shapes can render becomes a
-declaration; the rest stay text, with the directive that blocked them. `--mode exact`
-(default) keeps the rendered file byte for byte; `semantic` keeps the same directives. The
-output is the internal `tundravm.declarative` model, not the public `Service`: treat it as
-a starting point and port it by hand.
+reads a unit file or a directory of them and prints an `Image` file that `tundravm check`
+accepts. Each service unit becomes one `Service`, with its `x.service.d/*.conf` drop-ins
+and the `x.timer` or `x.socket` that starts it folded in: `ExecStart=` as the argv,
+`Type=notify` as `readiness=Notify()`, the cgroup limits as `resources=`, the stop as
+`shutdown=`, the schedule as `timer=`, the socket as `socket=`, and every other directive
+systemd knows in `unit=DropIn(...)`. A `# note:` line says where the unit differs from what
+the image implies (`Type=exec`, `Restart=on-failure`, the generated user, the `static`
+sandbox in place of the unit's own, enabled at boot); a `# unsupported:` line names each
+unit or directive no `Image` slot holds (a mount, a path unit, a second `ExecStart=`).
 
 ## CI
 

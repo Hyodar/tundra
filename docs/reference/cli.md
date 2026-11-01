@@ -441,12 +441,11 @@ options:
 Turn an mkosi tree or systemd unit files into source.
 
 ```text
-usage: tundravm convert [-h] [--traceback] --from {mkosi,systemd} [--allow-scripts]
-                        [--mode {exact,semantic}]
-                        PATH
+usage: tundravm convert [-h] [--traceback] --from {mkosi,systemd} [--allow-scripts] PATH
 
---from systemd: unit files (a file, or a directory) as typed declarations; units no
-typed shape renders stay text, with what blocked them. --from mkosi: the tree
+--from systemd: unit files (a file, or a directory) as an Image file, one Service per
+service with its drop-ins, timer or socket; where a unit differs from what the image
+implies a note says so, and what no slot holds is reported. --from mkosi: the tree
 resolved by mkosi itself, as an Image file; every setting it cannot carry is
 reported. Parsing a tree runs its executable mkosi.version or mkosi.configure:
 refused unless --allow-scripts.
@@ -460,9 +459,6 @@ options:
   --from {mkosi,systemd}
                         What PATH is.
   --allow-scripts       Let mkosi run the tree's scripts while parsing.
-  --mode {exact,semantic}
-                        systemd: exact renders the file byte for byte (default); semantic the same
-                        directives.
 ```
 
 ## tundravm doctor

@@ -76,6 +76,11 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   waits for real readiness (`Notify()`, `HttpProbe`, `TcpProbe`); `expose=` opens the
   firewall; `state=`, `credentials=`, `resources=`, `shutdown=`, `timer=`, `socket=` and
   `unit=DropIn(...)` group the rest.
+- `convert --from systemd` prints an `Image` file over the public namespaces, which loads
+  and passes `check`: one `Service` per service unit with its drop-ins and its timer or
+  socket, directives no keyword holds in `unit=DropIn(...)`, a note where the unit differs
+  from what the image implies and an unsupported line for what no slot holds. `--mode` is
+  gone: the output follows the image's defaults, so no byte-exact mode applies.
 - `Kernel.default(cmdline=[...])` and `Kernel.build(..., cmdline=[...])` append kernel
   parameters to the UKI's command line after the image's own; none is added by default.
   Each entry is one parameter, and the ones tundravm sets (`root=`, `roothash=`,

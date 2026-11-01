@@ -1,10 +1,10 @@
 """``convert``: an existing mkosi tree or systemd unit files as tundravm source.
 
 ``--from systemd`` reads unit files (a file, or every unit and ``NAME.d/*.conf`` drop-in of
-a directory) and prints the typed declarations they convert to, pairing ``x.socket`` and
-``x.timer`` with ``x.service``; ``exact`` keeps a declaration only when it renders the file
-byte for byte, ``semantic`` when it renders the same directives. A unit no typed shape
-renders is kept as text, and what blocked it is listed.
+a directory) and prints an ``Image`` file with one ``Service`` per service unit, its
+drop-ins and the ``x.timer`` or ``x.socket`` that starts it folded in
+(:mod:`tundravm._units.image`): where the unit differs from what the image implies a note
+says so, and what no ``Image`` slot holds is listed as unsupported.
 
 ``--from mkosi`` resolves the tree with mkosi itself (the adapter's ``summary``, i.e.
 ``parse_config``): includes, ``mkosi.conf.d``, profiles and subimages are mkosi's to
@@ -20,9 +20,11 @@ value, and nothing is silently dropped.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import textwrap
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -126,10 +128,11 @@ def _unit_files(path: Path) -> dict[str, Path]:
     return found
 
 
-def from_systemd(path: Path, *, mode: str = "exact") -> Converted:
-    """Unit files at *path* as typed declarations (``convert --from systemd``)."""
-    from ._units.parse import convert
-    from .declarative._writer import declarations_source
+def from_systemd(path: Path) -> Converted:
+    """Unit files at *path* as an ``Image`` file of ``Service`` values (``convert --from
+    systemd``); see :mod:`tundravm._units.image`."""
+    from ._image import Image
+    from ._units.image import image_source
 
     texts: dict[str, str] = {}
     for name, file in _unit_files(path).items():
@@ -139,21 +142,87 @@ def from_systemd(path: Path, *, mode: str = "exact") -> Converted:
             raise ValidationError(
                 f"cannot read {file}: {error}", hint="Pass a readable UTF-8 unit file."
             ) from None
-    conversions = convert(texts, mode=mode, init=True)  # type: ignore[arg-type]
-    lines: list[str] = []
-    unsupported: list[str] = []
-    for conversion in conversions:
-        units = " + ".join(conversion.units)
-        if conversion.typed:
-            kind = type(conversion.declaration).__name__
-            moved = f"; extra= holds {', '.join(conversion.extra)}" if conversion.extra else ""
-            lines.append(f"# {units}: {kind} ({mode}){moved}")
-        else:
-            blocked = "; ".join(conversion.blockers)
-            lines.append(f"# {units}: kept as text, blocked by {blocked}")
-            unsupported.append(f"{units}: {blocked}")
-    source = "\n".join(lines) + "\n" + declarations_source([c.declaration for c in conversions])
-    return Converted(source, unsupported)
+    found = image_source(texts)
+    name = (path.stem if path.is_file() else path.resolve().name) or "image"
+    Image(name, services=[service for _, service, _ in found.services])
+    imports = {"Image"}
+    entries: list[str] = []
+    for units, service, description in found.services:
+        entries.append(f"# {units}" + (f": {description}" if description else ""))
+        entries.append(f"{_call(service, imports, lists=True)},")
+    services = "".join(f"        {entry}\n" for entry in entries)
+    source = (
+        f'"""{name}: converted from {path.name} by `tundravm convert --from systemd`."""\n\n'
+        f"{_imports(imports)}\n\n"
+        f"image = Image(\n    {name!r},\n    services=[\n{services}    ],\n)\n"
+    )
+    return Converted(_formatted(source), found.unsupported, found.notes)
+
+
+def _call(value: Any, imports: set[str], *, lists: bool = False) -> str:
+    """*value* (a dataclass) as its constructor call: the required fields, then each other
+    field that differs from its default; *lists* writes a tuple field as a list."""
+    imports.add(type(value).__name__)
+    args: list[str] = []
+    for item in fields(value):
+        if not item.init:
+            continue
+        current = getattr(value, item.name)
+        required = item.default is MISSING and item.default_factory is MISSING
+        if not required:
+            default = item.default if item.default is not MISSING else item.default_factory()  # type: ignore[misc]
+            if current == default:
+                continue
+        text = _source(current, imports, lists=lists)
+        args.append(text if required and not item.kw_only else f"{item.name}={text}")
+    return f"{type(value).__name__}({', '.join(args)})"
+
+
+def _source(value: object, imports: set[str], *, lists: bool = False) -> str:
+    if isinstance(value, tuple):
+        parts = [_source(item, imports) for item in value]
+        if lists:
+            return "[" + ", ".join(parts) + "]"
+        return "(" + ", ".join(parts) + ("," if len(parts) == 1 else "") + ")"
+    if isinstance(value, Mapping):
+        pairs = (f"{_source(k, imports)}: {_source(v, imports)}" for k, v in value.items())
+        return "{" + ", ".join(pairs) + "}"
+    if is_dataclass(value) and not isinstance(value, type):
+        return _call(value, imports)
+    return repr(value)
+
+
+def _formatted(source: str) -> str:
+    """*source* as ``ruff format`` writes it, or as is when ruff cannot run."""
+    try:
+        done = subprocess.run(
+            [sys.executable, "-m", "ruff", "format", "--stdin-filename", "image.py", "-"],
+            input=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return source
+    return done.stdout if done.returncode == 0 and done.stdout else source
+
+
+def _imports(names: Iterable[str]) -> str:
+    """One ``from <namespace> import ...`` line per public namespace *names* live in."""
+    import importlib
+
+    from ._reference import MODULES
+
+    homes: dict[str, list[str]] = {}
+    for name in names:
+        home = next(m for m in MODULES if name in importlib.import_module(m).__all__)
+        homes.setdefault(home, []).append(name)
+    return "\n".join(
+        f"from {module} import {', '.join(sorted(homes[module]))}"
+        for module in MODULES
+        if module in homes
+    )
 
 
 # ── mkosi ────────────────────────────────────────────────────────────────

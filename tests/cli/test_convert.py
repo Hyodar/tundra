@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
+import tundravm
 from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.systemd import Calendar
 
 pytestmark = pytest.mark.boundary  # convert reads the tree through mkosi's own parser
 
@@ -28,22 +30,6 @@ User=web
 [Install]
 WantedBy=multi-user.target
 """
-
-
-def _rendered_task(directory: Path) -> None:
-    """``backup.service`` + ``backup.timer`` as a scheduled ``Task`` renders them."""
-    from tundravm._units.parse import rendered
-    from tundravm.declarative import Calendar, Hardening, Task
-
-    task = Task(
-        "backup",
-        "/usr/bin/backup",
-        schedule=Calendar("daily"),
-        user="backup",
-        hardening=Hardening.none(),
-    )
-    for name, text in rendered(task).items():
-        (directory / name).write_text(text, encoding="utf-8")
 
 
 def _image_call(source: str) -> ast.Call:
@@ -112,37 +98,53 @@ def test_allow_scripts_applies_to_mkosi_only(cli: Cli, tmp_path: Path) -> None:
     assert result.code == EXIT_SDK_ERROR
 
 
-def test_a_unit_file_becomes_a_typed_declaration(cli: Cli, tmp_path: Path) -> None:
-    unit = tmp_path / "web.service"
-    unit.write_text(SERVICE)
-    result = cli("convert", unit, "--from", "systemd")
-    assert result.code == EXIT_OK, result.err
-    assert result.out.startswith("# web.service: Service (exact)")
-    assert "Service(" in result.out and "/usr/bin/web" in result.out
-    unit.write_text(SERVICE.replace("User=web\n", "User=web\nOOMScoreAdjust=-500\n"))
-    exact = cli("convert", unit, "--from", "systemd")
-    assert "# web.service: kept as text, blocked by Service.OOMScoreAdjust" in exact.out
-    assert "# unsupported: web.service: Service.OOMScoreAdjust" in exact.out
-    semantic = cli("convert", unit, "--from", "systemd", "--mode", "semantic")
-    assert "# web.service: Service (semantic); extra= holds Service.OOMScoreAdjust" in semantic.out
+WORKER = """\
+[Unit]
+Description=Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/worker --queue jobs
+Environment=MODE=batch
+StateDirectory=worker
+MemoryMax=1G
+ProtectSystem=strict
+OOMScoreAdjust=-500
+"""
+
+BACKUP = "[Service]\nType=oneshot\nExecStart=/usr/bin/backup\n"
+BACKUP_TIMER = "[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
 
 
-def test_a_directory_of_units_pairs_sockets_and_timers(cli: Cli, tmp_path: Path) -> None:
+def test_units_become_an_image_file_that_loads_and_checks(cli: Cli, tmp_path: Path) -> None:
     units = tmp_path / "units"
-    units.mkdir()
+    (units / "worker.service.d").mkdir(parents=True)
     (units / "web.service").write_text(SERVICE)
-    _rendered_task(units)
-    (units / "README").write_text("not a unit")
+    (units / "worker.service").write_text(WORKER)
+    (units / "worker.service.d" / "10-trace.conf").write_text("[Service]\nEnvironment=TRACE=1\n")
+    (units / "backup.service").write_text(BACKUP)
+    (units / "backup.timer").write_text(BACKUP_TIMER)
+    (units / "data.mount").write_text("[Mount]\nWhat=/dev/vdb\nWhere=/data\n")
     result = cli("convert", units, "--from", "systemd")
     assert result.code == EXIT_OK, result.err
-    assert "# backup.service + backup.timer: Task (exact)" in result.out
-    assert "# web.service: Service (exact)" in result.out
-    namespace: dict[str, object] = {}
-    exec(result.out, namespace)
-    assert {type(v).__name__ for k, v in namespace.items() if k.startswith("unit")} == {
-        "Task",
-        "Service",
-    }
+    imports = [line for line in result.out.splitlines() if line.startswith(("from ", "import "))]
+    assert imports == [
+        "from tundravm import Image, Service",
+        "from tundravm.systemd import Calendar, DropIn, Notify, Resources",
+    ]
+    assert "# unsupported: data.mount: no Image slot holds it" in result.out
+    assert "in place of the unit's ProtectSystem" in result.out
+    image_file = tmp_path / "image.py"
+    image_file.write_text(result.out, encoding="utf-8")
+    image = tundravm.load(image_file)
+    services = {service.name: service for service in image.services}
+    assert services["web"].argv == ("/usr/bin/web", "--port", "8080")
+    assert dict(services["worker"].environment) == {"MODE": "batch", "TRACE": "1"}
+    assert services["backup"].timer == Calendar("daily")
+    checked = cli("check", image_file)
+    assert checked.code == EXIT_OK, checked.out + checked.err
 
 
 def test_a_directory_without_units_is_refused(cli: Cli, tmp_path: Path) -> None:
