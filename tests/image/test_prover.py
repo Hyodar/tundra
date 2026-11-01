@@ -101,7 +101,7 @@ def test_the_prover_locks_without_the_network(prover_file: Path) -> None:
         return pins[url]
 
     payload = json.loads(lock(recipe, resolver=resolver).text())
-    builds = payload["recipe"]["profiles"]["production"]["source_builds"]
+    builds = payload["image"]["profiles"]["production"]["source_builds"]
     tools = {name for name in builds if name != "raiko"}
     assert tools == {"tdxs", "key-generation", "disk-encryption", "secret-delivery"}
 

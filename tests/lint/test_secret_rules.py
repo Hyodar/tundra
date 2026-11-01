@@ -123,7 +123,7 @@ def test_allow_secret_is_per_variant() -> None:
 def test_allow_secret_leaves_the_digest_alone() -> None:
     plain = recipe(File("/etc/motd.d/x", "x\n"))
     allowed = recipe(File("/etc/motd.d/x", "x\n", allow_secret=True))
-    assert lock(plain).recipe_digest == lock(allowed).recipe_digest
+    assert lock(plain).image_digest == lock(allowed).image_digest
     assert compile(plain).digest == compile(allowed).digest
 
 

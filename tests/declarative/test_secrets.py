@@ -34,7 +34,7 @@ def test_secret_values_are_not_persisted_in_lockfile() -> None:
     lock_text = lock(_recipe(token), resolver=lambda source: "0" * 40).text()
     # Schema metadata is in the lockfile via profile.secrets, but no values
     assert "api_token" in lock_text
-    (secret,) = json.loads(lock_text)["recipe"]["profiles"]["default"]["secrets"]
+    (secret,) = json.loads(lock_text)["image"]["profiles"]["default"]["secrets"]
     assert set(secret) == {"name", "required", "schema", "targets"}
 
 

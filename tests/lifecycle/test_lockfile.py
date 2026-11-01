@@ -21,11 +21,11 @@ def test_lock_records_dependency_and_recipe_metadata() -> None:
 
     lockfile = lock(recipe).lockfile
 
-    assert lockfile.version == 6
-    assert lockfile.recipe["distribution"]["base"] == "debian/bookworm"
-    assert "dialect" not in lockfile.recipe["compiler"]
-    assert lockfile.recipe["profiles"]["default"]["outputs"] == ["qemu"]
-    assert lockfile.recipe["profiles"]["dev"]["outputs"] == ["qemu"]
+    assert lockfile.version == 7
+    assert lockfile.image["distribution"]["base"] == "debian/bookworm"
+    assert "dialect" not in lockfile.image["compiler"]
+    assert lockfile.image["profiles"]["default"]["outputs"] == ["qemu"]
+    assert lockfile.image["profiles"]["dev"]["outputs"] == ["qemu"]
     assert lockfile.dependencies["default"] == ["curl"]
     assert lockfile.dependencies["dev"] == ["curl", "jq"]
-    assert lockfile.recipe_digest
+    assert lockfile.image_digest

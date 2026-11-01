@@ -154,9 +154,9 @@ def test_build_lowers_to_source_build_packages_and_hook() -> None:
 
 
 def test_payload_has_source_builds_only_when_declared() -> None:
-    bare = lock(_recipe(Package("curl"))).lockfile.recipe
+    bare = lock(_recipe(Package("curl"))).lockfile.image
     assert "source_builds" not in bare["profiles"]["default"]
-    payload = lock(_recipe(_build()), resolver=_Fixed(SHA_A)).lockfile.recipe
+    payload = lock(_recipe(_build()), resolver=_Fixed(SHA_A)).lockfile.image
     entry = payload["profiles"]["default"]["source_builds"]["tool"]
     assert entry["source"] == {
         "kind": "git",
@@ -327,20 +327,20 @@ def test_http_source_without_sha256_is_hashed_by_resolver() -> None:
 
 def test_lockfile_roundtrips_fetch_name_and_ref() -> None:
     lockfile = build_lockfile(
-        recipe={"base": "x"},
+        image={"base": "x"},
         fetches=[LockedFetch(source=REPO, kind="git", digest=SHA_A, name="tool", ref="main")],
     )
     raw = serialize_lockfile(lockfile)
     assert json.loads(raw)["fetches"][0]["ref"] == "main"
     assert parse_lockfile(raw).fetches == lockfile.fetches
-    plain = build_lockfile(recipe={}, fetches=[LockedFetch(source="u", kind="http", digest="d")])
+    plain = build_lockfile(image={}, fetches=[LockedFetch(source="u", kind="http", digest="d")])
     assert "name" not in json.loads(serialize_lockfile(plain))["fetches"][0]
 
 
 def test_frozen_bake_refuses_unpinned_sources(tmp_path: Path) -> None:
     recipe = _recipe(_build(), Package("linux-image-amd64"))
     pinned = lock(recipe, resolver=_Fixed(SHA_A))
-    unpinned = Lock.of(build_lockfile(recipe=pinned.lockfile.recipe))
+    unpinned = Lock.of(build_lockfile(image=pinned.lockfile.image))
     with pytest.raises(LockfileError, match="unpinned: tool") as excinfo:
         bake(recipe, lock=unpinned, backend=Backend("local"), build=tmp_path / "out", fetch=False)
     assert excinfo.value.hint is not None

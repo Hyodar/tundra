@@ -35,8 +35,8 @@ from tundravm.lockfile import (
     LockedFetch,
     Lockfile,
     compare_lock,
+    image_digest,
     read_lockfile,
-    recipe_digest,
     unselected_sources,
 )
 from tundravm.models import (
@@ -264,7 +264,7 @@ class Lowered:
 
     def digest(self) -> str:
         """The recipe digest of the active profiles, as the lockfile records it."""
-        return recipe_digest(self.payload())
+        return image_digest(self.payload())
 
     # ── sources and pins ────────────────────────────────────────────────
 
@@ -642,7 +642,7 @@ def _init_scripts_payload(entries: Sequence[InitScriptEntry]) -> list[dict[str, 
 
 
 def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str, object]:
-    """The lockfile payload of *profile_names*: what ``recipe_digest`` and section digests hash."""
+    """The lockfile payload of *profile_names*: what ``image_digest`` and section digests hash."""
     profiles_data: dict[str, dict[str, object]] = {}
     for profile_name in sorted(profile_names):
         profile = state.effective_profile(profile_name)

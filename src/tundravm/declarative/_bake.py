@@ -33,7 +33,7 @@ from tundravm._source import (
 from tundravm.backends.base import BuildBackend, drop_intermediates
 from tundravm.check import check
 from tundravm.errors import LintError, LockfileError, PolicyError, StateError, ValidationError
-from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, read_lockfile, recipe_digest
+from tundravm.lockfile import LOCKFILE_VERSION, compare_lock, image_digest, read_lockfile
 from tundravm.models import (
     ArtifactRef,
     BakeRequest,
@@ -385,7 +385,7 @@ def _assert_frozen_lock(lowered: Lowered) -> None:
     # A lock written for more variants than this bake selects covers it when
     # every section of the selected variants and the recipe-wide ones matches.
     drift = compare_lock(lock, current, partial=True)
-    if lock.recipe_digest == recipe_digest(current) or drift.is_clean:
+    if lock.image_digest == image_digest(current) or drift.is_clean:
         unpinned = lowered.unpinned_sources(lock_path)
         if unpinned:
             raise LockfileError(

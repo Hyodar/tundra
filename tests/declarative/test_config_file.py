@@ -46,7 +46,7 @@ def test_yaml_is_the_hand_written_file() -> None:
     by_hand = File.text("/etc/prometheus/prometheus.yml", PROMETHEUS_YAML)
     assert rendered == by_hand
     assert compile(_recipe(rendered)).digest == compile(_recipe(by_hand)).digest
-    assert lock(_recipe(rendered)).recipe_digest == lock(_recipe(by_hand)).recipe_digest
+    assert lock(_recipe(rendered)).image_digest == lock(_recipe(by_hand)).image_digest
 
 
 @pytest.mark.parametrize(

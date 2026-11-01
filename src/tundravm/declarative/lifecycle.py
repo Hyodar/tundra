@@ -106,7 +106,7 @@ class Lock:
     section; this version for a lockfile older than version 4).
     """
 
-    recipe_digest: str
+    image_digest: str
     sections: Pairs
     pins: tuple[Pin, ...]
     compiler_version: str
@@ -114,10 +114,10 @@ class Lock:
 
     @classmethod
     def of(cls, lockfile: Lockfile) -> Lock:
-        compiler = lockfile.recipe.get("compiler")
+        compiler = lockfile.image.get("compiler")
         written = compiler.get("tundravm") if isinstance(compiler, dict) else None
         return cls(
-            recipe_digest=lockfile.recipe_digest,
+            image_digest=lockfile.image_digest,
             sections=tuple(sorted(lockfile.sections.items())),
             pins=tuple(_pin(fetch) for fetch in lockfile.fetches),
             compiler_version=str(written) if written is not None else _version(),
@@ -211,7 +211,7 @@ class Artifact:
     profile: str
     target: Target
     sha256: str
-    recipe_digest: str
+    image_digest: str
     lock_digest: str
     tree_digest: str
     lock_sha256: str | None = None
@@ -639,7 +639,7 @@ def lock_image(
             kept.append(build.locked(pin))
     fetches = resolve_pins(pending, prior, resolver=resolver, offline=offline, kept=kept)
     fetches.sort(key=lambda fetch: fetch.name or fetch.source)
-    return Lock.of(build_lockfile(recipe=payload, fetches=fetches, toolchain=toolchain))
+    return Lock.of(build_lockfile(image=payload, fetches=fetches, toolchain=toolchain))
 
 
 def _named_pins(locked: Lock) -> dict[str, LockedFetch]:
@@ -1081,10 +1081,10 @@ def bake_image(
             )
             baking = replace(baking, fetched_pins={s.name: s.locked() for s in fetched})
         result = _bake.bake(baking, destination, frozen=locked is not None, reporter=reporter)
-        recipe_digest = (
-            locked.recipe_digest
+        digest = (
+            locked.image_digest
             if locked is not None
-            else (read_lock(lock_path).recipe_digest if lock_path.is_file() else "")
+            else (read_lock(lock_path).image_digest if lock_path.is_file() else "")
         )
         warn = _tree_warning(reporter)
         artifacts: list[Artifact] = []
@@ -1097,7 +1097,7 @@ def bake_image(
                         profile=name,
                         target=target,
                         sha256=ref.digest or "",
-                        recipe_digest=recipe_digest,
+                        image_digest=digest,
                         lock_digest=result.lock_digest or "",
                         tree_digest=tree_digest,
                         lock_sha256=result.lock_sha256,

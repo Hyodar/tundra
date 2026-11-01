@@ -49,7 +49,7 @@ def _pin_all(source: object) -> str:
 def _source_builds(recipe: Recipe) -> dict[str, dict[str, object]]:
     """The source builds the lockfile records for the default variant, by name."""
     payload = json.loads(lock(recipe, resolver=_pin_all).text())
-    builds: dict[str, dict[str, object]] = payload["recipe"]["profiles"]["default"]["source_builds"]
+    builds: dict[str, dict[str, object]] = payload["image"]["profiles"]["default"]["source_builds"]
     return builds
 
 

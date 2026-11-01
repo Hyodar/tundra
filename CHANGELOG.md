@@ -56,7 +56,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `build` publishes `build/<image>/production/<id>/` once, read-only, with a canonical `manifest.json` whose digest is `<id>`, `measurements.json` (a `tundravm.policy/2` policy per record), an SPDX SBOM, `observations.json` and a report of artifacts, sources, toolchains, phases and predicted registers.
 - **Breaking:** the manifest is `tundravm.manifest/2`: `image_digest` replaces `recipe_digest`, in `show BUILD --json` and `lock --json` too; an older build directory is refused, so build again.
 - **Breaking:** a production build needs `build/tundravm.lock` (`lock-missing`); a development build writes a missing one and re-pins `Local` sources.
-- **Breaking:** lockfile version 6 names profile sections `profiles.<name>`; an older lock is refused.
+- **Breaking:** lockfile version 7 names profile sections `profiles.<name>` and the payload and its digest `image` and `image_digest`, as the manifest does; an older lock is refused, so run `tundravm lock` again.
 - **Breaking:** the default Debian snapshot moves from `20251113T083151Z` to `20261018T082309Z`; `Debian(snapshot=)` keeps the old one.
 - `lock` prints the snapshot, each source's ref and pin and the toolchain; `build --tree-only` without a lock says its tree will drift.
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.

@@ -183,7 +183,7 @@ def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     assert (lowered.overlays, lowered.clouds("azure")) == (("azure",), ("azure",))
 
 
-def test_runtime_init_order_follows_after_and_enters_the_recipe_digest(tmp_path: Path) -> None:
+def test_runtime_init_order_follows_after_and_enters_the_image_digest(tmp_path: Path) -> None:
     def ordered(first: str, second: str) -> Recipe:
         return Recipe(
             "inits",

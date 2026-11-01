@@ -7,7 +7,7 @@ from typing import Any
 
 from tundravm.toolchain import Toolchain
 
-LOCKFILE_VERSION = 6
+LOCKFILE_VERSION = 7
 """Current lockfile schema version.
 
 Version 2 added per-section digests (``sections``) and version 3 named the
@@ -18,8 +18,9 @@ profiles once per profile (``<profile>/<name>``). Version 5 records the build
 ``toolchain`` (tundravm, mkosi and its commit, the tools tree's distribution,
 release and snapshot, measurement tools; see :class:`~tundravm.toolchain.Toolchain`).
 Version 6 names the per-profile sections ``profiles.<name>.<key>``, as the public
-API says. Older lockfiles do not load: :func:`~tundravm.lockfile.parse_lockfile`
-asks to lock again.
+API says. Version 7 names the payload and its digest ``image`` and ``image_digest``,
+as the build manifest does. Older lockfiles do not load:
+:func:`~tundravm.lockfile.parse_lockfile` asks to lock again.
 """
 
 
@@ -43,16 +44,16 @@ class LockedFetch:
 class Lockfile:
     """Parsed ``tundravm.lock``.
 
-    ``recipe_digest`` is the sha256 of the whole canonical recipe payload (what
-    frozen bakes enforce). ``sections`` maps dotted payload paths such as
+    ``image_digest`` is the sha256 of the whole canonical image payload (what
+    frozen builds enforce). ``sections`` maps dotted payload paths such as
     ``base`` or ``profiles.default.packages`` to the sha256 of that sub-payload,
     so drift can be reported section by section. ``toolchain`` is the build
-    toolchain recorded at lock time; it is not part of the recipe digest.
+    toolchain recorded at lock time; it is not part of the image digest.
     """
 
     version: int
-    recipe_digest: str
-    recipe: dict[str, Any]
+    image_digest: str
+    image: dict[str, Any]
     dependencies: dict[str, list[str]]
     fetches: list[LockedFetch] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)

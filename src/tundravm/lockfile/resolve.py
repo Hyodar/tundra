@@ -20,9 +20,9 @@ def value_digest(value: object) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def recipe_digest(recipe: Mapping[str, Any]) -> str:
-    """Return the digest of the whole recipe payload (the value frozen bakes enforce)."""
-    return value_digest(dict(recipe))
+def image_digest(payload: Mapping[str, Any]) -> str:
+    """The digest of the whole image payload (the value frozen builds enforce)."""
+    return value_digest(dict(payload))
 
 
 def section_values(payload: Mapping[str, object]) -> dict[str, object]:
@@ -52,13 +52,13 @@ def section_digests(payload: Mapping[str, object]) -> dict[str, str]:
 
 def build_lockfile(
     *,
-    recipe: dict[str, Any],
+    image: dict[str, Any],
     fetches: list[LockedFetch] | None = None,
     toolchain: Toolchain | None = None,
 ) -> Lockfile:
-    """The lockfile for *recipe*; *toolchain* defaults to this tundravm alone (nothing probed)."""
+    """The lockfile for the *image* payload; *toolchain* defaults to this tundravm alone."""
     dependencies: dict[str, list[str]] = {}
-    profiles = recipe.get(PROFILES_KEY, {})
+    profiles = image.get(PROFILES_KEY, {})
     if isinstance(profiles, dict):
         for profile_name, profile_data in profiles.items():
             if not isinstance(profile_name, str) or not isinstance(profile_data, dict):
@@ -69,10 +69,10 @@ def build_lockfile(
 
     return Lockfile(
         version=LOCKFILE_VERSION,
-        recipe_digest=recipe_digest(recipe),
-        recipe=recipe,
+        image_digest=image_digest(image),
+        image=image,
         dependencies=dependencies,
         fetches=list(fetches or []),
-        sections=section_digests(recipe),
+        sections=section_digests(image),
         toolchain=toolchain if toolchain is not None else Toolchain(tundravm_identity()),
     )

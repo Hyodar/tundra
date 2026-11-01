@@ -109,7 +109,7 @@ def _artifact(tmp_path: Path, *, manifest: bool = True, lock: Lock | None = None
         profile="default",
         target="qemu",
         sha256=UKI_SHA,
-        recipe_digest="r" * 64,
+        image_digest="r" * 64,
         lock_digest="l" * 64,
         tree_digest="t" * 64,
         lock_sha256=None if lock is None else hashlib.sha256(lock.text().encode()).hexdigest(),
@@ -173,7 +173,7 @@ def test_artifact_sbom_merges_manifest_lock_and_metadata(tmp_path: Path, locked:
     )
     assert (document.variant, document.artifact_sha256) == ("default", UKI_SHA)
     assert document.artifact == Path("default/output/default.efi") and document.bound
-    assert (document.recipe_digest, document.tree_digest) == ("r" * 64, "t" * 64)
+    assert (document.image_digest, document.tree_digest) == ("r" * 64, "t" * 64)
     build, stub = document.sources
     assert (build.kind, build.name, build.commit, build.ref, build.url) == (
         "build",

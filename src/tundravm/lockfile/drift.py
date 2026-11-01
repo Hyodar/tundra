@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tundravm.formats import annotation_path, workflow_command
 from tundravm.lockfile.model import Lockfile
-from tundravm.lockfile.resolve import PROFILES_KEY, recipe_digest, section_values, value_digest
+from tundravm.lockfile.resolve import PROFILES_KEY, image_digest, section_values, value_digest
 from tundravm.project import lock_command
 
 DETAIL_LIMIT = 5
@@ -80,7 +80,7 @@ class LockDrift:
         entries = [(markers[name], name, self.details.get(name)) for name in sorted(markers)]
         if not entries and not self.digest_matches:
             entries.append(
-                ("~", "recipe_digest", "every section matches; the lockfile digest was edited")
+                ("~", "image_digest", "every section matches; the lockfile digest was edited")
             )
         return entries
 
@@ -94,7 +94,7 @@ _DRIFT_WORDS = {
 
 def lock_variants(lock: Lockfile) -> tuple[str, ...]:
     """The profiles *lock* was written for, sorted."""
-    return _profiles(lock.recipe)
+    return _profiles(lock.image)
 
 
 def _profiles(payload: Mapping[str, object]) -> tuple[str, ...]:
@@ -115,7 +115,7 @@ def unselected_sources(lock: Lockfile, payload: Mapping[str, object]) -> frozens
     profile) and kernel sources: ``kernel-<profile>``, and the shared ``kernel``,
     which an unselected profile may build too.
     """
-    entries = lock.recipe.get(PROFILES_KEY)
+    entries = lock.image.get(PROFILES_KEY)
     if not isinstance(entries, Mapping):
         return frozenset()
     names: set[str] = set()
@@ -180,7 +180,7 @@ def compare_lock(
     )
     added = tuple(name for name in current if name not in locked)
     removed = tuple(sorted(name for name in locked if name not in current))
-    previous = section_values(lock.recipe)
+    previous = section_values(lock.image)
     details: dict[str, str] = {}
     for name in changed:
         if name not in previous or value_digest(previous[name]) != locked[name]:
@@ -193,7 +193,7 @@ def compare_lock(
         added=added,
         removed=removed,
         details=details,
-        digest_matches=bool(others) or lock.recipe_digest == recipe_digest(payload),
+        digest_matches=bool(others) or lock.image_digest == image_digest(payload),
     )
 
 

@@ -101,7 +101,7 @@ class Sbom:
     arch: str = ""
     snapshot: str | None = None
     mirror: str | None = None
-    recipe_digest: str = ""
+    image_digest: str = ""
     tree_digest: str = ""
     artifact: Path | None = None
     """The artifact's path relative to the bake output directory (absolute when outside it)."""
@@ -175,7 +175,7 @@ class Sbom:
         entry: dict[str, Any] = {
             "SPDXID": ref,
             "name": self.variant,
-            "versionInfo": self.artifact_sha256 or self.recipe_digest or "NOASSERTION",
+            "versionInfo": self.artifact_sha256 or self.image_digest or "NOASSERTION",
             "downloadLocation": "NOASSERTION",
             "filesAnalyzed": False,
             "primaryPackagePurpose": "OPERATING-SYSTEM",
@@ -198,7 +198,7 @@ class Sbom:
             ("arch", self.arch),
             ("snapshot", self.snapshot or ""),
             ("mirror", self.mirror or ""),
-            ("image digest", self.recipe_digest),
+            ("image digest", self.image_digest),
             ("tree digest", self.tree_digest),
             ("artifact", "" if self.artifact is None else str(self.artifact)),
             ("artifact sha256", self.artifact_sha256),
@@ -319,7 +319,7 @@ def sbom(
             ),
             context={"profile": artifact.profile, "target": artifact.target},
         )
-    payload = lock.lockfile.recipe if lock is not None else {}
+    payload = lock.lockfile.image if lock is not None else {}
     profiles = payload.get("profiles") or {}
     profile: Mapping[str, Any] = profiles.get(artifact.profile) or {}
     distribution: Mapping[str, Any] = payload.get("distribution") or payload
@@ -344,7 +344,7 @@ def sbom(
         arch=arch,
         snapshot=_opt(distribution.get("snapshot")),
         mirror=_opt(distribution.get("mirror")),
-        recipe_digest=artifact.recipe_digest,
+        image_digest=artifact.image_digest,
         tree_digest=artifact.tree_digest,
         artifact=_relative(artifact.path, artifact.build),
         artifact_sha256=artifact.sha256,

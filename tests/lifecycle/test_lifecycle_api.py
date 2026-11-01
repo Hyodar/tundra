@@ -222,7 +222,7 @@ def test_bake_writes_the_outputs_each_variant_declares(tmp_path: Path) -> None:
     # each variant's artifacts are its declared outputs
     assert {(a.profile, a.target) for a in artifacts} == {("default", "qemu"), ("azure", "azure")}
     assert all(a.path.is_file() and len(a.sha256) == 64 for a in artifacts)
-    assert all(a.recipe_digest == lock(_recipe()).recipe_digest for a in artifacts)
+    assert all(a.image_digest == lock(_recipe()).image_digest for a in artifacts)
     assert all(a.tree_digest and a.lock_digest for a in artifacts)
     assert any("built 2 profiles" in line for line in lines)
 

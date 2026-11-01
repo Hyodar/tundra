@@ -27,8 +27,8 @@ from tundravm.lockfile import (
     build_lockfile,
     compare_lock,
     describe_change,
+    image_digest,
     parse_lockfile,
-    recipe_digest,
     section_digests,
     serialize_lockfile,
 )
@@ -76,7 +76,7 @@ def test_lockfile_records_section_digests_and_keeps_whole_digest() -> None:
     payload = _payload(recipe)
 
     assert locked.lockfile.version == LOCKFILE_VERSION
-    assert locked.recipe_digest == recipe_digest(payload)
+    assert locked.image_digest == image_digest(payload)
     assert locked.lockfile.sections == section_digests(payload)
     assert dict(locked.sections) == section_digests(payload)
     assert {
@@ -142,14 +142,14 @@ def test_lock_status_missing_lockfile_raises(tmp_path: Path) -> None:
     assert "lock" in excinfo.value.hint
 
 
-@pytest.mark.parametrize("version", [1, 2, 5])
+@pytest.mark.parametrize("version", [1, 5, 6])
 def test_older_lockfile_versions_ask_to_lock_again(tmp_path: Path, version: int) -> None:
     recipe = _recipe()
     payload = _payload(recipe)
     lock_path = tmp_path / "legacy.lock"
     legacy = {
         "version": version,
-        "recipe_digest": recipe_digest(payload),
+        "recipe_digest": image_digest(payload),
         "recipe": payload,
         "dependencies": {"default": ["curl", "jq"]},
         "fetches": [],
@@ -164,7 +164,7 @@ def test_older_lockfile_versions_ask_to_lock_again(tmp_path: Path, version: int)
 
 
 def test_lockfile_without_toolchain_section_is_invalid() -> None:
-    raw = json.loads(serialize_lockfile(build_lockfile(recipe={"base": "debian/trixie"})))
+    raw = json.loads(serialize_lockfile(build_lockfile(image={"base": "debian/trixie"})))
     del raw["toolchain"]
 
     with pytest.raises(LockfileError, match="no `toolchain` section"):
@@ -175,7 +175,7 @@ def test_removed_profile_sections_and_scalar_detail() -> None:
     old = {"base": "debian/bookworm", "profiles": {"a": {"packages": []}, "b": {"packages": []}}}
     new = {"base": "ubuntu/noble", "profiles": {"a": {"packages": []}}}
 
-    drift = compare_lock(build_lockfile(recipe=old), new)
+    drift = compare_lock(build_lockfile(image=old), new)
 
     assert drift.changed == ("base",)
     assert drift.removed == ("profiles.b.packages",)
@@ -196,12 +196,12 @@ def test_describe_change_marks_modified_items_and_elides() -> None:
 
 
 def test_drift_ignores_embedded_recipe_that_does_not_match_section_digest() -> None:
-    lock = build_lockfile(recipe={"profiles": {"default": {"packages": ["jq"]}}})
-    tampered = lock.recipe | {"profiles": {"default": {"packages": ["other"]}}}
+    lock = build_lockfile(image={"profiles": {"default": {"packages": ["jq"]}}})
+    tampered = lock.image | {"profiles": {"default": {"packages": ["other"]}}}
     forged = type(lock)(
         version=lock.version,
-        recipe_digest=lock.recipe_digest,
-        recipe=tampered,
+        image_digest=lock.image_digest,
+        image=tampered,
         dependencies=lock.dependencies,
         sections=lock.sections,
     )
@@ -221,7 +221,7 @@ def _two_variants(payload: dict[str, object]) -> dict[str, object]:
 
 
 def test_partial_comparison_skips_the_locks_other_variants() -> None:
-    both = build_lockfile(recipe=_two_variants({"a": {"packages": []}, "b": {"packages": []}}))
+    both = build_lockfile(image=_two_variants({"a": {"packages": []}, "b": {"packages": []}}))
     only_a = _two_variants({"a": {"packages": []}})
 
     assert compare_lock(both, only_a, partial=True).is_clean
@@ -233,14 +233,14 @@ def test_partial_comparison_skips_the_locks_other_variants() -> None:
 
 
 def test_partial_comparison_checks_the_digest_for_the_locks_full_set() -> None:
-    lock_a = build_lockfile(recipe=_two_variants({"a": {"packages": []}}))
+    lock_a = build_lockfile(image=_two_variants({"a": {"packages": []}}))
     wider = _two_variants({"a": {"packages": []}, "b": {"packages": []}})
 
     assert compare_lock(lock_a, wider, partial=True).added == ("profiles.b.packages",)
     forged = type(lock_a)(
         version=lock_a.version,
-        recipe_digest="0" * 64,
-        recipe=lock_a.recipe,
+        image_digest="0" * 64,
+        image=lock_a.image,
         dependencies=lock_a.dependencies,
         sections=lock_a.sections,
     )
@@ -248,10 +248,10 @@ def test_partial_comparison_checks_the_digest_for_the_locks_full_set() -> None:
 
 
 def test_lockfile_round_trips_its_toolchain() -> None:
-    current = build_lockfile(recipe=_two_variants({"a": {"packages": ["curl"]}}))
+    current = build_lockfile(image=_two_variants({"a": {"packages": ["curl"]}}))
 
     parsed = parse_lockfile(serialize_lockfile(current))
 
     assert parsed == current
-    assert LOCKFILE_VERSION == 6
+    assert LOCKFILE_VERSION == 7
     assert parsed.toolchain is not None and parsed.toolchain.tundravm

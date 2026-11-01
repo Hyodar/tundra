@@ -19,8 +19,8 @@ def _regenerate() -> str:
 def serialize_lockfile(lockfile: Lockfile) -> str:
     payload = {
         "version": lockfile.version,
-        "recipe_digest": lockfile.recipe_digest,
-        "recipe": lockfile.recipe,
+        "image_digest": lockfile.image_digest,
+        "image": lockfile.image,
         "dependencies": lockfile.dependencies,
         "fetches": [_fetch_payload(item) for item in lockfile.fetches],
         "sections": lockfile.sections,
@@ -46,8 +46,8 @@ def parse_lockfile(raw: str) -> Lockfile:
             hint=f"Run `{lock_command()}` to lock again, and commit the lockfile.",
             context={"version": str(version)},
         )
-    recipe_digest = _required_str(payload, "recipe_digest")
-    recipe = _required_dict(payload, "recipe")
+    image_digest = _required_str(payload, "image_digest")
+    image = _required_dict(payload, "image")
     dependencies = _required_dependencies(payload, "dependencies")
     fetches_raw = payload.get("fetches", [])
     if not isinstance(fetches_raw, list):
@@ -60,8 +60,8 @@ def parse_lockfile(raw: str) -> Lockfile:
     toolchain = None if raw_toolchain is None else Toolchain.from_payload(raw_toolchain)
     return Lockfile(
         version=version,
-        recipe_digest=recipe_digest,
-        recipe=recipe,
+        image_digest=image_digest,
+        image=image,
         dependencies=dependencies,
         fetches=fetches,
         sections=sections,

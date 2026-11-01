@@ -10,7 +10,7 @@ from .drift import (
 )
 from .io import parse_lockfile, read_lockfile, serialize_lockfile
 from .model import LOCKFILE_VERSION, LockedFetch, Lockfile
-from .resolve import build_lockfile, recipe_digest, section_digests, section_values
+from .resolve import build_lockfile, image_digest, section_digests, section_values
 
 __all__ = [
     "LOCKFILE_VERSION",
@@ -23,7 +23,7 @@ __all__ = [
     "lock_variants",
     "parse_lockfile",
     "read_lockfile",
-    "recipe_digest",
+    "image_digest",
     "section_digests",
     "section_profile",
     "section_values",

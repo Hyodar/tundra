@@ -1006,7 +1006,7 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
         print(
             json_report(
                 "lock",
-                {"path": str(path), "image_digest": locked.recipe_digest, "updated": list(update)},
+                {"path": str(path), "image_digest": locked.image_digest, "updated": list(update)},
             ),
             file=out,
         )
@@ -1022,7 +1022,7 @@ def _pinned(locked: Lock) -> list[str]:
     sources table) and the toolchain."""
     lockfile = locked.lockfile
     lines = []
-    distribution = lockfile.recipe.get("distribution")
+    distribution = lockfile.image.get("distribution")
     if isinstance(distribution, dict) and distribution.get("snapshot"):
         lines.append(f"  snapshot: {distribution.get('base')} {distribution['snapshot']}")
     sources = [
