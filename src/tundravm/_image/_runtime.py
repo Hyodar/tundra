@@ -37,7 +37,6 @@ from tundravm.errors import ValidationError
 from ._component import Component, composed
 from ._ingress import TLS, AttestedTLS
 from ._secrets import (
-    CREDENTIALS_DIRECTORY,
     GENERATED_DIRECTORY,
     RUNTIME_DIRECTORY,
     BrokerKey,
@@ -52,7 +51,6 @@ __all__ = [
     "CONTROL_PLANE",
     "RUNTIME_FRAGMENT",
     "RUNTIME_MANIFEST",
-    "RUNTIME_TMPFILES",
     "Runtime",
     "RuntimeFragment",
     "bound",
@@ -63,20 +61,8 @@ __all__ = [
 RUNTIME_MANIFEST = "/etc/tundravm/runtime.json"
 """What the image needs at run time, for the tools that deliver it."""
 
-RUNTIME_TMPFILES = "/usr/lib/tmpfiles.d/50-tundravm-runtime.conf"
-"""The tmpfs directories the delivery writes into, made at boot."""
-
 CONTROL_PLANE = "tundravm"
 """The ``Secrets`` block that is the control plane: the attested endpoint."""
-
-_TMPFILES = f"""\
-# tundravm: where secrets, keys and unlock passphrases are delivered (root-owned tmpfs).
-# credentials/ is searchable so a unit can wait for a name; its files are mode 0600.
-d {RUNTIME_DIRECTORY} 0711 root root -
-d {CREDENTIALS_DIRECTORY} 0711 root root -
-d {RUNTIME_DIRECTORY}/unlock 0700 root root -
-d {RUNTIME_DIRECTORY}/keys 0700 root root -
-"""
 
 
 class RuntimeFragment(dm.Fragment):
@@ -262,7 +248,6 @@ class Runtime:
         """Everything the contracts add to the image (a component is lowered as one)."""
         found: list[dm.Declaration | Component] = []
         if self.volumes or self.secrets:
-            found.append(dm.File(RUNTIME_TMPFILES, _TMPFILES))
             found.append(dm.RuntimeTools(self.tools))
         for volume in self.volumes:
             found.extend(self.volume(volume))

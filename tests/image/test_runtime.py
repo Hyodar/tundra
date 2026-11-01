@@ -244,8 +244,7 @@ def test_a_secret_is_a_credential_the_service_waits_for(planned: PlannedImage) -
 
 def test_nothing_of_a_secret_is_written_into_the_image(planned: PlannedImage) -> None:
     assert not [path for path in planned.files if path.startswith("/run/")]
-    tmpfiles = planned.file("/usr/lib/tmpfiles.d/50-tundravm-runtime.conf").text
-    assert "d /run/tundravm/credentials 0711 root root -" in tmpfiles
+    assert "/usr/lib/tmpfiles.d/50-tundravm-runtime.conf" not in planned.files
     expected = json.loads(planned.file("/etc/tdx/secrets.json").text)
     assert [s["name"] for s in expected["secrets"]] == ["api-token"]
     (target,) = expected["secrets"][0]["targets"]

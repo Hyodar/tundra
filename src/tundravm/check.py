@@ -540,12 +540,10 @@ def _rule_debloat_removes_needed_unit(
                 profile=profile_name,
                 subject=svc.name,
             )
-    from ._image._runtime import RUNTIME_TMPFILES
-
     if not masked(TMPFILES_SETUP):
         return
     for path in sorted(_declared_paths(state)):
-        if path.startswith(TMPFILES_DIRS) and path != RUNTIME_TMPFILES:
+        if path.startswith(TMPFILES_DIRS):
             yield Diagnostic(
                 severity="warning",
                 code="debloat-removes-needed-unit",
