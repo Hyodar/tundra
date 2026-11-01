@@ -30,7 +30,8 @@ scratch project:
 
 ### 2.4 `convert --from systemd` keeps the most common unit as text (M)
 
-A unit with `ExecStart=`, `User=`, `Restart=always` and no `Type=` is "kept as text,
+Fixed later on `97e6245`: a unit without `Type=` converts to a `Service` in an `Image` file.
+As first found: a unit with `ExecStart=`, `User=`, `Restart=always` and no `Type=` is "kept as text,
 blocked by Service.Type": the implied `Type=simple` blocks the typed shape. The output is
 a `tundravm.declarative.Unit`, which no `Image` slot takes. Proposal: treat a missing
 `Type=` as `simple`, and print a `Service(...)` sketch beside the text for what maps.
@@ -180,11 +181,70 @@ and `show`. The generated workflow was parsed as YAML.
    writes a tree that drifts once locked, without a word (S; `cli.py`).
 9. `convert --from mkosi` of a tundravm tree lists implied packages (`chrony`, `nftables`)
    as the image's own (S; `convert.py`).
-10. The guide is at 7996 of its 8000 words: the next paragraph needs a cut first; the
-    doctor sample and the Imports table (the API reference has both) are the candidates.
-11. The default snapshot (`LOCKED_SNAPSHOT`, 20251113T083151Z) is a year old; bumping it is
-    its own deliberate change, not a date-dependent lint (S; needs a CI run).
-12. `Observability(proxy=)` is plain HTTP CONNECT: a proxy that speaks TLS itself needs
+10. `Observability(proxy=)` is plain HTTP CONNECT: a proxy that speaks TLS itself needs
     its name to resolve to its fixed address, an `/etc/hosts` entry the image does not
     write (GCP's glue owns that file), since neither `systemd-journal-upload` nor
     Prometheus takes the proxy's TLS name apart from its URL (S; `_observability.py`).
+
+The guide's word budget (once item 10) was cut on `walkthrough-3` (section 6); the default
+snapshot (once item 11) moved to `20261018T082309Z` on `ec5e339`.
+
+## 6. Third pass
+
+Base: master at `e42ccdf`, after fourteen landings (component rules through the API
+review). Branch: `walkthrough-3`. Host: no sudo without a password, no user namespaces, no
+QEMU, no `go`; `rustup` and tundra-tools read access.
+
+### What was run
+
+In a scratch directory: `new demo` (its `app/` is Go; with no `go` here, tundravm's own
+`go vet` test of the template skips), `new prov --template prover --ci` (the workflow
+parsed as YAML, its token step run under bash), `uv sync`, `check` (text, `--json`,
+`--explain` known, a component's and misspelt, `--tree` before and after the tree), `lock`,
+`lock --check` (text and `--json`), `build --tree-only`, the generated `pytest`, `show`
+(image, `--profile dev`, `--units`, `--json`, `--dev`, `IMAGE --dev`), `doctor` and each
+`--for`, in and outside a project, `build` and `build --dev` (both refuse without `go`,
+naming `doctor --for build`), and through a test of the project using `FakeMkosi` and
+`FakeSources`: `build --dev`, `build`, `show BUILD` (text and `--json`), `verify`, `run
+--probe` of a production build (refused, naming the dev build), `run --mode tdx`, `run
+status`, `attest`, `deploy gcp` without the target. `convert --from systemd` on a timer and
+a `Restart=always` python unit, then `check` of the result; `convert --from mkosi` on the
+demo's and surge's trees; surge through `check --tree` and `show`.
+
+### Fixed on this branch (the commits carry the why)
+
+- `run`'s summary omitted `probe`; `doctor --help` called `build:go` optional without an
+  image; `show --help` left out the boot probe checks a build prints.
+- `service-program-missing`, `hardening-disabled`, `service-runs-as-root`,
+  `port-unreachable` and `unit-written-at-runtime` named internal spellings
+  (`File(PATH, Path)`, `Hardening.strict`, `Firewall(collect=)`, `Unit(dropin=)`).
+- `show --json` per profile said `fragments` and `inherits`: `components`, `extends`.
+- `convert --from systemd` single-quoted its strings when ruff was not importable.
+- The prover docstring's `GoBinary` lacked `package="."`; `policies/README.md` ran a bare
+  `tundravm`; the `--ci` token step went on silently to a build that cannot fetch.
+- A git source's `source-unpinned` hint was 55 words of fix and background.
+- Guide: 7995 to 7551 words (the doctor sample two rows short, the Imports table, the
+  toolchain and convert paragraphs, the profile edit inventory); "gates 1, 4 and 5" after
+  gate 6; Testing before Build; the explain sample says it is the template's `App`.
+- CHANGELOG: 1755 to 1131 words, one bullet per change, 21 breaking marks; README 399.
+- Trust: the weekly `kernel` workflow; `docs/design/status-2026-11-01.md` is new.
+
+### Not fixed, ranked (items 7 to 10 above still stand)
+
+11. About 25 rows of `docs/reference/lint.md` give fixes in the internal model (`Unit`,
+    `Key`, `Disk`, `SecretEnv`, `ExternalDelivery`, `Setting`, `Debloat`, `needs=`); most
+    cannot fire from an `Image` file, but every user reads the page (M; `check.py`,
+    `declarative/resolve.py`, `declarative/utils.py`).
+12. The firewall's 8745 rule says `comment "allow"` and opens on images with no
+    `secret-delivery` (S; `components/_base.py`, `declarative/_network.py`; regenerates
+    the native-tree fixture, which `observability-proof` owns now).
+13. The manifest and `show BUILD --json` carry `recipe_digest` (S; `manifest.py`).
+14. `show` lists `server` (a source build) and `dev`, `dev-access`, `devtools` as
+    components (S; `_describe.py`, `cli.py`).
+15. `egress-unfiltered` puts its fix in the message and prints no `hint:` (S;
+    `components/_base.py`).
+16. `show --dev` is a build in a project and a profile after `IMAGE` (S; `cli.py`).
+17. The API reference: `File(mode=420)` in decimal, `Firewall.check(resolved:
+    dm.Resolved)`, `FakeMkosi.invoke`/`verbs` and `FakeSources.*` without a line
+    (S; `_reference.py`, `components/_base.py`, `testing/`).
+18. `tundravm.bake` keeps the old verb in the API beside `build` (S, breaking).
