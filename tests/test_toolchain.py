@@ -89,7 +89,6 @@ def test_compare_names_each_differing_field() -> None:
     ]
     assert not compare_toolchains(a, a)
     assert {d.severity for d in toolchain_drift(a, b)} == {"warning"}
-    assert {d.severity for d in toolchain_drift(a, b, strict=True)} == {"error"}
     assert {d.code for d in toolchain_drift(a, b)} == {"toolchain-drift"}
 
 

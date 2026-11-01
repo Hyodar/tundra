@@ -10,7 +10,7 @@ all report it; ``tundravm check`` renders it and ``check --json`` prints
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, get_args
 
@@ -84,38 +84,79 @@ RuleCheck = Callable[["Lowered", str, "ProfileState"], Iterator[Diagnostic]]
 """A compiler pass: the findings of one profile of the lowered image."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class Rule:
     """One code ``tundravm check`` reports: its severity, what it checks and how to fix it.
 
     A component declares the codes its ``check()`` reports on its class, as
     ``rules = (Rule("app-privileged-port", "error", summary, fix),)``, so
     ``tundravm check --explain CODE`` prints them; reporting a code it does not declare is
-    a ``rule-undeclared`` error. *summary* is one line: what it checks and why it matters;
-    *fix* is what clears it. *checks* are the passes of tundravm's own compiler that report
-    it; a component's rule has none.
+    a ``rule-undeclared`` error. *severity* is the level it reports at, or every level it
+    reports at, the default first and then in the order the policy escalates to them;
+    *when* says, for each level after the default, when the code reports at it
+    (``"under Policy(storage_safety='warn')"``). *summary* is one line: what it checks and
+    why it matters; *fix* is what clears it. *checks* are the passes of tundravm's own
+    compiler that report it; a component's rule has none.
     """
 
     code: str
-    severity: Severity
+    severity: tuple[Severity, ...]
+    """Every level the code reports at, the default first."""
     summary: str
     fix: str
-    checks: tuple[RuleCheck, ...] = ()
+    checks: tuple[RuleCheck, ...]
+    when: tuple[str, ...]
+    """When the code reports at each level after the default, one phrase per level."""
 
-    def __post_init__(self) -> None:
-        for name in ("code", "summary", "fix"):
-            value = getattr(self, name)
+    def __init__(
+        self,
+        code: str,
+        severity: Severity | Sequence[Severity],
+        summary: str,
+        fix: str,
+        checks: Sequence[RuleCheck] = (),
+        *,
+        when: Sequence[str] = (),
+    ) -> None:
+        levels = (severity,) if isinstance(severity, str) else tuple(severity)
+        for name, value in (("code", code), ("summary", summary), ("fix", fix)):
             if not isinstance(value, str) or not value.strip():
                 raise ValidationError(
                     f"Rule: {name} must be a non-empty string, got {value!r}.",
                     hint='Pass Rule("app-privileged-port", "error", "What it checks.", '
                     '"How to fix it.").',
                 )
-        if self.severity not in SEVERITIES:
+        wrong = [level for level in levels if level not in SEVERITIES]
+        if not levels or wrong or len(set(levels)) != len(levels):
             raise ValidationError(
-                f"Rule {self.code}: invalid severity {self.severity!r}.",
-                hint=f"Expected one of: {', '.join(SEVERITIES)}.",
+                f"Rule {code}: invalid severity {severity!r}.",
+                hint=f"Pass one of {', '.join(SEVERITIES)}, or a tuple of distinct ones with "
+                "the default first.",
             )
+        phrases = (when,) if isinstance(when, str) else tuple(when)
+        if len(phrases) != len(levels) - 1:
+            raise ValidationError(
+                f"Rule {code}: {len(levels) - 1} level(s) after the default, "
+                f"{len(phrases)} when= phrase(s).",
+                hint="Pass when= one phrase per level after the default, saying when the code "
+                "reports at it: when=(\"under Policy(storage_safety='warn')\",).",
+            )
+        object.__setattr__(self, "code", code)
+        object.__setattr__(self, "severity", levels)
+        object.__setattr__(self, "summary", summary)
+        object.__setattr__(self, "fix", fix)
+        object.__setattr__(self, "checks", tuple(checks))
+        object.__setattr__(self, "when", phrases)
+
+    @property
+    def severity_text(self) -> str:
+        """The severity as the lint reference and ``--explain`` print it:
+        ``error (warning under Policy(storage_safety='warn'))``."""
+        default, *others = self.severity
+        if not others:
+            return default
+        changes = (f"{level} {phrase}" for level, phrase in zip(others, self.when, strict=True))
+        return f"{default} ({', '.join(changes)})"
 
 
 __all__ = ["SEVERITIES", "Context", "Diagnostic", "Rule", "RuleCheck", "Severity"]

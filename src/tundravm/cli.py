@@ -946,7 +946,7 @@ def _toolchain(backend: BuildBackend | None, locked: Lock) -> tuple[Diagnostic, 
     recorded = locked.lockfile.toolchain
     if recorded is None:
         return ()
-    return toolchain_drift(recorded, running_toolchain(backend, locked=recorded), strict=False)
+    return toolchain_drift(recorded, running_toolchain(backend, locked=recorded))
 
 
 # ── lock ─────────────────────────────────────────────────────────────────

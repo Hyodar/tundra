@@ -53,9 +53,9 @@ def test_errors_exit_1_in_text_and_json(
 def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     result = cli("check", "--explain", "source-unpinned", "--explain", "tree-drift", "demo.py")
     assert result.code == EXIT_OK, result.err
-    assert result.out.startswith("source-unpinned (warning)\n    A source build")
+    assert result.out.startswith("source-unpinned: warning (error when the policy refuses")
     assert "\n    fix: Run `tundravm lock IMAGE`" in result.out
-    assert "\n\ntree-drift (error)\n" in result.out
+    assert "\n\ntree-drift: error\n" in result.out
     unknown = cli("check", "--explain", "source-unpined")
     assert unknown.code == EXIT_SDK_ERROR
     assert "Did you mean 'source-unpinned'? docs/reference/lint.md lists" in unknown.err
@@ -74,7 +74,7 @@ def test_a_components_code_is_explained_through_the_image_that_declares_it(
     explained = cli("check", "--explain", "app-privileged-port")
     assert explained.code == EXIT_OK, explained.err
     assert explained.out.splitlines()[:2] == [
-        "app-privileged-port (error)",
+        "app-privileged-port: error",
         "    declared by App in demo.py",
     ]
 

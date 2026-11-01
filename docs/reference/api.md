@@ -898,14 +898,20 @@ One profile of the image after expansion, profile changes and reference checks.
 ```python
 Rule(
     code: str,
-    severity: Severity,
+    severity: Severity | Sequence[Severity],
     summary: str,
     fix: str,
-    checks: tuple[RuleCheck, ...] = (),
+    checks: Sequence[RuleCheck] = (),
+    *,
+    when: Sequence[str] = (),
 )
 ```
 
 One code `tundravm check` reports: its severity, what it checks and how to fix it.
+
+| Member | Does |
+|---|---|
+| `Rule.severity_text` | The severity as the lint reference and `--explain` print it: `error (warning under Policy(storage_safety='warn'))`. |
 
 ### `ServiceReady`
 

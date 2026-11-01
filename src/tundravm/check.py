@@ -1159,21 +1159,22 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     Rule(
         "secret-store-undefined",
-        "error",
-        "The secrets are stored on a disk no Disk in the profile declares (a warning when "
-        "a module reports it).",
+        ("error", "warning"),
+        "The secrets are stored on a disk no Disk in the profile declares.",
         "Declare Disk(NAME, ...) in the same profile, pass Secrets(store=) one of the "
         "declared disks, or store=None.",
         _MODULES,
+        when=("when the compiled profile, not its declarations, lacks the disk",),
     ),
     Rule(
         "export-stale",
-        "error",
-        "A component holds an export of a provider that this profile configures "
-        "differently; a warning when the profile only edits declarations inside the "
-        "provider, which exports do not follow.",
+        ("error", "warning"),
+        "A component holds an export of a provider that this profile configures differently.",
         "Pass the consumer the export of the component this profile includes, or change "
         "the provider through its own arguments instead of editing what it composed.",
+        when=(
+            "when the profile only edits what the provider composed, which exports do not follow",
+        ),
     ),
     Rule(
         "executable-stale",
@@ -1212,12 +1213,13 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     Rule(
         "disk-device-guessed",
-        "error",
+        ("error", "warning"),
         "A disk that is formatted names no device, and automatic selection can pick the "
-        "boot disk and format it (a warning under Policy(storage_safety='warn')).",
+        "boot disk and format it.",
         "Name a stable device (device='/dev/disk/by-id/virtio-SERIAL'), or format='never' "
         "for a disk prepared beforehand.",
         _MODULES,
+        when=("under Policy(storage_safety='warn')",),
     ),
     Rule(
         "disk-device-unstable",
@@ -1319,15 +1321,18 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     Rule(
         "source-unpinned",
-        "warning",
+        ("warning", "error", "info"),
         "A source build, built kernel or downloaded package has no pin in the lockfile, so "
-        "a moving ref builds different bytes (the image's policy can make it an error or "
-        "an info).",
+        "a moving ref builds different bytes.",
         "Run `tundravm lock IMAGE` to pin every source at once (`tundravm build` then "
         "fetches each on the host), or declare an immutable source: Git(url, ref) with a "
         "40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, "
         "with every other source it cannot resolve, before anything is written.",
         (_rule_source_unpinned,),
+        when=(
+            "when the policy refuses moving refs",
+            "when the policy allows them",
+        ),
     ),
     Rule(
         "kernel-missing",
@@ -1440,19 +1445,19 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     Rule(
         "socket-service-unpaired",
-        "error",
-        "A socket activates a service the profile neither ships nor enables (a warning "
-        "when the profile installs packages, which may ship it).",
+        ("error", "warning"),
+        "A socket activates a service the profile neither ships nor enables.",
         "Ship the service next to the socket, or name the one it starts with Service=.",
         _UNIT_TEXT,
+        when=("when the profile installs packages, which may ship it",),
     ),
     Rule(
         "timer-unit-missing",
-        "error",
-        "A timer activates a unit the profile neither ships nor enables (a warning when the "
-        "profile installs packages, which may ship it).",
+        ("error", "warning"),
+        "A timer activates a unit the profile neither ships nor enables.",
         "Ship the unit next to the timer, or name the one it starts with Unit=.",
         _UNIT_TEXT,
+        when=("when the profile installs packages, which may ship it",),
     ),
     Rule(
         "timer-service-enabled",
@@ -1599,16 +1604,16 @@ _REGISTRY: tuple[Rule, ...] = (
         "toolchain-drift",
         "warning",
         "The running toolchain (mkosi, the tools tree, tundravm, the measurement tools) "
-        "differs from the one the lock records, so a build may differ (an error with "
-        "strict_toolchain).",
+        "differs from the one the lock records, so a build may differ.",
         "Run the locked tools, or `tundravm lock --update toolchain` to record this "
         "toolchain instead.",
     ),
     Rule(
         "tool-missing",
-        "error",
-        "A host tool the build backend needs is missing (a warning when it is optional).",
+        ("error", "warning"),
+        "A host tool the build backend needs is missing.",
         "Install the tool the message names; `tundravm doctor` lists what this host can do.",
+        when=("when the tool is optional",),
     ),
     Rule(
         "tree-drift",
@@ -1774,7 +1779,14 @@ def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None
             for text in (rule.summary, f"fix: {rule.fix}")
         )
         by = "" if origin is None else f"\n    declared by {origin}"
-        blocks.append(f"{rule.code} ({rule.severity}){by}\n{summary}\n{fix}")
+        heading = textwrap.fill(
+            f"{rule.code}: {rule.severity_text}",
+            88,
+            subsequent_indent="    ",
+            break_on_hyphens=False,
+            break_long_words=False,
+        )
+        blocks.append(f"{heading}{by}\n{summary}\n{fix}")
     return "\n\n".join(blocks)
 
 

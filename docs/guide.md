@@ -1108,7 +1108,7 @@ $ tundravm check --explain app-privileged-port
 ```
 
 ```text
-app-privileged-port (error)
+app-privileged-port: error
     declared by App in demo.py
     The app runs as a regular user, so it cannot bind a port below 1024.
     fix: Pass App(port=) 1024 or above.

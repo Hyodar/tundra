@@ -20,7 +20,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from .diagnostics import Diagnostic, Severity
+from .diagnostics import Diagnostic
 from .errors import LockfileError
 
 TOOLCHAIN_UPDATE = "toolchain"
@@ -196,19 +196,12 @@ def compare_toolchains(left: Toolchain, right: Toolchain) -> tuple[ToolchainChan
     )
 
 
-def drift_severity(*, strict: bool) -> Severity:
-    """``toolchain-drift`` is a warning, an error under ``strict_toolchain``/``--strict``."""
-    return "error" if strict else "warning"
-
-
-def toolchain_drift(
-    locked: Toolchain, running: Toolchain, *, strict: bool = False
-) -> tuple[Diagnostic, ...]:
-    """One ``toolchain-drift`` diagnostic per field the running toolchain differs on."""
+def toolchain_drift(locked: Toolchain, running: Toolchain) -> tuple[Diagnostic, ...]:
+    """One ``toolchain-drift`` warning per field the running toolchain differs on."""
     return tuple(
         Diagnostic(
             "toolchain-drift",
-            drift_severity(strict=strict),
+            "warning",
             f"toolchain {change.field}: locked {change.left or 'none'}, "
             f"running {change.right or 'none'}",
             subject=f"toolchain.{change.field}",

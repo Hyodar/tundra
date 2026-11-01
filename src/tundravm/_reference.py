@@ -395,7 +395,8 @@ def lint_markdown() -> str:
     lines = _header("Lint reference", "the `tundravm check` rule registry")
     lines += [
         "Every code tundravm itself reports. `tundravm check --explain CODE` prints one "
-        "row. The severity is the default; the row says when it differs.",
+        "row. The severity is the default, then each other level a code reports at and "
+        "when.",
         "",
         "| Code | Severity | What it checks | How to fix |",
         "|---|---|---|---|",
@@ -424,7 +425,7 @@ def _code(rule: Rule) -> str:
 def _rule_row(rule: Rule) -> str:
     """*rule*'s code, severity, summary and fix, as the cells of a table row."""
     return (
-        f"`{rule.code}` | {rule.severity} | {_cell(_markup(rule.summary))} "
+        f"`{rule.code}` | {_cell(rule.severity_text)} | {_cell(_markup(rule.summary))} "
         f"| {_cell(_markup(rule.fix))}"
     )
 
