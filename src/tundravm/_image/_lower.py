@@ -10,6 +10,7 @@ the whole answer to "what did I get".
 
 from __future__ import annotations
 
+import copy
 import shlex
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -1050,7 +1051,14 @@ def _waiting(
 ) -> dm.Declaration | dm.Fragment:
     """*item*, a service or task in it waiting for *steps* as well (``needs=``)."""
     if isinstance(item, dm.Fragment):
-        return replace(item, items=tuple(_waiting(child, steps) for child in item.items))
+        items = tuple(_waiting(child, steps) for child in item.items)
+        if items == item.items:
+            return item
+        # A Composite (a GoBinary, a CargoBinary) composes its own items, so a copy takes
+        # the changed ones in place of replace().
+        found = copy.copy(item)
+        object.__setattr__(found, "items", items)
+        return found
     if isinstance(item, (dm.Service, dm.Task)) and dm.RUNTIME_INIT not in item.needs:
         missing = tuple(step for step in steps if step not in item.needs)
         return replace(item, needs=(*item.needs, *missing)) if missing else item
