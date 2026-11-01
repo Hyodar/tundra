@@ -492,20 +492,24 @@ options:
 Turn an mkosi tree or systemd unit files into source.
 
 ```text
-usage: tundravm convert [-h] [--traceback] --from {mkosi,systemd} [--allow-scripts] PATH
+usage: tundravm convert [-h] [--json] [--traceback] --from {mkosi,systemd} [--allow-scripts] PATH
 
 --from systemd: unit files (a file, or a directory) as an Image file, one Service per
 service with its drop-ins, timer or socket; where a unit differs from what the image
 implies a note says so, and what no slot holds is reported. --from mkosi: the tree
-resolved by mkosi itself, as an Image file; every setting it cannot carry is
-reported. Parsing a tree runs its executable mkosi.version or mkosi.configure:
-refused unless --allow-scripts.
+resolved by mkosi itself, as an Image file, then a report with one line per setting
+the tree sets: kept (the image's tree resolves it to the same value), mapped (the
+slot that carries it), defaulted (the opinion that replaced it) or refused (why
+nothing carries it). Parsing a tree runs its executable mkosi.version or
+mkosi.configure: refused unless --allow-scripts. --json prints the source and the
+report as one object.
 
 positional arguments:
   PATH
 
 options:
   -h, --help            show this help message and exit
+  --json                Print a JSON report.
   --traceback           Raise errors with the Python traceback.
   --from {mkosi,systemd}
                         What PATH is.

@@ -741,9 +741,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--from systemd: unit files (a file, or a directory) as an Image file, one Service per\n"
         "service with its drop-ins, timer or socket; where a unit differs from what the image\n"
         "implies a note says so, and what no slot holds is reported. --from mkosi: the tree\n"
-        "resolved by mkosi itself, as an Image file; every setting it cannot carry is\n"
-        "reported. Parsing a tree runs its executable mkosi.version or mkosi.configure:\n"
-        "refused unless --allow-scripts.",
+        "resolved by mkosi itself, as an Image file, then a report with one line per setting\n"
+        "the tree sets: kept (the image's tree resolves it to the same value), mapped (the\n"
+        "slot that carries it), defaulted (the opinion that replaced it) or refused (why\n"
+        "nothing carries it). Parsing a tree runs its executable mkosi.version or\n"
+        "mkosi.configure: refused unless --allow-scripts. --json prints the source and the\n"
+        "report as one object.",
+        as_json,
     )
     convert.add_argument("path", type=Path, metavar="PATH")
     convert.add_argument(
@@ -1741,6 +1745,10 @@ def _cmd_convert(args: argparse.Namespace, out: TextIO) -> int:
         converted = convert.from_systemd(args.path)
     else:
         converted = convert.from_mkosi(args.path, allow_scripts=args.allow_scripts)
+    if args.json:
+        json.dump(converted.as_json(), out, indent=2)
+        out.write("\n")
+        return EXIT_OK
     out.write(converted.source)
     for line in convert.render(converted):
         print(line, file=out)
