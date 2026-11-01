@@ -13,7 +13,8 @@
 
 tundravm is mkosi made opinionated for confidential VMs: Debian, systemd and Intel TDX,
 declared as one Python `Image`. It compiles the image to a plain mkosi 27.1 tree, builds it
-into an immutable directory with a signed manifest, and runs, deploys and attests the result.
+into an immutable directory with a manifest you can sign, and runs, deploys and attests the
+result.
 
 ## Install
 
@@ -63,13 +64,12 @@ $ uv run tundravm dev                           # lock, build the dev profile, b
 $ uv run tundravm verify latest-development     # every artifact against the manifest, offline
 ```
 
-That file is the whole image. Everything else is implied: the TEE baseline (NTS time, a
-volatile journal, hardened sysctls, no apt timers); a measured UKI with the TDX, virtio,
-NVMe, Hyper-V and gVNIC drivers; an nftables firewall that opens nothing; and the `tdxs`
-evidence service, whose quote `attest` checks. Each default has a typed escape hatch.
+That file is the whole image. What its docstring does not list is implied too: a measured
+UKI with the TDX, virtio, NVMe, Hyper-V and gVNIC drivers, and the `tdxs` evidence
+service, whose quote `attest` checks. Each default has a typed escape hatch.
 
 The two commands build, boot, probe and verify the `dev` profile. A production build is
-the same image without `DevAccess`, and it starts no service unless it runs under TDX.
+the same image without `DevAccess`. It starts no service unless it runs under TDX.
 [The guide](docs/guide.md#the-attested-node-stage-by-stage) builds the node up from there
 in six stages under `examples/attested-node/stages/`: Nethermind as a component of your
 own, Lighthouse, a signing proxy built from Go source, attested TLS, and operating it.
