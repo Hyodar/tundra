@@ -1,5 +1,8 @@
 """QEMU firmware search paths, read by ``run``, ``doctor`` and the boot harness."""
 
+import os
+from collections.abc import Callable
+
 # Common OVMF firmware paths
 OVMF_CODE_PATHS = (
     "/usr/share/OVMF/OVMF_CODE.fd",
@@ -22,3 +25,10 @@ TDVF_PATHS = (
     "/usr/share/OVMF/OVMF.fd",
     "/usr/share/qemu/OVMF.fd",
 )
+
+
+def ovmf_firmware(exists: Callable[[str], bool] = os.path.isfile) -> tuple[str, str] | None:
+    """The first OVMF ``(code, vars)`` pair that *exists*, or ``None``: a simulated boot
+    needs both."""
+    pairs = zip(OVMF_CODE_PATHS, OVMF_VARS_PATHS, strict=True)
+    return next(((c, v) for c, v in pairs if exists(c) and exists(v)), None)

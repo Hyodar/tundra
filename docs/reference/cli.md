@@ -520,8 +520,9 @@ usage: tundravm doctor [-h] [--attr NAME] [--pythonpath DIR] [--json] [--traceba
                        [--for {build,run,tdx,azure,gcp}]
                        [IMAGE]
 
-One row per capability: ready, blocked (with the fix), optional, unavailable or
-unsupported. --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1
+One row per capability: ready, blocked, optional, unavailable or unsupported, then
+a fix: block, the one command that clears each row (apt packages on Debian or
+Ubuntu). --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1
 when a build row (or, with --for, a row of that area) is blocked. build:go blocks
 without go, image or not (every image's Tdxs is Go); build:rustup only when IMAGE
 has a Cargo source that pins a Rust toolchain.

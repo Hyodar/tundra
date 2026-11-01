@@ -3,11 +3,14 @@
 Each row is ``<area>:<what>`` and a verdict:
 
 - ``ready`` (with what it will use),
-- ``blocked: <why>: <fix>`` when something installable or configurable is missing,
+- ``blocked: <why>`` when something installable or configurable is missing,
 - ``unavailable: <why>`` when this host cannot do it (no TDX hardware),
 - ``optional: <why>`` when the image needs no such tool (``not needed by this image``), or
   no image says whether it does and the tool (``rustup``) is missing (never a failure),
 - ``unsupported: <why>`` when tundravm does not do it anywhere.
+
+A row's *fix* is the one command that clears it, an apt package on Debian or Ubuntu; a
+ready row has one when a command makes it better (KVM instead of TCG, no sudo).
 
 Every fact comes through :class:`Host`, so tests describe a host instead of probing this one.
 """
@@ -24,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from .backends.local_linux import DEBIAN_KEYRING
-from .deploy.qemu import OVMF_CODE_PATHS, TDVF_PATHS
+from .deploy.qemu import TDVF_PATHS, ovmf_firmware
 from .measure.gcp_firmware import TABLE_VERSION
 from .measure.model import MEASURE_VERSION
 from .toolchain import MKOSI_PIN, installed_version
@@ -38,11 +41,13 @@ BuildBackendKind = Literal["local", "lima"]
 
 @dataclass(frozen=True, slots=True)
 class Capability:
-    """One row: *name* (``build:x86-64``), its *verdict* and the *detail* after it."""
+    """One row: *name* (``build:x86-64``), its *verdict*, the *detail* after it and its
+    *fix*, one command (``sudo apt install golang``), ``""`` for none."""
 
     name: str
     verdict: Verdict
     detail: str = ""
+    fix: str = ""
 
     @property
     def area(self) -> str:
@@ -137,7 +142,8 @@ def build_capability(host: Host, backend: BuildBackendKind) -> Capability:
 
 def _lima_build(name: str, host: Host) -> Capability:
     if not host.has("limactl"):
-        return Capability(name, "blocked", "limactl not found: install Lima (lima-vm.io)")
+        fix = "brew install lima" if host.system == "Darwin" else "install Lima: https://lima-vm.io"
+        return Capability(name, "blocked", "no limactl, which runs the Lima build guest", fix)
     if host.machine in ("x86_64", "AMD64"):
         return Capability(name, "ready", f"Lima x86-64 guest, mkosi {MKOSI_PIN.version}")
     return Capability(
@@ -149,41 +155,43 @@ def _lima_build(name: str, host: Host) -> Capability:
 
 
 def _linux_build(name: str, host: Host) -> Capability:
+    lima = "export TUNDRAVM_BACKEND=lima"
     if host.system != "Linux":
-        return Capability(
-            name,
-            "blocked",
-            f"this is {host.system}: build with the Lima backend (TUNDRAVM_BACKEND=lima)",
-        )
+        return Capability(name, "blocked", f"this is {host.system}, not x86-64 Linux", lima)
     if not host.linux_x86_64:
-        return Capability(
-            name,
-            "blocked",
-            f"tundravm builds x86-64 images on x86-64 Linux; this is {host.machine}: "
-            "build with the Lima backend (TUNDRAVM_BACKEND=lima)",
-        )
+        return Capability(name, "blocked", f"this is {host.machine}, not x86-64 Linux", lima)
     version = host.mkosi_version()
     if version != MKOSI_PIN.version:
         found = "no mkosi" if version is None else f"mkosi {version}"
         return Capability(
             name,
             "blocked",
-            f"{found} in tundravm's environment, it needs {MKOSI_PIN.version}: "
-            "reinstall tundravm (`uv sync` or `pip install`)",
+            f"{found} in tundravm's environment, which installs mkosi {MKOSI_PIN.version}",
+            "uv tool upgrade --reinstall tundravm (in a project: uv sync --reinstall)",
         )
-    for tool, fix in (("apt-get", "install apt"), ("dpkg", "install dpkg")):
+    for tool in ("apt-get", "dpkg"):
         if host.output(tool, "--version") is None:
             return Capability(
-                name, "blocked", f"no {tool} (mkosi bootstraps its tools tree with it): {fix}"
+                name,
+                "blocked",
+                f"no {tool}, which mkosi bootstraps its Debian tools tree with",
+                f"build on Debian or Ubuntu, or {lima}",
             )
     if host.output("test", "-e", DEBIAN_KEYRING) is None:
         return Capability(
-            name, "blocked", "no Debian archive keyring: install debian-archive-keyring"
+            name,
+            "blocked",
+            "no Debian archive keyring, which checks the tools tree's packages",
+            apt_install(["debian-archive-keyring"]),
         )
     privilege = _privilege(host)
     if privilege is None:
-        return Capability(name, "blocked", _userns_fix(host))
-    return Capability(name, "ready", f"mkosi {MKOSI_PIN.version}, {privilege}")
+        fix = (
+            _userns_fix(host) or "allow user namespaces (container or LSM policy), or install sudo"
+        )
+        return Capability(name, "blocked", "no unprivileged user namespaces and no sudo", fix)
+    fix = "" if privilege in ("root", "user namespaces") else _userns_fix(host)
+    return Capability(name, "ready", f"mkosi {MKOSI_PIN.version}, {privilege}", fix)
 
 
 GO_PURPOSE = (
@@ -191,6 +199,9 @@ GO_PURPOSE = (
     "build (every image's Tdxs is one)"
 )
 """What the host ``go`` is for, in every ``build:go`` row."""
+
+GO_FIX = "sudo apt install golang (Debian 13, Ubuntu 24.04; older: https://go.dev/dl)"
+"""The fix of a host without ``go``: Debian 13's and Ubuntu 24.04's golang are 1.21+."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +225,7 @@ def _as_needed(row: Capability, wanted: Sequence[str] | None) -> Capability:
     if wanted is not None and not wanted:
         return Capability(row.name, "optional", "not needed by this image")
     if wanted is None and row.verdict == "blocked":
-        return Capability(row.name, "optional", row.detail)
+        return Capability(row.name, "optional", row.detail, row.fix)
     return row
 
 
@@ -231,14 +242,14 @@ def _go_row(host: Host) -> Capability:
     words = (host.output("go", "version") or "").split()
     found = words[2] if len(words) > 2 and words[2].startswith("go1.") else None
     if found is None:
-        return Capability(name, "blocked", f"no go on PATH: install Go 1.21+, which {GO_PURPOSE}")
+        return Capability(name, "blocked", f"no go on PATH, which {GO_PURPOSE}", GO_FIX)
     minor = found.removeprefix("go1.").split(".", 1)[0]
     if not minor.isdigit() or int(minor) < 21:
         return Capability(
             name,
             "blocked",
-            f"{found} predates toolchain switching (Go 1.21), and go {GO_PURPOSE}: "
-            "install Go 1.21+",
+            f"{found} predates toolchain switching (Go 1.21), and go {GO_PURPOSE}",
+            "install Go 1.21 or newer: https://go.dev/dl",
         )
     return Capability(name, "ready", f"{found}, which {GO_PURPOSE}")
 
@@ -262,8 +273,8 @@ def _rustup_row(host: Host) -> Capability:
         return Capability(
             name,
             "blocked",
-            f"no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
-            "(https://rustup.rs, or the Debian package rustup)",
+            f"no rustup on PATH, which {RUSTUP_PURPOSE}",
+            "sudo apt install rustup (or https://rustup.rs)",
         )
     return Capability(name, "ready", f"rustup {words[1]}, which {RUSTUP_PURPOSE}")
 
@@ -284,16 +295,21 @@ def _privilege(host: Host) -> str | None:
     return None
 
 
+USERNS_KNOBS = (
+    ("kernel.apparmor_restrict_unprivileged_userns", "1", "0"),
+    ("kernel.unprivileged_userns_clone", "0", "1"),
+    ("user.max_user_namespaces", "0", "65536"),
+)
+"""``(sysctl, the value that withholds user namespaces, the value that grants them)``."""
+
+
 def _userns_fix(host: Host) -> str:
-    """Why this host gives no user namespace, and the fix, from the kernel's knobs."""
-    reason = "no unprivileged user namespaces and no sudo"
-    if host.read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") == "1":
-        return f"{reason}: run `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`"
-    if host.read("/proc/sys/kernel/unprivileged_userns_clone") == "0":
-        return f"{reason}: run `sysctl -w kernel.unprivileged_userns_clone=1`"
-    if host.read("/proc/sys/user/max_user_namespaces") == "0":
-        return f"{reason}: run `sysctl -w user.max_user_namespaces=65536`"
-    return f"{reason}: allow user namespaces (container or LSM policy), or install sudo"
+    """The sysctl that grants this host unprivileged user namespaces, ``""`` when no kernel
+    knob withholds them."""
+    for key, off, on in USERNS_KNOBS:
+        if host.read(f"/proc/sys/{key.replace('.', '/')}") == off:
+            return f"sudo sysctl -w {key}={on}"
+    return ""
 
 
 # ── run ──────────────────────────────────────────────────────────────────
@@ -313,16 +329,29 @@ def _qemu(host: Host) -> str | None:
     return words[index] if index < len(words) else "unknown"
 
 
+def apt_install(packages: Sequence[str]) -> str:
+    """The command that installs *packages* on Debian or Ubuntu."""
+    return f"sudo apt install {' '.join(packages)}"
+
+
 def _run_simulated(host: Host) -> Capability:
     name = "run:simulated"
-    qemu = _qemu(host)
-    if qemu is None:
-        return Capability(name, "blocked", "qemu-system-x86_64 not found: install qemu-system-x86")
-    firmware = next((path for path in OVMF_CODE_PATHS if host.exists(path)), None)
-    if firmware is None:
-        return Capability(name, "blocked", "no OVMF firmware: install ovmf")
-    accel = "KVM" if host.system == "Linux" and host.kvm() else "TCG emulation, slow"
-    return Capability(name, "ready", f"qemu {qemu}, OVMF {firmware}, {accel}")
+    qemu, firmware = _qemu(host), ovmf_firmware(host.exists)
+    missing = [
+        (what, package)
+        for what, package, found in (
+            ("no qemu-system-x86_64", "qemu-system-x86", qemu),
+            ("no OVMF firmware", "ovmf", firmware),
+        )
+        if found is None
+    ]
+    if qemu is None or firmware is None:
+        why = ", ".join(what for what, _ in missing)
+        return Capability(name, "blocked", why, apt_install([p for _, p in missing]))
+    if host.system == "Linux" and host.kvm():
+        return Capability(name, "ready", f"qemu {qemu}, OVMF {firmware[0]}, KVM")
+    fix = "sudo usermod -aG kvm $USER, then log in again" if host.exists("/dev/kvm") else ""
+    return Capability(name, "ready", f"qemu {qemu}, OVMF {firmware[0]}, TCG emulation, slow", fix)
 
 
 def _run_tdx(host: Host) -> Capability:
@@ -331,10 +360,17 @@ def _run_tdx(host: Host) -> Capability:
     if host.system != "Linux" or enabled not in ("Y", "1"):
         return Capability(name, "unavailable", "no Intel TDX host: kvm_intel tdx is not enabled")
     if _qemu(host) is None:
-        return Capability(name, "blocked", "qemu-system-x86_64 not found: install qemu-system-x86")
+        return Capability(
+            name, "blocked", "no qemu-system-x86_64", apt_install(["qemu-system-x86"])
+        )
     firmware = next((path for path in TDVF_PATHS if host.exists(path)), None)
     if firmware is None:
-        return Capability(name, "blocked", "no TDVF firmware: install ovmf with TDX support")
+        return Capability(
+            name,
+            "blocked",
+            "no TDVF firmware (OVMF built with TDX support)",
+            "set up the TDX host: https://github.com/canonical/tdx",
+        )
     return Capability(name, "ready", f"TDVF {firmware}")
 
 
@@ -349,22 +385,32 @@ def deploy_capabilities(host: Host) -> tuple[Capability, ...]:
 def _deploy_gcp(host: Host) -> Capability:
     name = "deploy:gcp"
     if not host.has("gcloud"):
-        return Capability(name, "blocked", "gcloud not found: install the Google Cloud CLI")
+        return Capability(
+            name,
+            "blocked",
+            "no gcloud",
+            "install the Google Cloud CLI: https://cloud.google.com/sdk/docs/install",
+        )
     account = host.output(
         "gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"
     )
     if not account:
-        return Capability(name, "blocked", "gcloud has no active account: run `gcloud auth login`")
+        return Capability(name, "blocked", "gcloud has no active account", "gcloud auth login")
     return Capability(name, "ready", f"gcloud as {account}")
 
 
 def _deploy_azure(host: Host) -> Capability:
     name = "deploy:azure"
     if not host.has("az"):
-        return Capability(name, "blocked", "az not found: install the Azure CLI")
+        return Capability(
+            name,
+            "blocked",
+            "no az",
+            "install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli",
+        )
     account = host.output("az", "account", "show", "--query", "user.name", "--output", "tsv")
     if not account:
-        return Capability(name, "blocked", "az is not logged in: run `az login`")
+        return Capability(name, "blocked", "az is not logged in", "az login")
     return Capability(name, "ready", f"az as {account}")
 
 
@@ -427,6 +473,7 @@ __all__ = [
     "Capability",
     "Host",
     "ToolchainNeeds",
+    "apt_install",
     "build_capability",
     "capabilities",
     "default_backend",

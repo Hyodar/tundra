@@ -15,6 +15,7 @@ import pytest
 from tests.helpers import run_main
 from tundravm.backends.local_linux import DEBIAN_KEYRING
 from tundravm.capabilities import (
+    GO_FIX,
     GO_PURPOSE,
     RUSTUP_PURPOSE,
     Host,
@@ -46,7 +47,10 @@ def _host(
     machine: str = "x86_64",
     userns: bool = True,
     uid: int = 1000,
-    files: Sequence[str] = ("/usr/share/OVMF/OVMF_CODE_4M.fd",),
+    files: Sequence[str] = (
+        "/usr/share/OVMF/OVMF_CODE_4M.fd",
+        "/usr/share/OVMF/OVMF_VARS_4M.fd",
+    ),
     proc: Mapping[str, str] | None = None,
     kvm: bool = True,
     accounts: Mapping[str, str] | None = None,
@@ -100,7 +104,12 @@ def _rows(host: Host, **kwargs: object) -> dict[str, str]:
     return {row.name: row.render().split(None, 1)[1] for row in capabilities(host, **kwargs)}  # type: ignore[arg-type]
 
 
-LINUX_FILES = (DEBIAN_KEYRING, "/usr/share/OVMF/OVMF_CODE_4M.fd")
+def _fixes(host: Host, **kwargs: object) -> dict[str, str]:
+    return {row.name: row.fix for row in capabilities(host, **kwargs) if row.fix}  # type: ignore[arg-type]
+
+
+OVMF = ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd")
+LINUX_FILES = (DEBIAN_KEYRING, *OVMF)
 
 
 def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> None:
@@ -123,13 +132,11 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
     ]
     assert rows[7].startswith("verify:qemu      ready (built-in TDX replay ")
     assert rows[8].startswith("verify:gcp       ready (built-in replay, GCP firmware table ")
+    assert _fixes(host) == {}
 
 
-NO_GO = f"no go on PATH: install Go 1.21+, which {GO_PURPOSE}"
-NO_RUSTUP = (
-    f"no rustup on PATH, which {RUSTUP_PURPOSE}: install rustup "
-    "(https://rustup.rs, or the Debian package rustup)"
-)
+NO_GO = f"no go on PATH, which {GO_PURPOSE}"
+NO_RUSTUP = f"no rustup on PATH, which {RUSTUP_PURPOSE}"
 NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
 
 
@@ -137,14 +144,6 @@ NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
     ("tool", "version", "needs", "row", "code"),
     [
         ("go", None, NEEDS_BOTH, f"blocked: {NO_GO}", EXIT_FAILURE),
-        (
-            "go",
-            "go version go1.19.8 linux/amd64",
-            NEEDS_BOTH,
-            f"blocked: go1.19.8 predates toolchain switching (Go 1.21), and go {GO_PURPOSE}: "
-            "install Go 1.21+",
-            EXIT_FAILURE,
-        ),
         ("rustup", None, NEEDS_BOTH, f"blocked: {NO_RUSTUP}", EXIT_FAILURE),
         ("go", None, None, f"blocked: {NO_GO}", EXIT_FAILURE),
         ("rustup", None, None, f"optional: {NO_RUSTUP}", EXIT_OK),
@@ -163,15 +162,7 @@ NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
             EXIT_OK,
         ),
     ],
-    ids=[
-        "no-go",
-        "too-old-go",
-        "no-rustup",
-        "no-image-go",
-        "no-image-rustup",
-        "unneeded",
-        "unneeded-present",
-    ],
+    ids=["no-go", "no-rustup", "no-image-go", "no-image-rustup", "unneeded", "unneeded-present"],
 )
 def test_the_host_toolchain_rows_block_only_for_an_image_that_needs_them(
     tool: str, version: str | None, needs: ToolchainNeeds | None, row: str, code: int
@@ -214,125 +205,195 @@ def test_doctor_reads_what_the_projects_image_needs(
     host, _ = _host({k: v for k, v in TOOLS.items() if k != "rustup"}, files=LINUX_FILES)
     monkeypatch.setattr("tundravm.cli.Host", lambda: host)
     got, out = run_main("doctor", "--for", "build")
-    rows = {line.split(None, 1)[0]: line.split(None, 1)[1] for line in out.splitlines()}
+    rows = {
+        line.split(None, 1)[0]: line.split(None, 1)[1] for line in out.split("\n\n")[0].splitlines()
+    }
     assert rows["build:rustup"] == row and rows["build:go"].startswith("ready (go1.24.4")
     assert got == code
 
 
-def test_build_falls_back_to_sudo_and_names_the_userns_fix_without_it() -> None:
+def _without(*tools: str) -> dict[str, str]:
+    return {tool: text for tool, text in TOOLS.items() if tool not in tools}
+
+
+RESTRICTED = {"/proc/sys/kernel/apparmor_restrict_unprivileged_userns": "1"}
+LIMA_FIX = "export TUNDRAVM_BACKEND=lima"
+GCLOUD = "install the Google Cloud CLI: https://cloud.google.com/sdk/docs/install"
+AZ = "install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
+
+
+@pytest.mark.parametrize(
+    ("given", "name", "row", "fix"),
+    [
+        ({"tools": _without("go")}, "build:go", f"blocked: {NO_GO}", GO_FIX),
+        (
+            {"tools": {**TOOLS, "go": "go version go1.19.8 linux/amd64"}},
+            "build:go",
+            f"blocked: go1.19.8 predates toolchain switching (Go 1.21), and go {GO_PURPOSE}",
+            "install Go 1.21 or newer: https://go.dev/dl",
+        ),
+        (
+            {"tools": _without("rustup")},
+            "build:rustup",
+            f"optional: {NO_RUSTUP}",
+            "sudo apt install rustup (or https://rustup.rs)",
+        ),
+        (
+            {"tools": _without("apt-get")},
+            "build:x86-64",
+            "blocked: no apt-get, which mkosi bootstraps its Debian tools tree with",
+            f"build on Debian or Ubuntu, or {LIMA_FIX}",
+        ),
+        (
+            {"files": OVMF},
+            "build:x86-64",
+            "blocked: no Debian archive keyring, which checks the tools tree's packages",
+            "sudo apt install debian-archive-keyring",
+        ),
+        (
+            {"mkosi": "26"},
+            "build:x86-64",
+            f"blocked: mkosi 26 in tundravm's environment, which installs mkosi "
+            f"{MKOSI_PIN.version}",
+            "uv tool upgrade --reinstall tundravm (in a project: uv sync --reinstall)",
+        ),
+        (
+            {"tools": _without("sudo"), "userns": False, "proc": RESTRICTED},
+            "build:x86-64",
+            "blocked: no unprivileged user namespaces and no sudo",
+            "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+        ),
+        (
+            {
+                "tools": _without("sudo"),
+                "userns": False,
+                "proc": {"/proc/sys/kernel/unprivileged_userns_clone": "0"},
+            },
+            "build:x86-64",
+            "blocked: no unprivileged user namespaces and no sudo",
+            "sudo sysctl -w kernel.unprivileged_userns_clone=1",
+        ),
+        (
+            {"userns": False, "proc": RESTRICTED},
+            "build:x86-64",
+            f"ready (mkosi {MKOSI_PIN.version}, sudo, as this host has no unprivileged user "
+            "namespaces)",
+            "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+        ),
+        (
+            {"system": "Darwin", "machine": "arm64", "tools": _without("limactl")},
+            "build:x86-64",
+            "blocked: no limactl, which runs the Lima build guest",
+            "brew install lima",
+        ),
+        (
+            {"system": "Darwin", "machine": "arm64", "backend": "local"},
+            "build:x86-64",
+            "blocked: this is Darwin, not x86-64 Linux",
+            LIMA_FIX,
+        ),
+        (
+            {"tools": _without("qemu-system-x86_64"), "files": (DEBIAN_KEYRING,)},
+            "run:simulated",
+            "blocked: no qemu-system-x86_64, no OVMF firmware",
+            "sudo apt install qemu-system-x86 ovmf",
+        ),
+        (
+            {"files": (DEBIAN_KEYRING, OVMF[0])},
+            "run:simulated",
+            "blocked: no OVMF firmware",
+            "sudo apt install ovmf",
+        ),
+        (
+            {"kvm": False, "files": (*LINUX_FILES, "/dev/kvm")},
+            "run:simulated",
+            "ready (qemu 9.2.0, OVMF /usr/share/OVMF/OVMF_CODE_4M.fd, TCG emulation, slow)",
+            "sudo usermod -aG kvm $USER, then log in again",
+        ),
+        (
+            {"proc": {"/sys/module/kvm_intel/parameters/tdx": "Y"}},
+            "run:tdx",
+            "blocked: no TDVF firmware (OVMF built with TDX support)",
+            "set up the TDX host: https://github.com/canonical/tdx",
+        ),
+        ({"tools": _without("gcloud")}, "deploy:gcp", "blocked: no gcloud", GCLOUD),
+        (
+            {"accounts": {}},
+            "deploy:gcp",
+            "blocked: gcloud has no active account",
+            "gcloud auth login",
+        ),
+        ({"tools": _without("az")}, "deploy:azure", "blocked: no az", AZ),
+        ({"accounts": {}}, "deploy:azure", "blocked: az is not logged in", "az login"),
+    ],
+    ids=[
+        "no-go",
+        "old-go",
+        "no-rustup",
+        "no-apt",
+        "no-keyring",
+        "other-mkosi",
+        "apparmor-no-sudo",
+        "userns-clone-off",
+        "sudo",
+        "no-lima",
+        "local-on-macos",
+        "no-qemu-no-ovmf",
+        "no-ovmf-vars",
+        "kvm-not-usable",
+        "no-tdvf",
+        "no-gcloud",
+        "gcloud-logged-out",
+        "no-az",
+        "az-logged-out",
+    ],
+)
+def test_each_row_names_the_one_command_that_fixes_it(
+    given: dict[str, Any], name: str, row: str, fix: str
+) -> None:
+    """A row that is not ready, or could be better, says why, and its fix is one command: the
+    apt package on Debian or Ubuntu, the sysctl, the login."""
+    options = dict(given)
+    backend, mkosi = options.pop("backend", None), options.pop("mkosi", None)
+    tools = options.pop("tools", TOOLS)
+    host, _ = _host(tools, **{"files": LINUX_FILES, **options})
+    if mkosi is not None:
+        host.mkosi_version = lambda: mkosi
+    assert _rows(host, backend=backend)[name] == row
+    assert _fixes(host, backend=backend).get(name, "") == fix
+
+
+def test_builds_fall_back_to_sudo_and_macos_builds_in_lima() -> None:
     sudo, _ = _host(files=LINUX_FILES, userns=False)
-    assert _rows(sudo)["build:x86-64"] == (
-        f"ready (mkosi {MKOSI_PIN.version}, sudo, as this host has no unprivileged user namespaces)"
-    )
     ask = replace(sudo, runner=_refusing(sudo.runner, ("sudo", "-n", "true")))
     assert _rows(ask)["build:x86-64"] == (
         f"ready (mkosi {MKOSI_PIN.version}, sudo, which may ask for a password, as this host "
         "has no unprivileged user namespaces)"
     )
     root, _ = _host(files=LINUX_FILES, userns=False, uid=0)
-    assert _rows(root)["build:x86-64"].endswith(", root)")
+    assert _rows(root)["build:x86-64"].endswith(", root)") and _fixes(root) == {}
 
-    no_sudo = {tool: text for tool, text in TOOLS.items() if tool != "sudo"}
-    restricted = {"/proc/sys/kernel/apparmor_restrict_unprivileged_userns": "1"}
-    host, _ = _host(no_sudo, files=LINUX_FILES, userns=False, proc=restricted)
-    assert _rows(host)["build:x86-64"] == (
-        "blocked: no unprivileged user namespaces and no sudo: "
-        "run `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`"
-    )
-    clone_off = {"/proc/sys/kernel/unprivileged_userns_clone": "0"}
-    host, _ = _host(no_sudo, files=LINUX_FILES, userns=False, proc=clone_off)
-    assert "kernel.unprivileged_userns_clone=1" in _rows(host)["build:x86-64"]
-
-
-@pytest.mark.parametrize(
-    ("missing", "fix"),
-    [
-        ("apt-get", "blocked: no apt-get (mkosi bootstraps its tools tree with it): install apt"),
-        ("dpkg", "blocked: no dpkg (mkosi bootstraps its tools tree with it): install dpkg"),
-    ],
-)
-def test_build_names_the_missing_host_tool(missing: str, fix: str) -> None:
-    tools = {tool: text for tool, text in TOOLS.items() if tool != missing}
-    host, _ = _host(tools, files=LINUX_FILES)
-
-    assert _rows(host)["build:x86-64"] == fix
-
-
-def test_build_needs_the_debian_keyring_and_the_pinned_mkosi() -> None:
-    host, _ = _host(files=())
-    assert _rows(host)["build:x86-64"] == (
-        "blocked: no Debian archive keyring: install debian-archive-keyring"
-    )
-    host, _ = _host(files=LINUX_FILES)
-    host.mkosi_version = lambda: "26"
-    assert _rows(host)["build:x86-64"] == (
-        f"blocked: mkosi 26 in tundravm's environment, it needs {MKOSI_PIN.version}: "
-        "reinstall tundravm (`uv sync` or `pip install`)"
-    )
-
-
-def test_macos_builds_in_lima_and_says_what_tcg_costs() -> None:
     host, _ = _host(system="Darwin", machine="arm64")
-
     assert default_backend(host) == "lima"
     assert _rows(host, areas=("build",))["build:x86-64"] == (
         "ready (Lima x86-64 guest under QEMU TCG emulation on this arm64 host: same bytes, "
         f"several times slower; mkosi {MKOSI_PIN.version})"
-    )
-    no_lima = {tool: text for tool, text in TOOLS.items() if tool != "limactl"}
-    host, _ = _host(no_lima, system="Darwin", machine="arm64")
-    assert _rows(host, areas=("build",))["build:x86-64"] == (
-        "blocked: limactl not found: install Lima (lima-vm.io)"
     )
     linux, _ = _host(files=LINUX_FILES)
     assert default_backend(linux) == "local"
     assert _rows(linux, backend="lima")["build:x86-64"] == (
         f"ready (Lima x86-64 guest, mkosi {MKOSI_PIN.version})"
     )
-    host, _ = _host(system="Darwin", machine="arm64")
-    assert _rows(host, backend="local")["build:x86-64"] == (
-        "blocked: this is Darwin: build with the Lima backend (TUNDRAVM_BACKEND=lima)"
-    )
-
-
-def test_run_rows_name_qemu_ovmf_kvm_and_tdx() -> None:
-    host, _ = _host(files=LINUX_FILES, kvm=False)
-    assert _rows(host)["run:simulated"].endswith(", TCG emulation, slow)")
-    no_qemu = {tool: text for tool, text in TOOLS.items() if tool != "qemu-system-x86_64"}
-    host, _ = _host(no_qemu, files=LINUX_FILES)
-    assert _rows(host)["run:simulated"] == (
-        "blocked: qemu-system-x86_64 not found: install qemu-system-x86"
-    )
-    host, _ = _host(files=(DEBIAN_KEYRING,))
-    assert _rows(host)["run:simulated"] == "blocked: no OVMF firmware: install ovmf"
-
     tdx = {"/sys/module/kvm_intel/parameters/tdx": "Y"}
     host, _ = _host(files=(*LINUX_FILES, "/usr/share/ovmf/OVMF.fd"), proc=tdx)
     assert _rows(host)["run:tdx"] == "ready (TDVF /usr/share/ovmf/OVMF.fd)"
-    host, _ = _host(files=LINUX_FILES, proc=tdx)
-    assert _rows(host)["run:tdx"] == "blocked: no TDVF firmware: install ovmf with TDX support"
-
-
-def test_deploy_rows_name_the_cli_and_the_login() -> None:
-    host, _ = _host(files=LINUX_FILES, accounts={})
-    rows = _rows(host, areas=("deploy",))
-    assert rows == {
-        "deploy:gcp": "blocked: gcloud has no active account: run `gcloud auth login`",
-        "deploy:azure": "blocked: az is not logged in: run `az login`",
-    }
-    bare = {tool: text for tool, text in TOOLS.items() if tool not in ("gcloud", "az")}
-    host, _ = _host(bare, files=LINUX_FILES)
-    assert _rows(host, areas=("deploy",)) == {
-        "deploy:gcp": "blocked: gcloud not found: install the Google Cloud CLI",
-        "deploy:azure": "blocked: az not found: install the Azure CLI",
-    }
 
 
 # ── the command ──────────────────────────────────────────────────────────
 
 
 def _names(out: io.StringIO) -> list[str]:
-    return [line.split()[0] for line in out.getvalue().splitlines()]
+    return [line.split()[0] for line in out.getvalue().split("\n\n")[0].splitlines()]
 
 
 @pytest.mark.parametrize(
@@ -374,8 +435,14 @@ def test_doctor_without_for_prints_every_row_and_fails_only_on_build() -> None:
         "verify:gcp",
         "verify:azure",
     ]
-    blocked, _ = _host({}, files=())
-    assert doctor(io.StringIO(), host=blocked) == EXIT_FAILURE
+    blocked, _ = _host(_without("go", "qemu-system-x86_64"), files=(DEBIAN_KEYRING,))
+    out = io.StringIO()
+    assert doctor(out, host=blocked) == EXIT_FAILURE
+    assert out.getvalue().split("\n\n")[1].splitlines() == [
+        "fix:",
+        f"  build:go         {GO_FIX}",
+        "  run:simulated    sudo apt install qemu-system-x86 ovmf",
+    ]
 
 
 def test_doctor_json() -> None:
@@ -389,6 +456,7 @@ def test_doctor_json() -> None:
             "name": "run:tdx",
             "verdict": "unavailable",
             "detail": "no Intel TDX host: kvm_intel tdx is not enabled",
+            "fix": "",
         }
     ]
 

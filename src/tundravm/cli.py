@@ -785,8 +785,9 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor",
         _cmd_doctor,
         "Report what this host can build, run, deploy and verify.",
-        "One row per capability: ready, blocked (with the fix), optional, unavailable or\n"
-        "unsupported. --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1\n"
+        "One row per capability: ready, blocked, optional, unavailable or unsupported, then\n"
+        "a fix: block, the one command that clears each row (apt packages on Debian or\n"
+        "Ubuntu). --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1\n"
         "when a build row (or, with --for, a row of that area) is blocked. build:go blocks\n"
         "without go, image or not (every image's Tdxs is Go); build:rustup only when IMAGE\n"
         "has a Cargo source that pins a Rust toolchain.",
@@ -1795,7 +1796,8 @@ def doctor(
     as_json: bool = False,
     needs: ToolchainNeeds | None = None,
 ) -> int:
-    """Print one row per capability (of *area*); exit 1 when a relevant one is blocked.
+    """Print one row per capability (of *area*), then a ``fix:`` block with the command
+    that clears each row that has one; exit 1 when a relevant row is blocked.
 
     *needs* is what the image builds with (:func:`_toolchain_needs`); ``None`` without one.
     """
@@ -1805,13 +1807,21 @@ def doctor(
     rows = _rows(area, facts, needs)
     if as_json:
         payload = {
-            "rows": [{"name": r.name, "verdict": r.verdict, "detail": r.detail} for r in rows]
+            "rows": [
+                {"name": r.name, "verdict": r.verdict, "detail": r.detail, "fix": r.fix}
+                for r in rows
+            ]
         }
         print(json_report("doctor", payload), file=out)
     else:
         width = max(16, *(len(row.name) for row in rows))
         for row in rows:
             print(row.render(width), file=out)
+        fixes = [row for row in rows if row.fix]
+        if fixes:
+            print("\nfix:", file=out)
+            for row in fixes:
+                print(f"  {row.name.ljust(width)} {row.fix}", file=out)
     blocked = any(r.verdict == "blocked" for r in rows) if area else failed(rows, areas=None)
     return EXIT_FAILURE if blocked else EXIT_OK
 
