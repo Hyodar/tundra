@@ -1,9 +1,12 @@
 """Compiler diagnostics on a lowered recipe, reported by ``lint()`` and ``tundravm check``.
 
-Each rule is a small function ``(image, profile_name, state) -> Iterator[Diagnostic]``
-registered in ``RULES``; ``_rule_module_checks`` adds each applied module's own
-``Module.check()`` findings. Rules read each profile's effective state
-(``RecipeState.effective_profile``): what the compiler emits for it, i.e. the
+``RULES`` registers every code ``tundravm check`` reports, wherever it comes from
+(resolution, a component, a module, the compiler, unit text, the lock, the host,
+``--tree``), as a :class:`Rule`: its severity, what it checks and how to fix it.
+A compiler rule's ``checks`` are small functions
+``(image, profile_name, state) -> Iterator[Diagnostic]``; ``_rule_module_checks`` adds
+each applied module's own ``Module.check()`` findings. They read each profile's effective
+state (``RecipeState.effective_profile``): what the compiler emits for it, i.e. the
 profile merged over the default profile it extends.
 """
 
@@ -14,7 +17,7 @@ import json
 import posixpath
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,7 +45,26 @@ if TYPE_CHECKING:
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
 
 
-Rule = Callable[["Lowered", str, ProfileState], Iterator[Diagnostic]]
+RuleCheck = Callable[["Lowered", str, ProfileState], Iterator[Diagnostic]]
+"""A compiler pass: the findings of one profile of the lowered image."""
+
+
+@dataclass(frozen=True, slots=True)
+class Rule:
+    """One code ``tundravm check`` reports: what it checks, and how to fix it.
+
+    *severity* is the level it reports at by default (the *summary* names when it
+    differs). *summary* is one line: what it checks and why it matters; *fix* is what
+    clears it. *checks* are the compiler passes that report it; a code resolution, a
+    component, the lock, the host or ``--tree`` reports has none.
+    """
+
+    code: str
+    severity: Severity
+    summary: str
+    fix: str
+    checks: tuple[RuleCheck, ...] = ()
+
 
 _INIT_FILE_PATHS = frozenset(
     {"/usr/bin/runtime-init", "/usr/lib/systemd/system/runtime-init.service"}
@@ -948,25 +970,636 @@ def _rule_module_checks(
         yield from module.check(image, profile_name)
 
 
-RULES: list[Rule] = [
-    _rule_service_user_missing,
-    _rule_user_group_undefined,
-    _rule_file_path_duplicate,
-    _rule_file_path_relative,
-    _rule_service_command_not_shipped,
-    _rule_variant_empty,
-    _rule_debloat_removes_needed_unit,
-    _rule_debloat_removes_declared_file,
-    _rule_source_unpinned,
-    _rule_kernel_missing,
-    _rule_debloat_removes_modules,
-    _rule_built_kernel_modules,
-    _rule_recipe_arch_unsupported,
-    _rule_secret_in_file,
-    _rule_secret_in_env,
-    _rule_unit_text,
-    _rule_module_checks,
-]
+_UNIT_TEXT = (_rule_unit_text,)
+_MODULES = (_rule_module_checks,)
+_LOCK_AGAIN = (
+    "Review the change, then run `tundravm lock IMAGE` to record it and commit the lockfile; "
+    "`tundravm lock --check` shows the same drift without writing."
+)
+
+_REGISTRY: tuple[Rule, ...] = (
+    # ── resolution: the declarations of each profile ──
+    Rule(
+        "edit-invalid",
+        "error",
+        "A profile's edit sets a field to a value the declaration refuses.",
+        "Fix the field values in the profile's changes=; the message carries the "
+        "declaration's own error.",
+    ),
+    Rule(
+        "edit-missing",
+        "error",
+        "A profile edits a declaration it does not inherit, so the edit changes nothing.",
+        "Edit only what the profile inherits from the profile it extends (or the image), "
+        "or declare the value in its add= instead.",
+    ),
+    Rule(
+        "remove-missing",
+        "error",
+        "A profile removes a declaration it does not inherit, so the removal does nothing.",
+        "Remove only what the profile inherits from the profile it extends (or the image), "
+        "or drop the removal from its changes=.",
+    ),
+    Rule(
+        "identity-collision",
+        "error",
+        "Two declarations with one identity (a path, a unit, an account) hold different "
+        "values, so the image could only keep one of them.",
+        "Declare it once. To change an inherited declaration in a profile, edit it in the "
+        "profile's changes= instead of declaring it again.",
+    ),
+    Rule(
+        "fragment-conflict",
+        "error",
+        "Two different component configurations share one name, so their declarations "
+        "and exports would mix.",
+        "Use one configuration of the component, or give the second one its own name.",
+    ),
+    Rule(
+        "fragment-requires-missing",
+        "error",
+        "A component needs another component that the profile does not include.",
+        "Add the required component to components= (or to the profile's add=).",
+    ),
+    Rule(
+        "target-inconsistent",
+        "error",
+        "A profile targets outputs that drop the cloud platform integration it inherits, "
+        "so its UKI carries glue for a cloud it never boots on.",
+        "Keep every inherited cloud target in the profile's outputs, or extend a profile "
+        "that has no cloud integration.",
+    ),
+    Rule(
+        "unit-collision",
+        "error",
+        "Two declarations write the same unit file, so one would silently replace the other.",
+        "Rename one of them. Change a packaged unit with Unit(name, dropin=...), and a "
+        "Service's own unit through its fields.",
+    ),
+    Rule(
+        "port-unreachable",
+        "warning",
+        "A service listens on a port the firewall drops, so nothing outside reaches it.",
+        "Open it with Firewall(allow=(PORT,)), or Firewall(collect=True) to open every port "
+        "a service declares.",
+    ),
+    Rule(
+        "network-missing",
+        "warning",
+        "The profile serves ports or syncs time but brings up no network interface.",
+        "Add Network() (TeeBase(network=True) does), or ship a .network file.",
+    ),
+    Rule(
+        "step-undefined",
+        "error",
+        "A boot step orders itself after or before a step the profile does not declare.",
+        "Declare that step in the profile, or drop it from after=/before=.",
+    ),
+    Rule(
+        "step-cycle",
+        "error",
+        "The boot steps' after= and before= form a cycle, so runtime-init has no order to "
+        "run them in.",
+        "Drop one after=/before= edge of the cycle the message names.",
+    ),
+    Rule(
+        "needs-undefined",
+        "error",
+        "A unit needs a boot step or boot task the profile does not declare, so it would "
+        "wait forever.",
+        "Declare the step or the Task in the profile, or drop it from needs=.",
+    ),
+    Rule(
+        "needs-without-init",
+        "warning",
+        "A unit waits for runtime-init, but the profile declares no runtime-init step, so "
+        "it waits for nothing.",
+        "Declare the boot step the unit waits for, or drop needs= so it starts without waiting.",
+    ),
+    Rule(
+        "hook-after-undefined",
+        "error",
+        "A build hook runs after a hook the profile does not declare.",
+        "Declare that hook in the profile, or drop it from after=.",
+    ),
+    Rule(
+        "hook-order",
+        "error",
+        "A build hook is ordered after a hook of a later phase, which only runs after it.",
+        "Drop the later hook from after=, or move this hook to that phase or a later one.",
+    ),
+    Rule(
+        "disk-key-undefined",
+        "error",
+        "A disk is encrypted with a key that no Key in the profile declares, so it cannot "
+        "be unlocked at boot.",
+        "Declare Key(NAME, ...) in the same profile, or point the Disk at a declared key.",
+        _MODULES,
+    ),
+    Rule(
+        "secret-store-undefined",
+        "error",
+        "The secrets are stored on a disk no Disk in the profile declares (a warning when "
+        "a module reports it).",
+        "Declare Disk(NAME, ...) in the same profile, pass Secrets(store=) one of the "
+        "declared disks, or store=None.",
+        _MODULES,
+    ),
+    Rule(
+        "export-stale",
+        "error",
+        "A component holds an export of a provider that this profile configures "
+        "differently; a warning when the profile only edits declarations inside the "
+        "provider, which exports do not follow.",
+        "Pass the consumer the export of the component this profile includes, or change "
+        "the provider through its own arguments instead of editing what it composed.",
+    ),
+    Rule(
+        "executable-stale",
+        "error",
+        "A service runs a path a Build installed before a profile edited or removed it, so "
+        "the command names a file the image no longer has.",
+        "Point the service's command at what the edited Build installs, or edit the "
+        "command in the same profile.",
+    ),
+    Rule(
+        "external-delivery-unwired",
+        "warning",
+        "Nothing in the image can tell when an ExternalDelivery has written the secrets, "
+        "so services start without them.",
+        "Give the delivery unit= (the unit that writes them) or ready_path= (a file it "
+        "writes when done), and wait for it with needs=[delivery.ready].",
+    ),
+    # ── components ──
+    Rule(
+        "tee-base-clock",
+        "warning",
+        "TeeBase(time=False) leaves the guest on the host's clock, so the host decides "
+        "certificate expiry and attestation freshness.",
+        "Keep TeeBase(time=True), the default: authenticated NTS time.",
+    ),
+    Rule(
+        "network-no-route",
+        "warning",
+        "A static address without a gateway reaches its own subnet only, so NTS time and "
+        "every remote endpoint fail.",
+        'Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")).',
+    ),
+    Rule(
+        "firewall-ssh-open",
+        "warning",
+        "The firewall opens port 22 by hand, outside the SSH access that accepts only a key.",
+        "Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which "
+        "open it only with a key to accept.",
+    ),
+    Rule(
+        "ssh-keys-baked",
+        "warning",
+        "SSH keys are baked into a cloud image, so every instance of it lets their holders "
+        "in as root.",
+        "Use SshAccess(from_delivery=True) so the control plane delivers the key at boot, "
+        "or keep baked keys in a non-production profile with dev=DevAccess(...).",
+    ),
+    Rule(
+        "dev-access-rsa-key",
+        "info",
+        "A development profile accepts an RSA SSH key where every current client makes ed25519.",
+        "Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead.",
+    ),
+    Rule(
+        "tdxs-validator-unchecked",
+        "warning",
+        "Tdxs validates peers' quotes with no expected measurements, so it accepts any "
+        "genuine TD whatever it runs.",
+        "Pass Tdxs(expected_measurements=...), or build it with Tdxs.from_policy(POLICY).",
+    ),
+    Rule(
+        "observability-plaintext",
+        "warning",
+        "An Observability sink is http://, so the host and every hop read what the guest logs.",
+        "Point the sink at an https:// URL.",
+    ),
+    Rule(
+        "nethermind-volatile-state",
+        "warning",
+        "Nethermind keeps its database on the volatile root, so it resyncs from genesis at "
+        "every boot.",
+        "Pass state=volume.directory('nethermind') on a Volume.",
+    ),
+    Rule(
+        "raiko-listens-publicly",
+        "warning",
+        "Raiko listens beyond the loopback, so requests reach the prover without going "
+        "through its AttestedTLS ingress.",
+        "Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress.",
+    ),
+    # ── modules ──
+    Rule(
+        "disk-key-path-mismatch",
+        "warning",
+        "A disk reads its key from a path other than the one its Key writes, so the unlock "
+        "finds no key.",
+        "Set Key(NAME, output=PATH) to the path the Disk reads, or point the Disk at the "
+        "key's output.",
+        _MODULES,
+    ),
+    Rule(
+        "disk-device-guessed",
+        "error",
+        "A disk that is formatted names no device, and automatic selection can pick the "
+        "boot disk and format it (a warning under Policy(storage_safety='warn')).",
+        "Name a stable device (device='/dev/disk/by-id/virtio-SERIAL'), or format='never' "
+        "for a disk prepared beforehand.",
+        _MODULES,
+    ),
+    Rule(
+        "disk-device-unstable",
+        "warning",
+        "A disk is formatted through a kernel name (/dev/sdb), which follows probe order "
+        "and can point at another disk on the next boot.",
+        "Name the disk by a stable link: /dev/disk/by-id/ (a virtio serial, a SCSI WWN) or "
+        "/dev/disk/by-path/.",
+        _MODULES,
+    ),
+    Rule(
+        "secret-target-unsupported",
+        "error",
+        "A secret goes to a target its delivery does not write at boot, so it never arrives.",
+        "Name what writes it with Secrets(delivery=ExternalDelivery(NAME, supports=...)), "
+        "add the target kind to that delivery's supports=, or remove the target.",
+        _MODULES,
+    ),
+    Rule(
+        "secret-env-service-unknown",
+        "error",
+        "A SecretEnv delivers to a service the profile neither generates, ships nor enables.",
+        "Declare the Service or Unit in the same profile, enable a packaged unit with "
+        "Unit(NAME, enabled=True), or fix the SecretEnv's service=.",
+        _MODULES,
+    ),
+    Rule(
+        "key-pipe-outside-run",
+        "info",
+        "A key reads its pipe outside /run, where a FIFO survives reboots and can be "
+        "replaced by a regular file.",
+        "Place the pipe under /run, which is a tmpfs.",
+        _MODULES,
+    ),
+    # ── the compiler: each profile's lowered state ──
+    Rule(
+        "service-user-missing",
+        "error",
+        "A service (or a unit's User=/Group=) runs as an account that nothing creates, so "
+        "systemd refuses to start it.",
+        "Declare the User or Group in the same profile, or drop user= to run as a system "
+        "user named after the service.",
+        (_rule_service_user_missing, _rule_unit_text),
+    ),
+    Rule(
+        "user-group-undefined",
+        "error",
+        "A user joins a group that nothing creates, so useradd fails during the build.",
+        "Declare the Group in the same profile, or drop it from the user's groups=.",
+        (_rule_user_group_undefined,),
+    ),
+    Rule(
+        "file-path-duplicate",
+        "error",
+        "One path is declared several times with different content, and only the last "
+        "one ends up in the image.",
+        "Keep a single declaration; if two components write the path, drop one or merge "
+        "their content into one File.",
+        (_rule_file_path_duplicate,),
+    ),
+    Rule(
+        "file-path-relative",
+        "error",
+        "A file path contains '..' and may escape the image root.",
+        "Write the normalized absolute path instead.",
+        (_rule_file_path_relative,),
+    ),
+    Rule(
+        "service-command-not-shipped",
+        "warning",
+        "A service runs a binary that nothing in a package-free profile ships (a "
+        "heuristic: no file, build or hook mentions it).",
+        "Ship it with File(PATH, Path(...), mode=0o755), a Build that installs it, or the "
+        "package that provides it; ignore it when the base image already has it.",
+        (_rule_service_command_not_shipped,),
+    ),
+    Rule(
+        "variant-empty",
+        "info",
+        "A profile declares nothing of its own, so it builds the same image as the one it extends.",
+        "Declare what it adds in its add= or changes=, or remove it.",
+        (_rule_variant_empty,),
+    ),
+    Rule(
+        "debloat-removes-needed-unit",
+        "warning",
+        "The systemd debloat masks a unit a service is, or depends on, so the service "
+        "stops or never starts.",
+        "Keep it with Debloat(keep_units_extra=(UNIT,)), or drop the dependency.",
+        (_rule_debloat_removes_needed_unit,),
+    ),
+    Rule(
+        "debloat-removes-declared-file",
+        "warning",
+        "The debloat deletes a path at finalize, after a declared file was placed there, "
+        "so the file never reaches the image.",
+        "Keep the path with Debloat(keep_paths=(...)), or move the file outside it.",
+        (_rule_debloat_removes_declared_file,),
+    ),
+    Rule(
+        "source-unpinned",
+        "warning",
+        "A source build, built kernel or downloaded package has no pin in the lockfile, so "
+        "a moving ref builds different bytes (the image's policy can make it an error or "
+        "an info).",
+        "Run `tundravm lock IMAGE` to pin every source at once (`tundravm build` then "
+        "fetches each on the host), or declare an immutable source: Git(url, ref) with a "
+        "40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, "
+        "with every other source it cannot resolve, before anything is written.",
+        (_rule_source_unpinned,),
+    ),
+    Rule(
+        "kernel-missing",
+        "error",
+        "A bootable image installs no kernel, so mkosi cannot build its UKI.",
+        'Keep Debian(kernel_package="linux-image-amd64") for the distribution kernel, '
+        'declare Kernel(...) to build one, or Setting("Content", "Bootable", ("no",)) with '
+        "Debian(boot=None) for a non-bootable image.",
+        (_rule_kernel_missing,),
+    ),
+    Rule(
+        "kernel-modules-ignored",
+        "warning",
+        "Kernel modules are selected, but the built kernel has no loadable modules, so the "
+        "selection does nothing.",
+        "Build those drivers into the kernel config and drop the selection, or build the "
+        "kernel with loadable modules.",
+        (_rule_built_kernel_modules,),
+    ),
+    Rule(
+        "debloat-removes-modules",
+        "error",
+        "The debloat removes /usr/lib/modules while the kernel loads its drivers (virtio, "
+        "tdx_guest, cloud NICs) from there, so they never load.",
+        "Debloat(keep_modules=True) keeps them; Debloat(keep_modules=False) removes them on "
+        "purpose; or build a Kernel with everything the image needs built in.",
+        (_rule_debloat_removes_modules, _rule_built_kernel_modules),
+    ),
+    Rule(
+        "recipe-arch-unsupported",
+        "error",
+        "An aarch64 image uses what only boots x86-64: EfiStub's amd64 stub or the qemu "
+        "target. TDX guests are x86-64.",
+        "Build for x86_64 (Debian(..., arch='x86_64')), or drop EfiStub and the qemu target "
+        "from the aarch64 image.",
+        (_rule_recipe_arch_unsupported,),
+    ),
+    Rule(
+        "secret-in-file",
+        "error",
+        "A shipped file holds what looks like a secret, baked into every copy of the image "
+        "and every registry that holds it.",
+        "Deliver it at boot: a Secret with a SecretFile target, written by the profile's "
+        "ExternalDelivery. If it is not a secret, pass allow_secret=True to the "
+        "declaration.",
+        (_rule_secret_in_file,),
+    ),
+    Rule(
+        "secret-in-env",
+        "error",
+        "A unit's environment or command line holds what looks like a secret, baked into "
+        "every copy of the image.",
+        "Deliver it at boot: a Secret with a SecretEnv target, written by the profile's "
+        "ExternalDelivery. If it is not a secret, pass allow_secret=True to the "
+        "declaration.",
+        (_rule_secret_in_env,),
+    ),
+    # ── systemd unit text: every unit a profile ships, raw or generated ──
+    Rule(
+        "unit-section-invalid",
+        "error",
+        "A unit has a section its type does not allow, which systemd ignores.",
+        "Move its directives to [Unit], [Install] or the unit type's own section.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "unit-directive-unknown",
+        "warning",
+        "A unit sets a directive systemd 257 does not know, which systemd ignores.",
+        "Check the spelling against systemd.directives(7); X- keys are left alone.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "unit-value-invalid",
+        "error",
+        "A unit gives a directive a value it does not accept, so systemd keeps the default.",
+        "Use a value the directive accepts; the message names what is wrong with it.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "unit-exec-relative",
+        "warning",
+        "A unit command (ExecStart= and the other Exec directives) names its program by a "
+        "relative name, and systemd's search path is not $PATH.",
+        "Spell the absolute path (/usr/bin/NAME or /usr/sbin/NAME).",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "state-dir-mkdir",
+        "info",
+        "ExecStartPre= creates a state directory that systemd can create and own for the "
+        "service user.",
+        "Use StateDirectory=, LogsDirectory=, RuntimeDirectory= or CacheDirectory= instead.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "relation-conflict",
+        "error",
+        "A unit's relations contradict each other: it pulls in and conflicts with a unit, "
+        "is ordered both before and after one, or names itself.",
+        "Drop one of the relations.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "requires-without-after",
+        "info",
+        "A unit Requires= another without After=, so both start in parallel.",
+        "Add After= for the same unit, so this one starts once it is up.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "socket-service-unpaired",
+        "error",
+        "A socket activates a service the profile neither ships nor enables (a warning "
+        "when the profile installs packages, which may ship it).",
+        "Ship the service next to the socket, or name the one it starts with Service=.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "timer-unit-missing",
+        "error",
+        "A timer activates a unit the profile neither ships nor enables (a warning when the "
+        "profile installs packages, which may ship it).",
+        "Ship the unit next to the timer, or name the one it starts with Unit=.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "timer-service-enabled",
+        "warning",
+        "A service a timer starts is also enabled at boot, so it runs off schedule.",
+        "Leave it out of [Install] and do not enable it; enable the timer alone.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "socket-service-started",
+        "info",
+        "A service a socket starts on demand is also enabled at boot.",
+        "Leave it out of [Install] and do not enable it; enable the socket alone.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "unit-enable-noop",
+        "warning",
+        "A unit is enabled but has no [Install] section, so systemctl enable does nothing.",
+        "Add [Install] WantedBy=, or stop enabling it.",
+        _UNIT_TEXT,
+    ),
+    Rule(
+        "cloud-glue-unconditional",
+        "warning",
+        "A unit that only works on one cloud has no ConditionVirtualization= for it, while "
+        "the profile's UKI also boots elsewhere, where it runs and fails.",
+        "Add conditions=(Condition.virtualization(ID),) to the Service or Task (or "
+        "ConditionVirtualization=ID to the unit text) so it stays inert elsewhere.",
+        _UNIT_TEXT,
+    ),
+    # ── the image file's own declarations ──
+    Rule(
+        "service-runs-as-root",
+        "info",
+        "A Service or Task runs as root, so a compromise owns the whole guest.",
+        "Drop user= to run as a system user named after the unit (declared for you); "
+        "grant one capability with Hardening.strict(capabilities=(...)) if it needs one.",
+    ),
+    Rule(
+        "hardening-disabled",
+        "warning",
+        "A unit runs without a sandbox (Hardening.none()).",
+        "Use Hardening.relaxed(), or relax one knob of Hardening.strict(...) (jit=True, "
+        "devices=(...), capabilities=(...)) instead of dropping them all.",
+    ),
+    Rule(
+        "hardening-relaxed",
+        "info",
+        "A unit relaxes knobs of the strict sandbox, and each one widens what a "
+        "compromised process can do.",
+        "Keep the knobs the program does not need; the message lists the relaxed ones.",
+    ),
+    Rule(
+        "unit-extra",
+        "info",
+        "A unit sets directives through the extra= escape hatch, which nothing types or validates.",
+        "Use the typed field when one exists (docs/reference/api.md lists them); keep "
+        "extra= for directives no field covers.",
+    ),
+    Rule(
+        "unit-raw",
+        "info",
+        "A service is hand-written unit text instead of a typed Service.",
+        "Declare Service(NAME, command, ...): the compiler renders the unit, its ordering "
+        "after needs= and its enablement.",
+    ),
+    Rule(
+        "unit-as-file",
+        "info",
+        "A unit file is shipped as a File, so enabled=, needs= and the unit lint skip it.",
+        "Ship it as Unit(name, text).",
+    ),
+    Rule(
+        "setting-raw",
+        "info",
+        "A raw mkosi Setting has a typed spelling.",
+        "Declare the typed field the message names; Setting is for keys tundravm has no field for.",
+    ),
+    Rule(
+        "hook-covered",
+        "info",
+        "A build hook or boot step runs a command a declaration already covers (useradd, "
+        "systemctl enable, mkdir and chown).",
+        "Declare what the message names instead of the command.",
+    ),
+    Rule(
+        "mkosi-configure-script",
+        "error",
+        "A Setting adds mkosi ConfigureScripts, which rewrite the configuration after "
+        "`mkosi summary` resolved it, so the summary would not describe the build.",
+        "Declare what the script would set as typed declarations or Settings.",
+    ),
+    Rule(
+        "mkosi-environment-passthrough",
+        "error",
+        "A Setting passes the host's environment into the build, so the build depends on "
+        "the machine it runs on.",
+        "Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)).",
+    ),
+    # ── the lock, the toolchain, the host and the committed tree ──
+    Rule(
+        "lock-changed",
+        "error",
+        "A section of the image (or a source's ref) changed since the lock, or the "
+        "lockfile is an older version.",
+        _LOCK_AGAIN,
+    ),
+    Rule(
+        "lock-added",
+        "error",
+        "The image has a section the lock does not record (a new profile or source).",
+        _LOCK_AGAIN,
+    ),
+    Rule(
+        "lock-removed",
+        "error",
+        "The lock records a section the image no longer has.",
+        _LOCK_AGAIN,
+    ),
+    Rule(
+        "lock-stale",
+        "error",
+        "Every section matches the lock, but the image's digest does not.",
+        _LOCK_AGAIN,
+    ),
+    Rule(
+        "toolchain-drift",
+        "warning",
+        "The running toolchain (mkosi, the tools tree, tundravm, the measurement tools) "
+        "differs from the one the lock records, so a build may differ (an error with "
+        "strict_toolchain).",
+        "Run the locked tools, or `tundravm lock --update toolchain` to record this "
+        "toolchain instead.",
+    ),
+    Rule(
+        "tool-missing",
+        "error",
+        "A host tool the build backend needs is missing (a warning when it is optional).",
+        "Install the tool the message names; `tundravm doctor` lists what this host can do.",
+    ),
+    Rule(
+        "tree-drift",
+        "error",
+        "A file of the committed mkosi tree differs from what the image compiles to.",
+        "Rewrite the tree with `tundravm build --tree-only DIR`, review the diff and commit it.",
+    ),
+)
+
+RULES: dict[str, Rule] = {rule.code: rule for rule in _REGISTRY}
+"""Every code ``tundravm check`` reports, by code."""
+
+_PASSES: tuple[RuleCheck, ...] = tuple(dict.fromkeys(c for rule in _REGISTRY for c in rule.checks))
+"""The compiler passes :func:`check` runs, each once."""
 
 
 def _sort_key(d: Diagnostic) -> tuple[str, int, str, str, str]:
@@ -979,7 +1612,7 @@ def check(image: Lowered, *, profiles: Sequence[str] | None = None) -> list[Diag
     found: dict[Diagnostic, None] = {}
     for name in dict.fromkeys(names):
         state = image.state.effective_profile(name)
-        for rule in RULES:
+        for rule in _PASSES:
             found.update(dict.fromkeys(rule(image, name, state)))
     return sorted(found, key=_sort_key)
 
@@ -1287,6 +1920,7 @@ __all__ = [
     "TYPED_SETTINGS",
     "Diagnostic",
     "Rule",
+    "RuleCheck",
     "check",
     "declaration_check",
     "unit_declaration_check",
