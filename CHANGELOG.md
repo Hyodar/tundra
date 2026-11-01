@@ -54,6 +54,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.
 - The ESP is a fixed 128 MiB; a UKI over 126 MiB fails, naming `RootFS.verity()`.
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
+- `examples/nethermind_base.py`'s kernel config builds in every driver a target needs; a weekly workflow builds it and Debian's 6.12.111.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
 - `GoBinary` builds the module root unless `package=` names a sub-command.
 - Go builds with the toolchain `go.mod` names, fetched by the host's `go` 1.21+, which every image needs (`Tdxs` is Go); Cargo with the one `rust-toolchain.toml` pins, installed by the host's `rustup`, and an unpinned channel is refused.
