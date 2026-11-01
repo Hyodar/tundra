@@ -24,6 +24,7 @@ from tundravm.testing._boot import (
     CONSOLE_CMDLINE,
     DEFAULT_MARKERS,
     clean_console,
+    console_lines,
     deinterleave,
     expected_cmdline,
     find_ovmf,
@@ -31,6 +32,7 @@ from tundravm.testing._boot import (
     on_console,
     qemu_command,
     uki_cmdline,
+    unit_lines,
 )
 from tundravm.testing.pytest_plugin import BootRunner
 
@@ -185,6 +187,18 @@ def test_a_marker_split_by_kernel_lines_is_on_the_console() -> None:
     assert on_console(console, "[    2.208352]  vda: vda1")  # the kernel line, whole
     assert not on_console(console[: console.index("ces\r\n")], REFUSED)  # not written yet
     assert not on_console(console.replace("servi[", "servi\n["), REFUSED)  # a real line break
+
+
+def test_the_line_readers_read_each_line_whole_with_the_kernel_lines_after_it() -> None:
+    console = "".join(INTERLEAVED)
+    lines = console_lines(console)
+    refused = f"[    1.861157] tdx-evidence[202]: {REFUSED}"
+    exited = "[    1.872729] systemd[1]: tdx-evidence.service: Main process exited, code=exited, "
+    exited += "status=1/FAILURE"
+    assert lines[lines.index(refused) + 1].startswith("[    2.197534] virtio_blk virtio1: [vda]")
+    assert lines[lines.index(exited) + 1] == "[    2.208352]  vda: vda1"
+    about = unit_lines(console, "tdx-evidence.service")
+    assert {refused, exited} <= set(about)
 
 
 def test_boot_finds_a_marker_kernel_lines_interrupted(fake: Fake) -> None:

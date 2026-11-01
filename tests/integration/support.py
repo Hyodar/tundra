@@ -22,7 +22,7 @@ from tundravm._modules import execution
 from tundravm._source import GitSource
 from tundravm.declarative._lowered import Lowered
 from tundravm.testing import BootResult, boot_unavailable, build_unavailable
-from tundravm.testing._boot import DEFAULT_MARKERS, on_console
+from tundravm.testing._boot import DEFAULT_MARKERS, console_lines, on_console
 
 SECTOR = 512
 
@@ -190,9 +190,10 @@ PROBE_DONE = f"{PROBE}done"
 
 
 def probe_lines(console: str, what: str) -> list[str]:
-    """The probe's ``<what> ...`` lines in *console*, without the prefix and the word."""
+    """The probe's ``<what> ...`` lines in *console* (:func:`console_lines`), without the prefix
+    and the word."""
     found = []
-    for line in console.splitlines():
+    for line in console_lines(console):
         _, sep, said = line.partition(PROBE)
         if sep and said.startswith(f"{what} "):
             found.append(said.removeprefix(f"{what} ").strip())

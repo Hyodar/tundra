@@ -112,6 +112,9 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - An image file names no backend: `TUNDRAVM_BACKEND`, else `local` on Linux x86-64 and
   `lima` elsewhere.
 - `tundravm.testing.plan(image)` takes an `Image`; the planned value is `PlannedImage`.
+- `scan_console`, the unit lines of a boot summary and the integration probe read the
+  console line by line as its writers wrote it: a line a kernel line interrupted is whole,
+  the kernel line after it, as `on_console` already matched.
 - `tundravm.testing` says profile where it said variant: `PlannedImage.profile`,
   `CompiledTree.profiles`, `.default_profile` and `.profile(name)`, the `profile=` argument of
   every `CompiledTree` reader, `fragment_plan(profile=)`, `assert_diagnostic(profile=,

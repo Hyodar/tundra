@@ -17,6 +17,8 @@ carriage returns, and in that text de-interleaved (:func:`deinterleave`): every 
 kernel lines (a ``[ seconds.micros]`` stamp up to its newline) that starts in the middle of
 another line is cut out, which puts the interrupted line back together, while the kernel
 line itself is whole in the transcript. A marker still has to appear in full in one of them.
+What reads the console line by line (:func:`scan_console`, a unit's lines in a summary)
+reads :func:`console_lines`: the mended lines, each followed by the kernel lines cut out.
 """
 
 from __future__ import annotations
@@ -84,6 +86,8 @@ _KERNEL_CMDLINE = re.compile(r"^\[\s*[0-9.]+\]\s+Kernel command line: (.*?)\s*$"
 """The command line the kernel booted with, as it prints it (the text of ``/proc/cmdline``)."""
 _INTERRUPTION = re.compile(r"(?<=[^\n])(?:\[ *[0-9]+\.[0-9]+\] [^\n]*\n)+")
 """Whole kernel lines (``[    2.197534] ...`` up to the newline) written into another line."""
+_CUT = "\ue000"
+"""Where :func:`console_lines` cut kernel lines out (a private-use character)."""
 
 
 def clean_console(raw: str) -> str:
@@ -95,6 +99,24 @@ def deinterleave(text: str) -> str:
     """Console *text*, cleaned, with each run of kernel lines that interrupts another line
     cut out, which makes the interrupted line whole again."""
     return _INTERRUPTION.sub("", clean_console(text))
+
+
+def console_lines(text: str) -> list[str]:
+    """Console *text*, cleaned, line by line as the writers wrote them: each line kernel
+    lines interrupted made whole again (:func:`deinterleave`), then those kernel lines."""
+    runs: list[str] = []
+
+    def cut(match: re.Match[str]) -> str:
+        runs.append(match[0])
+        return _CUT
+
+    found: list[str] = []
+    pending = iter(runs)
+    for line in _INTERRUPTION.sub(cut, clean_console(text).replace(_CUT, "")).splitlines():
+        found.append(line.replace(_CUT, ""))
+        for _ in range(line.count(_CUT)):
+            found += next(pending).splitlines()
+    return found
 
 
 def on_console(text: str, marker: str) -> bool:
@@ -143,7 +165,7 @@ def scan_console(text: str) -> ConsoleScan:
     failed: dict[str, None] = {}
     state: dict[str, str] = {}
     fatal: list[str] = []
-    for line in clean_console(text).splitlines():
+    for line in console_lines(text):
         for match in _STARTED.finditer(line):
             started.setdefault(match[1])
             if state.get(match[1]) != "done":
@@ -169,7 +191,7 @@ def unit_lines(text: str, unit: str, limit: int = 20) -> list[str]:
     lines of a process named like it (``nft[155]:`` for ``nftables.service``)."""
     stem = unit.rsplit(".", 1)[0]
     found = []
-    for line in clean_console(text).splitlines():
+    for line in console_lines(text):
         source = _SOURCE.match(line)
         name = source[1] if source else ""
         related = len(name) >= 3 and name not in ("systemd", "kernel")
