@@ -27,8 +27,8 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 PROVER_SOURCE = '''"""Plan section 3.1's prover.py."""
 
 from tundravm import Image, RootFS
-from tundravm.components import DevAccess, Raiko
-from tundravm.ports import AttestedTLS
+from tundravm.components import DevAccess, Egress, Network, Raiko
+from tundravm.ports import TCP, AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
 
@@ -42,6 +42,7 @@ image = Image(
     volumes=[data],
     secrets=[config],
     ingress=[AttestedTLS(443, upstream=raiko.http)],
+    network=Network(egress=Egress(ports=[TCP(443)])),
     rootfs=RootFS.verity(),
     dev=DevAccess(password="tdx"),
 )

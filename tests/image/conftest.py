@@ -7,12 +7,14 @@ from pathlib import Path
 import pytest
 
 from tundravm import File, Image, Service
+from tundravm.components import Egress, Network
 from tundravm.ports import TCP
 from tundravm.testing import PlannedImage, plan
 
 STARTER_SOURCE = '''"""The starter: plan section 3.1's demo.py."""
 
 from tundravm import File, Image, Service
+from tundravm.components import Egress, Network
 from tundravm.ports import TCP
 
 image = Image(
@@ -26,6 +28,7 @@ image = Image(
             expose=[TCP(8080)],
         ),
     ],
+    network=Network(egress=Egress()),
 )
 '''
 """The starter as a file, for the tests that load it the way the CLI does."""
@@ -44,6 +47,7 @@ def starter() -> Image:
                 expose=[TCP(8080)],
             ),
         ],
+        network=Network(egress=Egress()),
     )
 
 

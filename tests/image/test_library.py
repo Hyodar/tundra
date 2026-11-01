@@ -10,6 +10,7 @@ from tundravm._image import lower, recipe_of
 from tundravm.components import (
     EVIDENCE,
     DevAccess,
+    Egress,
     Endpoint,
     Firewall,
     JournalExport,
@@ -117,6 +118,23 @@ def test_component_checks_report_what_the_contract_warns_about() -> None:
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
     unchecked = Image("x", components=[Tdxs(validator="tdx")])
     assert "tdxs-validator-unchecked" in {d.code for d in plan(unchecked).lint()}
+
+
+@pytest.mark.parametrize(
+    ("network", "profile", "reported"),
+    [
+        (None, "production", True),
+        (Network(egress=Egress(hosts=["10.0.0.0/8", "0.0.0.0/0"])), "production", True),
+        (Network(egress=Egress(ports=[TCP(443)])), "production", False),
+        (None, "dev", False),
+    ],
+)
+def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
+    network: Network | None, profile: str, reported: bool
+) -> None:
+    image = Image("x", network=network, dev=DevAccess(password="tdx"))
+    found = {d.code for d in plan(image, profile).lint()}
+    assert ("egress-unfiltered" in found) is reported
 
 
 @pytest.mark.parametrize(

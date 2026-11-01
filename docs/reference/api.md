@@ -746,7 +746,7 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 
 | Member | Does |
 |---|---|
-| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`. |
+| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere. |
 
 ### `JournalExport`
 
@@ -875,6 +875,7 @@ Resolved(
     targets: tuple[Target, ...],
     items: tuple[Declaration, ...],
     components: tuple[str, ...],
+    production: bool = True,
 )
 ```
 

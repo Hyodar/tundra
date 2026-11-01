@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from tundravm import Image, Service
-from tundravm.components import Component, Endpoint
+from tundravm.components import Component, Egress, Endpoint, Network
 from tundravm.ports import TCP
 from tundravm.sources import Build, Git, GoBinary, Http, Install
 from tundravm.systemd import TcpProbe
@@ -91,4 +91,6 @@ image = Image(
         ),
     ],
     components=[Prometheus()],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata).
+    network=Network(egress=Egress()),
 )

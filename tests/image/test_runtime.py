@@ -16,7 +16,7 @@ import pytest
 from tundravm import File, Image, Kernel, RootFS, Service
 from tundravm._image import lower, recipe_of
 from tundravm._image._values import MANAGEMENT_PORT
-from tundravm.components import Endpoint
+from tundravm.components import Egress, Endpoint, Network
 from tundravm.declarative import Disk, Key, Secrets
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, TLS, AttestedTLS
@@ -58,6 +58,7 @@ def prover(**changes: object) -> Image:
         "volumes": [data],
         "secrets": [token],
         "ingress": [AttestedTLS(443, upstream=upstream())],
+        "network": Network(egress=Egress()),
     }
     fields.update(changes)
     return Image("prover", **fields)  # type: ignore[arg-type]
@@ -306,7 +307,7 @@ def test_the_control_plane_bootstrap_listens_on_the_management_port(
 
 
 def test_attested_tls_is_the_only_way_in(planned: PlannedImage) -> None:
-    rules = planned.file("/etc/nftables.conf").text
+    rules = planned.file("/etc/nftables.conf").text.split("chain output")[0]
     accepted = sorted(
         int(line.split("tcp dport ")[1].split()[0])
         for line in rules.splitlines()

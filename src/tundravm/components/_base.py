@@ -247,20 +247,54 @@ class Firewall(Component):
             "Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which "
             "open it only with a key to accept.",
         ),
+        Rule(
+            "egress-unfiltered",
+            "warning",
+            "A production profile accepts every outbound packet (no Egress, or one allowing "
+            "0.0.0.0/0 or ::/0), so a compromised service sends what it holds anywhere.",
+            "List what its services talk to: network=Network(egress=Egress(ports=[TCP(443)], "
+            "hosts=[...])); what the baseline sends (NTS time, resolvers, cloud metadata) is "
+            "accepted for you. A Profile(production=False) is exempt.",
+        ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
-        """``firewall-ssh-open``: port 22 opened by hand instead of by ``SshAccess``."""
-        if not any(port.port == 22 for port in self.allow):
-            return ()
-        return (
-            _diagnostic(
-                "firewall-ssh-open",
-                "warning",
-                "Firewall(allow=[TCP(22)]) opens SSH by hand: use SshAccess or "
-                "dev=DevAccess(...), which open it only with a key to accept",
-            ),
+        """``firewall-ssh-open``: port 22 opened by hand instead of by ``SshAccess``;
+        ``egress-unfiltered``: a production profile that sends anywhere."""
+        found: list[dm.Diagnostic] = []
+        if any(port.port == 22 for port in self.allow):
+            found.append(
+                _diagnostic(
+                    "firewall-ssh-open",
+                    "warning",
+                    "Firewall(allow=[TCP(22)]) opens SSH by hand: use SshAccess or "
+                    "dev=DevAccess(...), which open it only with a key to accept",
+                )
+            )
+        if resolved.production:
+            unfiltered = self._unfiltered()
+            if unfiltered is not None:
+                found.append(_diagnostic("egress-unfiltered", "warning", unfiltered))
+        return tuple(found)
+
+    def _unfiltered(self) -> str | None:
+        """Why this firewall accepts every outbound packet, or ``None`` when it filters."""
+        fix = (
+            "list what its services talk to with network=Network(egress=Egress(ports=[...], "
+            "hosts=[...]))"
         )
+        if self.egress is None:
+            return (
+                "the production profile accepts every outbound packet, so a compromised "
+                f"service sends what it holds anywhere: {fix}"
+            )
+        everywhere = [host for host in self.egress.hosts if host.endswith("/0")]
+        if everywhere:
+            return (
+                f"Egress(hosts=[{', '.join(map(repr, everywhere))}]) accepts every "
+                f"destination, so it filters nothing: {fix}"
+            )
+        return None
 
 
 class SshAccess(Component):

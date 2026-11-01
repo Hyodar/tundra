@@ -24,9 +24,9 @@ reproduces its registers), and the verifier below accepts it only because it pas
 """
 
 from tundravm import Image, Package, Service
-from tundravm.components import EVIDENCE, Endpoint, Tdxs
+from tundravm.components import EVIDENCE, Egress, Endpoint, Network, Tdxs
 from tundravm.declarative import Resources
-from tundravm.ports import AttestedTLS
+from tundravm.ports import TCP, AttestedTLS
 from tundravm.sources import GoBinary, Local
 from tundravm.systemd import TcpProbe
 
@@ -65,6 +65,8 @@ image = Image(
         ),
     ],
     ingress=[AttestedTLS(443, upstream=Endpoint("127.0.0.1", 8080, ready=app.ready))],
+    # Outbound: Intel's collateral over HTTPS, and what the baseline sends.
+    network=Network(egress=Egress(ports=[TCP(443)])),
     # Every target boots the same payload; azure only adds its fixed VHD.
     targets=("qemu", "azure"),
 )

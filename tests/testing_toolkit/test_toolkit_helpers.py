@@ -11,7 +11,7 @@ import pytest
 from tundravm import File as PublicFile
 from tundravm import Image, Profile
 from tundravm import Service as PublicService
-from tundravm.components import Component
+from tundravm.components import Component, Egress, Network
 from tundravm.declarative import (
     BootStep,
     Diagnostic,
@@ -77,19 +77,22 @@ def _single(*items: Package | File | User | Service) -> Recipe:
 
 
 GHOST = PublicService("app", ["/usr/bin/busybox", "true"], user="ghost")
+FILTERED = Network(egress=Egress())
 """A service that runs as a user nothing creates: ``service-user-missing``."""
 
 
 def _ghost(*, where: str = "image") -> Image:
     """An image whose ``app`` service runs as an undeclared user, everywhere or in ``dev``."""
     if where == "image":
-        return Image("demo", packages=["busybox"], services=[GHOST])
-    return Image("demo", packages=["busybox"], profiles={"dev": Profile(add=[GHOST])})
+        return Image("demo", packages=["busybox"], services=[GHOST], network=FILTERED)
+    return Image(
+        "demo", packages=["busybox"], profiles={"dev": Profile(add=[GHOST])}, network=FILTERED
+    )
 
 
 def _warning_only() -> Image:
     """One warning: the implied evidence service's source is unpinned."""
-    return Image("demo")
+    return Image("demo", network=FILTERED)
 
 
 # ── compile_tree / CompiledTree ──────────────────────────────────────

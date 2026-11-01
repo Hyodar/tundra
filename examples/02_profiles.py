@@ -14,7 +14,7 @@ image builds: one UKI wrapped for QEMU and for each cloud, whose glue is gated a
 """
 
 from tundravm import File, Image, Profile, Service
-from tundravm.components import DevAccess
+from tundravm.components import DevAccess, Egress, Network
 from tundravm.ports import TCP
 from tundravm.systemd import Resources
 
@@ -32,6 +32,8 @@ image = Image(
             resources=Resources(memory_max="512M"),
         ),
     ],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata).
+    network=Network(egress=Egress()),
     # One UKI, one set of measurements, three disks.
     targets=("qemu", "azure", "gcp"),
     profiles={

@@ -25,6 +25,8 @@ Teaches:
 """
 
 from tundravm import Image, Package, Service
+from tundravm.components import Egress, Network
+from tundravm.ports import TCP
 from tundravm.secrets import Secret
 from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, TpmSeal, Volume
@@ -63,5 +65,7 @@ image = Image(
     ],
     volumes=[data, cache],
     secrets=[token, flags],
+    # Outbound: HTTPS, and what the baseline sends.
+    network=Network(egress=Egress(ports=[TCP(443)])),
     targets=("azure",),
 )

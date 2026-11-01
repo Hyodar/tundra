@@ -2863,6 +2863,9 @@ class Resolved:
     """Every target the profile builds, own or inherited (never empty)."""
     items: tuple[Declaration, ...]
     components: tuple[str, ...]
+    production: bool = True
+    """Whether its builds are production builds: ``False`` for ``Profile(production=False)``
+    and the ``dev`` profile."""
 
     def __post_init__(self) -> None:
         _freeze(self, "targets")

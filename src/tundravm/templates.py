@@ -55,7 +55,7 @@ Run:    uv run tundravm run --mode simulated --dev
 '''
 
 _MINIMAL = r"""from tundravm import File, Image, Service
-from tundravm.components import DevAccess
+from tundravm.components import DevAccess, Egress, Network
 from tundravm.ports import TCP
 
 image = Image(
@@ -69,13 +69,17 @@ image = Image(
             expose=[TCP(8080)],
         ),
     ],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.
+    network=Network(egress=Egress()),
     dev=DevAccess(password="tdx"),
 )
 """
 
 _CLOUD_IMPORTS = (
     "from tundravm import Debian, File, Image, Package, Service\n"
-    "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved, Rule\n"
+    "from tundravm.components import (\n"
+    "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
+    "    Network,\n    Resolved,\n    Rule,\n)\n"
     "from tundravm.ports import TCP\n"
     "from tundravm.systemd import TcpProbe\n"
 )
@@ -83,8 +87,9 @@ _CLOUD_IMPORTS = (
 _APP_IMPORTS = {
     "service": (
         "from tundravm import Debian, Image, Package, Service\n"
-        "from tundravm.components import "
-        "Component, DevAccess, Diagnostic, Endpoint, Resolved, Rule\n"
+        "from tundravm.components import (\n"
+        "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
+        "    Network,\n    Resolved,\n    Rule,\n)\n"
         "from tundravm.ports import TCP\n"
         "from tundravm.sources import GoBinary, Local\n"
         "from tundravm.systemd import TcpProbe\n"
@@ -92,8 +97,9 @@ _APP_IMPORTS = {
     "cloud": _CLOUD_IMPORTS,
     "prover": (
         "from tundravm import Debian, File, Image, Package, Service\n"
-        "from tundravm.components import "
-        "Component, DevAccess, Diagnostic, Endpoint, Resolved, Rule\n"
+        "from tundravm.components import (\n"
+        "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
+        "    Network,\n    Resolved,\n    Rule,\n)\n"
         "from tundravm.ports import AttestedTLS\n"
         "from tundravm.secrets import Secret\n"
         "from tundravm.storage import OperatorKey, Volume, VolumeDirectory\n"
@@ -253,6 +259,8 @@ image = Image(
     # what a service exposes, one hardened user per service and the evidence service.
     packages=[Package("ca-certificates")],
     components=[App(version=APP_VERSION, port=APP_PORT)],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.
+    network=Network(egress=Egress()),
     # A non-production "dev" profile: debugging tools, and a serial console with root
     # password "tdx". Build it with --dev; production never has it.
     dev=DevAccess(password="tdx"),
@@ -273,6 +281,8 @@ image = Image(
     base=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
     packages=[Package("ca-certificates")],
     components=[App(version=APP_VERSION, port=APP_PORT)],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.
+    network=Network(egress=Egress()),
     # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
     targets=("qemu", "azure", "gcp"),
     dev=DevAccess(password="tdx"),
@@ -358,6 +368,8 @@ image = Image(
     secrets=[token],
     # TLS on 443, relayed to the app on the loopback: the only way requests reach it.
     ingress=[AttestedTLS(443, upstream=app.http)],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.
+    network=Network(egress=Egress()),
     # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.
     targets=("qemu", "azure", "gcp"),
     dev=DevAccess(password="tdx"),

@@ -73,6 +73,7 @@ Breaking changes are marked **Breaking**.
 - **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces the `service-command-not-shipped` warning: a service's program must be a file, tree or build the image ships, or a program a listed package provides.
+- `egress-unfiltered` (warning, a `Firewall` rule): a production profile without `Egress`, or with one allowing `0.0.0.0/0` or `::/0`, sends anywhere; `Resolved.production` tells any component's check which profiles are exempt.
 - A finding several profiles share prints once (`[dev, production]`), `[image]` marks an image-wide one, and a shared hint prints once.
 - **Breaking:** `source-unpinned` is image-wide with the subject `sources.NAME`, as lock drift reports a source.
 - A hint names the lock command that runs where you are: `tundravm lock`, or `tundravm lock FILE` for an image the project does not configure; `local-changed` says `build --dev` re-pins.

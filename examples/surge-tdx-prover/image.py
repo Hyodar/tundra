@@ -30,6 +30,7 @@ image = Image(
     volumes=[data],
     secrets=[jwt, chain, config],
     ingress=[AttestedTLS(443, upstream=prover.http)],
+    # Egress is per deployment: Egress(ports=, hosts=) for its L1 RPC, Nethermind peers, collateral.
     rootfs=RootFS.verity(),
     targets=("qemu", "azure", "gcp"),
     dev=DevAccess(password="tdx"),

@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from tundravm import File, Image, Package
-from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
+from tundravm.components import Component, Diagnostic, Egress, Endpoint, Network, Resolved, Rule
 from tundravm.declarative import Repository, Task, Unit
 from tundravm.declarative.utils import ConfigFile, Run
 from tundravm.systemd import Every
@@ -122,5 +122,7 @@ image = Image(
     "components",
     packages=["ca-certificates"],
     components=[Hardening(), NodeExporter(), metrics, HealthCheck(target=metrics.health)],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata).
+    network=Network(egress=Egress()),
     targets=("qemu", "gcp"),
 )

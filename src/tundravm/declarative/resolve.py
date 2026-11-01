@@ -589,6 +589,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
         targets=_targets(chain),
         items=items,
         components=tuple(state.fragments),
+        production=chain[-1].release,
     )
     for fragment in state.fragments.values():
         for required in fragment.requires:

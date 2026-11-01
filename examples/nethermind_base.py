@@ -23,6 +23,7 @@ network script, and the evidence service is ``Tdxs()``. The surge prover
 from __future__ import annotations
 
 from tundravm import Debian, Image, Kernel
+from tundravm.components import Egress, Network
 from tundravm.declarative import Resources
 from tundravm.sources import Git
 
@@ -52,4 +53,6 @@ image = Image(
         Git("https://github.com/gregkh/linux", f"v{KERNEL_VERSION}"),
         config=KERNEL_CONFIG,
     ),
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata).
+    network=Network(egress=Egress()),
 )

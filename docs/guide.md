@@ -590,12 +590,12 @@ threshold.
 ### Network and observability
 
 `network=Network(egress=Egress(ports=[TCP(443)], hosts=["10.0.0.0/8"]))` filters outbound
-traffic. Without `Egress`, outbound traffic is not filtered. With it, the baseline's NTS
-time, resolvers and cloud metadata servers are accepted for you.
+traffic, accepting what the baseline sends (NTS time, resolvers, cloud metadata). A
+production profile without it is an `egress-unfiltered` warning.
 
 `observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
-exports the volatile journal and node metrics. Their credentials are secrets the image
-declares. An `http://` sink is a lint warning: it sees what the guest logs in the clear.
+exports the volatile journal and node metrics with secret credentials. An `http://` sink
+is a lint warning: it carries the logs in the clear.
 
 ### The control plane today
 
@@ -989,6 +989,7 @@ replaced. The [trust page](trust.md#recovery) has the recovery rules.
 
 ```python
 from tundravm import File, Image, Service
+from tundravm.components import Egress, Network
 from tundravm.ports import TCP
 from tundravm.testing import assert_clean, plan
 
@@ -1003,6 +1004,7 @@ image = Image(
             expose=[TCP(8080)],
         ),
     ],
+    network=Network(egress=Egress()),
 )
 
 

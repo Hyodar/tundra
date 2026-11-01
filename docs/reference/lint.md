@@ -89,6 +89,7 @@ The codes each component of `tundravm.components` reports, as its class declares
 | Component | Code | Severity | What it checks | How to fix |
 |---|---|---|---|---|
 | `DevAccess` | `dev-access-rsa-key` | info | A development profile accepts an RSA SSH key where every current client makes ed25519. | Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead. |
+| `Firewall` | `egress-unfiltered` | warning | A production profile accepts every outbound packet (no Egress, or one allowing 0.0.0.0/0 or ::/0), so a compromised service sends what it holds anywhere. | List what its services talk to: network=Network(egress=Egress(ports=[TCP(443)], hosts=[...])); what the baseline sends (NTS time, resolvers, cloud metadata) is accepted for you. A Profile(production=False) is exempt. |
 | `Firewall` | `firewall-ssh-open` | warning | The firewall opens port 22 by hand, outside the SSH access that accepts only a key. | Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which open it only with a key to accept. |
 | `Nethermind` | `nethermind-volatile-state` | warning | Nethermind keeps its database on the volatile root, so it resyncs from genesis at every boot. | Pass state=volume.directory('nethermind') on a Volume. |
 | `Network` | `network-no-route` | warning | A static address without a gateway reaches its own subnet only, so NTS time and every remote endpoint fail. | Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")). |

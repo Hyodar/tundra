@@ -77,7 +77,7 @@ def test_the_firewall_opens_the_exposed_port_and_the_management_ingress(
     assert "tcp dport 8080 accept" in rules
     assert f"tcp dport {MANAGEMENT_PORT} accept" in rules
     assert "policy drop" in rules
-    assert "hook output priority filter; policy accept" in rules  # unfiltered outbound
+    assert "hook output priority filter; policy drop" in rules  # Egress() filters outbound
 
 
 def test_the_tee_baseline_is_there(planned: PlannedImage) -> None:

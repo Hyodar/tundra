@@ -13,6 +13,7 @@ implied item with its one escape hatch. With no ``profiles`` it builds one
 """
 
 from tundravm import File, Image, Service
+from tundravm.components import Egress, Network
 from tundravm.ports import TCP
 
 image = Image(
@@ -26,4 +27,6 @@ image = Image(
             expose=[TCP(8080)],
         ),
     ],
+    # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata).
+    network=Network(egress=Egress()),
 )
