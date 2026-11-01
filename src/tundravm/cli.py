@@ -114,7 +114,7 @@ COMMANDS = (
     "convert",
     "doctor",
 )
-RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode")
+RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "probe")
 DEPLOY_ACTIONS = ("status", "logs", "mode", "upgrade", "rollback")
 NEW_TEMPLATES = ("service", "prover")
 DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
@@ -474,7 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         _cmd_run,
         "Run a build locally as a named instance; status|logs|stop|ssh|mode.",
-        "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach]\n"
+        "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]\n"
         "    boot qemu.raw through OVMF from its ESP on a snapshot (the build is never\n"
         "    written), forward every TCP port the image's firewall accepts or its services\n"
         "    declare, and the management port :8745, from 127.0.0.1, and write\n"
@@ -483,11 +483,14 @@ def build_parser() -> argparse.ArgumentParser:
         "      production build boots fail-closed (tdx-evidence.service refuses, no service\n"
         "      starts, nothing is delivered), a --dev build runs its services.\n"
         "    tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.\n"
+        "    --probe: wait for the dev build's boot probe, print its table, exit 1 on a\n"
+        "      failed check (a production build carries no probe).\n"
         "tundravm run status INSTANCE   the process, control-plane and application readiness\n"
         "tundravm run logs INSTANCE     the serial console\n"
         "tundravm run stop INSTANCE     quit QEMU\n"
         "tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH\n"
-        "tundravm run mode INSTANCE     the security mode and what it means for evidence",
+        "tundravm run mode INSTANCE     the security mode and what it means for evidence\n"
+        "tundravm run probe INSTANCE    the boot probe's checks; writes probe.json",
         as_json,
     )
     run.add_argument(
@@ -504,6 +507,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--detach", action="store_true", help="Return once QEMU runs (default: show the console)."
+    )
+    run.add_argument(
+        "--probe",
+        action="store_true",
+        help="Wait for the boot probe and print its checks (implies --detach).",
+    )
+    run.add_argument(
+        "--timeout",
+        type=float,
+        default=instances.PROBE_TIMEOUT,
+        metavar="SECONDS",
+        help="How long --probe waits (default: %(default)s).",
     )
     run.add_argument("--memory", default="2G", help="Guest memory (default: %(default)s).")
     run.add_argument("--cpus", type=int, default=2, help="Guest CPUs (default: %(default)s).")
@@ -1244,18 +1259,43 @@ def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
             "(add --dev to start the services), --mode tdx needs `tundravm doctor --for tdx`.",
         )
     build = _resolve_build(args.subject, found, dev=args.dev)
+    if args.probe:
+        instances.probe_checks(build.manifest, f"build {build.id}")
     instance = instances.launch(
         found.instances,
         build,
         mode=args.mode,
-        detach=args.detach,
+        detach=args.detach or args.probe,
         out=out,
         memory=args.memory,
         cpus=args.cpus,
     )
+    if args.probe:
+        code = _probe(instance, args, out)
+        print(f"stop it with `tundravm run stop {instance.id}`", file=out)
+        return code
     if args.detach:
         print(f"stop it with `tundravm run stop {instance.id}`", file=out)
     return EXIT_OK
+
+
+def _probe(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -> int:
+    """Wait for *instance*'s boot probe, print its table (or ``--json``); 0 only when every
+    check printed and none failed."""
+    report = instances.probe(instance, timeout=args.timeout)
+    if args.json:
+        print(json_report("run", {"id": instance.id, "probe": report.to_dict()}), file=out)
+    else:
+        print(report.table(), file=out)
+        if report.done is None:
+            print(
+                f"the probe did not finish within {args.timeout:g}s: `tundravm run logs "
+                f"{instance.id}` shows where the boot stands (a volume waiting for "
+                "`tundravm secrets unlock` holds the services)",
+                file=out,
+            )
+        print(f"recorded in {instance.path / instances.PROBE}", file=out)
+    return EXIT_OK if report.ok else EXIT_FAILURE
 
 
 def _run_action(
@@ -1282,6 +1322,8 @@ def _run_action(
         return EXIT_OK
     if action == "mode":
         return _mode(instance, args, out)
+    if action == "probe":
+        return _probe(instance, args, out)
     instances.ssh_permitted(instance)
     session = bootstrap.Session(instance, bootstrap.identity_path(args.identity))
     argv = session.argv("")[:-1]

@@ -228,3 +228,45 @@ def test_a_volume_gets_a_disk_of_its_own(prover: Path, cli: Cli, qemu: Path) -> 
     assert "virtio-blk-pci,drive=vol0,serial=tundravm-data" in command
     time.sleep(0)
     cli("run", "stop", "prover-1")
+
+
+def test_run_probe_reads_the_probe_off_the_console_and_refuses_production(
+    dev_built: Build, project: Path, cli: Cli, qemu: Path
+) -> None:
+    """``run probe`` renders each check's last line (the journal forwards each a second
+    time, a kernel line may cut one), exits 1 on a ``fail`` and records ``probe.json``; a
+    production build has no probe, so ``run --probe`` refuses it before booting."""
+    checks = [row["check"] for row in dev_built.manifest["probe"]]
+    assert checks[:2] == ["mode", "rtmr"] and "service:app.service" in checks
+    assert cli("run", "--mode", "simulated", "--dev", "--detach").code == EXIT_OK
+    lines = [f"tundravm-probe: {name} ok fine" for name in checks if name != "rtmr"]
+    lines += [
+        "tundravm-probe: rtmr skip no TDX",
+        "[    3.1] sh[201]: tundravm-probe: service:app.service ok active",
+        "tundravm-probe: service:app.service fail failed (exit-code): journalctl -u app.ser"
+        "[    3.2] virtio_net virtio0 enp0s1: renamed\n"
+        "vice says why",
+        f"tundravm-probe: done {len(checks) - 2} ok 1 fail",
+    ]
+    with (project / ".tundravm/instances/demo-1/console.log").open("a") as console:
+        console.write("\n".join(lines) + "\n")
+    result = cli("run", "probe", "demo-1")
+    assert result.code == 1, result.err
+    rows = result.out.splitlines()
+    assert rows[0].split() == ["check", "verdict", "detail"]
+    assert rows[1].split() == ["mode", "ok", "fine"]
+    table = {row.split()[0]: row.split()[1:] for row in rows[1 : len(checks) + 1]}
+    assert table["rtmr"] == ["skip", "no", "TDX"]
+    failed = next(row for row in rows if row.startswith("service:app.service"))
+    assert failed.split()[1:3] == ["fail", "failed"]
+    assert failed.endswith("journalctl -u app.service says why")
+    assert rows[-2] == f"{len(checks) - 2} ok, 1 fail, 1 skip"
+    record = json.loads((project / ".tundravm/instances/demo-1/probe.json").read_text())
+    assert record["ok"] is False and record["done"] == {"ok": len(checks) - 2, "fail": 1}
+    assert {r["check"] for r in record["results"]} == set(checks)
+    cli("run", "stop", "demo-1")
+    refused = cli("run", "--mode", "simulated", "--probe")
+    assert refused.code == EXIT_SDK_ERROR
+    assert "is a production build: it carries no boot probe" in refused.err
+    assert "tundravm run --mode simulated --dev --probe" in refused.err
+    assert not (project / ".tundravm/instances/demo-2").exists()

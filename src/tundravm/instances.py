@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
+from ._modules import probe as probe_module
 from .builds import Build
 from .deploy import qemu as qemu_paths
 from .errors import DeploymentError, StateError, ValidationError
@@ -46,6 +47,10 @@ CONSOLE = "console.log"
 MONITOR = "monitor.sock"
 PIDFILE = "qemu.pid"
 KNOWN_HOSTS = "known_hosts"
+PROBE = "probe.json"
+"""What ``run --probe`` read off the console: each check's verdict and detail."""
+PROBE_TIMEOUT = 900.0
+"""Seconds ``run --probe`` waits for the probe to finish (TCG on a CI runner is slow)."""
 MANAGEMENT_PORT = 8745
 SSH_PORT = 22
 QEMU = "qemu-system-x86_64"
@@ -523,6 +528,45 @@ def ssh_permitted(instance: Instance) -> None:
         )
 
 
+def probe_checks(build: Mapping[str, Any], subject: str) -> tuple[str, ...]:
+    """The checks a build's manifest records for its probe; refuses a build that has none
+    (a production one), naming the fix."""
+    found = probe_module.checks_of(build)
+    if not found:
+        raise ValidationError(
+            f"{subject} is a {build.get('kind', 'production')} build: it carries no boot probe.",
+            hint="A production image starts nothing it does not declare. Build the dev profile "
+            "and probe it: `tundravm build --dev`, then "
+            "`tundravm run --mode simulated --dev --probe`.",
+        )
+    return found
+
+
+def probe(instance: Instance, *, timeout: float = PROBE_TIMEOUT) -> probe_module.Report:
+    """``run --probe`` / ``run probe``: wait up to *timeout* seconds for
+    ``tundravm-probe: done`` on *instance*'s console, then write :data:`PROBE` into its
+    directory and return what the probe printed."""
+    from .testing._boot import console_lines
+
+    build = instance.build
+    expected = probe_checks(build.manifest, f"{instance.id} runs build {build.id}, which")
+    console = instance.path / CONSOLE
+    deadline = time.monotonic() + timeout
+    while True:
+        text = console.read_text(encoding="utf-8", errors="replace") if console.is_file() else ""
+        report = probe_module.read(console_lines(text), expected)
+        if report.done is not None or not alive(instance) or time.monotonic() >= deadline:
+            break
+        time.sleep(POLL)
+    record = {"instance": instance.id, "build": build.id, "at": now(), **report.to_dict()}
+    if report.done is None:
+        record["timeout_s"] = timeout
+    text = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    (instance.path / PROBE).write_text(text, encoding="utf-8")
+    instance.event("probed", ok=report.ok, finished=report.done is not None)
+    return report
+
+
 def known_hosts(instance: Instance) -> Path:
     return instance.path / KNOWN_HOSTS
 
@@ -534,6 +578,8 @@ __all__ = [
     "INSTANCE",
     "MANAGEMENT_PORT",
     "MODES",
+    "PROBE",
+    "PROBE_TIMEOUT",
     "SCHEMA",
     "SSH_PORT",
     "Instance",
@@ -547,6 +593,8 @@ __all__ = [
     "launch",
     "logs",
     "open_instance",
+    "probe",
+    "probe_checks",
     "qemu_command",
     "readiness",
     "reachable",

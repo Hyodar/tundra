@@ -226,10 +226,10 @@ Run a build locally as a named instance; status|logs|stop|ssh|mode.
 
 ```text
 usage: tundravm run [-h] [--json] [--traceback] [--mode {simulated,tdx}] [--dev] [--detach]
-                    [--memory MEMORY] [--cpus CPUS] [--identity KEY]
+                    [--probe] [--timeout SECONDS] [--memory MEMORY] [--cpus CPUS] [--identity KEY]
                     [BUILD|ACTION] [INSTANCE]
 
-tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach]
+tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]
     boot qemu.raw through OVMF from its ESP on a snapshot (the build is never
     written), forward every TCP port the image's firewall accepts or its services
     declare, and the management port :8745, from 127.0.0.1, and write
@@ -238,11 +238,14 @@ tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach]
       production build boots fail-closed (tdx-evidence.service refuses, no service
       starts, nothing is delivered), a --dev build runs its services.
     tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.
+    --probe: wait for the dev build's boot probe, print its table, exit 1 on a
+      failed check (a production build carries no probe).
 tundravm run status INSTANCE   the process, control-plane and application readiness
 tundravm run logs INSTANCE     the serial console
 tundravm run stop INSTANCE     quit QEMU
 tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH
 tundravm run mode INSTANCE     the security mode and what it means for evidence
+tundravm run probe INSTANCE    the boot probe's checks; writes probe.json
 
 positional arguments:
   BUILD|ACTION          A build, or an action.
@@ -256,6 +259,8 @@ options:
                         Security mode (required to start).
   --dev                 The latest development build (default: production).
   --detach              Return once QEMU runs (default: show the console).
+  --probe               Wait for the boot probe and print its checks (implies --detach).
+  --timeout SECONDS     How long --probe waits (default: 900.0).
   --memory MEMORY       Guest memory (default: 2G).
   --cpus CPUS           Guest CPUs (default: 2).
   --identity KEY        SSH key for `run ssh`.
