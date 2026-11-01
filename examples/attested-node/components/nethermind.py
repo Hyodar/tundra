@@ -4,20 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tundravm import Service
+from tundravm import Package, Service
 from tundravm.components import Component, Diagnostic, Egress, Endpoint, Resolved, Rule
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Generated, Secret
-from tundravm.sources import Build, Git, Install
+from tundravm.sources import Build, Dotnet, Git, Install
 from tundravm.storage import VolumeDirectory
 from tundravm.systemd import TcpProbe
 
 SOURCE = Git("https://github.com/NethermindEth/nethermind.git", "1.32.3")
 HOME = "/usr/lib/nethermind"
-RUNNER = "src/Nethermind/Nethermind.Runner --runtime linux-x64"
 PROPERTIES = {
-    "Deterministic": "true",
-    "ContinuousIntegrationBuild": "true",
     "PublishSingleFile": "true",
     "BuildTimestamp": "0",
     "Commit": "0" * 40,
@@ -26,27 +23,17 @@ PROPERTIES = {
     "IncludeAllContentForSelfExtract": "true",
     "EmbedUntrackedSources": "true",
 }
-PUBLISH = (
-    f"dotnet restore {RUNNER} --disable-parallel --force && "
-    f"dotnet publish {RUNNER} --configuration Release --self-contained true --output publish "
-    + " ".join(f"-p:{key}={value}" for key, value in PROPERTIES.items())
-)
-TOOLCHAIN = ("dotnet-sdk-10.0", "build-essential", "git")
 INSTALL = (
     Install("publish/nethermind", f"{HOME}/nethermind"),
     Install("publish/NLog.config", f"{HOME}/NLog.config", mode=0o644),
     Install("publish/plugins", f"{HOME}/plugins", mode=None, directory=True),
 )
-DOTNET = {
-    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
-    "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
-    "DOTNET_NOLOGO": "1",
-    "DOTNET_CLI_HOME": "/tmp/dotnet",
-    "NUGET_PACKAGES": "/tmp/nuget",
-}
+RUNTIME = ("libssl3t64", "libstdc++6")
+"""What the self-contained publish needs from Debian at runtime: OpenSSL for its TLS and
+hashes, the C++ runtime for the CLR. It is built with invariant globalization, so no ICU."""
 
 
-class Nethermind(Component, build_network=True):
+class Nethermind(Component):
     """Nethermind on *config*, its JSON-RPC and Engine API on the loopback."""
 
     jwt: Secret | Generated
@@ -70,12 +57,16 @@ class Nethermind(Component, build_network=True):
         yield Build(
             "nethermind",
             SOURCE,
-            script=PUBLISH,
-            packages=TOOLCHAIN,
-            env=DOTNET,
+            using=Dotnet(
+                project="src/Nethermind/Nethermind.Runner",
+                output="nethermind",
+                properties=PROPERTIES,
+            ),
             install=INSTALL,
             cache_namespace=f"nethermind-{SOURCE.ref}",
         )
+        for package in RUNTIME:
+            yield Package(package)
         datadir = "/var/lib/nethermind" if self.state is None else self.state.path
         yield Service(
             "nethermind",

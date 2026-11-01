@@ -186,7 +186,7 @@ The class is the whole Component API:
 
 <!-- listing: examples/attested-node/components/nethermind.py Nethermind -->
 ```python
-class Nethermind(Component, build_network=True):
+class Nethermind(Component):
     """Nethermind on *config*, its JSON-RPC and Engine API on the loopback."""
 
     jwt: Secret | Generated
@@ -210,12 +210,16 @@ class Nethermind(Component, build_network=True):
         yield Build(
             "nethermind",
             SOURCE,
-            script=PUBLISH,
-            packages=TOOLCHAIN,
-            env=DOTNET,
+            using=Dotnet(
+                project="src/Nethermind/Nethermind.Runner",
+                output="nethermind",
+                properties=PROPERTIES,
+            ),
             install=INSTALL,
             cache_namespace=f"nethermind-{SOURCE.ref}",
         )
+        for package in RUNTIME:
+            yield Package(package)
         datadir = "/var/lib/nethermind" if self.state is None else self.state.path
         yield Service(
             "nethermind",
@@ -254,7 +258,7 @@ class Nethermind(Component, build_network=True):
 
 - Fields are configuration: the class is a frozen, keyword-only dataclass.
 - `compose()` yields what it stands for: a `Build` and the `Service` running it.
-- `build_network=True`: the build fetches its dependencies.
+- `using=Dotnet(...)`: its `global.json`'s SDK builds it offline.
 - `rpc` and `engine_api` are exports: endpoints carrying the service's readiness.
 - `outbound()` is what a filtered image lets it send: its peers on 30303.
 - `check()` is a lint rule per profile; `rules` declares each code it reports.
