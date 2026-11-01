@@ -1006,7 +1006,7 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
         print(
             json_report(
                 "lock",
-                {"path": str(path), "recipe_digest": locked.recipe_digest, "updated": list(update)},
+                {"path": str(path), "image_digest": locked.recipe_digest, "updated": list(update)},
             ),
             file=out,
         )

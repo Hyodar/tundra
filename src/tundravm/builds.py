@@ -697,7 +697,7 @@ def _assemble(
         "ports": sorted(set(ports)),
         "rootfs": img.mkosi.root,
         "rootfs_max_size": img.mkosi.root_size,
-        "recipe_digest": locked.recipe_digest,
+        "image_digest": locked.recipe_digest,
         "artifacts": mf.artifact_index(out),
         "uki": {
             "path": mf.UKI,
@@ -711,7 +711,7 @@ def _assemble(
         "lock": {
             "path": f"{mf.INPUTS}/{LOCK_NAME}",
             "sha256": mf.sha256_file(inputs / LOCK_NAME),
-            "recipe_digest": locked.recipe_digest,
+            "image_digest": locked.recipe_digest,
             "project_sha256": project_sha256,
         },
         "tree": {"path": mf.TREE, "digest": tree, "files": files},

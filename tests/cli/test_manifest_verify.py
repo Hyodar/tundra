@@ -19,16 +19,25 @@ from tundravm import manifest as mf
 from tundravm._mkosi import MkosiResult
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK
+from tundravm.errors import StateError
 from tundravm.testing import FakeMkosi
 
 SSH_KEYGEN = shutil.which("ssh-keygen")
 needs_ssh_keygen = pytest.mark.skipif(SSH_KEYGEN is None, reason="ssh-keygen is not installed")
 
 
+def test_a_manifest_of_an_older_schema_is_refused(tmp_path: Path) -> None:
+    (tmp_path / mf.MANIFEST).write_text('{"schema": "tundravm.manifest/1"}', encoding="utf-8")
+    with pytest.raises(StateError, match="manifest/1") as caught:
+        mf.load(tmp_path)
+    assert caught.value.hint == f"This tundravm reads {mf.SCHEMA} build directories: build again."
+
+
 def test_the_manifest_binds_the_directory(built: Build) -> None:
     raw = (built.path / mf.MANIFEST).read_bytes()
     payload = json.loads(raw)
-    assert payload["schema"] == "tundravm.manifest/1"
+    assert payload["schema"] == "tundravm.manifest/2"
+    assert payload["image_digest"] == payload["lock"]["image_digest"]
     assert raw == mf.canonical(payload)
     assert payload["id"] == mf.build_id(payload) == built.path.name
     every = {

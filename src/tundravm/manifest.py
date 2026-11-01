@@ -32,7 +32,7 @@ from typing import Any, Literal
 from . import _ssh_sig
 from .errors import StateError, TdxError
 
-SCHEMA = "tundravm.manifest/1"
+SCHEMA = "tundravm.manifest/2"
 OBSERVATIONS_SCHEMA = "tundravm.observations/1"
 MEASUREMENTS_SCHEMA = "tundravm.measurements/1"
 NAMESPACE = "tundravm-manifest"
@@ -159,7 +159,7 @@ def load(build: Path) -> dict[str, Any]:
     if payload.get("schema") != SCHEMA:
         raise StateError(
             f"{build / MANIFEST} has schema {payload.get('schema')!r}, not {SCHEMA}.",
-            hint="This tundravm reads tundravm.manifest/1 build directories; build again.",
+            hint=f"This tundravm reads {SCHEMA} build directories: build again.",
             context={"path": str(build)},
         )
     return payload

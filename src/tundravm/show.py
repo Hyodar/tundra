@@ -373,7 +373,7 @@ def render_build(build: Build) -> str:
     ]
     if m.get("root_hash"):
         lines.append(f"  root hash     {m['root_hash']}")
-    lines.append(f"  digest        {str(m.get('recipe_digest'))[:16]}")
+    lines.append(f"  digest        {str(m.get('image_digest'))[:16]}")
     lock = m.get("lock") or {}
     tree = m.get("tree") or {}
     lines.append(f"  lock          {lock.get('path')} {str(lock.get('sha256'))[:16]}")

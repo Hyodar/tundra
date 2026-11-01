@@ -827,7 +827,7 @@ is which.
 
 ### The manifest
 
-`manifest.json` (schema `tundravm.manifest/1`) is canonical JSON. Its `id` is the first 16
+`manifest.json` (schema `tundravm.manifest/2`) is canonical JSON. Its `id` is the first 16
 hex digits of the sha256 of the document without `id`. It binds:
 
 | Key | Binds |
