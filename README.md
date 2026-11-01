@@ -18,12 +18,14 @@ into an immutable directory with a signed manifest, and runs, deploys and attest
 ## Install
 
 ```console
-$ uvx --from git+https://github.com/Hyodar/tundra tundravm new my-image
+$ uv tool install git+https://github.com/Hyodar/tundra@v2.0.0
+$ tundravm new my-image
 $ cd my-image
 $ uv sync
 ```
 
-tundravm is not on PyPI: `new` pins the commit it ran from, and mkosi comes with it.
+tundravm is not on PyPI: the tag pins the release, `new` pins its commit, and mkosi
+comes with it ([releases](docs/release.md)).
 
 ## Quickstart
 

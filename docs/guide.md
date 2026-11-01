@@ -35,11 +35,12 @@ are gate 3's `run --mode` separation and attested endpoint. Gate 2 is not.
 
 ### Create one
 
-tundravm is not on PyPI. `uvx` runs it from git, and `new` writes a project that pins the
-commit it ran from:
+Install a release by its tag, which pins the version; `new` writes a project pinning that
+commit:
 
 ```console
-$ uvx --from git+https://github.com/Hyodar/tundra tundravm new demo --ci
+$ uv tool install git+https://github.com/Hyodar/tundra@v2.0.0
+$ tundravm new demo --ci
 $ cd demo
 $ uv sync
 $ uv run tundravm lock
