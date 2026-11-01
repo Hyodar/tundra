@@ -182,7 +182,7 @@ def from_systemd(path: Path) -> Converted:
     source = (
         f'"""{name}: converted from {path.name} by `tundravm convert --from systemd`."""\n\n'
         f"{_imports(imports)}\n\n"
-        f"image = Image(\n    {name!r},\n    services=[\n{services}    ],\n)\n"
+        f"image = Image(\n    {_quoted(name)},\n    services=[\n{services}    ],\n)\n"
     )
     return Converted(_formatted(source), found.unsupported, found.notes)
 
@@ -217,7 +217,7 @@ def _source(value: object, imports: set[str], *, lists: bool = False) -> str:
         return "{" + ", ".join(pairs) + "}"
     if is_dataclass(value) and not isinstance(value, type):
         return _call(value, imports)
-    return repr(value)
+    return _quoted(value) if isinstance(value, str) else repr(value)
 
 
 def _formatted(source: str) -> str:
