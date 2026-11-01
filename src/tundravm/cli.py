@@ -968,7 +968,7 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
                     {
                         "path": str(path),
                         "clean": drift.is_clean,
-                        "drift": drift.render().splitlines(),
+                        "drift": [] if drift.is_clean else drift.render().splitlines(),
                     },
                 ),
                 file=out,

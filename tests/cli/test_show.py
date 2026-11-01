@@ -40,6 +40,7 @@ def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli)
     rows = {row["declaration"]: row["origins"] for row in payload["provenance"]["production"]}
     (origin,) = rows["File(extra, /srv/www/index.html)"]
     assert origin["action"] == "declared" and origin["location"].startswith("demo.py:")
+    assert (origin["profile"], origin["components"]) == ("image", [])
 
 
 def test_without_a_build_show_reads_the_project_image(project: Path, cli: Cli) -> None:

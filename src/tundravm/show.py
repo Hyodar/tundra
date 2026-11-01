@@ -33,6 +33,7 @@ from .compiler.emit_mkosi import ESP_BYTES, UKI_CAPACITY
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import Lock, compile_image
 from .declarative.model import Recipe
+from .declarative.resolve import COMMON_LEVEL
 from .declarative.resolve import describe as describe_identity
 from .declarative.resolve import provenance as resolved_provenance
 from .diff import diff_trees
@@ -64,7 +65,8 @@ def image_report(
 
 def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[str, object]]]:
     """Per profile, every declaration its resolution touched, with each step that touched it
-    (declared, added, edited, removed), the component chain and the ``file:line``."""
+    (declared, added, edited, removed), the profile (``image`` for the image's own
+    declarations), the component chain and the ``file:line``."""
     found: dict[str, list[dict[str, object]]] = {}
     declared = {variant.name for variant in recipe.variants}
     for name in profiles:
@@ -76,8 +78,8 @@ def provenance(recipe: Recipe, profiles: Sequence[str]) -> dict[str, list[dict[s
                 "origins": [
                     {
                         "action": origin.action,
-                        "profile": origin.variant,
-                        "fragments": [f for f, _ in origin.fragments],
+                        "profile": "image" if origin.variant == COMMON_LEVEL else origin.variant,
+                        "components": [f for f, _ in origin.fragments],
                         "fields": list(origin.fields),
                         "location": display_location(origin.location),
                     }
