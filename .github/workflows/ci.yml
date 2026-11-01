@@ -1,4 +1,4 @@
-# test is the unit suite alone; templates and boot bake the Image templates for real, and
+# test is the unit suite alone; stages and boot bake the attested node's stage 1 for real, and
 # the fixture jobs lock and build tests/fixtures/native-tree/recipe.py, whose sources are a
 # public Go program (a Git source) asking for a newer Go than Debian's and
 # tests/fixtures/rust-probe (a Local source, pinned by its content digest) pinning a newer
@@ -68,9 +68,12 @@ jobs:
         # and tree drift fail the step.
         run: uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
 
-  templates:
-    # Real mkosi builds on the runner: the smoke recipe (no source builds) and the service
-    # and cloud templates, whose evidence service builds from tools/ (see the header).
+  stages:
+    # Real mkosi builds on the runner: the smoke recipe (no source builds) and the attested
+    # node's stage 1, whose evidence service builds from tools/ (see the header), production
+    # and with every cloud target. Stages 2 to 6 build Nethermind from Git with .NET, over
+    # the ten minutes a stage gets here (the fixture's two profiles, two small Go programs
+    # and a Rust one, take four), so the signer they add is vetted, tested and built alone.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 90
@@ -86,16 +89,29 @@ jobs:
           host: build
           doctor: build
 
-      - name: Bake the smoke recipe and the templates
+      - name: Bake the smoke recipe and stage 1 (stages 2 to 6 build Nethermind with .NET, too slow)
         run: >-
           uv run pytest tests/integration/test_mkosi_smoke.py
           tests/integration/test_stages_bake.py -m integration -v -rsP
 
+      - name: Set up Go for the signer
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: examples/attested-node/signer/go.mod
+          cache-dependency-path: examples/attested-node/signer/go.sum
+
+      - name: Vet, test and build the signer stages 4 to 6 add (their images are not baked)
+        working-directory: examples/attested-node/signer
+        run: |
+          go vet ./...
+          go test ./...
+          go build -o /dev/null ./...
+
   boot:
-    # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
-    # the runner exposes /dev/kvm, TCG otherwise; no TDX here): payload.efi through -kernel,
-    # and the service template's qemu.raw as a disk OVMF boots through its ESP. The
-    # templates are Image files whose evidence service builds from tools/ (see the header).
+    # Bakes the attested node's stage 1 as its dev profile and boots it under QEMU with OVMF
+    # (KVM when the runner exposes /dev/kvm, TCG otherwise; no TDX here): payload.efi through
+    # -kernel and qemu.raw as a disk OVMF boots through its ESP, each until its boot probe
+    # passes. Its evidence service builds from tools/ (see the header).
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 105
@@ -111,7 +127,7 @@ jobs:
           host: boot
           doctor: build run
 
-      - name: Bake and boot the templates
+      - name: Bake stage 1's dev profile and boot it both ways
         env:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"

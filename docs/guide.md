@@ -21,7 +21,7 @@ are gate 3's `run --mode` separation and attested endpoint. Gate 2 is not.
 | Area | State |
 |---|---|
 | The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds give identical digests, both layouts' `azure.vhd` included |
-| Building an `Image` in CI | the `templates` and `boot` jobs build and boot the templates |
+| Building an `Image` in CI | the `stages` and `boot` jobs build stage 1 of the example and boot its dev build |
 | `Image`, `Service`, `Component`, `Profile` and the runtime slots | compile and resolve under mkosi in the test suite |
 | The thirteen commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
 | `run --mode simulated --probe` | CI runs the fixture's dev build: every probe check passes and its page is fetched |
