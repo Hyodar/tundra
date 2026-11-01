@@ -126,7 +126,9 @@ jobs:
     # the boot probe still prints). The dev build runs as an instance with
     # `tundravm run --mode simulated --probe` (KVM when the runner has it, TCG otherwise),
     # where the gate records simulated and the boot probe its declarations compile in must
-    # pass every check, until the host fetches the fixture's page through the forward.
+    # pass every check (the observability exporters' among them), until the host fetches the
+    # fixture's page through the forward and the in-guest sink has printed a journal upload
+    # and a remote-write batch, each carried through it as the proxy.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 120
@@ -167,6 +169,8 @@ jobs:
             | select(.name == "rust-probe") | .rust_toolchain.rustc | startswith("rustc 1.91.0 ")'
           uv run tundravm show latest --measurements
           uv run tundravm show --diff latest latest-development
+          uv run tundravm show latest-development |
+            grep -E '^    observability:egress +the output chain accepts 127\.0\.0\.1:19582/tcp '
 
       - name: Boot the production build both ways, fail-closed
         env:
@@ -183,9 +187,12 @@ jobs:
           jq -e '.ok' .tundravm/instances/fixture-1/probe.json
           receipt=.tundravm/instances/fixture-1/instance.json
           port=$(jq -r '.ports["8080"]' "$receipt")
+          console=.tundravm/instances/fixture-1/console.log
           for attempt in $(seq 1 150); do
-            if curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'; then
-              echo "page served on :$port after $attempt attempts"
+            if curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>' &&
+              grep -qE 'sink: journal batch [0-9]+ [1-9][0-9]* bytes' "$console" &&
+              grep -qE 'sink: remote-write batch [0-9]+ [1-9][0-9]* bytes' "$console"; then
+              echo "page served on :$port and both sinks delivered after $attempt attempts"
               break
             fi
             sleep 10
@@ -193,7 +200,11 @@ jobs:
           uv run tundravm run status fixture-1
           uv run tundravm run mode fixture-1
           grep -F 'tdx-evidence: no TDX quote path; development profile, running simulated' \
-            .tundravm/instances/fixture-1/console.log
+            "$console"
+          grep -m 2 -E 'sink: journal batch [0-9]+ [1-9][0-9]* bytes' "$console"
+          grep -m 2 -E 'sink: remote-write batch [0-9]+ [1-9][0-9]* bytes' "$console"
+          grep -F 'sink: proxy carries 127.0.0.2:19580' "$console"
+          grep -F 'sink: proxy carries 127.0.0.2:19581' "$console"
           curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
 
       - name: Stop the instance
