@@ -594,7 +594,7 @@ probe_endpoint() {{
     while :; do
         said=$(curl -ksS --max-time 10 "https://127.0.0.1:$1/evidence?nonce=$nonce" 2>&1) || true
         case $said in
-            *"\"nonce\":\"$nonce\""*) ok "listening, evidence answers nonce $nonce"; return ;;
+            *"\\"nonce\\":\\"$nonce\\""*) ok "listening, evidence answers nonce $nonce"; return ;;
         esac
         [ "$waited" -ge {WAIT_SECONDS} ] && break
         sleep 1

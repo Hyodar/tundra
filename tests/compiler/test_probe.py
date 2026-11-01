@@ -10,7 +10,10 @@ production profile carries none.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 import tundravm
 from tundravm import Image, Kernel, Service
@@ -70,3 +73,34 @@ def test_a_dev_profile_compiles_the_checks_its_declarations_imply(tmp_path: Path
     assert f"After={probe.UNIT}" not in tree.unit(probe.UNIT, "dev")
     assert not tree.exists(f"mkosi.extra{probe.SCRIPT_PATH}", "production")
     assert not tree.exists(f"mkosi.extra/usr/lib/systemd/system/{probe.UNIT}", "production")
+
+
+@pytest.mark.parametrize(
+    ("answer", "verdict"),
+    [("$nonce", "ok"), ("00" * 16, "fail")],
+    ids=["answers-the-nonce", "answers-another"],
+)
+def test_the_endpoint_check_passes_only_on_evidence_for_its_nonce(
+    tmp_path: Path, answer: str, verdict: str
+) -> None:
+    """Against a stand-in ``curl`` printing the endpoint's JSON for the nonce it was asked."""
+    curl = tmp_path / "curl"
+    curl.write_text(
+        "#!/bin/sh\n"
+        "for arg; do case $arg in *nonce=*) nonce=${arg##*nonce=} ;; esac; done\n"
+        f'printf \'{{"purpose":"tundravm-endpoint/1","nonce":"%s"}}\' "{answer}"\n'
+    )
+    curl.chmod(0o755)
+    script = (
+        probe._HEADER
+        + probe._HELPERS["endpoint"].replace(f"-ge {probe.WAIT_SECONDS}", "-ge 0")
+        + "check=endpoint:8745\nprobe_endpoint 8745 tundravm-endpoint.service\n"
+    )
+    done = subprocess.run(
+        ["/bin/sh", "-c", script],
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout.split()[:3] == [probe.PREFIX.strip(), "endpoint:8745", verdict]
