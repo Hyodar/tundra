@@ -440,10 +440,10 @@ def build_parser() -> argparse.ArgumentParser:
         "probe, profiles with what each changes), then what each profile builds: packages,\n"
         "sources, files, units, firewall, build steps; a profile beyond the one it extends.\n"
         "--json has the same sections and where each declaration came from. With BUILD (a\n"
-        "build directory, an id prefix, or `latest`): the report `build` printed, the\n"
-        "manifest's provenance, unchecked guarantees and boot probe checks. --units, --tree\n"
-        "and --measurements narrow it. --diff OLD NEW compares two builds: packages, files,\n"
-        "units, boot payload, measurements, policy coverage.",
+        "build directory, an id prefix, `latest` or `latest-development`): the report\n"
+        "`build` printed, the manifest's provenance, unchecked guarantees and boot probe\n"
+        "checks. --units, --tree and --measurements narrow it. --diff OLD NEW compares two\n"
+        "builds: packages, files, units, boot payload, measurements, policy coverage.",
         as_json,
     )
     show_cmd.add_argument(
@@ -463,13 +463,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="P",
-        help="Profiles of the image (repeatable; default: all); --profile dev is its dev profile.",
+        help="Profiles of the image (repeatable; default: all).",
     )
     show_cmd.add_argument(
-        "--dev",
-        action="store_true",
-        help="The latest development build, as `show latest-development`; an image's dev "
-        "profile is --profile dev.",
+        "--dev", action="store_true", help="The image's dev profile (DevAccess), as build --dev."
     )
     show_cmd.add_argument(
         "--attr", default=None, metavar="NAME", help="The image's name in its file."
@@ -1231,19 +1228,20 @@ def _cmd_show(args: argparse.Namespace, out: TextIO) -> int:
             file=out,
         )
         return EXIT_OK
-    if _is_image(args.subject) or (args.subject is None and not args.dev and _project_image()):
+    if _is_image(args.subject) or (args.subject is None and _project_image()):
         return _show_image(args, out)
+    if args.dev:
+        what = f"{args.subject} is a build" if args.subject else "there is no image here"
+        raise ValidationError(
+            f"--dev selects an image's dev profile, and {what}.",
+            hint="Drop --dev: `tundravm show latest-development` is the latest dev build.",
+        )
     if args.profile:
         raise ValidationError(
             "--profile selects profiles of an image file, not of a build.", hint="Drop it."
         )
     found = settings(None)
-    try:
-        build = _resolve_build(args.subject, found, dev=args.dev)
-    except StateError as exc:
-        if args.dev and args.subject is None and found.image is not None:
-            exc.hint = f"{exc.hint} The image's dev profile is `tundravm show --profile dev`."
-        raise
+    build = builds.resolve(args.subject, root=found.build, image=None)
     if args.units:
         units = show.build_units(build)
         print(
@@ -1291,12 +1289,17 @@ def _image_report(
     args: argparse.Namespace, path: Path | None
 ) -> tuple[dict[str, object], RecipeFile, Lowered, tuple[str, ...]]:
     """The dry run of the image file at *path* (``None``: the project's) for the profiles
-    ``--profile`` selects, with what it was made from."""
+    ``--profile`` or ``--dev`` select, with what it was made from."""
+    if args.dev and args.profile:
+        raise ValidationError(
+            "--profile and --dev choose the profile twice.", hint="Pass one of them."
+        )
     args.image = path
     found = _settings(args)
     loaded = _loaded(args, found)
     img = _lowered(loaded, found)
-    names = show.ordered_profiles(loaded.variants, _profiles(img, args.profile or ()))
+    given = [builds.choose_profile(img, None, dev=True)] if args.dev else args.profile
+    names = show.ordered_profiles(loaded.variants, _profiles(img, given or ()))
     report = show.image_report(
         img, names, file=found.image, declared=loaded.declared, recipe=loaded.recipe
     )
@@ -1308,11 +1311,6 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
         raise ValidationError(
             "An image has no measurements until it is built.",
             hint="Run `tundravm build`, then `tundravm show latest --measurements`.",
-        )
-    if args.dev:
-        raise ValidationError(
-            "--dev picks the latest development build, not a profile of an image file.",
-            hint=f"Use `tundravm show {args.subject} --profile dev` for its dev profile.",
         )
     report, loaded, img, names = _image_report(args, Path(args.subject) if args.subject else None)
     locked = _locked(_settings(args))

@@ -41,13 +41,13 @@ def test_show_reads_like_the_image_file(
 
 
 def test_show_selects_profiles(project: Path, cli: Cli) -> None:
-    """--profile P picks some, each shown whole."""
-    dev = cli("show", "demo.py", "--profile", "dev")
+    """--profile P picks some, --dev the dev profile, each shown whole."""
+    dev = cli("show", "demo.py", "--dev")
     assert dev.code == EXIT_OK, dev.err
+    assert dev.out == cli("show", "demo.py", "--profile", "dev").out
     assert "\nBuilt into dev:\n" in dev.out and "Built into production" not in dev.out
-    refused = cli("show", "demo.py", "--dev")
-    assert refused.code == EXIT_SDK_ERROR
-    assert "tundravm show demo.py --profile dev" in refused.err
+    twice = cli("show", "demo.py", "--dev", "--profile", "production")
+    assert twice.code == EXIT_SDK_ERROR and "twice" in twice.err
 
 
 def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli) -> None:
@@ -199,9 +199,12 @@ def test_no_build_yet(project: Path, cli: Cli) -> None:
 
 
 def test_show_the_latest_development_build(dev_built: Build, cli: Cli) -> None:
-    result = cli("show", "--dev")
+    result = cli("show", "latest-development")
     assert result.code == EXIT_OK
     assert result.out.startswith(f"build {dev_built.id}  demo dev (development)")
+    refused = cli("show", "latest", "--dev")
+    assert refused.code == EXIT_SDK_ERROR
+    assert "`tundravm show latest-development`" in refused.err
 
 
 def test_diff_of_the_production_and_development_builds(dev_built: Build, cli: Cli) -> None:

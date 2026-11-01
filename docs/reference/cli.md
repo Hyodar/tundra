@@ -204,10 +204,10 @@ services with their program, source, ports, hardening, volume, credentials and
 probe, profiles with what each changes), then what each profile builds: packages,
 sources, files, units, firewall, build steps; a profile beyond the one it extends.
 --json has the same sections and where each declaration came from. With BUILD (a
-build directory, an id prefix, or `latest`): the report `build` printed, the
-manifest's provenance, unchecked guarantees and boot probe checks. --units, --tree
-and --measurements narrow it. --diff OLD NEW compares two builds: packages, files,
-units, boot payload, measurements, policy coverage.
+build directory, an id prefix, `latest` or `latest-development`): the report
+`build` printed, the manifest's provenance, unchecked guarantees and boot probe
+checks. --units, --tree and --measurements narrow it. --diff OLD NEW compares two
+builds: packages, files, units, boot payload, measurements, policy coverage.
 
 positional arguments:
   BUILD           A build, or an image file.
@@ -220,10 +220,8 @@ options:
   --tree          The tree's files.
   --measurements  The measurement records (a build).
   --diff OLD NEW  Compare two builds.
-  --profile P     Profiles of the image (repeatable; default: all); --profile dev is its dev
-                  profile.
-  --dev           The latest development build, as `show latest-development`; an image's dev
-                  profile is --profile dev.
+  --profile P     Profiles of the image (repeatable; default: all).
+  --dev           The image's dev profile (DevAccess), as build --dev.
   --attr NAME     The image's name in its file.
 ```
 
