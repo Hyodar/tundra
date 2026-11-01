@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import difflib
 import fnmatch
-import json
 import posixpath
 import re
 import textwrap
@@ -31,7 +30,7 @@ from ._source import DebFile, KernelFile, KernelSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .errors import ValidationError
-from .formats import annotation_path, md_cell, md_table, workflow_command
+from .formats import annotation_path, workflow_command
 from .kernel_modules import (
     NO_MODULES,
     ModuleSelection,
@@ -1765,49 +1764,6 @@ def render_github(
     return "\n".join(lines)
 
 
-def render_markdown(diagnostics: Sequence[Diagnostic]) -> str:
-    """A Markdown table of findings followed by the summary line in bold."""
-    if not diagnostics:
-        return "**No findings.**"
-    located = any(d.location for d in diagnostics)
-    rows = [
-        (
-            md_cell(d.severity),
-            md_cell(d.code, code=True),
-            md_cell(_where(d), code=True),
-            *((md_cell(d.location, code=True),) if located else ()),
-            md_cell(d.subject, code=True),
-            md_cell(d.message),
-            md_cell(d.hint),
-        )
-        for d in diagnostics
-    ]
-    header = ("Severity", "Code", "Profile", *(("Location",) if located else ()), "Subject")
-    table = md_table((*header, "Message", "Hint"), rows)
-    return f"{table}\n\n**{render_summary(diagnostics)}**"
-
-
-def render_as(
-    diagnostics: Sequence[Diagnostic],
-    fmt: str,
-    *,
-    recipe_path: str | Path,
-    strict: bool = False,
-) -> str:
-    """Render *diagnostics* in a resolved ``--format``: text, json, github or markdown."""
-    if fmt == "json":
-        payload = {
-            "diagnostics": [d.to_dict() for d in diagnostics],
-            "summary": summarize(diagnostics),
-        }
-        return json.dumps(payload, indent=2, sort_keys=True)
-    if fmt == "github":
-        return render_github(diagnostics, recipe_path, strict=strict)
-    if fmt == "markdown":
-        return render_markdown(diagnostics)
-    return render(diagnostics)
-
-
 def failing(diagnostics: Sequence[Diagnostic], *, strict: bool = False) -> bool:
     """True when a finding fails ``check``: an error, or with *strict* a warning."""
     levels = {"error", "warning"} if strict else {"error"}
@@ -1993,9 +1949,7 @@ __all__ = [
     "unit_declaration_check",
     "failing",
     "render",
-    "render_as",
     "render_github",
-    "render_markdown",
     "render_summary",
     "summarize",
 ]

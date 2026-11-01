@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm.check import Diagnostic, check, render, render_github, render_markdown
+from tundravm.check import Diagnostic, check, render, render_github
 from tundravm.cli import main
 from tundravm.declarative import (
     Debian,
@@ -510,10 +510,6 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
         "warning app-port [default]: port 80",
         "    at: node.py:27",
     ]
-    table = render_markdown([placed, plain])
-    assert table.startswith("| Severity | Code | Profile | Location | Subject | Message | Hint |")
-    assert "| `default` | `node.py:27` |" in table
-    assert "| Profile | Subject |" in render_markdown([plain])
     lines = render_github([placed, plain], "recipe.py").splitlines()
     assert lines[0].startswith("::warning file=node.py,line=27,title=app-port::[default]")
     assert lines[1].startswith("::warning file=recipe.py,title=lock-stale::[image]")

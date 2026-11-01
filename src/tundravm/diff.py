@@ -5,8 +5,6 @@ from __future__ import annotations
 import difflib
 import glob
 import os
-import posixpath
-import secrets
 import tempfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -15,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from .backends.base import is_mkosi_state
-from .formats import md_cell, md_fence, md_table, workflow_command
 
 if TYPE_CHECKING:
     from .declarative._lowered import Lowered
@@ -25,14 +22,6 @@ ChangeStatus = Literal["added", "removed", "modified", "mode"]
 _BINARY_PROBE = 8192
 _STAT_CODES: dict[ChangeStatus, str] = {"added": "A", "removed": "D", "modified": "M", "mode": "T"}
 _RED, _GREEN, _CYAN, _BOLD, _RESET = "\x1b[31m", "\x1b[32m", "\x1b[36m", "\x1b[1m", "\x1b[0m"
-MARKDOWN_DIFF_LINES = 400
-"""Unified-diff lines ``TreeDiff.markdown()`` keeps before truncating."""
-_GITHUB_CHANGES: dict[ChangeStatus, tuple[str, str]] = {
-    "added": ("notice", "added: the image now compiles to this file"),
-    "removed": ("warning", "removed: the image no longer compiles to this file"),
-    "modified": ("warning", "modified: differs from what the image compiles to"),
-    "mode": ("warning", "mode changed: the executable bit differs from what the image compiles to"),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,60 +71,6 @@ class TreeDiff:
             for kind, line in _change_lines(change, context)
         )
         return "".join(painted)
-
-    def markdown(self, *, max_lines: int = MARKDOWN_DIFF_LINES) -> str:
-        """Changed files as a Markdown table, then the unified diff in a ``diff`` fence.
-
-        The diff is cut after *max_lines* lines with a note saying how many were kept.
-        """
-        if self.is_clean:
-            return "**Tree is up to date with the image.**\n"
-        rows = [
-            (md_cell(change.status), md_cell(change.path, code=True)) for change in self.changes
-        ]
-        count = len(self.changes)
-        parts = [
-            md_table(("Status", "File"), rows),
-            f"**{count} file{'' if count == 1 else 's'} changed**",
-        ]
-        lines = self.unified().splitlines(keepends=True)
-        if lines:
-            parts.append(md_fence("".join(lines[:max_lines]), "diff"))
-        if len(lines) > max_lines:
-            parts.append(
-                f"_Diff truncated: showing {max_lines} of {len(lines)} lines. "
-                "Run `tundravm check --tree DIR` locally for the rest._"
-            )
-        return "\n\n".join(parts) + "\n"
-
-    def github(self, *, root: str | None = None, title: str = "compiled tree drift") -> str:
-        """GitHub workflow commands: ``::warning`` per changed file (``::notice`` if added).
-
-        *root* prefixes each annotation's ``file=`` so it points into the repository.
-        The unified diff follows in a collapsed ``::group::`` with workflow commands
-        disabled, so file contents cannot inject annotations.
-        """
-        lines: list[str] = []
-        for change in self.changes:
-            command, message = _GITHUB_CHANGES[change.status]
-            path = posixpath.join(root, change.path) if root and root != "." else change.path
-            lines.append(workflow_command(command, f"{path} {message}", file=path, title=title))
-        count = len(self.changes)
-        lines.append(f"{count} file{'' if count == 1 else 's'} changed")
-        token = f"tundravm-{secrets.token_hex(8)}"
-        lines += ["::group::unified diff", f"::stop-commands::{token}"]
-        text = "\n".join(lines) + "\n" + self.unified()
-        return text + f"::{token}::\n::endgroup::\n"
-
-    def render(self, fmt: str, *, root: str | None = None, color: bool = False) -> str:
-        """Render in a resolved ``--format``: text (unified), stat, markdown or github."""
-        if fmt == "stat":
-            return self.stat()
-        if fmt == "markdown":
-            return self.markdown()
-        if fmt == "github":
-            return self.github(root=root)
-        return self.unified(color=color)
 
     def to_dict(self) -> dict[str, object]:
         return {"clean": self.is_clean, "changes": [change.to_dict() for change in self.changes]}

@@ -39,7 +39,15 @@ from ._reporting import TextReporter
 from .attestation import render_attestation
 from .backends.base import BuildBackend
 from .capabilities import AREAS, Capability, Host, capabilities, failed
-from .check import explain, explain_command, failing, render_as, render_summary
+from .check import (
+    explain,
+    explain_command,
+    failing,
+    render,
+    render_github,
+    render_summary,
+    summarize,
+)
 from .declarative._lowered import Lowered
 from .declarative.lifecycle import (
     NO_LOCK,
@@ -57,7 +65,7 @@ from .declarative.resolve import resolve
 from .diagnostics import Diagnostic
 from .diff import diff_against
 from .errors import LockfileError, TdxError, ValidationError
-from .formats import resolve_format
+from .formats import in_github_actions
 from .project import RESOLUTION_HELP, Settings, settings
 from .recipe import RecipeFile, load_file
 from .templates import (
@@ -862,16 +870,22 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
             )
     bad = failing(diagnostics)
     if args.json:
-        payload = json.loads(render_as(diagnostics, "json", recipe_path=found.image or ""))
-        payload["tree"] = None if drift is None else drift.to_dict()
-        payload["passed"] = not bad
+        payload = {
+            "diagnostics": [d.to_dict() for d in diagnostics],
+            "summary": summarize(diagnostics),
+            "tree": None if drift is None else drift.to_dict(),
+            "passed": not bad,
+        }
         print(json_report("check", payload), file=out)
         return EXIT_FAILURE if bad else EXIT_OK
-    fmt = resolve_format(None)
-    print(render_as(diagnostics, fmt, recipe_path=found.image or ""), file=out)
+    annotate = in_github_actions()
+    if annotate:
+        print(render_github(diagnostics, found.image or ""), file=out)
+    else:
+        print(render(diagnostics), file=out)
     if drift is not None and drift.is_clean:
         print(f"tree {args.tree} is up to date", file=out)
-    if fmt == "text" and (explained := explain_command(diagnostics)):
+    if not annotate and (explained := explain_command(diagnostics)):
         print(explained, file=out)
     return EXIT_FAILURE if bad else EXIT_OK
 
@@ -921,9 +935,7 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
                 file=out,
             )
         else:
-            print(
-                drift.github(path) if resolve_format(None) == "github" else drift.render(), file=out
-            )
+            print(drift.github(path) if in_github_actions() else drift.render(), file=out)
         return EXIT_OK if drift.is_clean else EXIT_FAILURE
     previous = read_lock(path) if path.is_file() else None
     update: tuple[str, ...] = ()

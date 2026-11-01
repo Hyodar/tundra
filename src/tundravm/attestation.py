@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from .errors import AttestationError, MeasurementError, ValidationError
-from .formats import md_cell, md_table
 from .measure.policy import (
     IMAGE_REGISTERS,
     PLATFORM_REGISTERS,
@@ -370,7 +369,7 @@ class Attestation:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """The JSON form ``attest --format json`` prints (sorted keys)."""
+        """The JSON form ``attest --json`` prints (sorted keys)."""
         return {
             "checks": CHECKS_NOTE,
             "debug": self.debug,
@@ -1134,32 +1133,12 @@ def _signature_line(result: Attestation) -> str:
 
 
 def render_attestation(result: Attestation, fmt: str) -> str:
-    """*result* as ``text`` (one line per register), ``json`` or ``markdown`` (a table)."""
+    """*result* as ``text`` (one line per register) or ``json``."""
     if fmt == "json":
         return json.dumps(result.to_dict(), indent=2, sort_keys=True)
     nonce = "match" if result.nonce_matches else "mismatch"
     where = f"quote v{result.quote_version}" if result.source == "quote" else "issuer metadata"
     reasons = ", ".join(result.reasons)
-    if fmt == "markdown":
-        rows = [
-            (
-                md_cell(r.name),
-                md_cell(r.verdict),
-                md_cell(r.actual, code=True),
-                md_cell(r.matched or ", ".join(v[:12] for v in r.values), code=True),
-            )
-            for r in result.registers
-        ]
-        because = f" Reasons: {reasons}." if reasons else ""
-        return "\n\n".join(
-            (
-                f"# tundravm attest: `{result.issuer}`",
-                f"**Verdict:** `{result.verdict}` ({result.platform}, {where}; "
-                f"nonce {nonce}; {_signature_line(result)}).{because}",
-                md_table(("Register", "Verdict", "Quote", "Policy"), rows),
-                f"Note: {CHECKS_NOTE}.",
-            )
-        )
     lines = [
         f"attestation {result.issuer} ({result.platform}, {where})",
         f"policy: {result.policy or '(dict)'}",

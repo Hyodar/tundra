@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tundravm.formats import annotation_path, md_cell, md_table, workflow_command
+from tundravm.formats import annotation_path, workflow_command
 from tundravm.lockfile.model import Lockfile
 from tundravm.lockfile.resolve import PROFILES_KEY, recipe_digest, section_values, value_digest
 
@@ -70,16 +70,6 @@ class LockDrift:
             message += ". Run `tundravm lock` and commit the lockfile."
             lines.append(workflow_command("error", message, file=path, title="lock drift"))
         return "\n".join(lines)
-
-    def markdown(self) -> str:
-        """A Markdown table of drifted sections, or a bold up-to-date line."""
-        if self.is_clean:
-            return "**Lock is up to date.**"
-        rows = [
-            (md_cell(_DRIFT_WORDS[marker]), md_cell(name, code=True), md_cell(detail, code=True))
-            for marker, name, detail in self._entries()
-        ]
-        return md_table(("Change", "Section", "Detail"), rows)
 
     def _entries(self) -> list[tuple[str, str, str | None]]:
         """``(marker, section, detail)`` per drifted section, sorted by section."""

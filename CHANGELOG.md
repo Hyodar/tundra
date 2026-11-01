@@ -287,5 +287,8 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `read_artifacts`: `tundravm run`, `tundravm deploy`, `tundravm check --tree` and
   `tundravm build` replace them.
 - `explain.py`: `show` keeps the description and provenance rendering it needs.
+- The `--format` machinery and the Markdown renderers of `check`, lock drift, tree diffs and
+  `attest`, which no command printed: `check` has `--json`, and prints GitHub annotations
+  when `GITHUB_ACTIONS=true`.
 - The `tundravm fetch` hints in emitted build scripts and source errors: they now say
   `run tundravm lock, then tundravm build` and `is not fetched: run tundravm build`.
