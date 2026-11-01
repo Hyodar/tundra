@@ -297,9 +297,9 @@ class App(Component):
     """The app: a page busybox httpd serves on the loopback, its state on an encrypted
     volume and a token delivered after attestation.
 
-    Swap in your program: build it with ``GoBinary("app", Local("app"))`` as the service
-    template does, or a CargoBinary or a Package, and point the service at it; it reads the
-    token at ``self.token.path``. `tundravm show` lists it as component ``app``.
+    Swap in your program: build it with ``GoBinary("app", Local("app"), package=".")`` as
+    the service template does, or a CargoBinary or a Package, and point the service at it;
+    it reads the token at ``self.token.path``. `tundravm show` lists it as component ``app``.
     """
 
     version: str
@@ -595,9 +595,9 @@ WORKFLOW_TEMPLATE = """\
 #
 # The build job is opt-in: it runs after check only when the repository variable
 # TUNDRAVM_BACKEND (Settings > Secrets and variables > Actions > Variables) names the
-# backend: local (the runner has no Lima). It builds the production profile twice in independent
-# workspaces (`build --reproduce`), verifies the build directory against its manifest
-# and uploads it. Every image builds the evidence service from the private repository
+# backend: local (the runner has no Lima). It builds the production profile twice in
+# independent workspaces (`build --reproduce`), verifies the build directory against its
+# manifest and uploads it. Every image builds the evidence service from the private repository
 # Hyodar/tundra-tools: add a fine-grained token with read-only Contents on it as the
 # repository secret TUNDRA_TOOLS_TOKEN, or the build cannot fetch it.
 name: tundravm
@@ -659,7 +659,11 @@ jobs:
         env:
           TUNDRA_TOOLS_TOKEN: ${{{{ secrets.TUNDRA_TOOLS_TOKEN }}}}
         run: |
-          [ -n "$TUNDRA_TOOLS_TOKEN" ] || {{ echo "no TUNDRA_TOOLS_TOKEN secret"; exit 0; }}
+          [ -n "$TUNDRA_TOOLS_TOKEN" ] || {{
+            echo "::warning::no TUNDRA_TOOLS_TOKEN secret: the build reads tundra-tools only" \\
+              "through a mirror (Tdxs(source=Git(mirror, ref))); see the header to add it"
+            exit 0
+          }}
           repo=github.com/Hyodar/tundra-tools
           git config --global \\
             url."https://x-access-token:${{TUNDRA_TOOLS_TOKEN}}@$repo".insteadOf "https://$repo"

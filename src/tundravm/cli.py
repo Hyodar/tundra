@@ -854,7 +854,7 @@ POLICIES_README = """\
 The operator-approved copies of a build's predictions: `attest` and `secrets deliver`
 check an instance against one of these files.
 
-    tundravm build --target gcp
+    uv run tundravm build --target gcp
     jq '.records[] | select(.target == "gcp" and .boot == "disk") | .policy' \\
         build/{name}/latest-production/measurements.json > policies/{name}-gcp.json
 
