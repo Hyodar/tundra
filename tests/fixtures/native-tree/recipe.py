@@ -1,8 +1,9 @@
 """Gate 1 fixture: the smallest recipe that exercises every node of the mkosi-native tree.
 
-One service, one component, a Go and a Rust program built from source, a ``dev`` variant
-that adds content (a profile overlay with SSH access by public key only) and two variants
-that only add outputs (the ``azure`` and ``gcp`` wrapper subimages).
+One service, one component, a Go program built from a git source and a Rust one from a
+local directory, a ``dev`` variant that adds content (a profile overlay with SSH access by
+public key only) and two variants that only add outputs (the ``azure`` and ``gcp`` wrapper
+subimages).
 ``recipe_with(root=...)`` builds it with either root layout;
 ``tests/compiler/test_native_tree.py`` compiles both into ``tree-initramfs/`` and
 ``tree-verity/`` beside this file and asserts every file and the resolved mkosi summary.
@@ -25,6 +26,7 @@ from tundravm.declarative import (
     File,
     Git,
     Hardening,
+    Local,
     Mkosi,
     Package,
     Recipe,
@@ -63,18 +65,11 @@ REVIEW = GoBinary(
 commit that says ``go 1.26.0`` and requires no module. The build fetches go1.26.0 on the
 host and builds offline with it."""
 
-RUST_PROBE = CargoBinary(
-    "rust-probe",
-    Git(
-        "https://github.com/Hyodar/tundra",
-        "7fdfe4315f7b3a698712232af6926b74d538fd3d",
-        subdir="tests/fixtures/rust-probe",
-    ),
-)
+RUST_PROBE = CargoBinary("rust-probe", Local("../rust-probe"))
 """A Rust program whose rust-toolchain.toml pins 1.91.0 (trixie's Rust is 1.85) and which
-needs 1.88: this repository's ``tests/fixtures/rust-probe`` at the commit that adds it. The
-build installs 1.91.0 on the host with rustup and builds offline with it; the program prints
-the release of the rustc that built it."""
+needs 1.88: ``tests/fixtures/rust-probe`` beside this directory, a local source pinned by
+its content digest. The build installs 1.91.0 on the host with rustup and builds offline
+with it; the program prints the release of the rustc that built it."""
 
 
 PROBE = "/usr/lib/tundravm/boot-probe"
