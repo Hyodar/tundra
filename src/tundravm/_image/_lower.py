@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from tundravm._location import anchored, declared_at, display_location
 from tundravm.declarative import model as dm
@@ -42,12 +42,18 @@ from ._secrets import Secret
 from ._service import Binding, Service
 from ._storage import VolumeDirectory
 from ._values import (
+    TCP,
+    UDP,
     Credential,
+    Egress,
     File,
     Notify,
     Package,
     Tree,
 )
+
+if TYPE_CHECKING:
+    from tundravm.components import TeeBase
 
 __all__ = ["OWNED_FILES", "component_classes", "recipe_of"]
 
@@ -192,12 +198,16 @@ class _Lowering:
                 "Image: the Network and the Firewall both set egress=.",
                 hint="Set it once: network=Network(egress=Egress(...)).",
             )
+        tee = self.explicit(TeeBase) or TeeBase()
+        egress = network.egress if firewall is None or firewall.egress is None else firewall.egress
+        if egress is not None:
+            egress = _with_baseline(egress, tee, tuple(self.image.targets))
         if firewall is None:
-            firewall = Firewall(egress=network.egress)
-        elif firewall.egress is None and network.egress is not None:
-            firewall = Firewall(allow=firewall.allow, egress=network.egress)
+            firewall = Firewall(egress=egress)
+        elif egress is not None:
+            firewall = Firewall(allow=firewall.allow, egress=egress)
         found: list[dm.Declaration | dm.Fragment] = [
-            self.component(self.explicit(TeeBase) or TeeBase()),
+            self.component(tee),
             self.component(firewall),
             self.component(self.explicit(Tdxs) or Tdxs()),
             self.component(network),
@@ -648,6 +658,23 @@ def component_classes(recipe: dm.Recipe) -> tuple[type[Component], ...]:
                 found[cls] = None
             pending.extend(item.items)
     return tuple(found)
+
+
+_CLOUD_EGRESS: dict[str, tuple[str, ...]] = {
+    "azure": ("168.63.129.16", "169.254.169.254"),
+    "gcp": ("169.254.169.254",),
+}
+"""What each cloud's glue talks to: Azure's wireserver and IMDS, GCE's metadata server
+(its DNS resolver, too)."""
+
+
+def _with_baseline(egress: Egress, tee: TeeBase, targets: Sequence[str]) -> Egress:
+    """*egress* plus what the baseline sends: *tee*'s NTS time (TCP 4460, NTP on UDP 123)
+    and resolvers, and the metadata servers of the clouds in *targets*."""
+    ports = [*egress.ports, *((TCP(4460), UDP(123)) if tee.time else ())]
+    hosts = [*egress.hosts, *(tee.nameservers if tee.dns else ())]
+    hosts += [host for target in targets for host in _CLOUD_EGRESS.get(target, ())]
+    return Egress(ports=list(dict.fromkeys(ports)), hosts=list(dict.fromkeys(hosts)))
 
 
 @contextmanager

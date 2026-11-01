@@ -590,8 +590,8 @@ threshold.
 ### Network and observability
 
 `network=Network(egress=Egress(ports=[TCP(443)], hosts=["10.0.0.0/8"]))` filters outbound
-traffic. Without `Egress`, outbound traffic is not filtered. An image that resolves names
-or syncs time must list those destinations.
+traffic. Without `Egress`, outbound traffic is not filtered. With it, the baseline's NTS
+time, resolvers and cloud metadata servers are accepted for you.
 
 `observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
 exports the volatile journal and node metrics. Their credentials are secrets the image

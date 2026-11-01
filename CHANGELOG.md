@@ -24,6 +24,7 @@ Breaking changes are marked **Breaking**.
 - `Component` is a dataclass with `compose()`, typed exports (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()`.
 - `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)`, which takes the value's own constructor keywords, and `value.ref.remove()`.
 - `Volume` with `OperatorKey`, `TpmSeal` or `BrokerKey`, `Secret` as a systemd credential, `AttestedTLS` and `TLS` ingress, `RootFS.verity()`, `Observability`.
+- `network=Network(egress=Egress(...))` drops every other outbound packet, and accepts the baseline's NTS time, resolvers and cloud metadata servers for you.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
 - `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`.

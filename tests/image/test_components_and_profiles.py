@@ -323,11 +323,15 @@ def test_a_dev_profile_and_dev_access_together_are_refused() -> None:
 
 
 def test_an_egress_filters_the_output_chain() -> None:
-    image = Image("x", network=Network(egress=Egress(ports=[TCP(443)], hosts=["1.1.1.1"])))
+    egress = Egress(ports=[TCP(443)], hosts=["1.1.1.1"])
+    image = Image("x", network=Network(egress=egress), targets=("qemu", "azure"))
     rules = plan(image, "production").file("/etc/nftables.conf").text
     assert "hook output priority filter; policy drop" in rules
     assert "tcp dport 443 accept" in rules
     assert "ip daddr 1.1.1.1 accept" in rules
+    # what the baseline sends: NTS time, TeeBase's resolvers, Azure's wireserver
+    assert "tcp dport 4460 accept" in rules and "udp dport 123 accept" in rules
+    assert "ip daddr 1.0.0.1 accept" in rules and "ip daddr 168.63.129.16 accept" in rules
 
 
 def test_a_network_takes_dhcp_or_a_static_address() -> None:

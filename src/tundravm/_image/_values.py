@@ -414,8 +414,9 @@ class Egress:
 
     Without an ``Egress`` the image does not filter outbound traffic. With one, the
     output chain accepts the replies of accepted inbound traffic, loopback, the DHCP
-    client, the ICMPv6 messages IPv6 needs, *ports* and *hosts*, and drops the rest.
-    An image that resolves names or syncs time needs those destinations listed.
+    client, the ICMPv6 messages IPv6 needs, what the baseline sends (``TeeBase``'s NTS
+    time on TCP 4460 and UDP 123, its resolvers, the metadata servers of the image's
+    clouds), *ports* and *hosts*, and drops the rest.
     """
 
     ports: Sequence[PortValue] = ()
