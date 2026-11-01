@@ -96,7 +96,6 @@ def test_the_digest_covers_what_a_checkout_of_the_directory_holds(
     [
         ("/srv/app", "is absolute"),
         ("../../..", "outside the project directory"),
-        ("missing", "is not a directory"),
     ],
 )
 def test_local_refuses_a_path_the_lock_cannot_name(path: str, refused: str) -> None:

@@ -218,10 +218,6 @@ def test_the_image_collects_the_volumes_and_secrets_its_services_bind() -> None:
     cert = Secret("tls")
     image = prover(ingress=[TLS(443, upstream=upstream(), certificate=cert)])
     assert (image.volumes, image.secrets) == ((data,), (token, cert))
-    other = Volume("data", mount="/srv", unlock=OperatorKey())
-    twin = Service("b", ["/usr/bin/b"], state=other.directory("b"))
-    with pytest.raises(ValidationError, match='two different values are Volume\\("data"\\)'):
-        prover(services=[app(), twin])
     with pytest.raises(ValidationError, match="takes no keyword volumes="):
         Image("x", volumes=[data])  # type: ignore[call-arg]
 

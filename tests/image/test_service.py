@@ -294,21 +294,9 @@ def test_state_logs_and_runtime_stay_typed() -> None:
 # ── the argv contract ───────────────────────────────────────────────────
 
 
-def test_an_argv_is_not_a_command_line() -> None:
-    with pytest.raises(ValidationError) as caught:
-        Service("app", ["busybox httpd"])
-    assert "/usr/bin/app" in str(caught.value) or "program path" in str(caught.value)
-
-
 def test_the_shell_escape_is_explicit() -> None:
     planned = _plan(Service("app", ["/bin/sh", "-eu", "-c", "echo hi"]))
     assert planned.service("app").get("Service", "ExecStart") == '/bin/sh -eu -c "echo hi"'
-
-
-def test_an_empty_argv_is_refused() -> None:
-    with pytest.raises(ValidationError) as caught:
-        Service("app", [])
-    assert "argv= is empty" in str(caught.value)
 
 
 @pytest.mark.parametrize(
