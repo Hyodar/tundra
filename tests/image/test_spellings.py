@@ -65,7 +65,7 @@ INSTALL = Install("public", "/srv/www", mode=None, directory=True)
         ),
         (lambda: Debian(repositories=[AptRepository(DEBIAN, "s", key=KEYRING)] * 2), "twice"),
         (
-            lambda: Build("b", Local("."), command="make all", install=(INSTALL,)),  # type: ignore[arg-type]
+            lambda: Build("b", Local("."), command="make all", install=(INSTALL,)),
             "is an argv",
         ),
         (lambda: Build("b", Local("."), command=(), install=(INSTALL,)), "name a program"),

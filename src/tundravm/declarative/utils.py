@@ -485,7 +485,7 @@ class GoBinary(Composite):
     package: str = "."
     install: str | None = None
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    tags: tuple[str, ...] = ()
+    tags: Sequence[str] = ()
     ldflags: str = _GO_LDFLAGS
     cgo: bool = False
     cache_namespace: str | None = None
@@ -532,7 +532,7 @@ class CargoBinary(Composite):
     bin: str | None = None
     package: str | None = None
     install: str | None = None
-    features: tuple[str, ...] = ()
+    features: Sequence[str] = ()
     profile: str = "release"
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     auditable: bool | None = None

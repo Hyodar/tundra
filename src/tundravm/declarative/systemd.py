@@ -146,13 +146,13 @@ class Hardening:
     protect_home: bool = _UNSET
     private_tmp: bool = _UNSET
     private_devices: bool = _UNSET
-    devices: tuple[str, ...] = _UNSET
+    devices: Sequence[str] = _UNSET
     no_new_privileges: bool = _UNSET
-    capabilities: tuple[str, ...] | None = _UNSET
+    capabilities: Sequence[str] | None = _UNSET
     jit: bool = _UNSET
     network: Network = _UNSET
-    syscalls: tuple[str, ...] = _UNSET
-    deny_syscalls: tuple[str, ...] = _UNSET
+    syscalls: Sequence[str] = _UNSET
+    deny_syscalls: Sequence[str] = _UNSET
     kernel: bool = _UNSET
     sandbox: bool = _UNSET
     umask: str | None = _UNSET

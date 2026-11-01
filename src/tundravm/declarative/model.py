@@ -168,7 +168,7 @@ def _require_env(owner: object, name: str = "env") -> None:
             raise _fail(owner, f"environment value for {key!r} must be one line of text.")
 
 
-def _require_names(owner: object, values: tuple[str, ...], what: str) -> None:
+def _require_names(owner: object, values: Sequence[str], what: str) -> None:
     for value in values:
         _require_name(owner, value, what)
 
@@ -966,7 +966,7 @@ class User(Declared):
     shell: str = "/usr/sbin/nologin"
     uid: int | None = None
     primary_group: str | int | None = None
-    groups: tuple[str, ...] = ()
+    groups: Sequence[str] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "groups")
@@ -1314,39 +1314,48 @@ class DropIn:
     name: str = "20-tundravm"
     _: KW_ONLY
     description: str | None = None
-    exec_start: str | tuple[str, ...] | None = None
-    exec_start_pre: tuple[str, ...] = ()
-    exec_start_post: tuple[str, ...] = ()
+    exec_start: str | Sequence[str] | None = None
+    exec_start_pre: Sequence[str] = ()
+    exec_start_post: Sequence[str] = ()
     exec_reload: str | None = None
     user: str | Dynamic | None = None
     group: str | None = None
-    groups: tuple[str, ...] = ()
+    groups: Sequence[str] = ()
     working_dir: str | None = None
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    env_file: str | tuple[str, ...] | None = None
+    env_file: str | Sequence[str] | None = None
     credentials: Mapping[str, str | SecretFile] = field(default_factory=FrozenMap)
     state: str | None = None
     logs: str | None = None
     runtime: str | None = None
     cache: str | None = None
-    write_paths: tuple[str, ...] = ()
+    write_paths: Sequence[str] = ()
     restart: Literal["always", "on-failure", "on-abnormal", "no"] | None = None
     restart_sec: str | None = None
     timeout_start: str | None = None
     timeout_stop: str | None = None
     limits: Mapping[str, str | int] = field(default_factory=FrozenMap)
     hardening: Hardening | None = None
-    after: tuple[UnitTarget, ...] = ()
-    requires: tuple[UnitTarget, ...] = ()
-    wants: tuple[UnitTarget, ...] = ()
-    before: tuple[UnitTarget, ...] = ()
-    part_of: tuple[UnitTarget, ...] = ()
-    binds_to: tuple[UnitTarget, ...] = ()
-    conflicts: tuple[UnitTarget, ...] = ()
+    after: Sequence[UnitTarget] = ()
+    requires: Sequence[UnitTarget] = ()
+    wants: Sequence[UnitTarget] = ()
+    before: Sequence[UnitTarget] = ()
+    part_of: Sequence[UnitTarget] = ()
+    binds_to: Sequence[UnitTarget] = ()
+    conflicts: Sequence[UnitTarget] = ()
     extra: Extra = field(default_factory=FrozenMap)
 
     def __post_init__(self) -> None:
-        _freeze(self, "exec_start", "exec_start_pre")
+        _freeze(
+            self,
+            "exec_start",
+            "exec_start_pre",
+            "exec_start_post",
+            "groups",
+            "env_file",
+            "write_paths",
+            *_RELATIONS,
+        )
         if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid drop-in name {self.name!r}.", hint="Use '30-limits'.")
         if self.name in ("10-tundravm-needs", "tundravm-secrets"):
@@ -2043,12 +2052,12 @@ class Build(Declared):
     name: str
     source: Git | Http | Local
     script: str | None = None
-    install: tuple[Install, ...] = ()
-    packages: tuple[str, ...] = ()
+    install: Sequence[Install] = ()
+    packages: Sequence[str] = ()
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     cache_namespace: str | None = None
     using: Go | Cargo | Dotnet | None = field(default=None, hash=False)
-    command: tuple[str, ...] | None = None
+    command: Sequence[str] | None = None
 
     def __post_init__(self) -> None:
         _freeze(self, "install", "packages")

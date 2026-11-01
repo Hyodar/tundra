@@ -446,9 +446,9 @@ class GoBuild:
     output: str
     package: str = "."
     ldflags: str = "-s -w -buildid="
-    tags: tuple[str, ...] = ()
+    tags: Sequence[str] = ()
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    packages: tuple[str, ...] = ("golang",)
+    packages: Sequence[str] = ("golang",)
     output_dir: str = field(default="./build", metadata=_since("./build"))
     mkdir: bool = field(default=True, metadata=_since(True))
     reproducible: bool | None = field(default=None, metadata=_since(None))
@@ -560,10 +560,10 @@ class CargoBuild:
     output: str
     bin: str | None = None
     package: str | None = None
-    features: tuple[str, ...] = ()
+    features: Sequence[str] = ()
     profile: str = "release"
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    packages: tuple[str, ...] = ("cargo",)
+    packages: Sequence[str] = ("cargo",)
     auditable: bool | None = field(default=None, metadata=_since(None))
     reproducible: bool | None = field(default=None, metadata=_since(None))
 
@@ -675,8 +675,8 @@ class DotnetBuild:
     configuration: str = "Release"
     runtime: str = "linux-x64"
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    packages: tuple[str, ...] = ("dotnet-sdk-8.0",)
-    restore_args: tuple[str, ...] = field(default=(), metadata=_since(()))
+    packages: Sequence[str] = ("dotnet-sdk-8.0",)
+    restore_args: Sequence[str] = field(default=(), metadata=_since(()))
     properties: Mapping[str, str] = field(default_factory=FrozenMap, metadata=_since({}))
 
     kind: Literal["dotnet"] = field(default="dotnet", init=False, repr=False)
@@ -740,7 +740,7 @@ class ScriptBuild:
 
     script: str
     output: str
-    packages: tuple[str, ...] = ()
+    packages: Sequence[str] = ()
     env: Mapping[str, str] = field(default_factory=FrozenMap, metadata=_since({}))
 
     kind: Literal["script"] = field(default="script", init=False, repr=False)

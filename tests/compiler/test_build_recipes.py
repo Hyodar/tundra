@@ -264,16 +264,16 @@ def test_recipes_copy_the_callers_mappings_and_sequences() -> None:
     env = {"CGO_ENABLED": "0"}
     tags, features, restore, packages = ["netgo"], ["tdx"], ["--locked-mode"], ["make"]
     properties = {"Version": "1"}
-    go = Go(output="tool", env=env, tags=tags)  # type: ignore[arg-type]
-    cargo = Cargo(output="tool", env=env, features=features)  # type: ignore[arg-type]
+    go = Go(output="tool", env=env, tags=tags)
+    cargo = Cargo(output="tool", env=env, features=features)
     dotnet = Dotnet(
         project="App.csproj",
         output="app",
         env=env,
         properties=properties,
-        restore_args=restore,  # type: ignore[arg-type]
+        restore_args=restore,
     )
-    script = ScriptBuild(script="make", output="tool", env=env, packages=packages)  # type: ignore[arg-type]
+    script = ScriptBuild(script="make", output="tool", env=env, packages=packages)
     recipe = _recipe(Build("tool", Git(REPO, "main"), using=go, install=INSTALL))
     commands = [build.command("/build/tool") for build in (go, cargo, dotnet, script)]
     tree = _pinned(recipe)
