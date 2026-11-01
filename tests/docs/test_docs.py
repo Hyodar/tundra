@@ -4,8 +4,12 @@ Covered pages: README.md, docs/guide.md, docs/trust.md and the generated referen
 
 - Every ```python block of the prose pages executes in a fresh namespace, and every
   ``Image`` it binds compiles. A block preceded by the line ``<!-- fragment -->`` is
-  part of something larger: it is parsed, not run. Zero-argument ``test_*`` functions a
-  block defines are called, so the testing examples are tests.
+  part of something larger: it is parsed, not run.
+- A block preceded by ``<!-- listing: PATH [CLASS] -->`` is that file of the repository (or
+  that class of it), and one preceded by ``<!-- diff: OLD NEW -->`` is the diff between
+  two stages of the example below their docstrings: each is compared, never run.
+- Zero-argument ``test_*`` functions a block defines are called, so the testing examples
+  are tests.
 - Every ``tundravm ...`` line of a ```console or ```bash block parses with the real
   argument parser: the command exists, every flag is one of its own, every choice valid.
 - Every relative link resolves to a file in the repository, and every ``#anchor`` to a
@@ -19,6 +23,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import difflib
 import io
 import re
 import shlex
@@ -34,12 +39,15 @@ from tundravm import compile as compile_image
 from tundravm._reference import slug
 from tundravm.cli import build_parser
 
+STAGES = REPO_ROOT / "examples" / "attested-node" / "stages"
 PROSE = ("README.md", "docs/guide.md", "docs/trust.md")
 """Pages whose code blocks run and whose commands parse."""
 LINKED = (*PROSE, "docs/reference/cli.md", "docs/reference/api.md")
 """Pages whose links must resolve."""
 FRAGMENT = "<!-- fragment -->"
 """The line before a python block that is parsed but not run."""
+LISTING = re.compile(r"^<!-- (listing|diff): (\S+) (\S+)? ?-->$")
+"""The line before a block the repository holds: ``listing PATH [CLASS]`` or ``diff OLD NEW``."""
 
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.M | re.S)
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)|<(?:a|img)\s[^>]*(?:href|src)=\"([^\"]+)\"")
@@ -57,7 +65,8 @@ def _blocks(page: str) -> Iterator[tuple[str, str, int, bool]]:
     for match in FENCE.finditer(text):
         before = text[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
         line = text.count("\n", 0, match.start()) + 1
-        yield match.group(1), match.group(2), line, before == FRAGMENT
+        parsed_only = before == FRAGMENT or bool(LISTING.match(before))
+        yield match.group(1), match.group(2), line, parsed_only
 
 
 def _python_blocks() -> list[tuple[str, int, str, bool]]:
@@ -96,7 +105,65 @@ def test_python_blocks_run(
 
 def test_the_prose_has_python_blocks_that_run() -> None:
     runnable = [block for block in _python_blocks() if not block[3]]
-    assert len(runnable) >= 6
+    assert len(runnable) >= 1
+
+
+def _body(path: str) -> list[str]:
+    """*path*'s lines below its module docstring."""
+    text = (REPO_ROOT / path).read_text(encoding="utf-8")
+    end = ast.parse(text).body[0].end_lineno or 0
+    return text.splitlines()[end:]
+
+
+def stage_diff(old: str, new: str) -> str:
+    """The diff a ```diff block shows between two stages: below their docstrings, one line of
+    context, file names relative to the example, hunks marked by a bare ``@@``."""
+    before, after = (path.removeprefix("examples/attested-node/") for path in (old, new))
+    lines = difflib.unified_diff(_body(old), _body(new), before, after, n=1, lineterm="")
+    return "\n".join("@@" if line.startswith("@@") else line for line in lines) + "\n"
+
+
+def listing(kind: str, path: str, name: str | None) -> str:
+    """What a block after ``<!-- kind: path name -->`` must hold."""
+    if kind == "diff":
+        return stage_diff(path, name or "")
+    text = (REPO_ROOT / path).read_text(encoding="utf-8")
+    if name is None:
+        return text
+    tree = ast.parse(text)
+    (node,) = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name]
+    return (ast.get_source_segment(text, node) or "") + "\n"
+
+
+def _listings() -> list[tuple[str, int, str, str, str | None, str]]:
+    found = []
+    for page in PROSE:
+        text = _text(page)
+        for match in FENCE.finditer(text):
+            before = text[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
+            if marker := LISTING.match(before):
+                line = text.count("\n", 0, match.start()) + 1
+                kind, path, name = marker.group(1), marker.group(2), marker.group(3)
+                found.append((page, line, kind, path, name, match.group(2)))
+    return found
+
+
+@pytest.mark.parametrize(
+    ("page", "line", "kind", "path", "name", "body"),
+    [pytest.param(*found, id=f"{found[0]}:{found[1]}") for found in _listings()],
+)
+def test_listings_are_what_the_repository_holds(
+    page: str, line: int, kind: str, path: str, name: str | None, body: str
+) -> None:
+    assert body == listing(kind, path, name), f"{page}:{line}: {kind} {path} {name or ''}"
+
+
+def test_the_guide_lists_every_stage() -> None:
+    shown = {path for _, _, _, path, name, _ in _listings()} | {
+        name for _, _, kind, _, name, _ in _listings() if kind == "diff"
+    }
+    stages = {f"examples/attested-node/stages/{p.name}" for p in STAGES.glob("*.py")}
+    assert stages <= shown
 
 
 def _commands() -> list[tuple[str, int, list[str]]]:

@@ -20,7 +20,6 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `tundravm.bake` is `tundravm.build`, the command's verb, without an alias; its directory keyword is `into=` (was `build=`).
 - **Breaking:** a `Secrets` block and every `Image` with a volume or a secret run the attested endpoint (`tools/cmd/attested-endpoint`, `tundravm-endpoint.service`) instead of `secret-delivery`, which is gone with `tools/pkg/secrets`: its quote binds the nonce, its TLS key, the SSH host keys and the instance public key, and it writes `SecretFile` targets, an operator-key volume's passphrase and the operator's SSH key only on the session that fetched that evidence, once per boot; the built-in provider writes files, `secrets.ready` waits for the required ones, and `sshd` waits only for its host keys.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports (and 8745 where the attested endpoint listens), one hardened user per service, and `tdxs`.
-- **Breaking:** `Raiko` is removed, its upstream ref gone; `Nethermind(config=)` defaults to `hoodi`, which Nethermind ships.
 - `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)` or a component's `self.service(name).endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `hardening="python"` names the sandbox per runtime (`static`, `jit`, `node`, `python`, `dotnet`, `relaxed`), `Hardening.preset(NAME, ...)` a deviation; `quotes=True` joins the `tdx` group and requires the evidence service.
 - `Service.packaged(unit, package=, hardening=)` runs a Debian package's unit under the image's sandbox, which replaces the package's own; `convert --from systemd` writes it for drop-ins whose unit is not in the set.
 - `Hardening(capabilities=["CAP_SYS_TIME"])` also drops `ProtectClock=` and allows `@clock` back, so a time daemon's grant takes effect; the boot probe's `service:` failure names a denied capability when the unit's status shows one.
@@ -32,22 +31,22 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Component` is a dataclass with `compose()`, typed exports and an optional `check()`; `Profile(extends=, add=, changes=, production=)` edits with `value.ref.edit(...)` and `.remove()`.
 - `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential, bound by naming it in argv or `environment=`; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
 - Every image generates a fresh secp256k1 instance key at boot (tmpfs, root-only); `InstanceKey()` (`tundravm.secrets`) hands it to a service as a credential, `instance-key-exposed` refuses anything else naming it, and `run status`, `attest` and `show` print its public key and who takes it.
-- `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it: `Nethermind(jwt=Generated("jwt"))` and its consensus client need no delivered JWT.
-- `Lighthouse(execution=, jwt=, checkpoint_sync_url=)` runs the v8.3.2 release as a beacon node on `hoodi` (or another network it ships) beside `Nethermind`, dialing its peers without accepting any unless `expose_p2p=True`.
+- `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it, such as the Engine API JWT an execution client and its consensus client share.
+- An image file imports modules from its own directory and its project's (the nearest `pyproject.toml`), from any working directory: a project carries its own components.
 - `Mkosi(settings=)` writes each key in its mkosi section, and a key tundravm writes is refused with the public slot that sets it.
-- The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `Lighthouse`, `TaikoClient`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
+- The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
 
 ### Network and clouds
 
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
-- `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks, peers and collateral, `TaikoClient(l1=)` names its L1, and `Observability(proxy=)` sends through one proxy.
+- `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks and collateral, and `Observability(proxy=)` sends through one proxy.
 - `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.
 
 ### CLI
 
 - **Breaking:** twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
-- `new NAME [--template service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
+- `new NAME [--template node|service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; `node`, the default, is the example's first stage, the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds when `TUNDRAVM_BACKEND` is set.
 - **Breaking:** `show IMAGE` lists the components the image file wrote, each with what it composed (`--json`: `{"name", "components"}`), and a source build only under sources.
 - **Breaking:** `show --dev` is always the latest development build; an image file's dev profile is `--profile dev`, and `show IMAGE --dev` is refused.
@@ -73,7 +72,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.
 - The ESP is a fixed 128 MiB; a UKI over 126 MiB fails, naming `RootFS.verity()`.
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
-- `examples/nethermind_base.py`'s kernel config builds in every driver a target needs; a weekly workflow builds it and Debian's newest 6.12 (6.12.113, from the security pool).
+- A kernel fixture with its own config builds in every driver a target needs; a weekly workflow builds it and Debian's newest 6.12 (6.12.113, from the security pool).
 - `DebianConfig` reads the snapshot's main pool, then its security pool, which alone carries a kernel shipped as a security update.
 - A dev profile's root password (`DevAccess(password=)`, `DevTools`) is set inside the image with `mkosi-chroot chpasswd -e`, so the build no longer fails locking `/etc/passwd`; it logs in on the console only, unless `DevTools(network_login=True)` opens SSH to it.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
@@ -95,10 +94,11 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Docs
 
 - `README.md`, `docs/guide.md` in the order of the loop, `docs/trust.md` for the threat model and recovery, and `docs/reference/` generated from the code; the prose's examples run in the tests.
-- `examples/attested-node/` is the example: Nethermind on Hoodi behind a Go proxy that signs its block responses with the instance key, reached only through attested TLS.
+- **Breaking:** one example, `examples/attested-node/`, built in six stages the guide walks through: Nethermind on Hoodi as a component the example writes, Lighthouse, a Go proxy signing block responses with the instance key behind attested TLS, and operating it. The six small examples and `examples/app/` are gone.
 
 ### Removed
 
+- **Breaking:** `Nethermind`, `Lighthouse`, `TaikoClient` and `Raiko` leave `tundravm.components`: the library ships no application, and `examples/attested-node/components/` carries the two the example runs.
 - **Breaking:** the 23 old verbs, without aliases: `init` is `new`; `inspect`, `explain` and `status` are `show`; `lint` and `diff` are `check`.
 - **Breaking:** `compile` is `build --tree-only`, `bake` is `build`, `deploy qemu` is `run`, `import` and `units convert` are `convert`, `clean` is `build --clean-cache`.
 - **Breaking:** the per-variant tree layouts and the `nethermind-v1` dialect.

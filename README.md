@@ -27,21 +27,27 @@ tundravm is not on PyPI: `new` pins the commit it ran from, and mkosi comes with
 
 ## Quickstart
 
+`new` writes stage 1 of the one example, the attested node in
+[`examples/attested-node/`](examples/attested-node/):
+
+<!-- listing: examples/attested-node/stages/01-boot.py -->
 ```python
-from tundravm import File, Image, Service
-from tundravm.ports import TCP
+"""attested-node: the boot, stage 1 of the guide.
+
+Debian trixie from one snapshot, with systemd, the TEE baseline (NTS time, a volatile
+journal, sysctl hardening), DHCP, a firewall that drops inbound traffic nothing exposes,
+filtered egress, and a dev profile with a serial console and root password "tdx".
+"""
+
+from tundravm import Debian, Image
+from tundravm.components import DevAccess, Egress, Network
 
 image = Image(
-    "demo",
-    packages=["busybox"],
-    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
-    services=[
-        Service(
-            "app",
-            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
-            expose=[TCP(8080)],
-        ),
-    ],
+    "attested-node",
+    base=Debian("trixie", snapshot="20261018T082309Z"),
+    packages=["ca-certificates"],
+    network=Network(egress=Egress()),
+    dev=DevAccess(password="tdx"),
 )
 ```
 
@@ -51,16 +57,17 @@ $ uv run tundravm run --mode simulated --dev    # instance my-image-1, ports for
 $ uv run tundravm verify latest-development     # every artifact against the manifest, offline
 ```
 
-That file is the whole image. Everything else is implied: Debian trixie from a locked
-snapshot; the TEE baseline (NTS time, a volatile journal, hardened sysctls, no apt timers);
-a measured UKI with the TDX, virtio, NVMe, Hyper-V and gVNIC drivers; an nftables firewall
-that opens only `8080`; `app.service` as its own system user
-under a tested sandbox, restarted on failure; and the `tdxs` evidence service, whose quote
-`attest` checks. Each default has a typed escape hatch.
+That file is the whole image. Everything else is implied: the TEE baseline (NTS time, a
+volatile journal, hardened sysctls, no apt timers); a measured UKI with the TDX, virtio,
+NVMe, Hyper-V and gVNIC drivers; an nftables firewall that opens nothing; and the `tdxs`
+evidence service, whose quote `attest` checks. Each default has a typed escape hatch.
 
 The three commands build, boot and verify the `dev` profile. A production build is the
-same image without `DevAccess`, and it starts no service unless it runs under TDX. `new`
-writes a starter like this one, with a Go program in `app/` in place of busybox.
+same image without `DevAccess`, and it starts no service unless it runs under TDX.
+[The guide](docs/guide.md#the-attested-node-stage-by-stage) builds the node up from there
+in six stages under `examples/attested-node/stages/`: Nethermind as a component of your
+own, Lighthouse, a signing proxy built from Go source, attested TLS, and operating it.
+The last stage is `examples/attested-node/image.py`.
 
 ## Documentation
 

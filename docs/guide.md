@@ -7,8 +7,8 @@ attests the build. The choices are made for you: Debian trixie, systemd, a measu
 Intel TDX. Each default below has one escape hatch, and the hatch is a typed value, not a
 string.
 
-This guide follows the loop: create a project, declare the image, lock, test, build, run,
-deploy.
+This guide follows the loop: create a project, build the example up stage by stage, lock,
+test, build, run, deploy.
 The [command reference](reference/cli.md), the [API reference](reference/api.md) and the
 [lint reference](reference/lint.md) are generated from the code. The [trust page](trust.md)
 says what the image defends against and how to recover.
@@ -48,7 +48,7 @@ $ uv run pytest
 ```
 
 `new` prints this loop, then `build --dev` and `run --mode simulated --dev`. `lock` pins
-every source (see [the shipped library](#the-shipped-library)). The generated tests and the CI's
+every source. The generated tests and the CI's
 `check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends on
 the lock: write the tree after locking and commit both.
 
@@ -56,7 +56,7 @@ the lock: write the tree after locking and commit both.
 
 | File | Holds |
 |---|---|
-| `NAME.py` | the image, from the `service` template (or `--template prover`) |
+| `NAME.py` | the image: [stage 1](#1-the-boot) of the example (or `--template service` or `prover`) |
 | `app/` | with `service`: the Go program it builds through `Local("app")` |
 | `tests/test_NAME.py` | lint, compile and committed-tree tests |
 | `pyproject.toml` | tundravm from git at a commit, pytest, and `[tool.tundravm]` |
@@ -113,28 +113,298 @@ $ tundravm doctor
 $ tundravm doctor --for build
 ```
 
-## The image
+## The attested node, stage by stage
 
-An image file binds an `Image` to the name `image`. This is a complete one:
+The example, `examples/attested-node/`, is an Ethereum node on Hoodi that signs its block
+responses inside the TD. Six stages under `stages/` build it up. Each stage is a
+complete image file that adds to the one before. The last is `image.py`, whose `mkosi/`
+tree is committed. Run any stage the same way:
 
+```console
+$ tundravm check examples/attested-node/stages/01-boot.py
+$ tundravm build examples/attested-node/stages/01-boot.py --dev
+$ tundravm run --mode simulated --dev --probe
+```
+
+`run --probe` boots the dev build without TDX and prints the boot probe's table.
+
+### 1. The boot
+
+`tundravm new` writes this file. It declares the platform, and the baseline is implied:
+
+<!-- listing: examples/attested-node/stages/01-boot.py -->
 ```python
-from tundravm import File, Image, Service
-from tundravm.ports import TCP
+"""attested-node: the boot, stage 1 of the guide.
+
+Debian trixie from one snapshot, with systemd, the TEE baseline (NTS time, a volatile
+journal, sysctl hardening), DHCP, a firewall that drops inbound traffic nothing exposes,
+filtered egress, and a dev profile with a serial console and root password "tdx".
+"""
+
+from tundravm import Debian, Image
+from tundravm.components import DevAccess, Egress, Network
 
 image = Image(
-    "demo",
-    packages=["busybox"],
-    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
-    services=[
-        Service(
-            "app",
-            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
-            expose=[TCP(8080)],
-        ),
-    ],
+    "attested-node",
+    base=Debian("trixie", snapshot="20261018T082309Z"),
+    packages=["ca-certificates"],
+    network=Network(egress=Egress()),
+    dev=DevAccess(password="tdx"),
 )
 ```
 
+The probe reports `mode` simulated and a refused `egress:` datagram.
+
+### 2. Nethermind, a component of your own
+
+Stage 2 adds Nethermind. Application components are not part of tundravm: the project
+writes them, here as `components/nethermind.py`, which the image file imports:
+
+<!-- diff: examples/attested-node/stages/01-boot.py examples/attested-node/stages/02-nethermind.py -->
+```diff
+--- stages/01-boot.py
++++ stages/02-nethermind.py
+@@
+ 
+-from tundravm import Debian, Image
++from components.nethermind import Nethermind
++
++from tundravm import Debian, Image, RootFS
+ from tundravm.components import DevAccess, Egress, Network
++from tundravm.secrets import Generated
++from tundravm.storage import OperatorKey, Volume
++
++data = Volume("data", unlock=OperatorKey())
++jwt = Generated("jwt")
++nethermind = Nethermind(jwt=jwt, config="hoodi", state=data.directory("nethermind"))
+ 
+@@
+     packages=["ca-certificates"],
++    components=[nethermind],
+     network=Network(egress=Egress()),
++    rootfs=RootFS.verity(),
+     dev=DevAccess(password="tdx"),
+```
+
+The class is the whole Component API:
+
+<!-- listing: examples/attested-node/components/nethermind.py Nethermind -->
+```python
+class Nethermind(Component, build_network=True):
+    """Nethermind on *config*, its JSON-RPC and Engine API on the loopback."""
+
+    jwt: Secret | Generated
+    state: VolumeDirectory | None = None
+    config: str = "hoodi"
+    rpc_port: int = 8545
+    engine_port: int = 8551
+
+    @property
+    def rpc(self) -> Endpoint:
+        return self.service("nethermind").endpoint(self.rpc_port)
+
+    @property
+    def engine_api(self) -> Endpoint:
+        return self.service("nethermind").endpoint(self.engine_port)
+
+    def outbound(self) -> Egress:
+        return Egress(ports=[TCP(30303), UDP(30303)])
+
+    def compose(self) -> Iterator[object]:
+        yield Build(
+            "nethermind",
+            SOURCE,
+            script=PUBLISH,
+            packages=TOOLCHAIN,
+            env=DOTNET,
+            install=INSTALL,
+            cache_namespace=f"nethermind-{SOURCE.ref}",
+        )
+        datadir = "/var/lib/nethermind" if self.state is None else self.state.path
+        yield Service(
+            "nethermind",
+            [
+                f"{HOME}/nethermind",
+                f"--config={self.config}",
+                f"--datadir={datadir}",
+                "--JsonRpc.Enabled=true",
+                "--JsonRpc.Host=127.0.0.1",
+                f"--JsonRpc.Port={self.rpc_port}",
+                "--JsonRpc.EngineHost=127.0.0.1",
+                f"--JsonRpc.EnginePort={self.engine_port}",
+                f"--JsonRpc.JwtSecretFile={self.jwt.path}",
+            ],
+            readiness=TcpProbe(self.rpc_port, timeout="10min"),
+            state="nethermind" if self.state is None else self.state,
+            credentials=[self.jwt],
+            hardening="dotnet",
+        )
+
+    rules = (
+        Rule(
+            "nethermind-volatile-state",
+            "warning",
+            "Nethermind keeps its database on the volatile root, so it resyncs at every boot.",
+            "Pass state=volume.directory('nethermind') on a Volume.",
+        ),
+    )
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+        if self.state is not None:
+            return ()
+        message = "Nethermind keeps its database on the volatile root: it resyncs every boot"
+        return (Diagnostic("nethermind-volatile-state", "warning", message),)
+```
+
+- Fields are configuration: the class is a frozen, keyword-only dataclass.
+- `compose()` yields what it stands for: a `Build` and the `Service` running it.
+- `build_network=True`: the build fetches its dependencies.
+- `rpc` and `engine_api` are exports: endpoints carrying the service's readiness.
+- `outbound()` is what a filtered image lets it send: its peers on 30303.
+- `check()` is a lint rule per profile; `rules` declares each code it reports.
+
+`Generated("jwt")` is a secret the image writes at boot. The volume is LUKS2, and
+Nethermind waits until an operator attests the instance and runs `tundravm secrets unlock
+attested-node-1 data`. The build is large, so the root is read-only dm-verity.
+
+### 3. Lighthouse, ready-made
+
+Stage 3 adds the consensus client that drives Nethermind to the chain's head.
+`components/lighthouse.py` has the same shape, with a pinned download in place of a build:
+open it. Pairing it takes the Engine API export and the same secret:
+
+<!-- diff: examples/attested-node/stages/02-nethermind.py examples/attested-node/stages/03-lighthouse.py -->
+```diff
+--- stages/02-nethermind.py
++++ stages/03-lighthouse.py
+@@
+ 
++from components.lighthouse import Lighthouse
+ from components.nethermind import Nethermind
+@@
+ nethermind = Nethermind(jwt=jwt, config="hoodi", state=data.directory("nethermind"))
++lighthouse = Lighthouse(
++    execution=nethermind.engine_api,
++    jwt=jwt,
++    checkpoint_sync_url="https://checkpoint-sync.hoodi.ethpandaops.io",
++    state=data.directory("lighthouse"),
++)
+ 
+@@
+     packages=["ca-certificates"],
+-    components=[nethermind],
++    components=[nethermind, lighthouse],
+     network=Network(egress=Egress()),
+```
+
+### 4. The signer
+
+Stage 4 adds `signer/`, a Go proxy that signs Nethermind's block responses with the key
+each boot generates:
+
+<!-- diff: examples/attested-node/stages/03-lighthouse.py examples/attested-node/stages/04-signer.py -->
+```diff
+--- stages/03-lighthouse.py
++++ stages/04-signer.py
+@@
+ 
+-from tundravm import Debian, Image, RootFS
++from tundravm import Debian, Image, RootFS, Service
+ from tundravm.components import DevAccess, Egress, Network
+-from tundravm.secrets import Generated
++from tundravm.secrets import Generated, InstanceKey
++from tundravm.sources import GoBinary, Local
+ from tundravm.storage import OperatorKey, Volume
++from tundravm.systemd import Resources, TcpProbe
+ 
+@@
+ )
++program = GoBinary("signer", Local("../signer"))
++signer = Service(
++    "signer",
++    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
++    credentials=[InstanceKey()],
++    requires=[nethermind.rpc],
++    readiness=TcpProbe(8547),
++    resources=Resources(memory_max="256M"),
++    hardening="static",
++)
+ 
+@@
+     components=[nethermind, lighthouse],
++    services=[signer],
+     network=Network(egress=Egress()),
+```
+
+`GoBinary(..., Local("../signer"))` builds that directory, pinned by its files' digest.
+`credentials=[InstanceKey()]` hands the service the key. It listens on the loopback, so
+nothing reaches it yet.
+
+### 5. The attested ingress
+
+Stage 5 puts attested TLS on 8546 in front of it:
+
+<!-- diff: examples/attested-node/stages/04-signer.py examples/attested-node/stages/05-attested.py -->
+```diff
+--- stages/04-signer.py
++++ stages/05-attested.py
+@@
+ from tundravm.components import DevAccess, Egress, Network
++from tundravm.ports import AttestedTLS
+ from tundravm.secrets import Generated, InstanceKey
+@@
+     services=[signer],
++    ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
+     network=Network(egress=Egress()),
+```
+
+The firewall opens 8546 and nothing else. The probe's `port:` row shows it bound.
+
+### 6. Operating it
+
+Stage 6, which `image.py` repeats with `Local("signer")`, adds what operating it takes:
+
+<!-- diff: examples/attested-node/stages/05-attested.py examples/attested-node/stages/06-operate.py -->
+```diff
+--- stages/05-attested.py
++++ stages/06-operate.py
+@@
+ 
+-from tundravm import Debian, Image, RootFS, Service
+-from tundravm.components import DevAccess, Egress, Network
++from tundravm import Debian, File, Image, Profile, RootFS, Service
++from tundravm.components import DevAccess, Egress, JournalExport, Network, Observability
+ from tundravm.ports import AttestedTLS
+-from tundravm.secrets import Generated, InstanceKey
++from tundravm.secrets import Generated, InstanceKey, Secret
+ from tundravm.sources import GoBinary, Local
+@@
+ )
++motd = File.text("/etc/motd", "attested-node: Nethermind and Lighthouse on Hoodi\n")
++logs = JournalExport("https://logs.example:19532", credential=Secret("logs-client"))
+ 
+@@
+     packages=["ca-certificates"],
++    files=[motd],
+     components=[nethermind, lighthouse],
+@@
+     rootfs=RootFS.verity(),
++    observability=Observability(logs=logs),
++    targets=("qemu", "azure", "gcp"),
++    profiles={
++        "staging": Profile(changes=[motd.ref.edit(content="attested-node: staging\n")]),
++        "bench": Profile(add=["fio"], production=False),
++    },
+     dev=DevAccess(password="tdx"),
+```
+
+The journal ships to a sink, authenticated by a delivered certificate. `staging` edits one
+file, and `bench` adds `fio` and is never shipped. `targets=` adds the cloud disks of the
+same payload.
+
+## The image
+
+An image file binds an `Image` to the name `image`, as each stage does.
 `Image` is a frozen dataclass. Every slot is optional and takes small typed values.
 `tundravm show` prints what the image resolves to, profile by profile.
 
@@ -194,44 +464,20 @@ The ones tundravm sets are refused, each naming what sets it: `rootfs=` (`root=`
 ### Imports
 
 Every public name has one home, without aliases, so an image file's imports say what it
-uses: `tundravm` (the image, its contents and foundation), `tundravm.ports` (ports and
-ingress), `tundravm.systemd` (what `Service` keywords take), `tundravm.components`
-(`Component`, its exports, `check()` types and the [shipped library](#the-shipped-library)),
-`tundravm.storage`, `tundravm.secrets`, `tundravm.sources`, `tundravm.errors` and
-`tundravm.testing` ([Testing a project](#testing-a-project)). Importing `TCP` from the root
-is an `ImportError`; the [API reference](reference/api.md) lists each namespace.
+uses, as the stages' do. The [API reference](reference/api.md) lists each namespace.
 
 ## Services
 
-A `Service` is an argv, never a command line:
-
-```python
-from tundravm import Service
-from tundravm.ports import TCP
-from tundravm.systemd import HttpProbe, Resources, Shutdown
-
-api = Service(
-    "api",
-    ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
-    expose=[TCP(8080)],
-    readiness=HttpProbe("http://127.0.0.1:8080/"),
-    resources=Resources(memory_max="512M", tasks_max=64),
-    shutdown=Shutdown(timeout="30s"),
-    environment={"LANG": "C.UTF-8"},
-)
-```
-
+A `Service` is an argv, never a command line, as the [signer](#4-the-signer) is.
 What a bare `Service(name, argv)` gets: `Type=exec`, `Restart=on-failure` with
 `RestartSec=5s`, a system user named after the service, `hardening="static"`, and
 `WantedBy=minimal.target`. Each argv element is quoted the way systemd parses it. The one
 visible exception for a shell is `["/bin/sh", "-eu", "-c", script]`. A built binary is a
 valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
 
-Every image generates an instance key at boot: a fresh ECDSA secp256k1 key in
-`/run/tundravm/instance-key.pem`, on tmpfs and readable by root only. A service that signs
-with it says `credentials=[InstanceKey()]` or passes
-`InstanceKey()` in argv, and reads `$CREDENTIALS_DIRECTORY/instance-key`; nothing else may
-name the path. `run status`, `attest` and `show` print the public key and who takes it.
+Every image generates an instance key at boot: a fresh secp256k1 key on tmpfs, root-only.
+A service takes it with `credentials=[InstanceKey()]`, as the [signer](#4-the-signer) does,
+and nothing else may name it. `run status`, `attest` and `show` print its public key.
 
 ### Reaching a service
 
@@ -302,69 +548,16 @@ boot, as the probe's `service:` failure naming a denied capability.
 
 ## Components
 
-A `Component` is a class that groups declarations and exports typed values. This one
-serves a page with busybox; the `service` template's `App` builds `app/` instead:
+A `Component` groups declarations and exports typed values: [stage 2](#2-nethermind-a-component-of-your-own) writes one.
 
-```python
-from collections.abc import Iterator
-
-from tundravm import File, Image, Package, Service
-from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
-from tundravm.ports import TCP
-from tundravm.systemd import TcpProbe
-
-
-class App(Component):
-    """A page busybox httpd serves, its readiness, and a lint rule."""
-
-    port: int = 8080
-
-    @property
-    def http(self) -> Endpoint:
-        return self.service("app").endpoint(self.port)
-
-    def compose(self) -> Iterator[Package | File | Service]:
-        yield Package("busybox")
-        yield File.text("/srv/www/index.html", "<h1>app</h1>\n")
-        yield Service(
-            "app",
-            ["/usr/bin/busybox", "httpd", "-f", "-p", str(self.port), "-h", "/srv/www"],
-            expose=[TCP(self.port)],
-            readiness=TcpProbe(self.port),
-        )
-
-    rules = (Rule("app-privileged-port", "error", "Ports below 1024 need root.", "Use 8080."),)
-
-    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
-        if self.port >= 1024:
-            return ()
-        return (Diagnostic("app-privileged-port", "error", "app cannot bind below 1024"),)
-
-
-image = Image("site", components=[App()])
-```
-
-The rules:
-
-- Fields are configuration: the subclass becomes a frozen, keyword-only dataclass.
-- `compose()` yields declarations and nested components.
-- Exports are properties returning an `Endpoint` (`self.service("app").endpoint(port)`), a
-  `ServiceRef` or a `ServiceReady`. `requires=[app.http]` waits on one; in an argv it renders
-  as its URL.
-- `check(resolved)` returns diagnostics: a lint rule `tundravm check` runs once per profile
-  (`resolved.profile`).
-- `class X(Component, build_network=True)` says its builds fetch dependencies
-  (`WithNetwork=yes`).
-- `outbound()` returns the `Egress` a filtered image accepts for it.
-
-Each code `check()` reports is declared in `rules`, as `App` declares
-`app-privileged-port`: `--explain` prints it, and an undeclared code is a
-`rule-undeclared` error. A code reported at several levels lists them, default first, with
+Each code `check()` reports is declared in `rules`: `--explain` prints it, and an
+undeclared code is a `rule-undeclared` error. A code reported at several levels lists them, default first, with
 a `when=` phrase per other.
 
 ### The shipped library
 
-`tundravm.components`:
+`tundravm.components` ships the baseline and the ways in; application components
+are the project's, as the example's are:
 
 | Component | What it is | Exports |
 |---|---|---|
@@ -375,9 +568,6 @@ a `when=` phrase per other.
 | `SshAccess` | root SSH by public key, keys baked or delivered | `port` |
 | `DevAccess` | debug access, only in the `dev` profile | none |
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
-| `Nethermind` | Nethermind built with the .NET 10 SDK, `dotnet` preset | `rpc`, `ws`, `engine_api` |
-| `Lighthouse` | a beacon node from the Lighthouse release | `http` |
-| `TaikoClient` | the taiko-client driver, built with Go | none |
 
 A service that asks for quotes (`quotes=True`) joins the `tdx` group and requires
 `EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
@@ -387,43 +577,11 @@ them.
 the installed commit (from a checkout of it, its `tools/` directory, pinned by digest).
 `Tdxs(source=Git(mirror, commit, subdir="tools"))` points every one of them at a mirror.
 
-The attested node in `examples/attested-node/` wires `Nethermind` to a service of its own:
-see [Volumes, secrets and ingress](#volumes-secrets-and-ingress).
-
 ## Profiles
 
 The image itself is the `production` profile. `dev=DevAccess(...)` adds a non-production
 `dev` profile: debugging tools, a serial console and root SSH by public key only. Anything
-else is a `Profile`:
-
-```python
-from tundravm import File, Image, Profile, Service
-from tundravm.ports import TCP
-
-web = Service(
-    "web",
-    ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
-    expose=[TCP(8080)],
-)
-worker = Service("worker", ["/usr/bin/busybox", "sleep", "infinity"])
-motd = File.text("/etc/motd", "production\n")
-
-image = Image(
-    "chain",
-    packages=["busybox"],
-    files=[motd],
-    services=[web, worker],
-    profiles={
-        "staging": Profile(
-            add=["strace"],
-            changes=[motd.ref.edit(content="staging\n"), web.ref.edit(environment={"STAGE": "staging"})],
-        ),
-        "bench": Profile(
-            extends="staging", add=["fio"], changes=[worker.ref.remove()], production=False
-        ),
-    },
-)
-```
+else is a `Profile`, as [stage 6](#6-operating-it) declares two.
 
 | Field | Meaning |
 |---|---|
@@ -452,43 +610,7 @@ not depend on which profiles a compile selects. `build --profile staging` is
 
 ## Volumes, secrets and ingress
 
-The image collects each volume and secret from the services that bind it. The attested
-node, `examples/attested-node/image.py`, uses all three runtime contracts: Nethermind on
-Hoodi, and `signer/`, a Go proxy that signs its block responses with the key each boot
-generates (`InstanceKey()`):
-
-<!-- fragment -->
-```python
-from tundravm import Image, RootFS, Service
-from tundravm.components import DevAccess, Egress, Nethermind, Network
-from tundravm.ports import AttestedTLS
-from tundravm.secrets import Generated, InstanceKey
-from tundravm.sources import GoBinary, Local
-from tundravm.storage import OperatorKey, Volume
-from tundravm.systemd import TcpProbe
-
-data = Volume("data", unlock=OperatorKey())
-jwt = Generated("jwt")
-nethermind = Nethermind(jwt=jwt, config="hoodi", state=data.directory("nethermind"))
-signer = Service(
-    "signer",
-    [GoBinary("signer", Local("signer")), "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
-    credentials=[InstanceKey()],
-    requires=[nethermind.rpc],
-    readiness=TcpProbe(8547),
-)
-
-image = Image(
-    "attested-node",
-    components=[nethermind],
-    services=[signer],
-    ingress=[AttestedTLS(8546, upstream=signer.endpoint(8547))],
-    network=Network(egress=Egress()),
-    rootfs=RootFS.verity(),
-    targets=("qemu", "azure", "gcp"),
-    dev=DevAccess(password="tdx"),
-)
-```
+The image collects each volume and secret from the services that bind it.
 
 ### Volumes
 
@@ -571,8 +693,7 @@ recorded in the manifest, never switched by a size threshold.
 traffic, accepting what the baseline (NTS time, resolvers, cloud metadata) and each
 component's `outbound()` send. A host may be `HOST:PORT`, and since nftables matches no
 names, `"logs.example:443"` opens 443 to any address. A production profile without it is
-an `egress-unfiltered` warning. `TaikoClient(l1=["HOST:PORT"])` names the
-L1 endpoints its secret holds, and `Observability(proxy="IP:PORT")` reaches every sink
+an `egress-unfiltered` warning. `Observability(proxy="IP:PORT")` reaches every sink
 through that one address.
 
 `observability=Observability(logs=JournalExport(url, credential=), metrics=PrometheusRemoteWrite(url, credential=))`
@@ -601,18 +722,8 @@ recorded `Mkosi(scripts=)` escape, since nothing could say what it changed.
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
 by sha256. `Git(url, ref, subdir="tools")` builds one directory of the repository, with the
-toolchain its `go.mod` names. Your own program is a `Local` source:
-
-<!-- fragment -->
-```python
-from tundravm import Image, Service
-from tundravm.ports import TCP
-from tundravm.sources import GoBinary, Local
-
-app = GoBinary("app", Local("app"))
-
-image = Image("demo", services=[Service("app", [app], expose=[TCP(8080)])])
-```
+toolchain its `go.mod` names. Your own program is a `Local` source, as the
+[signer](#4-the-signer) is.
 
 The path stays inside the project (the nearest `pyproject.toml`). The digest covers each
 file's path, sha256 and exec bit, and symlink targets, of what `git ls-files --cached
@@ -724,24 +835,11 @@ at construction, each with the slot that sets it (`KernelCommandLine` names
 `tests/test_NAME.py` does:
 
 ```python
-from tundravm import File, Image, Service
+from tundravm import Image
 from tundravm.components import Egress, Network
-from tundravm.ports import TCP
 from tundravm.testing import assert_clean, plan
 
-image = Image(
-    "demo",
-    packages=["busybox"],
-    files=[File.text("/srv/www/index.html", "<h1>demo</h1>\n")],
-    services=[
-        Service(
-            "app",
-            ["/usr/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/srv/www"],
-            expose=[TCP(8080)],
-        ),
-    ],
-    network=Network(egress=Egress()),
-)
+image = Image("node", network=Network(egress=Egress()))
 
 
 def test_lints_clean() -> None:
@@ -749,9 +847,9 @@ def test_lints_clean() -> None:
     assert_clean(plan(image), allow=("source-unpinned",))
 
 
-def test_the_firewall_opens_the_port() -> None:
+def test_egress_is_filtered() -> None:
     nftables = plan(image).file("/etc/nftables.conf").content.decode()
-    assert "tcp dport 8080 accept" in nftables
+    assert "hook output priority filter; policy drop" in nftables
 
 ```
 
@@ -767,9 +865,6 @@ def test_the_firewall_opens_the_port() -> None:
 | `boot(artifact)`, fixture `boot` | boots a built disk or UKI under QEMU with OVMF and reads the serial console |
 | `assert_probe(result)`, `read_probe` | a dev boot's probe report; fails unless it finished clean (`markers=[PROBE_DONE]` waits for it) |
 | `run_cli(*argv)` | runs the CLI in-process: `(exit code, stdout, stderr)` |
-
-The pytest fixtures load once tundravm is installed; `boot_unavailable()` and
-`build_unavailable()` say why a host cannot boot or build, for a test to skip on.
 
 ## Build
 
@@ -1072,28 +1167,27 @@ with the Python traceback.
 | `E_SOURCE` | a source did not resolve, or a checkout changed | `tundravm build --clean-cache` |
 | `E_POLICY` | `build --offline` met a source the workspace never fetched, or a tree that builds with the network | build once online, then `--offline` |
 | `E_BACKEND_EXECUTION` | mkosi failed | the error names mkosi's log; `build -v` echoes it; `doctor --for build` |
-| `E_STATE` | no build, instance or host tool where one was expected | the hint names the command: `build`, `build --dev`, `run`, `deploy` or what to install |
+| `E_STATE` | no build, instance or host tool where one was expected | the hint names the command |
 | `E_ARTIFACT_CHANGED` | an artifact's bytes changed | `tundravm verify BUILD` names the file |
 | `E_REPRODUCIBILITY` | two builds that should match did not | compare `observations.json` |
 | `E_MEASUREMENT` | an artifact that is not a UKI or a disk booting one | rebuild it with `tundravm build` |
 | `E_ATTESTATION` | the endpoint, issuer or validator failed, or evidence was not bound to the session | `run logs`, `journalctl -u tundravm-endpoint -u tdxs` |
 | `E_DEPLOYMENT` | a missing tool, no TDX for `--mode tdx`, a refused upgrade | the hint names it |
 
-A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint, where
-`[image]` marks a finding about the whole image. A finding several profiles share is one
-line naming them, and a hint several findings share follows the last of them once. The
+A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint; `[image]`
+marks one about the whole image, and profiles sharing a finding share its line. The
 report ends with the command that explains its codes, a component's included (here the
-`service` template's `App`):
+example's `Nethermind`):
 
 ```console
-$ tundravm check --explain app-privileged-port
+$ tundravm check --explain nethermind-volatile-state
 ```
 
 ```text
-app-privileged-port: error
-    declared by App in demo.py
-    The app runs as a regular user, so it cannot bind a port below 1024.
-    fix: Pass App(port=) 1024 or above.
+nethermind-volatile-state: warning
+    declared by Nethermind in components/nethermind.py
+    Nethermind keeps its database on the volatile root, so it resyncs at every boot.
+    fix: Pass state=volume.directory('nethermind') on a Volume.
 ```
 
 The [lint reference](reference/lint.md) lists tundravm's and the shipped components'
