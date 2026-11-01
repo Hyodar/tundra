@@ -306,7 +306,7 @@ class App(Component):
 
     @property
     def http(self) -> Endpoint:
-        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
+        return self.service("app").endpoint(self.port)
 
     def compose(self) -> Iterator[Package | File | Service]:
         yield Package("busybox")
@@ -335,9 +335,10 @@ The rules:
   components with the same fields are equal.
 - `compose()` yields declarations and nested components. They resolve before validation,
   so a component never hides in `services=`.
-- Exports are properties returning an `Endpoint`, a `ServiceRef` (`self.service("app")`) or
-  a `ServiceReady`. A caller writes `requires=[app.http]` or puts `app.http` in an argv,
-  where it renders as its URL. Nobody outside names a unit, a port or a path inside it.
+- Exports are properties returning an `Endpoint` (`self.service("app").endpoint(port)`), a
+  `ServiceRef` (`self.service("app")`) or a `ServiceReady`. A caller writes
+  `requires=[app.http]` or puts `app.http` in an argv, where it renders as its URL. Nobody
+  outside names a unit, a port or a path inside it.
 - `check(resolved)` returns diagnostics. It becomes a lint rule that `tundravm check` runs,
   once per profile: `resolved.profile` names it, and a finding without `profile=` is that
   profile's.

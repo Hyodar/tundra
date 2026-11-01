@@ -96,6 +96,12 @@ def test_a_service_endpoint_is_its_loopback_address_with_its_readiness() -> None
     assert (endpoint.url, endpoint.ready) == ("http://127.0.0.1:8080/health", api.ready)
     assert Service("app", ["/usr/bin/app"], requires=[endpoint]).requires == (endpoint,)
 
+    class Api(Component):
+        def compose(self) -> Iterator[Service]:
+            yield api
+
+    assert Api().service("api").endpoint(8080, path="/health") == endpoint
+
 
 @pytest.mark.parametrize(
     ("given", "spelled"),

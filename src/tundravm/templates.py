@@ -78,7 +78,7 @@ image = Image(
 _CLOUD_IMPORTS = (
     "from tundravm import Debian, File, Image, Package, Service\n"
     "from tundravm.components import (\n"
-    "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
+    "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n"
     "    Network,\n    Resolved,\n    Rule,\n)\n"
     "from tundravm.ports import TCP\n"
     "from tundravm.systemd import TcpProbe\n"
@@ -88,7 +88,7 @@ _APP_IMPORTS = {
     "service": (
         "from tundravm import Image, Service\n"
         "from tundravm.components import (\n"
-        "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
+        "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n"
         "    Network,\n    Resolved,\n    Rule,\n)\n"
         "from tundravm.ports import TCP\n"
         "from tundravm.sources import GoBinary, Local\n"
@@ -98,7 +98,7 @@ _APP_IMPORTS = {
     "prover": (
         "from tundravm import File, Image, Package, Service\n"
         "from tundravm.components import (\n"
-        "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n    Endpoint,\n"
+        "    Component,\n    DevAccess,\n    Diagnostic,\n    Egress,\n"
         "    Network,\n    Resolved,\n    Rule,\n)\n"
         "from tundravm.ports import AttestedTLS\n"
         "from tundravm.secrets import Secret\n"
@@ -123,18 +123,13 @@ class App(Component):
     version: str
     port: int
 
-    @property
-    def http(self) -> Endpoint:
-        """Where the app answers, with its readiness: what a caller wires to."""
-        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
-
     def compose(self) -> Iterator[Package | File | Service]:
         # Debian's busybox has the httpd applet: a real server with nothing to download.
         yield Package("busybox")
         yield File.text(f"{WWW}/index.html", self.page())
         # Runs as system user "app" (declared for you), sandboxed by the "static" preset,
         # restarted on failure. expose= is what the image's firewall opens; readiness= is
-        # what another service's requires=[app.http] would wait for.
+        # what another service's requires=[app.service("app")] waits for.
         yield Service(
             "app",
             ["/usr/bin/busybox", "httpd", "-f", "-p", str(self.port), "-h", WWW],
@@ -179,16 +174,11 @@ class App(Component):
     version: str
     port: int
 
-    @property
-    def http(self) -> Endpoint:
-        """Where the app answers, with its readiness: what a caller wires to."""
-        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
-
     def compose(self) -> Iterator[Service]:
         server = GoBinary("server", Local("app"))
         # Runs as system user "app" (declared for you), sandboxed by the "static" preset,
         # restarted on failure. expose= is what the image's firewall opens; readiness= is
-        # what another service's requires=[app.http] would wait for.
+        # what another service's requires=[app.service("app")] waits for.
         yield Service(
             "app",
             [server, "-port", str(self.port), "-version", self.version],
@@ -307,11 +297,6 @@ class App(Component):
     state: VolumeDirectory
     token: Secret
 
-    @property
-    def http(self) -> Endpoint:
-        """Where the app answers on the loopback, with its readiness: what the ingress fronts."""
-        return Endpoint("127.0.0.1", self.port, ready=self.service("app").ready)
-
     def compose(self) -> Iterator[Package | File | Service]:
         yield Package("busybox")
         yield File.text(f"{WWW}/index.html", self.page())
@@ -361,7 +346,7 @@ image = Image(
     "$title",
     components=[app],
     # TLS on 443, relayed to the app on the loopback: the only way requests reach it.
-    ingress=[AttestedTLS(443, upstream=app.http)],
+    ingress=[AttestedTLS(443, upstream=app.service("app").endpoint(APP_PORT))],
     # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata); list the rest.
     network=Network(egress=Egress()),
     # One UKI, one set of measurements, three disks: the cloud glue is gated at boot.

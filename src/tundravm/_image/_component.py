@@ -205,6 +205,12 @@ class ServiceRef:
         """The readiness handle of that service."""
         return ServiceReady(self.unit, self.probe)
 
+    def endpoint(self, port: int, *, path: str = "/", scheme: str = "http") -> Endpoint:
+        """Where that service answers on the loopback, with its readiness, as
+        ``Service.endpoint`` gives it: what a component exports
+        (``self.service("app").endpoint(8080)``). It opens no port."""
+        return Endpoint("127.0.0.1", port, path, scheme, ready=self.ready)
+
     @property
     def ref(self) -> Ref:
         """The reference a profile change targets."""

@@ -48,7 +48,7 @@ class Prometheus(Component):
     @property
     def http(self) -> Endpoint:
         """Where it answers, with its readiness."""
-        return Endpoint("127.0.0.1", self.port, ready=self.service("prometheus").ready)
+        return self.service("prometheus").endpoint(self.port)
 
     def compose(self) -> Iterator[object]:
         yield Build(

@@ -938,6 +938,7 @@ A service a component composed, named from outside: `raiko.service("raiko")`.
 
 | Member | Does |
 |---|---|
+| `ServiceRef.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where that service answers on the loopback, with its readiness, as `Service.endpoint` gives it: what a component exports (`self.service("app").endpoint(8080)`). It opens no port. |
 | `ServiceRef.ready` | The readiness handle of that service. |
 | `ServiceRef.ref` | The reference a profile change targets. |
 

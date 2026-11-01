@@ -97,7 +97,7 @@ class Nethermind(Component, build_network=True):
     @property
     def rpc(self) -> Endpoint:
         """JSON-RPC over HTTP."""
-        return Endpoint("127.0.0.1", self.rpc_port, ready=self.service("nethermind").ready)
+        return self.service("nethermind").endpoint(self.rpc_port)
 
     @property
     def ws(self) -> Endpoint:
@@ -107,7 +107,7 @@ class Nethermind(Component, build_network=True):
     @property
     def engine_api(self) -> Endpoint:
         """The Engine API a consensus driver calls with the shared JWT."""
-        return Endpoint("127.0.0.1", self.engine_port, ready=self.service("nethermind").ready)
+        return self.service("nethermind").endpoint(self.engine_port)
 
     def outbound(self) -> Egress:
         """The p2p port, over TCP and UDP (discovery); its RPC and Engine API are loopback."""
