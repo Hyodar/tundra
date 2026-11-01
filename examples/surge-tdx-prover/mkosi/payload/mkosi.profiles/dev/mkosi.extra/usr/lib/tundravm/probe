@@ -77,6 +77,20 @@ probe_volume() {
         esac
     fi
 }
+probe_egress() {
+    if ! command -v bash >/dev/null 2>&1; then
+        skip "no bash to send a datagram with"
+        return
+    fi
+    if said=$(bash -c 'printf x >"/dev/udp/$0/$1"' "$1" "$2" 2>&1); then
+        fail "a datagram to $1:$2/udp left the guest: the output chain does not drop it; systemctl status nftables.service, and check Network(egress=Egress(...))"
+        return
+    fi
+    case $said in
+        *"not permitted"*) ok "refused by the output chain (Operation not permitted)" ;;
+        *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
+    esac
+}
 probe_hardening() {
     if ! command -v systemd-analyze >/dev/null 2>&1; then
         skip "no systemd-analyze in the image"
@@ -168,6 +182,8 @@ check=port:443/tcp
 probe_port tcp 443
 check=volume:/persistent
 probe_volume /persistent yes
+check=egress:192.0.2.1:9
+probe_egress 192.0.2.1 9
 check=hardening:nethermind.service
 probe_hardening nethermind.service 2.7 dotnet
 check=hardening:taiko-client.service

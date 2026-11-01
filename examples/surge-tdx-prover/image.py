@@ -4,13 +4,14 @@ The workloads come from ``tundravm.components``, which pins their sources and
 toolchains. Their state lives on a volume an operator unlocks after attesting the
 instance; the Engine API secret, the driver's L1 configuration and Raiko's configuration
 are delivered the same way and never built in. Requests reach Raiko only through the
-attested TLS ingress. One verity-rooted payload boots on QEMU, Azure and GCP.
+attested TLS ingress, and it sends only where its components say they send. One
+verity-rooted payload boots on QEMU, Azure and GCP.
 
     tundravm build examples/surge-tdx-prover/image.py --tree-only examples/surge-tdx-prover/mkosi
 """
 
 from tundravm import Image, RootFS
-from tundravm.components import DevAccess, Nethermind, Raiko, TaikoClient
+from tundravm.components import DevAccess, Egress, Nethermind, Network, Raiko, TaikoClient
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
@@ -30,7 +31,7 @@ image = Image(
     volumes=[data],
     secrets=[jwt, chain, config],
     ingress=[AttestedTLS(443, upstream=prover.http)],
-    # Egress is per deployment: Egress(ports=, hosts=) for its L1 RPC, Nethermind peers, collateral.
+    network=Network(egress=Egress()),
     rootfs=RootFS.verity(),
     targets=("qemu", "azure", "gcp"),
     dev=DevAccess(password="tdx"),

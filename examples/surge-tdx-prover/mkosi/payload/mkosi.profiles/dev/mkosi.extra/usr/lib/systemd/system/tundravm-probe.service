@@ -1,6 +1,6 @@
 [Unit]
 Description=Check what this profile's declarations promise
-After=tdx-evidence.service tdxs.socket nethermind.service nethermind-ready.service taiko-client.service taiko-client-ready.service raiko.service raiko-ready.service attested-tls-443.service attested-tls-443-ready.service runtime-init.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service
+After=tdx-evidence.service tdxs.socket nethermind.service nethermind-ready.service taiko-client.service taiko-client-ready.service raiko.service raiko-ready.service attested-tls-443.service attested-tls-443-ready.service runtime-init.service nftables.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service
 
 [Service]
 Type=oneshot
