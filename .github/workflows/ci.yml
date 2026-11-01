@@ -21,6 +21,9 @@ on:
       - "**"
   pull_request:
 
+# A push already runs every branch of this repository, so a pull request from one would run
+# the same commit twice; each job skips that case and runs pull requests from forks only.
+
 concurrency:
   # A newer push to the same branch (or pull request) cancels the run it supersedes.
   group: ci-${{ github.ref }}
@@ -30,11 +33,12 @@ jobs:
   test:
     # Lint, format, types and the unit suite: a fake mkosi and fake checkouts, no sudo, no
     # build host, no network resolution (tests/conftest.py).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -60,11 +64,12 @@ jobs:
   templates:
     # Real mkosi builds on the runner: the smoke recipe (no source builds) and the service
     # and cloud templates, whose evidence service needs tundra-tools (see the header).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -87,11 +92,12 @@ jobs:
     # templates are Image files whose evidence service builds tundra-tools from its source
     # repository: the bake fetches it, so this job needs read access to that repository
     # (TUNDRA_TOOLS_TOKEN, see the header).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 75
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -111,7 +117,7 @@ jobs:
 
       - name: Upload console logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-console-logs
           path: ${{ runner.temp }}/boot-logs
@@ -126,13 +132,14 @@ jobs:
     # the boot probe still prints). The dev build runs as an instance with
     # `tundravm run --mode simulated` (KVM when the runner has it, TCG otherwise), where the
     # gate records simulated, until the host fetches the fixture's page through the forward.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 120
     env:
       TUNDRAVM_BACKEND: local
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -196,7 +203,7 @@ jobs:
 
       - name: Upload console logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fixture-console-logs
           path: ${{ runner.temp }}/boot-logs
@@ -209,13 +216,14 @@ jobs:
     # overlay (the fixture's boot-probe task prints it to the console; it is a boot task,
     # which the execution gate does not hold back, so the production build proves it while
     # its services stay fail-closed).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 90
     env:
       TUNDRAVM_BACKEND: local
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -245,7 +253,7 @@ jobs:
 
       - name: Upload console logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verity-console-logs
           path: ${{ runner.temp }}/boot-logs
@@ -254,13 +262,14 @@ jobs:
   verity-cloud:
     # The verity layout's azure and gcp profiles: both converters must keep the root and
     # hash partitions byte for byte (tests/integration/test_verity_cloud.py).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 90
     env:
       TUNDRAVM_BACKEND: local
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -292,13 +301,14 @@ jobs:
     # sources, mkosi state and tree); every artifact must match, which exits 1 otherwise.
     # The comparison is recorded in each build directory's observations.json, and each
     # build directory is then verified against its manifest.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 120
     env:
       TUNDRAVM_BACKEND: local
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -332,7 +342,7 @@ jobs:
 
       - name: Upload the records
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reproduce-records
           path: ${{ runner.temp }}/reproduce-records
