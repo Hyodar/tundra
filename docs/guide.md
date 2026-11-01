@@ -848,43 +848,59 @@ $ tundravm show latest --measurements
 $ tundravm show --diff OLD NEW
 ```
 
-Without a build, `show` prints the image as it resolves: its name and file on the first
-line, then the production profile and the others as declared; `--profile P` picks some
-(`--profile dev` is the dev profile), and `--json` adds where each declaration came from.
-With a build (a directory, an id prefix or `latest`; `--dev` is the latest development
-build), it prints the build's report (`--json` puts it under `report`), then the
-manifest's provenance and unchecked guarantees; `--units`, `--tree` and `--measurements`
-narrow it. `--diff` compares two builds: packages, files, units, boot payload,
+Without a build, `show` prints the image as it resolves, the production profile first;
+`--profile P` picks some, and `--json` adds where each declaration came from.
+With a build (a directory, an id prefix, `latest`; `--dev` the latest development one),
+it prints the build's report, the manifest's provenance, its unchecked guarantees and its
+boot probe's checks; `--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds: packages, files, units, boot payload,
 measurements and policy coverage.
 
 ## Run
 
 ```console
-$ tundravm run --mode simulated --dev --detach
+$ tundravm run --mode simulated --dev --probe
 $ tundravm run status demo-1
 $ tundravm run logs demo-1
 $ tundravm run stop demo-1
 ```
 
-`run` boots `qemu.raw` through OVMF from its ESP, on a snapshot, so the build is never
-written. It forwards from `127.0.0.1` every TCP port the image accepts and the management
-port 8745, on the same port when it is free and unprivileged. `--mode` is required:
+`run` boots `qemu.raw` through OVMF from its ESP on a snapshot (the build is never
+written) and forwards from `127.0.0.1` every TCP port the image accepts and the management
+port 8745, on the same port when free and unprivileged. `--mode` is required:
 
 | Mode | Boots | Evidence |
 |---|---|---|
 | `simulated` | no TDX; KVM when `/dev/kvm` is usable, TCG otherwise | verdicts are `simulated` |
 | `tdx` | TDVF with a `tdx-guest` object | real quotes; refused unless `doctor --for tdx` is ready |
 
-A production build boots in `simulated` fail-closed: `tdx-evidence.service` finds no TDX
-and refuses, none of its services start, and `run status` says `fail-closed`. The console
-still shows the boot. Run the dev build (`--dev`) to use the services without TDX.
+A production build boots `simulated` fail-closed: no service starts, and `run status`
+says so. Run the dev build (`--dev`) to use the services without TDX.
 
-The instance is `<image>-<n>` under `.tundravm/instances/`: `instance.json` (the build,
-mode, QEMU argv and forwarded ports), `events.jsonl` (one record per action, never a
-value) and `console.log`. Each declared volume gets a fresh sparse 16 GiB disk,
-`volume-<name>.img` in the instance directory, attached under its serial. `run ssh` opens
-a shell only on a development build that runs SSH. `run mode` says what the mode means for
-evidence.
+The instance is `.tundravm/instances/<image>-<n>/`: `instance.json` (build, mode, QEMU
+argv, ports), `events.jsonl` (one record per action, never a value), `console.log`, and a
+sparse 16 GiB `volume-<name>.img` per volume. `run ssh` opens a shell on a dev build that
+runs SSH; `run mode` explains the mode.
+
+### The boot probe
+
+Every development profile carries `tundravm-probe.service`, a checklist compiled from its
+declarations (a production profile carries none), printing one `tundravm-probe: <check>
+ok|fail|skip <detail>` line per check; a `fail` says what to do:
+
+| Check | Holds when |
+|---|---|
+| `mode` | `/run/tundravm/mode` is `simulated` or `tdx` |
+| `service:`, `socket:`, `timer:` | each `Service`, socket or timer is active (or exited 0) |
+| `port:` | each `expose=` port has a listener |
+| `volume:` | each `Volume` is mounted, ext4, on dm-crypt |
+| `egress:` | with `Egress`, a datagram no rule accepts is refused |
+| `hardening:` | a preset's `systemd-analyze security` score is under its ceiling |
+| `kernel:` | no disabled symbol in `/proc/kallsyms` (`Kernel.build`), else no uncurated module |
+| `host-keys` | with SSH, the host key is root-owned, read-only to others |
+| `rtmr` | skipped: registers come only from a quote, which `attest` checks |
+
+`--probe` waits for it (up to `--timeout`), prints the table, writes `probe.json` and
+exits 1 on a failure; `run probe INSTANCE` reads a running instance's.
 
 ## Deploy
 
@@ -968,13 +984,13 @@ replaced. The [trust page](trust.md#recovery) has the recovery rules.
 
 ## Testing a project
 
-`tundravm.testing` reads an image as values without building it. The generated
-`tests/test_NAME.py` uses it; so can any test:
+`tundravm.testing` reads an image as values without building it, as the generated
+`tests/test_NAME.py` does:
 
 ```python
 from tundravm import File, Image, Service
 from tundravm.ports import TCP
-from tundravm.testing import assert_clean, assert_diagnostic, plan
+from tundravm.testing import assert_clean, plan
 
 image = Image(
     "demo",
@@ -995,36 +1011,27 @@ def test_lints_clean() -> None:
     assert_clean(plan(image), allow=("source-unpinned",))
 
 
-def test_the_app_runs_as_its_own_user() -> None:
-    app = plan(image).service("app")
-    assert app.user == "app"
-    assert app.get("Service", "Restart") == "on-failure"
-
-
 def test_the_firewall_opens_the_port() -> None:
     nftables = plan(image).file("/etc/nftables.conf").content.decode()
     assert "tcp dport 8080 accept" in nftables
 
-
-def test_the_tdxs_source_is_unpinned() -> None:
-    assert assert_diagnostic(plan(image), "source-unpinned").severity == "warning"
 ```
 
 | Helper | Does |
 |---|---|
-| `plan(image, profile)`, `plan(component)` | one profile compiled in memory (a component alone on an image named after it): `service()`, `unit()`, `file()`, `packages`, `users`, `settings()`, `lint()` |
+| `plan(image, profile)`, `plan(component)` | one profile (a component on an image of its own) compiled in memory: `service()`, `unit()`, `file()`, `packages`, `users`, `settings()`, `lint()` |
 | `assert_clean(subject, allow=)` | fails on any error or warning not allowed |
 | `assert_diagnostic(subject, code)` | the first finding with that code, or a failure listing all |
 | `assert_tree(tundravm.compile(image), golden)` | every path, byte, exec bit and symlink; `TUNDRAVM_UPDATE_GOLDEN=1` rewrites |
-| `read_lock(path)` | `build/tundravm.lock` as the value `tundravm.compile(image, lock=)` and `plan(image, lock=)` take |
-| `FakeMkosi`, fixture `fake_mkosi` | mkosi replaced at the adapter: backends run, nothing forks, `build` writes placeholder outputs, `calls` records each argv |
-| `FakeSources` | the source fetch replaced at its git and http boundary: each checkout is a stub a later build reuses, nothing reaches the network, `fetched` records each |
+| `read_lock(path)` | the lockfile, as `compile(image, lock=)` and `plan(image, lock=)` take it |
+| `FakeMkosi`, fixture `fake_mkosi` | mkosi replaced at the adapter: nothing forks, `build` writes placeholders, `calls` records each argv |
+| `FakeSources` | git and http fetches replaced by stub checkouts, `fetched` records each |
 | `boot(artifact)`, fixture `boot` | boots a built disk or UKI under QEMU with OVMF and reads the serial console |
+| `assert_probe(result)`, `read_probe` | a dev boot's probe report; fails unless it finished clean (`markers=[PROBE_DONE]` waits for it) |
 | `run_cli(*argv)` | runs the CLI in-process: `(exit code, stdout, stderr)` |
 
-The pytest fixtures load automatically once tundravm is installed. `boot` needs QEMU and
-OVMF; `boot_unavailable()` and `build_unavailable()` say why a host cannot, so a test can
-skip on the reason.
+The pytest fixtures load once tundravm is installed; `boot_unavailable()` and
+`build_unavailable()` say why a host cannot boot or build, for a test to skip on.
 
 ## Converting
 

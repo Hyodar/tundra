@@ -170,6 +170,35 @@ against stand-ins for `/proc/cpuinfo`, the guest device and the mode file:
 `test_without_tdx_a_development_profile_records_simulated`,
 `test_with_a_quote_path_either_profile_records_tdx`.
 
+## The probe
+
+Plan 5.2 item 7: the dev profile carries `tundravm-probe.service`, the checklist lowering
+derives from its declarations (`src/tundravm/_modules/probe.py`); the production profile
+carries none. Run `41292564613` on `ci/probe` (at `b842731`, on master `e6c7d71`): the
+`fixture-boot` job ran the dev build with `tundravm run latest-development --mode simulated
+--probe`, which exited 0 and wrote `probe.json`:
+
+```
+check                      verdict  detail
+mode                       ok       simulated
+rtmr                       skip     no TDX: a simulated guest has no registers to compare with measurements.json
+service:greeter.service    ok       exited 0
+service:web.service        ok       active
+port:8080/tcp              ok       listening
+hardening:greeter.service  ok       exposure 1.5, ceiling 2.5 (static)
+hardening:web.service      ok       exposure 1.5, ceiling 2.5 (static)
+kernel:modules             ok       5 loaded, each curated or held by one
+host-keys                  ok       /etc/ssh root:root 755, ssh_host_ed25519_key root:root 600
+8 ok, 0 fail, 1 skip
+```
+
+`show latest` printed `boot probe    none: a production build carries none`, and the
+production boots of the fixture and the verity fixture printed no probe line
+(`test_the_production_build_carries_no_boot_probe`). The fixture declares no volume, no
+egress and no built kernel, so the `volume:`, `egress:` and `kernel:symbols` checks are
+compiled and asserted (`tests/compiler/test_probe.py`) but not booted; the `boot` job's
+service template probe assertion skips with the templates while tundra-tools is private.
+
 ## Not proven
 
 - The replayed-quote and wrong-recipient-key tests of plan 6.3 need the attested endpoint's

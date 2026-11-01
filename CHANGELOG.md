@@ -19,14 +19,15 @@ Breaking changes are marked **Breaking**.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports and 8745, one hardened user per service, and `tdxs`.
 - `Service` takes an argv; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`); `expose=` is the only way to open a port.
 - A timer service keeps every keyword and refuses the ones only a long-lived service has.
-- `Hardening.preset(NAME)` names the runtime class (`static`, `jit`, `node`, `python`, `dotnet`).
+- `Hardening.preset(NAME)` names the runtime class (`static`, `jit`, `node`, `python`, `dotnet`), each with a `systemd-analyze security` ceiling.
+- Every development profile compiles in a boot probe derived from its declarations (services, ports, volumes, egress, sandboxes, kernel, host keys); a production profile carries none.
 - `Component` is a dataclass with `compose()`, typed exports (`Endpoint`, `ServiceRef`, `ServiceReady`) and an optional `check()`.
 - `Profile(extends=, add=, changes=, production=)` with `value.ref.edit(...)`, which takes the value's own constructor keywords, and `value.ref.remove()`.
 - `Volume` with `OperatorKey`, `TpmSeal` or `BrokerKey`, `Secret` as a systemd credential, `AttestedTLS` and `TLS` ingress, `RootFS.verity()`, `Observability`.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
 - `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`.
-- `tundravm.testing`: `plan(image)` or `plan(component)`, `assert_clean`, `assert_diagnostic`, `assert_tree`, `read_lock`, `FakeMkosi`, `FakeSources`, `boot`, `run_cli`, `image_file`.
+- `tundravm.testing`: `plan(image)` or `plan(component)`, `assert_clean`, `assert_diagnostic`, `assert_tree`, `read_lock`, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe`, `run_cli`, `image_file`.
 - **Breaking:** the API speaks the public model: `Resolved.targets` and `.components`, `class X(Component, name=)`, `ImageFile.component`, `image_file`; the internal-model test helpers and the `recipe` and `compiled` fixtures are gone.
 
 ### CLI
@@ -38,6 +39,7 @@ Breaking changes are marked **Breaking**.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds with `TUNDRA_TOOLS_TOKEN` when the repository sets it.
 - `show` leads with the image and its file, then production; with a build, with the build's report; `--diff` compares two builds.
 - `run --mode simulated|tdx` is always explicit; a production build boots fail-closed without TDX, and `--dev` runs the dev build's services.
+- `run --probe` and `run probe INSTANCE` wait for the boot probe, print its table, write `probe.json` and exit 1 on a failed check; `show BUILD` lists the checks.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` run the one replacement workflow on GCP.
 - `attest` verifies fresh evidence and delivers nothing; `secrets` attests again before it delivers or unlocks.
 - `doctor` prints one row per capability with its fix; `build:go` blocks without `go` (every image's `Tdxs` is Go), `build:rustup` only when the image needs it.

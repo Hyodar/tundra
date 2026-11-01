@@ -46,6 +46,13 @@ How the last row works (plan 6.1):
   TDX is missing by mistake. The release predicate is what keeps production secrets from a
   host you do not trust.
 
+The boot probe a development profile carries (`run --probe`) checks from inside the guest
+that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress
+refused, sandboxes under their ceilings, no module or kernel symbol beyond the declared
+ones, host keys root-owned. It catches a broken image, not an attacker: it runs inside the
+guest it checks, so a compromised guest can print `ok` for anything, and it reads no
+register. Evidence is the quote `attest` verifies. A production profile carries no probe.
+
 ### What the quote covers
 
 `build` writes `measurements.json`: one record per target and boot path (`uki` through
