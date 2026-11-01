@@ -1,5 +1,9 @@
 """Source builds: a fetched source plus a build recipe, pinned through the lockfile.
 
+A source is a git repository (:class:`GitSource`), a download (:class:`HttpSource`) or a
+directory of the project (:class:`LocalSource`), pinned by commit, sha256 or content
+digest (:func:`local_digest`).
+
 ``declarative.lower`` turns each declarative ``Build`` into a :class:`SourceBuild`
 recorded on its profile's state; the internal modules declare theirs directly.
 
@@ -25,6 +29,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import tomllib
@@ -158,9 +163,191 @@ class HttpSource:
         return {"kind": self.kind, "url": self.url, "sha256": self.sha256}
 
 
-Source = GitSource | HttpSource
+@dataclass(frozen=True, slots=True)
+class LocalSource:
+    """A directory of the project: *path* as the image file names it, *directory* on the host.
+
+    Its pin is the content digest of the directory (:func:`local_digest`), computed on
+    the host and never over the network, so ``lock`` records it again each time and a
+    change of the directory is drift (:data:`LOCAL_CHANGED`). The checkout is a copy of
+    the files :func:`local_files` lists.
+    """
+
+    path: str
+    directory: Path = field(kw_only=True, compare=False, repr=False)
+
+    kind: Literal["local"] = field(default="local", init=False, repr=False)
+
+    @property
+    def url(self) -> str:
+        """The path: what the lockfile records as the source."""
+        return self.path
+
+    @property
+    def requested(self) -> str:
+        return self.path
+
+    @property
+    def inline_pin(self) -> str | None:
+        return None
+
+    def describe(self) -> str:
+        """``local <path>``, as lock errors name the source."""
+        return f"local {self.path}"
+
+    def to_payload(self) -> dict[str, object]:
+        return {"kind": self.kind, "path": self.path}
+
+    def digest(self) -> str:
+        """:func:`local_digest` of :attr:`directory`."""
+        return local_digest(self.directory, self.describe())
+
+
+Source = GitSource | HttpSource | LocalSource
 Resolver = Callable[[Source], str]
-"""Maps a source to its pin: a commit sha for git, a sha256 for http."""
+"""Maps a source to its pin: a commit sha for git, a sha256 for http (a local source is
+never resolved: its pin is :meth:`LocalSource.digest`)."""
+
+LOCAL_CHANGED = "local-changed"
+"""The drift of a local source whose directory no longer has the digest the lock pins."""
+
+
+def local_files(directory: Path) -> list[str]:
+    """The files of *directory* a local source holds: relative POSIX paths, sorted.
+
+    Inside a git work tree it is what ``git ls-files --cached --others
+    --exclude-per-directory=.gitignore`` lists there: the tracked files and the untracked
+    ones the repository's ``.gitignore`` files do not ignore (only those, not
+    ``.git/info/exclude`` or the user's global excludes, which differ from host to host).
+    Outside one, or without ``git``, every file under it. ``.git`` is never part of it,
+    and neither is a deleted tracked file. A regular file or a symlink is listed; anything
+    else (a fifo, a socket, a device) is refused with :class:`~tundravm.errors.SourceError`.
+    """
+    listed = _git_listing(directory)
+    found: set[str] = set()
+    for rel in _walk_local(directory, "") if listed is None else listed:
+        path = directory / rel
+        if not path.is_symlink() and path.is_dir():
+            found.update(_walk_local(directory, rel))
+        elif os.path.lexists(path):
+            found.add(rel)
+    for rel in found:
+        mode = (directory / rel).lstat().st_mode
+        if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+            raise SourceError(
+                f"The local source {directory} holds {rel}, which is not a file or a symlink.",
+                source=f"local {directory}",
+                reason=f"{rel} is not a regular file or a symlink",
+                hint=f"Remove {rel}, or list it in a .gitignore of the directory.",
+            )
+    return sorted(found)
+
+
+def _git_listing(directory: Path) -> list[str] | None:
+    """What git lists in *directory* (see :func:`local_files`), ``None`` outside a work tree."""
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(directory),
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-per-directory=.gitignore",
+                "--",
+                ".",
+            ],
+            check=False,
+            capture_output=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    entries = completed.stdout.decode("utf-8", "surrogateescape").split("\0")
+    return [entry.rstrip("/") for entry in entries if entry]
+
+
+def _walk_local(directory: Path, prefix: str) -> list[str]:
+    """Every file and symlink under ``directory/prefix``, relative to *directory*, but ``.git``."""
+    found: list[str] = []
+    for current, dirnames, filenames in os.walk(directory / prefix):
+        base = Path(current).relative_to(directory)
+        links = [d for d in dirnames if (Path(current) / d).is_symlink()]
+        dirnames[:] = sorted(d for d in dirnames if d != ".git" and d not in links)
+        found.extend((base / name).as_posix() for name in (*filenames, *links) if name != ".git")
+    return found
+
+
+def local_manifest(directory: Path) -> dict[str, str]:
+    """``{path: sha256[ x] | -> target}`` of :func:`local_files`: a file's sha256, `` x``
+    when it is executable, and a symlink's target."""
+    found: dict[str, str] = {}
+    for rel in local_files(directory):
+        path = directory / rel
+        if path.is_symlink():
+            found[rel] = f"-> {os.readlink(path)}"
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        found[rel] = digest + (" x" if path.stat().st_mode & 0o111 else "")
+    return found
+
+
+def manifest_digest(manifest: Mapping[str, str]) -> str:
+    """The sha256 of *manifest* (:func:`local_manifest`) as canonical JSON."""
+    canonical = json.dumps(dict(manifest), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def local_digest(directory: Path, described: str | None = None) -> str:
+    """The pin of a local source: :func:`manifest_digest` of :func:`local_manifest`.
+
+    It covers each file's path, its sha256 and whether it is executable, and each
+    symlink's target, in path order; nothing else (owners, other mode bits, times), so
+    the same files hash the same on every host. A directory that holds no file is
+    refused with :class:`~tundravm.errors.SourceError` (*described* names the source).
+    """
+    manifest = local_manifest(directory)
+    if not manifest:
+        label = described or f"local {directory}"
+        raise SourceError(
+            f"The {label} source holds no files.",
+            source=label,
+            reason=f"{directory} holds no file a build could use",
+            hint="Check the path, and that a .gitignore does not ignore every file in it.",
+        )
+    return manifest_digest(manifest)
+
+
+def copy_local(source: LocalSource, pin: str, dest: Path) -> None:
+    """Copy the files of *source* into *dest* and check the copy is *pin*.
+
+    A file is written ``0755`` when executable and ``0644`` otherwise, a symlink as its
+    target. A copy whose digest is not *pin* (the directory changed since the lock)
+    raises :class:`~tundravm.errors.SourceError` naming ``tundravm lock``.
+    """
+    for rel in local_files(source.directory):
+        origin = source.directory / rel
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if origin.is_symlink():
+            target.symlink_to(os.readlink(origin))
+            continue
+        shutil.copyfile(origin, target)
+        target.chmod(0o755 if origin.stat().st_mode & 0o111 else 0o644)
+    copied = manifest_digest(_manifest(dest))
+    if copied != pin:
+        described = source.describe()
+        reason = f"its digest is {copied[:12]}, the lock pins {pin[:12]}"
+        raise SourceError(
+            f"The {described} source changed since the lock ({LOCAL_CHANGED}).",
+            source=described,
+            reason=reason,
+            hint="Run `tundravm lock` to record it, review and commit the lockfile, then build.",
+        )
 
 
 def _assignment(key: str, value: str) -> str:
@@ -1142,12 +1329,13 @@ def _identity_payload(source: Source) -> dict[str, object]:
 
 
 def write_marker(checkout: Path, source: Source, pin: str) -> None:
-    """Mark *checkout* complete: its pin, its source identity and, for http, a file manifest.
+    """Mark *checkout* complete: its pin, its source identity and, for http and local, a
+    file manifest.
 
     :func:`is_fetched` verifies the checkout against it before reuse.
     """
     marker: dict[str, object] = {"pin": pin, "source": _identity_payload(source)}
-    if isinstance(source, HttpSource):
+    if isinstance(source, (HttpSource, LocalSource)):
         marker["files"] = _manifest(checkout)
     text = json.dumps(marker, indent=2, sort_keys=True) + "\n"
     (checkout / FETCH_MARKER).write_text(text, encoding="utf-8")
@@ -1224,7 +1412,7 @@ def _checkout_problem(
     """Why *checkout* no longer holds *source* at *pin*, or ``None`` when it does."""
     if marker.get("source") != _identity_payload(source):
         return "the checkout was fetched for another source declaration"
-    if isinstance(source, HttpSource):
+    if isinstance(source, (HttpSource, LocalSource)):
         recorded = marker.get("files")
         if not isinstance(recorded, dict):
             return "the checkout has no file manifest"
@@ -1297,10 +1485,14 @@ def fetch_source(source: Source, pin: str, dest: Path) -> None:
     (and the submodules when the source asks for them); git never prompts, so
     its credential helpers and SSH agent apply. http: the download, checked
     against *pin* and unpacked (``--strip-components=1``) next to the archive
-    when it is a tarball, as the in-sandbox hook did. Raises
+    when it is a tarball, as the in-sandbox hook did. local: a copy of its files
+    (:func:`copy_local`), which must still be *pin*. Raises
     :class:`~tundravm.errors.SourceError` naming the source and the reason.
     """
     dest.mkdir(parents=True)
+    if isinstance(source, LocalSource):
+        copy_local(source, pin, dest)
+        return
     if isinstance(source, HttpSource):
         _download(source, pin, dest)
         return
@@ -2112,6 +2304,8 @@ def default_resolver(source: Source) -> str:
     """
     if source.inline_pin is not None:
         return source.inline_pin
+    if isinstance(source, LocalSource):
+        return source.digest()
     if isinstance(source, GitSource):
         return _ls_remote(source)
     return _download_digest(source)
@@ -2229,7 +2423,8 @@ def resolve_pins(
 
     Online, every mutable source is resolved again through *resolver* (default:
     :func:`default_resolver`). Offline, inline pins and matching *previous*
-    entries are reused. Every source is attempted; when any fails, one
+    entries are reused. A local source is never resolved: its pin is its digest
+    (:meth:`LocalSource.digest`), online or not. Every source is attempted; when any fails, one
     :class:`LockfileError` lists each failed source with its reason and counts
     the *kept* pins as resolved; its ``failures`` maps the failed names to
     :class:`~tundravm.errors.SourceError`.
@@ -2240,6 +2435,12 @@ def resolve_pins(
     for name, build in sorted(builds.items()):
         if build.source.inline_pin is not None:
             pins.append(build.locked(build.source.inline_pin))
+            continue
+        if isinstance(build.source, LocalSource):
+            try:
+                pins.append(build.locked(build.source.digest()))
+            except SourceError as exc:
+                failures[name] = exc
             continue
         if offline:
             pin = build.pin_from(previous)
@@ -2314,7 +2515,10 @@ def source_drift(
     ``source <name> is not pinned`` unless the declaration pins it inline; one
     whose entry was resolved from a different url/ref, or (with *resolver*) whose
     ref now resolves elsewhere, is changed, detailed as ``<old sha7> -> <new sha7>``.
-    Without *resolver* nothing touches the network.
+    A local source whose directory no longer has the locked digest is changed, detailed
+    as ``local-changed: <path> changed since the lock (<old7> -> <new7>)``; its digest
+    is computed on the host, so this needs no *resolver*. Without *resolver* nothing
+    touches the network.
     """
     added: list[str] = []
     changed: list[str] = []
@@ -2326,6 +2530,15 @@ def source_drift(
             added.append(section)
             if build.source.inline_pin is None:
                 details[section] = f"source {name} is not pinned"
+            continue
+        if isinstance(build.source, LocalSource) and build.matches(locked):
+            digest = build.source.digest()
+            if digest != locked.digest:
+                changed.append(section)
+                details[section] = (
+                    f"{LOCAL_CHANGED}: {build.source.path} changed since the lock "
+                    f"({locked.digest[:7]} -> {digest[:7]})"
+                )
             continue
         if build.matches(locked) and resolver is None:
             continue
@@ -2359,7 +2572,9 @@ __all__ = [
     "InstallKind",
     "KernelFile",
     "KernelSource",
+    "LOCAL_CHANGED",
     "LanguageBuild",
+    "LocalSource",
     "NOT_PREFETCHED",
     "NamedSource",
     "Resolver",
@@ -2369,6 +2584,7 @@ __all__ = [
     "SourceBuild",
     "checkout_identity",
     "checkout_rust_toolchain",
+    "copy_local",
     "default_resolver",
     "deps_problem",
     "fetch_source",
@@ -2377,6 +2593,10 @@ __all__ = [
     "host_go_version",
     "host_rustup_version",
     "is_fetched",
+    "local_digest",
+    "local_files",
+    "local_manifest",
+    "manifest_digest",
     "prefetch_deps",
     "require_host_go",
     "require_host_rustup",

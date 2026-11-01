@@ -77,7 +77,8 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   `tundravm.components` (`Component`, its exports, `Resolved`, `Diagnostic` and the
   shipped library), `tundravm.storage` (`Volume`, `VolumeDirectory`, `OperatorKey`,
   `TpmSeal`, `BrokerKey`), `tundravm.secrets` (`Secret`, `Credential`), `tundravm.sources`
-  (`GoBinary`, `CargoBinary`, `Build`, `Install`, `Git`, `Http`) and `tundravm.errors`. The
+  (`GoBinary`, `CargoBinary`, `Build`, `Install`, `Local`, `Git`, `Http`) and
+  `tundravm.errors`. The
   quickstart imports from two of them; the last release had 126 names in `tundravm`. Design:
   `docs/design/namespaces-2026-10-31.md`.
 - `Image(name, ...)` slots: `base`, `packages`, `files`, `services`, `components`,
@@ -95,6 +96,21 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   socket, directives no keyword holds in `unit=DropIn(...)`, a note where the unit differs
   from what the image implies and an unsupported line for what no slot holds. `--mode` is
   gone: the output follows the image's defaults, so no byte-exact mode applies.
+- `Local("app")` is a source like `Git` and `Http`: the directory beside the image file,
+  so your own program builds into the image without being pushed anywhere first. The path
+  is relative to the file that declares it and must stay inside the project directory (the
+  nearest `pyproject.toml`); an absolute path is refused. `lock` pins its content digest,
+  the sha256 over each file's path, sha256 and exec bit and each symlink's target, of the
+  files a git checkout would hold (`git ls-files --cached --others
+  --exclude-per-directory=.gitignore` inside a work tree, every file outside one; never
+  `.git`). `build` copies those files into the workspace like a checkout, so the Go and
+  Rust toolchain rules, the prefetch and the offline sandbox apply unchanged. A directory
+  that changed since the lock is `local-changed` naming its path, in `check` and
+  `lock --check`. `build --dev` re-pins it in the lock first, with no network, rewriting
+  only the Local entries and printing `lock: <name> re-pinned, local source changed`; a
+  production build refuses it until `tundravm lock` records it. The manifest
+  and the SBOM record the digest, and `show BUILD` prints it in its sources table's pin
+  column.
 - `Kernel.default(cmdline=[...])` and `Kernel.build(..., cmdline=[...])` append kernel
   parameters to the UKI's command line after the image's own; none is added by default.
   Each entry is one parameter, and the ones tundravm sets (`root=`, `roothash=`,

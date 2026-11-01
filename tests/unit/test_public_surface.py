@@ -74,7 +74,7 @@ COMPONENTS = [
 ]
 STORAGE = ["BrokerKey", "OperatorKey", "TpmSeal", "Volume", "VolumeDirectory"]
 SECRETS = ["Credential", "Secret"]
-SOURCES = ["Build", "CargoBinary", "Git", "GoBinary", "Http", "Install"]
+SOURCES = ["Build", "CargoBinary", "Git", "GoBinary", "Http", "Install", "Local"]
 ERRORS = [
     "ArtifactError",
     "AttestationError",
@@ -118,6 +118,7 @@ REUSED_FROM_DECLARATIVE = [
     "Http",
     "Install",
     "Listen",
+    "Local",
     "Resolved",
     "StaticAddress",
     "User",

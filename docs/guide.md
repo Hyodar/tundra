@@ -225,7 +225,7 @@ uses:
 | `tundravm.components` | `Component`, its exports (`Endpoint`, `ServiceRef`, `ServiceReady`, `ComponentReady`), `Resolved` and `Diagnostic` for `check()`, and the [shipped library](#the-shipped-library) with `StaticAddress` and `Egress` |
 | `tundravm.storage` | `Volume`, `VolumeDirectory` and the unlock policies `OperatorKey`, `TpmSeal`, `BrokerKey` |
 | `tundravm.secrets` | `Secret`, `Credential` |
-| `tundravm.sources` | `GoBinary`, `CargoBinary`, `Build`, `Install`, `Git`, `Http` |
+| `tundravm.sources` | `GoBinary`, `CargoBinary`, `Build`, `Install`, `Local`, `Git`, `Http` |
 | `tundravm.errors` | the exceptions, each with a stable code |
 | `tundravm.testing` | see [Testing a project](#testing-a-project) |
 
@@ -315,6 +315,29 @@ their build and install into the image, and `binary.executable` is the installed
 builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with
 `cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the crate
 graph from the binary.
+
+### Sources
+
+A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
+the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
+by sha256. Your own program is a `Local` source:
+
+<!-- fragment -->
+```python
+from tundravm import Image, Service
+from tundravm.ports import TCP
+from tundravm.sources import GoBinary, Local
+
+app = GoBinary("app", Local("app"), package=".")
+
+image = Image("demo", services=[Service("app", [app], expose=[TCP(8080)])])
+```
+
+The path stays inside the project (the nearest `pyproject.toml`). The digest covers each
+file's path, sha256 and exec bit, and symlink targets, of what `git ls-files --cached
+--others --exclude-per-directory=.gitignore` lists (every file outside a work tree).
+`build` copies those files like a checkout. An edit is `local-changed`; `build --dev`
+re-pins it, a production build refuses until `tundravm lock`.
 
 ## Components
 
@@ -676,9 +699,9 @@ $ tundravm lock --update tdxs
 $ tundravm lock --check
 ```
 
-`lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a commit
-or sha256 per source, and the toolchain (mkosi and its commit, the tools tree's
-distribution, release and snapshot, tundravm, the measurement tools). Commit it.
+`lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a commit,
+sha256 or content digest per source, and the toolchain (mkosi and its commit, the tools
+tree's distribution, release and snapshot, tundravm, the measurement tools). Commit it.
 
 - Pins already locked stay while their source is unchanged. `--update NAME` resolves the
   named inputs again; no name resolves all of them.
@@ -688,8 +711,8 @@ distribution, release and snapshot, tundravm, the measurement tools). Commit it.
   that profile's finding: `error lock-changed [dev, production] files: files changed since
   the lock: ~/srv/www/index.html`.
 - A lockfile an older tundravm wrote is refused, never migrated: run `tundravm lock` again.
-- A production build refuses a missing lock (`lock-missing`) and a stale one; a
-  development build writes a missing one. A build never changes the lock.
+- A production build refuses a missing (`lock-missing`) or stale lock; a development
+  build writes a missing one and re-pins changed `Local` sources.
 - `build --offline` builds only what the lock pins.
 
 `check` reports a `source-unpinned` warning for each source the lock does not pin yet: one

@@ -26,9 +26,11 @@ from typing import Final, Literal, get_args
 from tundravm import check as _check
 from tundravm._reporting import Event, Progress, Reporter, TextReporter
 from tundravm._source import (
+    LOCAL_CHANGED,
     SOURCES_DIRNAME,
     GitSource,
     LanguageBuild,
+    LocalSource,
     NamedSource,
     Resolver,
     SourceBuild,
@@ -68,7 +70,7 @@ from tundravm.toolchain import TOOLCHAIN_UPDATE, lock_toolchain
 from . import _bake, _compile
 from ._lowered import LOCK_FILENAME, Lowered
 from .lower import lower
-from .model import Diagnostic, Git, Http, Pairs, Recipe, Target
+from .model import Diagnostic, Git, Http, Local, Pairs, Recipe, Target, recorded_local
 from .resolve import lint as _resolution_lint
 from .resolve import locate, resolve
 
@@ -91,7 +93,7 @@ class Pin:
     """A locked source: *identity* is the build name (or the URL for anonymous fetches)."""
 
     identity: str
-    source: Git | Http
+    source: Git | Http | Local
     digest: str
 
 
@@ -575,6 +577,8 @@ def _pin(fetch: LockedFetch) -> Pin:
     identity = fetch.name or fetch.source
     if fetch.kind == "git":
         return Pin(identity, Git(fetch.source, fetch.ref or fetch.digest), fetch.digest)
+    if fetch.kind == "local":
+        return Pin(identity, recorded_local(fetch.source), fetch.digest)
     return Pin(identity, Http(fetch.source, sha256=fetch.digest), fetch.digest)
 
 
@@ -590,7 +594,7 @@ def lock_image(
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
     The sources are the source builds and the built kernel's source (``kernel``; see
-    ``Lowered.lock_sources``).
+    ``Lowered.lock_sources``). A local source is digested again whatever *previous* pins.
     The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`);
     naming ``toolchain`` in *update* records it again instead of keeping *previous*'s.
     """
@@ -620,7 +624,8 @@ def lock_image(
     kept: list[LockedFetch] = []
     pending: dict[str, NamedSource] = {}
     for name, build in builds.items():
-        pin = None if name in update else build.pin_from(prior)
+        local = isinstance(build.source, LocalSource)
+        pin = None if name in update or local else build.pin_from(prior)
         if pin is None:
             pending[name] = build
         else:
@@ -677,16 +682,21 @@ def image_lock_status(
 
     A section one profile owns reports under that profile, its subject the section's
     key there (``files``, ``sources.<name>``; see
-    :func:`~tundravm.lockfile.section_profile`). *partial* compares only the selected
+    :func:`~tundravm.lockfile.section_profile`). A local source whose directory changed is
+    ``local-changed``, naming its path. *partial* compares only the selected
     profiles' sections (see :func:`~tundravm.lockfile.compare_lock`).
     """
     drift = img.select(profiles).drift(locked.lockfile, resolver=resolver, partial=partial)
     details = drift.details
     known = (*img.state.profiles, *lock_variants(locked.lockfile))
+    local = f"{LOCAL_CHANGED}: "
 
     def lines() -> Iterator[tuple[str, str, str]]:
         for section in drift.changed:
-            yield "lock-changed", section, "changed since the lock"
+            if details.get(section, "").startswith(local):
+                yield "local-changed", section, "changed since the lock"
+            else:
+                yield "lock-changed", section, "changed since the lock"
         for section in drift.added:
             yield "lock-added", section, "is not in the lock"
         for section in drift.removed:
@@ -697,7 +707,9 @@ def image_lock_status(
         profile, subject = section_profile(section, known) or ("", section)
         message = f"{subject} {words}"
         detail = details.get(section)
-        if detail and code == "lock-changed":
+        if detail and code == LOCAL_CHANGED:
+            message = detail.removeprefix(local)
+        elif detail and code == "lock-changed":
             message += f": {detail}"
         elif detail:
             message = detail
@@ -768,7 +780,7 @@ class FetchedSource:
     """
 
     name: str
-    kind: Literal["git", "http"]
+    kind: Literal["git", "http", "local"]
     url: str
     pin: str
     path: Path

@@ -38,7 +38,14 @@ from . import templates as scaffold
 from ._describe import describe
 from ._image._image import DEV_PROFILE
 from ._reporting import TextReporter
-from ._source import SOURCES_DIRNAME, CargoBuild, GoBuild, SourceBuild, checkout_rust_toolchain
+from ._source import (
+    SOURCES_DIRNAME,
+    CargoBuild,
+    GoBuild,
+    LocalSource,
+    SourceBuild,
+    checkout_rust_toolchain,
+)
 from .attestation import render_attestation
 from .backends.base import BuildBackend
 from .capabilities import AREAS, Capability, Host, ToolchainNeeds, capabilities, failed
@@ -1049,6 +1056,8 @@ def _cmd_build(args: argparse.Namespace, out: TextIO) -> int:
     finally:
         reporter.close()
     result = outcome.build
+    for name in outcome.repinned:
+        print(f"lock: {name} re-pinned, local source changed", file=out)
     if outcome.lock_written:
         print(f"lock written: {found.lockfile} (commit it)", file=out)
     state = "built" if outcome.created else "already built (identical; left untouched)"
@@ -1576,8 +1585,9 @@ def _cmd_doctor(args: argparse.Namespace, out: TextIO) -> int:
 def _toolchain_needs(loaded: RecipeFile, found: Settings) -> ToolchainNeeds:
     """The image's Go sources, and its Cargo sources that pin a Rust toolchain.
 
-    A Cargo source pins one when its checkout in the workspace says so; one not checked out
-    yet (or whose toolchain file the build would refuse) counts as needing ``rustup``.
+    A Cargo source pins one when its checkout in the workspace (a local source: its
+    directory) says so; one not checked out yet (or whose toolchain file the build would
+    refuse) counts as needing ``rustup``.
     """
     img = _lowered(loaded, found)
     locked = _locked(found)
@@ -1597,6 +1607,8 @@ def _toolchain_needs(loaded: RecipeFile, found: Settings) -> ToolchainNeeds:
 
 def _may_pin(spec: SourceBuild, pin: str | None, checkouts: Path) -> bool:
     checkout = None if pin is None else checkouts / spec.pin_dir(pin)
+    if isinstance(spec.source, LocalSource):
+        checkout = spec.source.directory
     if checkout is None or not checkout.is_dir():
         return True
     try:

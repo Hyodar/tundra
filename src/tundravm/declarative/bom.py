@@ -72,6 +72,9 @@ class Component:
     """The git ref a source's commit was resolved from; empty for an http source."""
     sha256: str = ""
     """An http source's sha256 (its ``version`` too); empty for git."""
+    local: str = ""
+    """A local source's path, relative to the image file (its ``version`` is its content
+    digest); empty for another."""
     installs: tuple[str, ...] = ()
     """The image paths a source build installs (its ``Install`` destinations)."""
     declared: bool = False
@@ -443,6 +446,14 @@ def _locked_sources(lock: Lock, variant: str, profile: Mapping[str, Any]) -> tup
 
 
 def _pinned(kind: ComponentKind, fetch: LockedFetch, installs: tuple[str, ...]) -> Component:
+    if fetch.kind == "local":
+        return Component(
+            kind=kind,
+            name=fetch.name or fetch.source,
+            version=fetch.digest,
+            local=fetch.source,
+            installs=installs,
+        )
     if fetch.kind == "git":
         return Component(
             kind=kind,
@@ -582,8 +593,10 @@ def _spdx_package(component: Component, ref: str, distro: tuple[str, str]) -> di
     if component.sha256:
         entry["checksums"] = [{"algorithm": "SHA256", "checksumValue": component.sha256}]
     if component.kind != "package":
-        entry["primaryPackagePurpose"] = "SOURCE" if component.git else "ARCHIVE"
-        if component.ref:
+        entry["primaryPackagePurpose"] = "SOURCE" if component.git or component.local else "ARCHIVE"
+        if component.local:
+            entry["sourceInfo"] = f"{component.kind} from the project directory {component.local}"
+        elif component.ref:
             entry["sourceInfo"] = f"{component.kind} from git ref {component.ref}"
         else:
             entry["sourceInfo"] = f"{component.kind} downloaded over http"

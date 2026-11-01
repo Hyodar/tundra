@@ -48,6 +48,7 @@ from .model import (
     Hook,
     Http,
     Install,
+    Local,
     Package,
     Port,
     Ready,
@@ -451,7 +452,7 @@ class GoBinary(Composite):
     """
 
     name: str
-    source: Git | Http
+    source: Git | Http | Local
     _: KW_ONLY
     package: str
     install: str | None = None
@@ -498,7 +499,7 @@ class CargoBinary(Composite):
     """
 
     name: str
-    source: Git | Http
+    source: Git | Http | Local
     _: KW_ONLY
     bin: str | None = None
     package: str | None = None

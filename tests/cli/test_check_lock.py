@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -148,3 +149,71 @@ def test_lock_and_check_together_is_a_usage_error(project: Path, cli: Cli) -> No
     with pytest.raises(SystemExit) as exit_:
         cli("lock", "--check", "--update")
     assert exit_.value.code == EXIT_SDK_ERROR
+
+
+LOCAL = """\
+from tundravm import Image, Service
+from tundravm.sources import GoBinary, Local
+
+app = GoBinary("app", Local("app"), package=".")
+
+image = Image("demo", services=[Service("app", [app])])
+"""
+
+
+def test_a_local_source_is_pinned_by_its_content(project: Path, cli: Cli) -> None:
+    (project / "demo.py").write_text(LOCAL, encoding="utf-8")
+    (project / "app").mkdir()
+    main = project / "app" / "main.go"
+    main.write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+    unpinned = cli("check")
+    assert unpinned.code == EXIT_OK
+    assert "source-unpinned [production] app: source build 'app' (local app)" in unpinned.out
+    assert cli("lock").code == EXIT_OK
+    assert cli("lock", "--check").out == "lock is up to date\n"
+    main.write_text("package main\n\nfunc main() { println() }\n", encoding="utf-8")
+    drift = cli("lock", "--check")
+    assert drift.code == EXIT_FAILURE
+    assert drift.out.startswith("~ sources.app: local-changed: app changed since the lock (")
+    checked = cli("check")
+    assert "error local-changed [image] sources.app: app changed since the lock (" in checked.out
+    assert cli("lock").code == EXIT_OK and cli("build").code == EXIT_OK
+    pin = json.loads((project / "build" / "tundravm.lock").read_text())["fetches"][0]
+    assert (pin["name"], pin["kind"], pin["source"]) == ("app", "local", "app")
+    shown = cli("show", "latest").out
+    assert re.search(rf"\n  app +local +- +{pin['digest'][:12]} ", shown), shown
+
+
+REPINNED = "lock: app re-pinned, local source changed\n"
+
+
+@pytest.mark.parametrize(
+    ("args", "edit", "code", "said"),
+    [
+        (("--dev",), True, EXIT_OK, REPINNED),
+        ((), True, EXIT_SDK_ERROR, "local-changed: app changed since the lock"),
+        (("--dev",), False, EXIT_OK, ""),
+    ],
+    ids=["dev re-pins", "production refuses", "unchanged says nothing"],
+)
+def test_a_dev_build_re_pins_a_changed_local_source(
+    project: Path, cli: Cli, args: tuple[str, ...], edit: bool, code: int, said: str
+) -> None:
+    dev = 'services=[Service("app", [app])], dev=DevAccess(password="tdx"))'
+    source = LOCAL.replace('services=[Service("app", [app])])', dev)
+    (project / "demo.py").write_text(
+        "from tundravm.components import DevAccess\n" + source, encoding="utf-8"
+    )
+    (project / "app").mkdir()
+    main = project / "app" / "main.go"
+    main.write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+    assert cli("lock").code == EXIT_OK
+    if edit:
+        main.write_text("package main\n\nfunc main() { println() }\n", encoding="utf-8")
+    result = cli("build", *args)
+    assert result.code == code, result.err
+    if code == EXIT_OK:
+        assert ("re-pinned" in result.out) == bool(said) and result.out.startswith(said)
+        assert cli("lock", "--check").out == "lock is up to date\n"
+    else:
+        assert said in result.err and "run `tundravm lock`" in result.err

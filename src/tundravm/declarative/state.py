@@ -37,7 +37,14 @@ from tundravm._modules.secret_delivery import (
     SECRET_DELIVERY_BUILD_PACKAGES,
 )
 from tundravm._platforms import azure, gcp
-from tundravm._source import BuildRecipe, GitSource, HttpSource, ScriptBuild, SourceBuild
+from tundravm._source import (
+    BuildRecipe,
+    GitSource,
+    HttpSource,
+    LocalSource,
+    ScriptBuild,
+    SourceBuild,
+)
 from tundravm._source import Install as SourceInstall
 from tundravm._units.render import activation_unit, dropin_unit, render
 from tundravm.errors import ValidationError
@@ -88,6 +95,7 @@ from .model import (
     Kernel,
     KernelConfig,
     Key,
+    Local,
     Mount,
     Package,
     Partition,
@@ -1107,9 +1115,11 @@ def _git(source: Git) -> GitSource:
 
 def source_build(build: Build) -> SourceBuild:
     """The compiler's source build for *build*."""
-    source: GitSource | HttpSource
+    source: GitSource | HttpSource | LocalSource
     if isinstance(build.source, Git):
         source = _git(build.source)
+    elif isinstance(build.source, Local):
+        source = LocalSource(build.source.path, directory=build.source.directory)
     else:
         source = HttpSource(build.source.url, sha256=build.source.sha256)
     steps = tuple(

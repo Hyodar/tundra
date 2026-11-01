@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from ._modules.init import is_init_path
 from ._modules.secret_delivery import SecretDelivery
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
-from ._source import DebFile, KernelFile, KernelSource, NamedSource
+from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
 from .diagnostics import Diagnostic, Severity
 from .errors import ValidationError
@@ -494,6 +494,12 @@ def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
             f"Run `tundravm lock IMAGE` to pin its sha256 as {spec.name!r} "
             "(`tundravm build` then downloads it on the host). "
             "Unpinned, the postinst hook downloads it in the build sandbox.",
+        )
+    if isinstance(source, LocalSource):
+        return (
+            f"source build {spec.name!r} ({source.describe()}) is not pinned in the lockfile",
+            "Run `tundravm lock IMAGE` to pin its content digest (`tundravm build` then "
+            "copies the directory into its workspace).",
         )
     return (
         f"source build {spec.name!r} ({source.kind} {source.url} @ {source.requested}) "
@@ -1636,6 +1642,14 @@ _REGISTRY: tuple[Rule, ...] = (
         "error",
         "A section of the image or of one profile (or a source's ref) changed since the lock.",
         _LOCK_AGAIN,
+    ),
+    Rule(
+        "local-changed",
+        "error",
+        "A Local source's directory changed since the lock: its content digest is not the one "
+        "the lock pins, so a build refuses it.",
+        "Review the change, then run `tundravm lock IMAGE` to record the new digest and "
+        "commit the lockfile.",
     ),
     Rule(
         "lock-added",

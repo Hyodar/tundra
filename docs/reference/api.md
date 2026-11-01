@@ -1161,7 +1161,7 @@ Software built from source: what `tundravm lock` pins.
 ```python
 Build(
     name: str,
-    source: Git | Http,
+    source: Git | Http | Local,
     script: str | None = None,
     install: tuple[Install, ...] = (),
     packages: tuple[str, ...] = (),
@@ -1178,7 +1178,7 @@ Build(
 ```python
 CargoBinary(
     name: str,
-    source: Git | Http,
+    source: Git | Http | Local,
     *,
     bin: str | None = None,
     package: str | None = None,
@@ -1213,7 +1213,7 @@ Git(url: str, ref: str, subdir: str | None = None, submodules: bool = False)
 ```python
 GoBinary(
     name: str,
-    source: Git | Http,
+    source: Git | Http | Local,
     *,
     package: str,
     install: str | None = None,
@@ -1253,6 +1253,16 @@ Install(
     artifact: bool = False,
 )
 ```
+
+### `Local`
+
+*dataclass*
+
+```python
+Local(path: str)
+```
+
+A directory of the project: `Local("app")`, the program beside the image file.
 
 ## tundravm.errors
 

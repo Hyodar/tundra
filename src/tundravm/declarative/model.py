@@ -19,7 +19,7 @@ from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import ClassVar, Literal, get_args, overload
 
-from tundravm._location import Located, anchored
+from tundravm._location import Located, anchored, caller_location
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
 from tundravm._source import FrozenMap
@@ -1900,6 +1900,75 @@ class Http:
 
 
 @dataclass(frozen=True, slots=True)
+class Local:
+    """A directory of the project: ``Local("app")``, the program beside the image file.
+
+    *path* is relative to the directory of the file that declares it (the image file,
+    or for a component's ``compose``, the file that constructs the component). It must
+    exist, and stay inside the project directory: the nearest directory at or above
+    that file holding a ``pyproject.toml`` (that file's own directory without one), so
+    the lock describes what the project's repository holds. An absolute path is refused.
+
+    ``tundravm lock`` pins its content digest: the sha256 over every file's relative
+    path, its sha256 and whether it is executable, and each symlink's target, in path
+    order, of the files a git checkout of the directory would hold. Inside a git work
+    tree that is what ``git ls-files --cached --others --exclude-per-directory=.gitignore``
+    lists there (the tracked files and the untracked ones no ``.gitignore`` ignores);
+    outside one, every file. ``.git`` is never part of it. ``tundravm build`` copies those
+    files into its workspace like a checkout, and a directory that changed since the lock
+    is drift (``local-changed``) that ``tundravm lock`` records.
+    """
+
+    path: str
+    directory: Path = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.path, Path):
+            object.__setattr__(self, "path", self.path.as_posix())
+        if not isinstance(self.path, str) or not self.path.strip():
+            raise _fail(self, f"path must be a non-empty directory path, got {self.path!r}.")
+        if self.path.startswith("/"):
+            raise _fail(
+                self,
+                f"{self.path!r} is absolute: the lock would name a directory of this host.",
+                hint="Pass it relative to the image file: Local('app').",
+            )
+        object.__setattr__(self, "path", posixpath.normpath(self.path))
+        location = caller_location().rpartition(":")[0]
+        base = Path(location).parent if location else Path.cwd()
+        directory = (base / self.path).resolve()
+        project = _project_directory(base)
+        if not directory.is_relative_to(project):
+            raise _fail(
+                self,
+                f"{self.path!r} is {directory}, outside the project directory {project}.",
+                hint=f"Move the program under {project}, or push it and build it from "
+                "Git(url, ref).",
+            )
+        if not directory.is_dir():
+            raise _fail(
+                self,
+                f"{self.path!r} is not a directory: {directory}.",
+                hint="Pass the directory that holds the program, relative to the image file.",
+            )
+        object.__setattr__(self, "directory", directory)
+
+
+def recorded_local(path: str) -> Local:
+    """The :class:`Local` a lockfile entry names: its path alone, not resolved on this host."""
+    found = object.__new__(Local)
+    object.__setattr__(found, "path", path)
+    object.__setattr__(found, "directory", Path(path))
+    return found
+
+
+def _project_directory(base: Path) -> Path:
+    """The nearest directory at or above *base* holding a ``pyproject.toml``, else *base*."""
+    here = base.resolve()
+    return next((d for d in (here, *here.parents) if (d / "pyproject.toml").is_file()), here)
+
+
+@dataclass(frozen=True, slots=True)
 class Install:
     """Install *source* (relative to the build directory) at *destination*.
 
@@ -1951,7 +2020,7 @@ class Build(Declared):
     """
 
     name: str
-    source: Git | Http
+    source: Git | Http | Local
     script: str | None = None
     install: tuple[Install, ...] = ()
     packages: tuple[str, ...] = ()
@@ -1988,8 +2057,8 @@ class Build(Declared):
                 f"invalid cache_namespace {self.cache_namespace!r} for build {self.name!r}.",
                 hint="Use letters, digits and '._+@/-' ('/' is cached as '_').",
             )
-        if not isinstance(self.source, (Git, Http)):
-            raise _fail(self, f"build {self.name!r} source must be Git or Http.")
+        if not isinstance(self.source, (Git, Http, Local)):
+            raise _fail(self, f"build {self.name!r} source must be Local, Git or Http.")
         if self.script is not None:
             _require_name(self, self.script, "script")
         if not self.install:
@@ -2851,6 +2920,7 @@ __all__ = [
     "KernelPatch",
     "Key",
     "Listen",
+    "Local",
     "Mount",
     "Mkosi",
     "Package",

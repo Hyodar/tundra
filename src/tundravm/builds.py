@@ -49,7 +49,14 @@ from typing import Any, Literal, cast
 from . import __version__
 from . import manifest as mf
 from ._reporting import Event, Reporter
-from ._source import SOURCES_DIRNAME, CargoBuild, GoBuild, SourceBuild, toolchain_record
+from ._source import (
+    SOURCES_DIRNAME,
+    CargoBuild,
+    GoBuild,
+    LocalSource,
+    SourceBuild,
+    toolchain_record,
+)
 from ._ssh_sig import SigRunner
 from .backends.base import ARTIFACT_NAMES, BOOT_PAYLOAD_NAME, BuildBackend, is_mkosi_state
 from .declarative._compile import emit, mkosi_argv
@@ -184,12 +191,14 @@ class Build:
 @dataclass(frozen=True, slots=True)
 class Outcome:
     """What :func:`build` did: the build, whether it is new, whether the lock was written,
-    and the reproduction record (``None`` without ``--reproduce``)."""
+    the reproduction record (``None`` without ``--reproduce``) and the Local sources a
+    development build re-pinned in the lock."""
 
     build: Build
     created: bool
     lock_written: bool
     reproduction: Mapping[str, Any] | None = None
+    repinned: tuple[str, ...] = ()
 
     @property
     def reproducible(self) -> bool | None:
@@ -281,7 +290,9 @@ def build(
     """Build *profile* of *img* into an immutable directory under *root* (the build root).
 
     The lockfile ``root/tundravm.lock`` must be current: a stale one is refused (``lock``
-    or ``lock --update`` changes it, never a build). A production build is a locked build,
+    or ``lock --update`` changes it). A development build first re-pins the Local sources
+    whose directory changed, which needs no network (:attr:`Outcome.repinned`); a
+    production build never changes the lock. A production build is a locked build,
     so a missing lockfile refuses it (:func:`lock_missing`); a development build creates it
     first (refused with *offline*, which builds only from what the lock pins). *reproduce*
     builds again in an independent workspace and records the comparison in
@@ -293,7 +304,7 @@ def build(
     chosen = choose_targets(img, profile, targets)
     scoped = replace(img, targets={**dict(img.targets), profile: chosen})
     lockfile = root / LOCK_NAME
-    locked, written = _current_lock(img, scoped, profile, lockfile, offline=offline)
+    locked, written, repinned = _current_lock(img, scoped, profile, lockfile, offline=offline)
     project_sha256 = mf.sha256_file(lockfile)
     kind = kind_of(scoped, profile)
     image_root = root / scoped.image_id
@@ -364,7 +375,7 @@ def build(
             if incoming.exists():
                 _remove(incoming)
         _point(image_root / LATEST[kind], final)
-    return Outcome(Build.open(final), created, written, reproduction)
+    return Outcome(Build.open(final), created, written, reproduction, repinned)
 
 
 PHASES = {"fetch": "checkouts", "prefetch": "prefetch", "build": "mkosi"}
@@ -398,12 +409,13 @@ class _Recorder:
 
 def _current_lock(
     img: Lowered, scoped: Lowered, profile: str, lockfile: Path, *, offline: bool
-) -> tuple[Lock, bool]:
-    """The lock a build of *scoped* (*img* with the targets it builds) freezes against, and
-    whether this build wrote the project lock.
+) -> tuple[Lock, bool, tuple[str, ...]]:
+    """The lock a build of *scoped* (*img* with the targets it builds) freezes against,
+    whether this build wrote the project lock, and the Local sources it re-pinned there.
 
     The project lock is the image's as declared: a missing one refuses a production
-    build and is written from *img* for a development one; a stale one is refused. The
+    build and is written from *img* for a development one, which also re-pins in it the
+    Local sources whose directory changed (:func:`_repin_local`); a stale one is refused. The
     outputs are part of the locked payload, so a build whose targets differ from the
     declared ones (``qemu`` is always built; ``--target``) freezes against a lock derived
     from the project's for *scoped*: every pin and the toolchain kept, nothing resolved,
@@ -428,22 +440,48 @@ def _current_lock(
         locked = lock_image(img, img.profile_names)
         write_lock(locked, lockfile)
         written = True
+        repinned: tuple[str, ...] = ()
     else:
         locked = read_lock(lockfile)
         written = False
+        repinned = ()
+        if kind_of(img, profile) == "development":
+            locked, repinned = _repin_local(img, locked)
+            if repinned:
+                write_lock(locked, lockfile)
         drift = img.select([profile]).lock_status(lockfile)
         if not drift.is_clean:
             if scoped.select([profile]).lock_status(lockfile).is_clean:
-                return locked, False
+                return locked, False, repinned
             raise LockfileError(
                 f"The lockfile {lockfile} is stale:\n{drift.render()}",
-                hint="A build never updates the lock: run `tundravm lock` (or `tundravm lock "
-                "--update NAME` to move a pin), review the change, then build.",
+                hint="A build never updates the lock but to re-pin a development build's "
+                "Local sources: run `tundravm lock` (or `tundravm lock --update NAME` to move "
+                "one pin), review the change, then build.",
                 context={"path": str(lockfile)},
             )
     if tuple(img.targets.get(profile, ("qemu",))) != tuple(scoped.targets[profile]):
         locked = lock_image(scoped, scoped.profile_names, previous=locked, offline=True)
-    return locked, written
+    return locked, written, repinned
+
+
+def _repin_local(img: Lowered, locked: Lock) -> tuple[Lock, tuple[str, ...]]:
+    """*locked* with each Local source whose directory changed pinned at its digest now,
+    and their lockfile names; every other entry is kept as it is."""
+    sources = img.select(img.profile_names).lock_sources()
+    fetches = []
+    moved: list[str] = []
+    for fetch in locked.lockfile.fetches:
+        spec = sources.get(fetch.name or "")
+        if spec is not None and isinstance(spec.source, LocalSource) and spec.matches(fetch):
+            digest = spec.source.digest()
+            if digest != fetch.digest:
+                fetch = replace(fetch, digest=digest)
+                moved.append(spec.key)
+        fetches.append(fetch)
+    if not moved:
+        return locked, ()
+    return Lock.of(replace(locked.lockfile, fetches=fetches)), tuple(moved)
 
 
 def lock_missing(lockfile: Path) -> Diagnostic:
