@@ -779,12 +779,9 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
     codes = sorted({d.code for d in report})
     detail = f" ({', '.join(codes)})" if codes else ""
     print(f"check {filename}: {render_summary(report)}{detail}", file=out)
-    print(
-        f"next:\n  cd {name}\n  uv sync\n  uv run tundravm build                     "
-        "lock, build and measure the production profile\n"
-        "  uv run tundravm run --mode simulated --dev  boot the dev build locally",
-        file=out,
-    )
+    steps = (("cd " + name, ""), ("uv sync", ""), *scaffold.FIRST_STEPS)
+    lines = scaffold.render_steps(steps, "  ").splitlines()
+    print("next:", *(line.rstrip() for line in lines), sep="\n", file=out)
     return EXIT_OK
 
 

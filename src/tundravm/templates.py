@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -45,10 +46,10 @@ DEFAULT_TEMPLATE: TemplateName = "service"
 
 _HEADER = r'''"""$title image ($template template).
 
-Check:  tundravm check $filename
-Lock:   tundravm lock $filename
-Build:  tundravm build $filename
-Run:    tundravm run --mode simulated --dev
+Check:  uv run tundravm check $filename
+Lock:   uv run tundravm lock $filename
+Build:  uv run tundravm build $filename --dev
+Run:    uv run tundravm run --mode simulated --dev
 """
 
 '''
@@ -140,15 +141,17 @@ class App(Component):
 '''
 
 _SERVICE_RECIPE = r"""
+
 image = Image(
     "$title",
     base=Debian("$release"),
     # Implied with no further words: Debian from the locked snapshot, a measured
-    # UKI, NTS time, a RAM-only journal, sysctl hardening, DHCP, a firewall that opens only
+    # UKI, NTS time, a volatile journal, sysctl hardening, DHCP, a firewall that opens only
     # what a service exposes, one hardened user per service and the evidence service.
     packages=[Package("ca-certificates")],
     components=[App(version=APP_VERSION, port=APP_PORT)],
-    # A non-production "dev" profile: debugging tools and a serial console, never shipped.
+    # A non-production "dev" profile: debugging tools, and a serial console with root
+    # password "tdx". Build it with --dev; production never has it.
     dev=DevAccess(password="tdx"),
 )
 """
@@ -161,6 +164,7 @@ EFI_STUB_VERSION = "257.8-1~deb13u1"
 """
 
 _CLOUD_RECIPE = r"""
+
 image = Image(
     "$title",
     base=Debian("$release", snapshot=SNAPSHOT, efi_stub=EFI_STUB_VERSION),
@@ -299,7 +303,7 @@ def test_matches_committed_tree() -> None:
     # mkosi/ is the committed output of `tundravm build $filename --tree-only mkosi`. After an
     # intended image change, rewrite it with: TUNDRAVM_UPDATE_GOLDEN=1 uv run pytest tests
     if not GOLDEN.is_dir() and os.environ.get(UPDATE_GOLDEN_ENV) != "1":
-        raise AssertionError(f"{GOLDEN} is missing: run `tundravm build --tree-only mkosi`")
+        raise AssertionError(f"{GOLDEN} is missing: run `uv run tundravm build --tree-only mkosi`")
     lock = read_lock(LOCKFILE) if LOCKFILE.exists() else None
     assert_tree(tundravm.compile(IMAGE, lock=lock), GOLDEN)
 '''
@@ -484,19 +488,22 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync dependencies
         run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
       - name: Summarize the image
-        run: uv run tundravm show {recipe} >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {{ echo '```text'; uv run tundravm show {recipe}; echo '```'; }} >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check the image, the lockfile and the committed tree
         run: |
@@ -506,15 +513,17 @@ jobs:
   build:
     needs: check
     if: vars.TUNDRAVM_BACKEND != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       TUNDRAVM_BACKEND: ${{{{ vars.TUNDRAVM_BACKEND }}}}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Prepare the build host
         run: |
@@ -533,7 +542,7 @@ jobs:
 
       - name: Upload the build directory
         if: ${{{{ !cancelled() }}}}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tundravm-build
           path: build/*/production/
@@ -651,20 +660,32 @@ def render_pyproject(
     )
 
 
+FIRST_STEPS: tuple[tuple[str, str], ...] = (
+    ("uv run tundravm lock", "pin every source (tundra-tools needs git read access)"),
+    ("uv run tundravm build --tree-only mkosi", "the tree the tests and CI compare; commit it"),
+    ("uv run pytest", "lint, compile and committed-tree tests"),
+    ("uv run tundravm build --dev", "build the dev profile"),
+    ("uv run tundravm run --mode simulated --dev", "boot it without TDX, its services up"),
+)
+"""The loop after ``uv sync`` in a new project, as ``new`` prints it and its README lists."""
+
+
+def render_steps(steps: Sequence[tuple[str, str]], indent: str) -> str:
+    """*steps* as aligned ``command  why`` lines."""
+    width = max(len(command) for command, _ in steps)
+    return "\n".join(f"{indent}{command:<{width}}  {why}" for command, why in steps)
+
+
 def render_readme(*, title: str, filename: str, template: str, tests: bool) -> str:
     """Return the ``README.md`` ``new`` writes: the commands of the operator's loop."""
+    steps = FIRST_STEPS if tests else tuple(s for s in FIRST_STEPS if "pytest" not in s[0])
     commands = [
-        ("tundravm show", "what the image contains, profile by profile"),
-        ("tundravm check", "declarations, lint, lock and tree drift"),
-        ("tundravm build --tree-only mkosi", "write the mkosi tree; commit it"),
-        ("uv run pytest tests", "check, compile and golden-tree tests")
-        if tests
-        else ("tundravm lock --check", "the lockfile is current"),
-        ("tundravm build", "build into build/<image>/production/<id>/"),
-        ("tundravm run --mode simulated --dev", "boot the dev build locally"),
+        ("uv run tundravm show", "what the image contains, profile by profile"),
+        ("uv run tundravm check", "declarations, lint, lock and tree drift"),
+        *steps,
+        ("uv run tundravm build", "build production into build/<image>/production/<id>/"),
     ]
-    width = max(len(command) for command, _ in commands)
-    lines = "\n".join(f"    {command:<{width}}  {why}" for command, why in commands)
+    lines = render_steps(commands, "    ")
     return Template(README_TEMPLATE).substitute(
         title=title, filename=filename, template=template, commands=lines
     )
@@ -680,6 +701,7 @@ __all__ = [
     "EXPLICIT_BACKENDS",
     "EDITABLE_INSTALL",
     "EXPECTED_FINDINGS",
+    "FIRST_STEPS",
     "GITIGNORE_BLOCK",
     "GITIGNORE_MARKER",
     "PYPROJECT_TEMPLATE",
@@ -696,6 +718,7 @@ __all__ = [
     "WORKFLOW_TEMPLATE",
     "render_pyproject",
     "render_readme",
+    "render_steps",
     "render_recipe_template",
     "render_test_module",
     "render_workflow",
