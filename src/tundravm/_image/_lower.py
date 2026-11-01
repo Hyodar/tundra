@@ -10,7 +10,7 @@ the whole answer to "what did I get".
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from dataclasses import fields as dataclass_fields
@@ -53,7 +53,8 @@ __all__ = ["OWNED_FILES", "recipe_of"]
 
 OWNED_FILES = "/etc/tmpfiles.d/50-tundravm-owned.conf"
 """Where the ownership of ``File(owner=...)`` files is applied, at boot, by
-systemd-tmpfiles: the users exist by then, which they do not while the image is built."""
+systemd-tmpfiles: the users exist by then, which they do not while the image is built. A
+profile's own files are owned by ``50-tundravm-owned-<profile>.conf`` beside it."""
 
 _TMPFILES_HEADER = (
     "# tundravm: the owners File(owner=...) and Tree(owner=...) asked for.\n"
@@ -242,19 +243,15 @@ class _Lowering:
             found.append(dm.Hook(f"mkosi-{stage}-{index}", stage, script))  # type: ignore[arg-type]
         return tuple(found)
 
-    def owned_files(self) -> tuple[dm.Declaration, ...]:
-        """The one tmpfiles file that applies every ``owner=`` the image asked for."""
-        if not self.owned:
+    def owned_files(self, profile: str | None = None) -> tuple[dm.Declaration, ...]:
+        """The tmpfiles file that applies every ``owner=`` collected so far (the image's, or
+        *profile*'s own), and forgets them."""
+        owned, self.owned = self.owned, []
+        if not owned:
             return ()
-        lines = "".join(f"{line}\n" for line in sorted(dict.fromkeys(self.owned_lines())))
-        return (dm.File.text(OWNED_FILES, _TMPFILES_HEADER + lines),)
-
-    def owned_lines(self) -> Iterator[str]:
-        """One ``z``/``Z`` line per owned path."""
-        for path, owner in self.owned:
-            user, _, group = owner.partition(":")
-            kind = "Z" if path.endswith("/") else "z"
-            yield f"{kind} {path.rstrip('/')} - {user} {group or user} -"
+        path = OWNED_FILES if profile is None else f"{OWNED_FILES[:-5]}-{profile}.conf"
+        lines = "".join(f"{line}\n" for line in sorted(dict.fromkeys(_owned_lines(owned))))
+        return (dm.File.text(path, _TMPFILES_HEADER + lines),)
 
     def variants(self) -> tuple[dm.Variant, ...]:
         """The base variant the image is, then its profiles, then ``dev=``."""
@@ -271,6 +268,7 @@ class _Lowering:
         items: list[dm.Declaration | dm.Fragment] = []
         for item in profile.add:
             items.extend(self.content(item))
+        items.extend(self.owned_files(name))
         return dm.Variant(
             name,
             inherits=profile.extends or BASE_PROFILE,
@@ -364,6 +362,7 @@ class _Lowering:
                 items.append(tool)
         else:
             items.append(self.component(dev))
+        items.extend(self.owned_files(DEV_PROFILE))
         return dm.Variant(
             DEV_PROFILE,
             inherits=BASE_PROFILE,
@@ -438,21 +437,17 @@ class _Lowering:
         yield from item.binaries()
         if item.timer is not None:
             yield self.timer_task(item)
-            return
-        yield self.unit(item)
-        probe = self.probe(item)
-        if probe is not None:
-            yield probe
+        else:
+            yield self.unit(item)
+            probe = self.probe(item)
+            if probe is not None:
+                yield probe
         if item.unit is not None:
             yield dm.Unit(item.unit_name, dropin=item.unit)
 
     def unit(self, item: Service) -> dm.Service:
         """The generated ``.service``."""
-        directives: dict[str, str | tuple[str, ...]] = {}
-        if item.resources is not None:
-            directives.update(dict(item.resources.entries()))
-        if item.shutdown is not None:
-            directives.update(dict(item.shutdown.entries()))
+        directives = _directives(item)
         optional = self.runtime.optional(item)
         if optional:
             directives["SetCredential"] = optional
@@ -494,24 +489,29 @@ class _Lowering:
         )
 
     def timer_task(self, item: Service) -> dm.Task:
-        """A ``Service(timer=...)`` as the scheduled oneshot it is."""
-        if isinstance(item.state, VolumeDirectory) or item.credentials:
-            raise ValidationError(
-                f"Service {item.name!r} runs on a timer and binds a volume or credentials.",
-                hint="Give the timer a /var/lib state and no credentials, or run it as a "
-                "long-lived service.",
-            )
+        """A ``Service(timer=...)`` as the scheduled oneshot it is, every keyword kept."""
+        assert not isinstance(item.state, VolumeDirectory)  # refused with timer=
         requires = self.required_units(item)
+        shutdown = item.shutdown
+        directives = _directives(item)
         return dm.Task(
             item.unit_name,
             item.command(),
             schedule=item.timer,
             user=item.user,
+            groups=tuple(item.groups),
             state=item.state,
+            working_dir=item.working_directory,
+            env=dict(item.environment),
+            logs=item.logs,
+            runtime=item.runtime,
             after=requires,
             requires=requires,
             needs=(),
             hardening=item.hardening,
+            timeout_stop=None if shutdown is None else shutdown.timeout,
+            kill_mode=None if shutdown is None else shutdown.kill_mode,
+            directives={"Service": directives} if directives else {},
         )
 
     def probe(self, item: Service) -> dm.Task | None:
@@ -582,6 +582,23 @@ def _ready_unit(owner: Service, handle: Readied) -> str:
     if isinstance(handle.probe, Notify):
         return handle.unit
     return f"{handle.unit.removesuffix('.service')}-ready.service"
+
+
+def _owned_lines(owned: Sequence[tuple[str, str]]) -> Iterator[str]:
+    """One ``z``/``Z`` line per owned path."""
+    for path, owner in owned:
+        user, _, group = owner.partition(":")
+        kind = "Z" if path.endswith("/") else "z"
+        yield f"{kind} {path.rstrip('/')} - {user} {group or user} -"
+
+
+def _directives(item: Service) -> dict[str, str | tuple[str, ...]]:
+    """The ``[Service]`` lines ``resources=`` and ``shutdown=`` render beyond typed fields."""
+    found: dict[str, str | tuple[str, ...]] = {}
+    for value in (item.resources, item.shutdown):
+        if value is not None:
+            found.update(dict(value.entries()))
+    return found
 
 
 def _credentials(bindings: tuple[Binding, ...]) -> dict[str, str]:

@@ -861,7 +861,7 @@ def unit_declaration_check(
         unit_name(item.name)
         for _, items in groups
         for item in _own_declarations(items)
-        if isinstance(item, Service)
+        if isinstance(item, (Service, Task))
     }
     found: list[Diagnostic] = []
     for variant, items in groups:

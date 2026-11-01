@@ -339,6 +339,8 @@ class Kernel:
                 "cmdline= takes a list of kernel parameters, not one string.",
                 hint=f"Pass cmdline={self.cmdline.split()!r}.",
             )
+        if isinstance(self.modules, str):
+            raise _fail(self, "modules= takes a list of module names.")
         object.__setattr__(self, "patches", tuple(self.patches))
         object.__setattr__(self, "modules", tuple(self.modules))
         object.__setattr__(self, "cmdline", tuple(self.cmdline))
@@ -356,8 +358,13 @@ class Kernel:
                 "config= and patches= apply to a built kernel.",
                 hint="Use Kernel.build(version, source, config=...).",
             )
-        if not self.built and isinstance(self.modules, str):
-            raise _fail(self, "modules= takes a list of module names.")
+        if self.built and self.modules:
+            raise _fail(
+                self,
+                "modules= keeps modules of Debian's kernel; a built kernel has every driver "
+                "built in and loads none.",
+                hint="Drop modules=, or enable the drivers in the built kernel's config=.",
+            )
 
     @property
     def built(self) -> bool:

@@ -169,6 +169,22 @@ def test_a_profile_adds_and_changes_by_reference() -> None:
     assert "strace" not in plan(image, "production").packages
 
 
+def test_a_profile_owns_the_files_it_adds() -> None:
+    image = Image(
+        "x",
+        files=[File.text("/etc/a", "a\n", owner="nobody")],
+        profiles={"staging": Profile(add=[File.text("/etc/b", "b\n", owner="nobody")])},
+    )
+    owned = "/etc/tmpfiles.d/50-tundravm-owned"
+    assert "z /etc/a - nobody nobody -" in plan(image, "staging").file(f"{owned}.conf").text
+    assert (
+        plan(image, "staging")
+        .file(f"{owned}-staging.conf")
+        .text.endswith("z /etc/b - nobody nobody -\n")
+    )
+    assert f"{owned}-staging.conf" not in plan(image, "production").files
+
+
 def test_a_profile_removes_a_service_by_reference() -> None:
     app = Service("app", ["/usr/bin/app"], expose=[TCP(8080)])
     image = Image("x", services=[app], profiles={"slim": Profile(changes=[app.ref.remove()])})

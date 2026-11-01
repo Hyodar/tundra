@@ -143,6 +143,12 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   service's `unit=DropIn(...)` or raw unit directives set what a `Service` keyword covers
   (`MemoryMax=`, `env=`, ...), and names that keyword; a drop-in for what no keyword covers is
   quiet.
+- A `Service(timer=...)` keeps `environment=`, `resources=`, `shutdown=`, `unit=`, `groups=`,
+  `working_directory=`, `logs=` and `runtime=` (they were dropped), and refuses `readiness=`,
+  `expose=`, `credentials=` and a volume `state=` at construction, naming the keyword.
+  `Kernel(modules=)` on a built kernel is refused (they were dropped).
+- `File(owner=)` and `Tree(owner=)` in a profile's `add=` (and in `dev=`) are owned in that
+  profile, through `/etc/tmpfiles.d/50-tundravm-owned-<profile>.conf`; the owner was dropped.
 - Evidence: `docs/design/evidence/gate4-sdk.md`.
 
 ### Profiles and the ESP

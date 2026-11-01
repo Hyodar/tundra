@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,7 @@ from tundravm.declarative import Disk, Key, Secrets
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, TLS, AttestedTLS
 from tundravm.secrets import Secret
+from tundravm.sources import Git
 from tundravm.storage import BrokerKey, OperatorKey, TpmSeal, Volume
 from tundravm.systemd import TcpProbe
 from tundravm.testing import PlannedImage, assert_clean, plan
@@ -408,3 +410,9 @@ def test_kernel_parameters_follow_the_images_own_and_enter_its_digest() -> None:
 def test_a_kernel_parameter_tundravm_sets_is_refused(cmdline: object, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         Kernel.default(cmdline=cmdline)  # type: ignore[arg-type]
+
+
+def test_a_built_kernel_refuses_modules_it_would_drop() -> None:
+    source = Git("https://github.com/gregkh/linux", "v6.12.1")
+    with pytest.raises(ValidationError, match="a built kernel has every driver built in"):
+        Kernel("6.12.1", source, config=Path("kernel.config"), modules=["tdx_guest"])

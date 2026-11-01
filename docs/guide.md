@@ -307,7 +307,9 @@ cannot fix.
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
-These values come from `tundravm.systemd`. A built binary is a valid first argv element:
+A timer runs the service as a scheduled oneshot and keeps every other keyword;
+`socket=`, `readiness=`, `expose=`, `credentials=` and a volume `state=` belong to a
+long-lived service, so a timer refuses them. These values come from `tundravm.systemd`. A built binary is a valid first argv element:
 `GoBinary`, `CargoBinary` and `Build` (from `tundravm.sources`) pull
 their build and install into the image, and `binary.executable` is the installed path. Go
 builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with

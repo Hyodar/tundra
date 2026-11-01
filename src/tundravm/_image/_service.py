@@ -106,6 +106,10 @@ class Service(Located):
     the service then waits for. ``credentials=[jwt]`` binds delivered secrets: the service
     waits for each required one and reads it at ``jwt.path``; an argv word naming a
     credential the service does not bind is refused.
+
+    ``timer=Every("1h")`` (or ``Calendar(...)``) runs it as a scheduled oneshot with every
+    other keyword kept; what only a long-lived service has (``socket=``, ``readiness=``,
+    ``expose=``, ``credentials=``, a volume ``state=``) is refused.
     """
 
     name: str
@@ -294,12 +298,38 @@ class Service(Located):
         for key, value in self.environment.items():
             if not isinstance(key, str) or not isinstance(value, str) or "\n" in value:
                 raise _fail(self, f"environment[{key!r}] must be one line of text.")
-        if self.timer is not None and self.socket is not None:
-            raise _fail(
-                self,
-                f"{self.name!r} is both timer-started and socket-activated.",
-                hint="Pick one: a timer runs it on a schedule, a socket on demand.",
-            )
+        if self.timer is not None:
+            self._check_timer()
+
+    def _check_timer(self) -> None:
+        """A timer starts a run that exits when done: what only a long-lived service has is
+        refused rather than dropped."""
+        refused = (
+            (
+                "socket",
+                self.socket is not None,
+                "a timer runs it on a schedule, a socket on demand",
+            ),
+            ("readiness", self.readiness is not None, "nothing waits for a scheduled run"),
+            ("expose", bool(self.expose), "no port stays open between scheduled runs"),
+            (
+                "credentials",
+                bool(self.credentials),
+                "secret delivery orders long-lived services only",
+            ),
+            (
+                "state",
+                isinstance(self.state, VolumeDirectory),
+                "volume unlock orders long-lived services only; use a /var/lib state",
+            ),
+        )
+        for name, given, why in refused:
+            if given:
+                raise _fail(
+                    self,
+                    f"{self.name!r} runs on a timer, so {name}= does not apply: {why}.",
+                    hint=f"Drop {name}=, or drop timer= to run it as a long-lived service.",
+                )
 
     @property
     def unit_name(self) -> str:

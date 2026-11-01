@@ -10,6 +10,7 @@ from tundravm.declarative.systemd import PRESETS
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
 from tundravm.secrets import Credential
+from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import (
     DropIn,
     Every,
@@ -164,6 +165,33 @@ def test_a_timer_makes_it_a_scheduled_oneshot() -> None:
     assert planned.unit("rotate.timer").get("Timer", "OnUnitActiveSec") == "15m"
 
 
+@pytest.mark.parametrize(
+    ("fields", "section", "key", "value"),
+    [
+        ({"environment": {"A": "b"}}, "Service", "Environment", "A=b"),
+        ({"resources": Resources(memory_max="1G")}, "Service", "MemoryMax", "1G"),
+        ({"shutdown": Shutdown(timeout="30s")}, "Service", "TimeoutStopSec", "30s"),
+        ({"shutdown": Shutdown(signal="SIGINT")}, "Service", "KillSignal", "SIGINT"),
+        ({"groups": ["adm"]}, "Service", "SupplementaryGroups", "adm"),
+        ({"working_directory": "/srv"}, "Service", "WorkingDirectory", "/srv"),
+        ({"logs": "rotate"}, "Service", "LogsDirectory", "rotate"),
+        ({"runtime": "rotate"}, "Service", "RuntimeDirectory", "rotate"),
+        (
+            {"unit": DropIn("30-x", extra={"Unit": {"OnFailure": "x.service"}})},
+            "Unit",
+            "OnFailure",
+            "x.service",
+        ),
+    ],
+)
+def test_a_timer_keeps_every_keyword(
+    fields: dict[str, object], section: str, key: str, value: str
+) -> None:
+    service = Service("rotate", ["/usr/bin/rotate"], timer=Every("15m"), **fields)  # type: ignore[arg-type]
+    unit = "rotate.service.d/30-x.conf" if "unit" in fields else "rotate.service"
+    assert _plan(service).unit(unit).get(section, key) == value
+
+
 def test_a_socket_activates_it_on_demand() -> None:
     planned = _plan(Service("echo", ["/usr/bin/echo"], socket=Listen(7)))
     assert planned.unit("echo.socket").get("Socket", "ListenStream") == "7"
@@ -215,7 +243,16 @@ def test_an_empty_argv_is_refused() -> None:
     assert "empty argv" in str(caught.value)
 
 
-def test_a_timer_and_a_socket_together_are_refused() -> None:
-    with pytest.raises(ValidationError) as caught:
-        Service("app", ["/usr/bin/app"], timer=Every("1h"), socket=Listen(7))
-    assert "Pick one" in str(caught.value)
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("socket", Listen(7)),
+        ("readiness", TcpProbe(8080)),
+        ("expose", [TCP(8080)]),
+        ("credentials", [Credential("jwt", "/etc/app/jwt")]),
+        ("state", Volume("data", mount="/data", unlock=OperatorKey()).directory("app")),
+    ],
+)
+def test_a_timer_refuses_what_only_a_long_lived_service_has(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match=f"runs on a timer, so {field}= does not apply"):
+        Service("app", ["/usr/bin/app"], timer=Every("1h"), **{field: value})  # type: ignore[arg-type]

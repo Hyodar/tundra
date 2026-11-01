@@ -2559,8 +2559,11 @@ class Task(Declared):
     (``TimeoutStartSec=``, ``None``: systemd's unbounded oneshot default); *hardening*
     defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps and
     *conditions* gate it (``Condition.virtualization("google")``), as on :class:`Service`.
-    A scheduled task requires the execution gate as a ``Service`` does; a boot task does
-    not (probes and boot plumbing stay readable on a refused boot).
+    *env*, *groups*, *working_dir*, *logs*, *runtime*, *timeout_stop*, *kill_mode* and
+    *directives* render as :class:`Service`'s do (a public ``Service(timer=...)`` keeps
+    every keyword through them). A scheduled task requires the execution gate as a
+    ``Service`` does; a boot task does not (probes and boot plumbing stay readable on a
+    refused boot).
     """
 
     name: str
@@ -2579,9 +2582,34 @@ class Task(Declared):
     hardening: Hardening = Hardening.strict()
     wanted_by: str | None = None
     conditions: tuple[Condition, ...] = ()
+    env: Mapping[str, str] = field(default_factory=FrozenMap)
+    groups: tuple[str, ...] = ()
+    working_dir: str | None = None
+    logs: str | None = None
+    runtime: str | None = None
+    timeout_stop: str | None = None
+    kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
+    directives: Extra = field(default_factory=FrozenMap)
 
     def __post_init__(self) -> None:
-        _freeze(self, "command", "conditions")
+        _freeze(self, "command", "conditions", "groups")
+        _require_env(self)
+        for group in self.groups:
+            if not isinstance(group, str) or not _GROUP_NAME.fullmatch(group):
+                raise _fail(self, f"invalid group name {group!r} in groups=.")
+        if self.working_dir is not None:
+            _require_absolute(self, self.working_dir, "working_dir")
+        for what in ("logs", "runtime"):
+            if (directory := getattr(self, what)) is not None:
+                _require_name(self, directory, what)
+                _require_relative(self, directory, what)
+        if self.timeout_stop is not None:
+            _require_span(self, self.timeout_stop, "timeout_stop", "TimeoutStopSec", "Service")
+        if self.kill_mode is not None:
+            _require_choice(
+                self, self.kill_mode, ("control-group", "mixed", "process", "none"), "kill_mode"
+            )
+        require_extra(self, ("Service",), SERVICE_OWNED, name="directives")
         condition_entries(self, self.conditions)
         _require_service_name(self, self.name)
         if "@" in self.name:
