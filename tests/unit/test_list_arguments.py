@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import shutil
 from pathlib import Path
 
 import pytest
 from mypy import api
 
+from tests.helpers import REPO_ROOT
+
+WARM_CACHE = REPO_ROOT / ".mypy_cache"
+"""The repository's own mypy cache, when a ``mypy .`` left one: copied, never written."""
 HEADER = """\
 from tundravm import User
 from tundravm.sources import Build, CargoBinary, Git, GoBinary, Install
@@ -38,9 +44,17 @@ def test_a_list_argument_is_kept_as_a_tuple(call: str, fields: tuple[str, ...]) 
     assert all(isinstance(getattr(namespace["value"], name), tuple) for name in fields)
 
 
+def _copy_present(source: str, target: str) -> None:
+    with contextlib.suppress(FileNotFoundError):  # a running mypy's temporary file
+        shutil.copy2(source, target)
+
+
 def test_mypy_accepts_every_list_argument(tmp_path: Path) -> None:
     snippet = tmp_path / "lists.py"
     lines = [f"value_{i} = {call}" for i, (call, _) in enumerate(CASES)]
     snippet.write_text(HEADER + "\n".join(lines) + "\n", encoding="utf-8")
-    out, err, status = api.run(["--strict", "--no-incremental", str(snippet)])
+    cache = tmp_path / "mypy-cache"
+    if WARM_CACHE.is_dir():  # the gate's `mypy .` just checked the package: check the snippet
+        shutil.copytree(WARM_CACHE, cache, copy_function=_copy_present)
+    out, err, status = api.run(["--strict", "--cache-dir", str(cache), str(snippet)])
     assert status == 0, out + err
