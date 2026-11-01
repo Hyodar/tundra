@@ -1,8 +1,10 @@
-"""``dev``: build the dev profile, boot it under the fake QEMU, probe it, follow the
-console, stop on Ctrl-C."""
+"""``dev``: build the dev profile (or reuse the latest build, saying why), boot it under the
+fake QEMU, probe it, follow the console, stop on Ctrl-C."""
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,19 @@ from tests.cli.conftest import Cli, receipt
 from tundravm import instances
 from tundravm.builds import Build
 from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+
+LOCAL = """\
+from tundravm import Image, Service
+from tundravm.components import DevAccess
+from tundravm.sources import GoBinary, Local
+
+image = Image(
+    "demo",
+    services=[Service("app", [GoBinary("app", Local("app"))])],
+    dev=DevAccess(password="tdx"),
+)
+"""
+"""An image with a Local source, whose content the lock pins."""
 
 
 def _probe_lines(build: Build, failing: str | None = None) -> str:
@@ -33,7 +48,7 @@ def _probe_lines(build: Build, failing: str | None = None) -> str:
     ],
     ids=["every-check-ok", "a-failed-check", "the-probe-did-not-finish"],
 )
-def test_no_follow_exits_with_the_probes_verdict(
+def test_no_follow_reuses_the_build_and_exits_with_the_probes_verdict(
     dev_built: Build,
     project: Path,
     cli: Cli,
@@ -48,14 +63,64 @@ def test_no_follow_exits_with_the_probes_verdict(
         monkeypatch.setenv("FAKE_QEMU_CONSOLE", _probe_lines(dev_built, failing))
     result = cli("dev", "--no-follow")
     assert result.code == code, result.err
-    assert result.out.startswith(
-        f"already built (identical; left untouched) build/demo/development/{dev_built.id}\n"
-    )
+    assert result.out.startswith(f"reusing build/demo/development/{dev_built.id}\n")
     assert "instance demo-1: simulated (development build" in result.out
     assert result.out.splitlines()[-1] == "stop it with `tundravm run stop demo-1`"
     assert failing is None or failing in result.out
     assert receipt(project, "demo-1")["state"] == "running"
     assert cli("run", "stop", "demo-1").out.strip() == "stopped demo-1"
+
+
+def _edit_image(project: Path, cli: Cli) -> None:
+    (project / "demo.py").write_text(LOCAL.replace('"demo",', '"demo", packages=["jq"],'))
+    assert cli("lock").code == EXIT_OK
+
+
+def _edit_local_source(project: Path, cli: Cli) -> None:
+    (project / "app" / "main.go").write_text("package main\n\nfunc main() { println() }\n")
+
+
+def _edit_lock(project: Path, cli: Cli) -> None:
+    lock = project / "build" / "tundravm.lock"
+    payload = json.loads(lock.read_text())
+    payload["toolchain"]["mkosi"] = "mkosi 99.0"
+    lock.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+@pytest.mark.parametrize(
+    ("change", "line"),
+    [
+        (None, "reusing build/demo/development/"),
+        (_edit_image, "building: image changed"),
+        (_edit_local_source, "building: Local source app changed"),
+        (_edit_lock, "building: lock changed"),
+    ],
+    ids=["nothing", "the-image", "a-local-source", "the-lock"],
+)
+def test_the_latest_dev_build_is_reused_until_what_it_was_built_from_changes(
+    project: Path,
+    cli: Cli,
+    qemu: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: Callable[[Path, Cli], None] | None,
+    line: str,
+) -> None:
+    monkeypatch.setattr(instances, "PROBE_TIMEOUT", 0.05)
+    (project / "demo.py").write_text(LOCAL, encoding="utf-8")
+    (project / "app").mkdir()
+    (project / "app" / "main.go").write_text("package main\n\nfunc main() {}\n")
+    first = cli("dev", "--no-follow")
+    assert first.out.startswith("building: no dev build yet\nlock written: build/tundravm.lock")
+    assert "\nbuilt build/demo/development/" in first.out
+    cli("run", "stop", "demo-1")
+    built = [p.name for p in (project / "build" / "demo" / "development").iterdir()]
+    if change is not None:
+        change(project, cli)
+    again = cli("dev", "--no-follow")
+    assert again.out.startswith(line), again.out
+    cli("run", "stop", "demo-2")
+    now = [p.name for p in (project / "build" / "demo" / "development").iterdir()]
+    assert (len(now) == len(built)) is (change is None)
 
 
 def test_ctrl_c_stops_the_instance_and_keeps_the_build(

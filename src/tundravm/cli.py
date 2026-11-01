@@ -4,7 +4,7 @@
 pins its inputs; ``build`` makes an immutable build directory (``tundravm.builds``); ``show``
 reads an image or a build back, and diffs two builds; ``run`` starts a local instance and
 ``deploy`` a cloud one, each with a receipt (``tundravm.instances``); ``dev`` is the inner
-loop as one verb, a dev build run with its probe; ``attest`` checks an
+loop as one verb, a dev build run with its probe (``tundravm.dev``); ``attest`` checks an
 instance's evidence and ``secrets`` delivers credentials and unlocks volumes after a fresh
 check (``tundravm.bootstrap``); ``verify`` checks a build directory against its manifest;
 ``convert`` turns an mkosi tree or unit files into source; ``doctor`` says what this host
@@ -22,6 +22,7 @@ this parser: ``python -m tundravm.completion bash|zsh|fish``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import json
 import os
@@ -76,6 +77,7 @@ from .declarative.lifecycle import (
     write_lock,
 )
 from .declarative.resolve import resolve
+from .dev import rebuild_reason
 from .diagnostics import Diagnostic
 from .diff import diff_against
 from .errors import SourceError, StateError, TdxError, ValidationError
@@ -535,8 +537,10 @@ def build_parser() -> argparse.ArgumentParser:
         "The inner loop as one verb: `build --dev` (a missing lock written, changed Local\n"
         "sources re-pinned, the report printed), then `run --mode simulated --probe` on the\n"
         "build: the probe's table, then the console until Ctrl-C, which stops the instance\n"
-        "and keeps the build. Exit 1 on a failed check, 0 after the stop. --no-follow\n"
-        "returns right after the probe, the instance running\n"
+        "and keeps the build. The latest development build is run as it is while nothing\n"
+        "it was built from changed (the image, the lock, a Local source's content); one\n"
+        "line says which changed, or which build it reuses. Exit 1 on a failed check, 0\n"
+        "after the stop. --no-follow returns right after the probe, the instance running\n"
         "(scripts, CI); --mode tdx boots with TDX where `doctor --for tdx` is ready.",
         image,
     )
@@ -1476,7 +1480,16 @@ def _cmd_dev(args: argparse.Namespace, out: TextIO) -> int:
     img = _lowered(loaded, found)
     profile = builds.choose_profile(img, None, dev=True)
     instances.require_host(args.mode)
-    build = _build(loaded, img, found, profile, out).build
+    latest = None
+    with contextlib.suppress(StateError):
+        latest = builds.resolve(None, root=found.build, image=img.image_id, dev=True)
+    reason = rebuild_reason(img, profile, latest, found.lockfile)
+    if latest is None or reason is not None:
+        print(f"building: {reason}", file=out)
+        build = _build(loaded, img, found, profile, out).build
+    else:
+        build = latest
+        print(f"reusing {found.build / img.image_id / 'development' / build.id}", file=out)
     instances.probe_checks(build.manifest, f"build {build.id}")
     instance = instances.launch(found.instances, build, mode=args.mode, detach=True, out=out)
     try:

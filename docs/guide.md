@@ -993,7 +993,9 @@ $ tundravm run stop demo-1
 
 `dev` is the inner loop as one verb: `build --dev`, then `run --mode simulated --probe`
 on the build, the probe's table, then the console until Ctrl-C stops the instance (the
-build stays); `--no-follow` returns after the probe, `--mode tdx` boots with TDX.
+build stays). It builds only when the image, the lock or a `Local` source's content
+changed since the latest development build, and says which; else it reuses that build.
+`--no-follow` returns after the probe, `--mode tdx` boots with TDX.
 `run` boots `qemu.raw` through OVMF from its ESP on a snapshot and
 forwards from `127.0.0.1` every TCP port the image accepts (8745 where the key delivery
 listens), on the same port when free and unprivileged. `--mode` is required:

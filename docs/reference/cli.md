@@ -283,8 +283,10 @@ usage: tundravm dev [-h] [--attr NAME] [--pythonpath DIR] [--traceback] [--mode 
 The inner loop as one verb: `build --dev` (a missing lock written, changed Local
 sources re-pinned, the report printed), then `run --mode simulated --probe` on the
 build: the probe's table, then the console until Ctrl-C, which stops the instance
-and keeps the build. Exit 1 on a failed check, 0 after the stop. --no-follow
-returns right after the probe, the instance running
+and keeps the build. The latest development build is run as it is while nothing
+it was built from changed (the image, the lock, a Local source's content); one
+line says which changed, or which build it reuses. Exit 1 on a failed check, 0
+after the stop. --no-follow returns right after the probe, the instance running
 (scripts, CI); --mode tdx boots with TDX where `doctor --for tdx` is ready.
 
 positional arguments:
