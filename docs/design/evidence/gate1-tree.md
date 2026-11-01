@@ -961,10 +961,11 @@ Run [41140855928](https://github.com/Hyodar/tundra/actions/runs/41140855928) (br
 snapshot `20261018T082309Z` with `CONFIG_MODULES=n`, the composed kernel `Kernel.build`
 lowers to:
 
-- `recipe` (`tests/fixtures/kernel/recipe.py`): gregkh/linux `v6.12.111` (`b819bf73ee69`)
-  with `config.amd64_none_cloud-amd64` of Debian's `linux-config-6.12` 6.12.111-1 from the
-  snapshot's pool (6.12.113-1 is in the security pool only) and a fragment that only drops
-  debug info (`DEBUG_INFO_NONE=y`, no BTF).
+- `recipe` (`tests/fixtures/kernel/recipe.py`): gregkh/linux `v6.12.113` with
+  `config.amd64_none_cloud-amd64` of Debian's `linux-config-6.12` 6.12.113-1, which the
+  snapshot carries in its security pool only (runs before 41322173378 built `v6.12.111`
+  with 6.12.111-1 from the main pool), and a fragment that only drops debug info
+  (`DEBUG_INFO_NONE=y`, no BTF).
 - `example` (`tests/fixtures/kernel/example.py`): what `examples/nethermind_base.py`'s
   `Kernel.build` lowers to, gregkh/linux `v6.13.12` (`6b3a0b164a4a`) with the example's 6.6.35
   yocto config as its base and no other fragment. The example's `Image` cannot build in CI
@@ -977,9 +978,13 @@ source and the config, 25m09s for the mkosi build on the runner's 4 cores withou
 1331 options to Debian's 2917), 13s. Run 41307682145 (head `c5f19bf`, the label fix on top)
 passed both again in 27m43s and 16m02s with the same counts. Earlier runs built 6.12.57
 from the old snapshot `20251113T083151Z`: 41299630516 in 21m30s, 41299024098 in 27m42s.
-Each tree took about 5 GB of disk.
+Each tree took about 5 GB of disk. Run 41322173378 (master `9edb8d6`, by hand) is the
+first on the bumped fixture, 6.12.113 from the security pool: green, `recipe` in 22m16s and
+`example` in 14m01s; the same counts as below (1138 `=m` all `=y`, none dropped; 105, 104
+and `BT_CMTP` for the example; 30 required and 1 denied, all passing), and the probe prints
+`release 6.12.113` and `6.13.12-yocto-tiny`.
 
-- **The config diff**: Debian's 6.12.111 config has 1138 `=m` options; after `olddefconfig`
+- **The config diff**: Debian's 6.12.113 config (as 6.12.111's) has 1138 `=m` options; after `olddefconfig`
   all 1138 are `=y` and none dropped, so Kconfig promotes `m` to `y` under
   `CONFIG_MODULES=n` and `mod2yesconfig` is not needed. Besides those, what leaves is
   module-only (`MODULE_*`, `MODVERSIONS`, `MODPROBE_PATH`, `LIVEPATCH`), the debug info and
@@ -996,7 +1001,7 @@ Each tree took about 5 GB of disk.
   `EROFS_FS`, `NET_VENDOR_GOOGLE` and `GVE`, `NET_VENDOR_MICROSOFT` and `MICROSOFT_MANA`, and
   `CRYPTO_CRC32C_INTEL`, 12 lines in all.
 - **The boot**: each `qemu.raw` boots through its ESP and the probe prints `release
-  6.12.111` (`6.13.12-yocto-tiny` for the example, its `CONFIG_LOCALVERSION`),
+  6.12.113` (`6.13.12-yocto-tiny` for the example, its `CONFIG_LOCALVERSION`),
   `module-files 0`, `drivers virtio_net virtio_blk virtio_scsi nvme gve mana` and
   `filesystems ext4 erofs overlay`. The Hyper-V drivers register only on Hyper-V, so no
   boot here shows them.
