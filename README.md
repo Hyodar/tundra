@@ -51,14 +51,16 @@ $ uv run tundravm run --mode simulated --dev    # instance my-image-1, ports for
 $ uv run tundravm verify latest-development     # every artifact against the manifest, offline
 ```
 
-That file is the whole image. `new` writes one that builds your Go program from `app/`, and
-the `dev` profile these commands build: production starts no service without TDX.
-Implied: Debian trixie from a locked snapshot; the TEE baseline (NTS time, a volatile
-journal, sysctl hardening, no apt timers); a measured UKI with the TDX, virtio, NVMe,
-Hyper-V and gVNIC drivers; an nftables firewall that opens only `8080` and the management
-port `8745`; `app.service` as its own system user under a tested sandbox, restarting on
-failure; and the `tdxs` evidence service, whose quote `attest` checks.
-Each default has a typed escape hatch.
+That file is the whole image. Everything else is implied: Debian trixie from a locked
+snapshot; the TEE baseline (NTS time, a volatile journal, hardened sysctls, no apt timers);
+a measured UKI with the TDX, virtio, NVMe, Hyper-V and gVNIC drivers; an nftables firewall
+that opens only `8080` and the management port `8745`; `app.service` as its own system user
+under a tested sandbox, restarted on failure; and the `tdxs` evidence service, whose quote
+`attest` checks. Each default has a typed escape hatch.
+
+The three commands build, boot and verify the `dev` profile. A production build is the
+same image without `DevAccess`, and it starts no service unless it runs under TDX. `new`
+writes a starter like this one, with a Go program in `app/` in place of busybox.
 
 ## Documentation
 
