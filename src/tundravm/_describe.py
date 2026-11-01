@@ -7,8 +7,8 @@ packages, sources, files, units, firewall and build steps, each in public terms 
 service's probe is its service's, a build step is what it does). Both are
 JSON-serializable and deterministically ordered.
 
-``show`` prints them as :class:`Section` rows; a profile beyond the one it extends prints
-the rows the two do not share (:func:`diff_rows`).
+``show`` prints them as :class:`Section` rows, and ``show --diff`` (and a profile beyond
+the one it extends) prints the rows two descriptions do not share (:func:`diff_sections`).
 """
 
 from __future__ import annotations
@@ -686,15 +686,18 @@ def _profile_rows(profiles: Sequence[Mapping[str, Any]]) -> list[Row]:
 
 
 def resolved_sections(
-    resolved: Mapping[str, Mapping[str, Any]], extends: Mapping[str, str | None]
+    resolved: Mapping[str, Mapping[str, Any]],
+    extends: Mapping[str, str | None],
+    *,
+    beyond: bool = True,
 ) -> list[Section]:
-    """What each profile builds; a profile that extends one shown too lists only what
-    differs from it."""
+    """What each profile builds; with *beyond*, a profile that extends one shown too lists
+    only what differs from it."""
     sections: list[Section] = []
     for name, description in resolved.items():
         rows = tuple(resolved_rows(description))
         parent = extends.get(name)
-        if parent is not None and parent in resolved and parent != name:
+        if beyond and parent is not None and parent in resolved and parent != name:
             parent_rows = tuple(resolved_rows(resolved[parent]))
             changed = diff_rows(parent_rows, rows) or [Row("nothing")]
             sections.append(Section(f"Built into {name}, beyond {parent}", tuple(changed)))
@@ -908,6 +911,34 @@ def _whole(row: Row, sign: str) -> Row:
     if row.inline:
         return Row(f"{sign} {row.head} ({len(row.items)}): " + " ".join(map(_text, row.items)))
     return Row(f"{sign} {row.head}", tuple(f"{sign} {_text(i)}" for i in row.items))
+
+
+def diff_sections(old: Sequence[Section], new: Sequence[Section]) -> list[Section]:
+    """Section by section (by title), the rows that differ; a section with none is left
+    out."""
+    before = {section.title: section for section in old}
+    titles = [s.title for s in old] + [s.title for s in new if s.title not in before]
+    after = {section.title: section for section in new}
+    found: list[Section] = []
+    for title in titles:
+        rows = diff_rows(
+            before[title].rows if title in before else (),
+            after[title].rows if title in after else (),
+        )
+        if rows:
+            found.append(Section(title, tuple(rows)))
+    return found
+
+
+def section_payload(sections: Sequence[Section]) -> list[dict[str, object]]:
+    """*sections* as JSON: each title and its rows as the lines ``show`` prints."""
+    return [
+        {
+            "title": section.title,
+            "lines": [line[2:] for row in section.rows for line in _row_lines(row)],
+        }
+        for section in sections
+    ]
 
 
 def _truncate(text: str, width: int) -> str:

@@ -434,7 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
     show_cmd = command(
         "show",
         _cmd_show,
-        "Show the image as written and what it builds, or a build; --diff two builds.",
+        "Show the image as written and what it builds, or a build; --diff two of either.",
         "Without BUILD: the image as its file wrote it (components with their keywords,\n"
         "services with their program, source, ports, hardening, volume, credentials and\n"
         "probe, profiles with what each changes), then what each profile builds: packages,\n"
@@ -442,8 +442,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--json has the same sections and where each declaration came from. With BUILD (a\n"
         "build directory, an id prefix, `latest` or `latest-development`): the report\n"
         "`build` printed, the manifest's provenance, unchecked guarantees and boot probe\n"
-        "checks. --units, --tree and --measurements narrow it. --diff OLD NEW compares two\n"
-        "builds: packages, files, units, boot payload, measurements, policy coverage.",
+        "checks. --units, --tree and --measurements narrow it. --diff OLD NEW prints the\n"
+        "lines that differ: of two image files, section by section; of two builds, their\n"
+        "packages, files, units, boot payload, measurements and policy coverage.",
         as_json,
     )
     show_cmd.add_argument(
@@ -456,7 +457,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--measurements", action="store_true", help="The measurement records (a build)."
     )
     part.add_argument(
-        "--diff", nargs=2, default=None, metavar=("OLD", "NEW"), help="Compare two builds."
+        "--diff",
+        nargs=2,
+        default=None,
+        metavar=("OLD", "NEW"),
+        help="Compare two image files or two builds.",
     )
     show_cmd.add_argument(
         "--profile",
@@ -1220,14 +1225,7 @@ def _is_image(subject: str | None) -> bool:
 
 def _cmd_show(args: argparse.Namespace, out: TextIO) -> int:
     if args.diff is not None:
-        found = settings(None)
-        old, new = (builds.resolve(ref, root=found.build, image=None) for ref in args.diff)
-        report = show.diff_builds(old, new)
-        print(
-            json_report("show", {"diff": report}) if args.json else show.render_diff(report),
-            file=out,
-        )
-        return EXIT_OK
+        return _show_diff(args, out)
     if _is_image(args.subject) or (args.subject is None and _project_image()):
         return _show_image(args, out)
     if args.dev:
@@ -1268,6 +1266,34 @@ def _cmd_show(args: argparse.Namespace, out: TextIO) -> int:
             else show.render_build(build),
             file=out,
         )
+    return EXIT_OK
+
+
+def _show_diff(args: argparse.Namespace, out: TextIO) -> int:
+    """``--diff OLD NEW``: two image files, section by section, or two builds."""
+    images = [_is_image(ref) for ref in args.diff]
+    if all(images):
+        old, new = (_image_report(args, Path(ref))[0] for ref in args.diff)
+        diff = show.diff_images(old, new)
+        text = show.render_image_diff(diff)
+    elif any(images):
+        raise ValidationError(
+            "--diff compares two image files or two builds, not one of each.",
+            hint="Build the image (`tundravm build`), then compare the two builds.",
+        )
+    elif args.dev or args.profile:
+        raise ValidationError(
+            "--dev and --profile select profiles of image files; a build is one profile.",
+            hint="Drop them, or name the builds: `latest` and `latest-development`.",
+        )
+    else:
+        found = settings(None)
+        old_build, new_build = (
+            builds.resolve(ref, root=found.build, image=None) for ref in args.diff
+        )
+        diff = show.diff_builds(old_build, new_build)
+        text = show.render_diff(diff)
+    print(json_report("show", {"diff": diff}) if args.json else text, file=out)
     return EXIT_OK
 
 

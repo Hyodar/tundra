@@ -29,9 +29,11 @@ from ._describe import (
     declared_recipe,
     declared_sections,
     describe,
+    diff_sections,
     probe_units,
     render_sections,
     resolved_sections,
+    section_payload,
 )
 from ._describe import declared as declared_view
 from ._location import display_location
@@ -152,11 +154,13 @@ def render_image(report: Mapping[str, Any]) -> str:
     return f"{head}\n{_base_line(report['base'])}\n\n{render_sections(image_sections(report))}"
 
 
-def image_sections(report: Mapping[str, Any]) -> list[Section]:
+def image_sections(report: Mapping[str, Any], *, beyond: bool = True) -> list[Section]:
     """What the image file wrote (components, services, ingress, content, profiles), then
-    what each profile builds, a profile beyond the one it extends when both are shown."""
+    what each profile builds; with *beyond*, a profile beyond the one it extends when both
+    are shown."""
     extends = {name: row.get("extends") for name, row in report["resolved"].items()}
-    return [*declared_sections(report), *resolved_sections(report["resolved"], extends)]
+    built = resolved_sections(report["resolved"], extends, beyond=beyond)
+    return [*declared_sections(report), *built]
 
 
 def _base_line(base: Mapping[str, Any]) -> str:
@@ -169,6 +173,33 @@ def _base_line(base: Mapping[str, Any]) -> str:
     parts.append(str(base["arch"]))
     parts.append("reproducible" if base.get("reproducible") else "not reproducible")
     return ", ".join(parts)
+
+
+def diff_images(old: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, object]:
+    """What differs from the image *old* describes to *new*: the sections ``show`` prints,
+    each with only the lines that differ."""
+    changed = diff_sections(image_sections(old, beyond=False), image_sections(new, beyond=False))
+    before, after = old["base"], new["base"]
+    return {
+        "old": {"image": old["image"], "file": old.get("file")},
+        "new": {"image": new["image"], "file": new.get("file")},
+        "base": [f"{k}: {before[k]} -> {after[k]}" for k in before if before[k] != after[k]],
+        "sections": section_payload(changed),
+    }
+
+
+def render_image_diff(diff: Mapping[str, Any]) -> str:
+    """The two image files, then each section with the lines that differ."""
+    old, new = (diff[side]["file"] or diff[side]["image"] for side in ("old", "new"))
+    head = f"{old} -> {new}"
+    if not diff["base"] and not diff["sections"]:
+        return f"{head}: no difference"
+    blocks = [head, *(f"base {line}" for line in diff["base"])]
+    for section in diff["sections"]:
+        blocks.append("")
+        blocks.append(f"{section['title']}:")
+        blocks.extend(f"  {line}" for line in section["lines"])
+    return "\n".join(blocks)
 
 
 def ordered_profiles(declared: Sequence[str], given: Sequence[str]) -> tuple[str, ...]:
@@ -635,40 +666,45 @@ def diff_builds(old: Build, new: Build) -> dict[str, object]:
 
 
 def render_diff(diff: Mapping[str, Any]) -> str:
-    lines = [f"{diff['old']['id']} -> {diff['new']['id']}"]
-    packages = diff["packages"]
-    if not packages["known"]:
-        lines.append("packages: unknown (neither build has a package manifest)")
-    else:
-        count = sum(len(packages[k]) for k in ("added", "removed", "changed"))
-        lines.append(f"packages: {count} changed")
-        lines += [f"  + {n} {v}" for n, v in packages["added"].items()]
-        lines += [f"  - {n} {v}" for n, v in packages["removed"].items()]
-        lines += [f"  ~ {n} {a} -> {b}" for n, (a, b) in packages["changed"].items()]
+    """Two builds, then each section with the lines that differ, as ``show`` names them;
+    a section that does not differ is left out."""
     codes = {"added": "+", "removed": "-", "modified": "~", "mode": "m"}
-    lines.append(f"files: {len(diff['files'])} changed")
-    lines += [f"  {codes[f['status']]} {f['path']}" for f in diff["files"]]
-    lines.append(f"units: {len(diff['units'])} changed")
-    lines += [f"  {codes[f['status']]} {f['path']}" for f in diff["units"]]
-    lines.append(f"boot payload: {'unchanged' if not diff['boot'] else ', '.join(diff['boot'])}")
-    for key, (a, b) in diff["boot"].items():
-        lines.append(f"  {key}: {a} -> {b}")
-    lines.append(
-        f"measurements: {'unchanged' if not diff['measurements'] else len(diff['measurements'])}"
-    )
+    packages = diff["packages"]
+    sections: list[tuple[str, list[str]]] = [
+        (
+            "Packages",
+            ["unknown: neither build has a package manifest"]
+            if not packages["known"]
+            else [
+                *(f"+ {n} {v}" for n, v in packages["added"].items()),
+                *(f"- {n} {v}" for n, v in packages["removed"].items()),
+                *(f"~ {n} {a} -> {b}" for n, (a, b) in packages["changed"].items()),
+            ],
+        ),
+        ("Files", [f"{codes[f['status']]} {f['path']}" for f in diff["files"]]),
+        ("Units", [f"{codes[f['status']]} {f['path']}" for f in diff["units"]]),
+        ("Boot payload", [f"{key}: {a} -> {b}" for key, (a, b) in diff["boot"].items()]),
+    ]
+    measured: list[str] = []
     for name, change in diff["measurements"].items():
-        lines.append(f"  {name}: {change['state'][0]} -> {change['state'][1]}")
-        for reg, (a, b) in change["registers"].items():
-            lines.append(f"    {reg}: {a} -> {b}")
-    lines.append(
-        f"policy coverage: {'unchanged' if not diff['coverage'] else len(diff['coverage'])}"
-    )
+        measured.append(f"{name}: {change['state'][0]} -> {change['state'][1]}")
+        measured += [f"  {reg}: {a} -> {b}" for reg, (a, b) in change["registers"].items()]
+    sections.append(("Measurements", measured))
+    coverage: list[str] = []
     for name, change in diff["coverage"].items():
         if change["now_unknown"]:
-            lines.append(f"  {name}: no longer predicted: {', '.join(change['now_unknown'])}")
+            coverage.append(f"{name}: no longer predicted: {', '.join(change['now_unknown'])}")
         if change["now_predicted"]:
-            lines.append(f"  {name}: now predicted: {', '.join(change['now_predicted'])}")
-    return "\n".join(lines)
+            coverage.append(f"{name}: now predicted: {', '.join(change['now_predicted'])}")
+    sections.append(("Policy coverage", coverage))
+    head = f"{diff['old']['id']} -> {diff['new']['id']}"
+    shown = [(title, lines) for title, lines in sections if lines]
+    if not shown:
+        return f"{head}: no difference"
+    blocks = [head]
+    for title, lines in shown:
+        blocks += ["", f"{title}:", *(f"  {line}" for line in lines)]
+    return "\n".join(blocks)
 
 
 __all__ = [
@@ -677,6 +713,7 @@ __all__ = [
     "build_tree",
     "build_units",
     "diff_builds",
+    "diff_images",
     "IMAGE_KEYS",
     "image_egress",
     "image_report",
@@ -689,6 +726,7 @@ __all__ = [
     "render_egress",
     "render_files",
     "render_image",
+    "render_image_diff",
     "render_measurements",
     "render_report",
     "render_units",

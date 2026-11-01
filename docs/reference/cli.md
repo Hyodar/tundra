@@ -8,7 +8,7 @@ Generated from the `tundravm` argument parser by `uv run python -m tundravm._ref
 | [`check`](#tundravm-check) | Check the image: declarations, lint, lock drift, tree drift. |
 | [`lock`](#tundravm-lock) | Resolve or check the lock: snapshot, sources, toolchain. |
 | [`build`](#tundravm-build) | Build into an immutable build directory, with its manifest. |
-| [`show`](#tundravm-show) | Show the image as written and what it builds, or a build; --diff two builds. |
+| [`show`](#tundravm-show) | Show the image as written and what it builds, or a build; --diff two of either. |
 | [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode\|probe. |
 | [`dev`](#tundravm-dev) | Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it. |
 | [`deploy`](#tundravm-deploy) | Deploy a build to Azure or GCP; status\|logs\|mode\|upgrade\|rollback. |
@@ -31,7 +31,7 @@ positional arguments:
     check     Check the image: declarations, lint, lock drift, tree drift.
     lock      Resolve or check the lock: snapshot, sources, toolchain.
     build     Build into an immutable build directory, with its manifest.
-    show      Show the image as written and what it builds, or a build; --diff two builds.
+    show      Show the image as written and what it builds, or a build; --diff two of either.
     run       Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.
     dev       Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it.
     deploy    Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.
@@ -191,7 +191,7 @@ loading the image file:
 
 ## tundravm show
 
-Show the image as written and what it builds, or a build; --diff two builds.
+Show the image as written and what it builds, or a build; --diff two of either.
 
 ```text
 usage: tundravm show [-h] [--json] [--traceback]
@@ -206,8 +206,9 @@ sources, files, units, firewall, build steps; a profile beyond the one it extend
 --json has the same sections and where each declaration came from. With BUILD (a
 build directory, an id prefix, `latest` or `latest-development`): the report
 `build` printed, the manifest's provenance, unchecked guarantees and boot probe
-checks. --units, --tree and --measurements narrow it. --diff OLD NEW compares two
-builds: packages, files, units, boot payload, measurements, policy coverage.
+checks. --units, --tree and --measurements narrow it. --diff OLD NEW prints the
+lines that differ: of two image files, section by section; of two builds, their
+packages, files, units, boot payload, measurements and policy coverage.
 
 positional arguments:
   BUILD           A build, or an image file.
@@ -219,7 +220,7 @@ options:
   --units         The unit files.
   --tree          The tree's files.
   --measurements  The measurement records (a build).
-  --diff OLD NEW  Compare two builds.
+  --diff OLD NEW  Compare two image files or two builds.
   --profile P     Profiles of the image (repeatable; default: all).
   --dev           The image's dev profile (DevAccess), as build --dev.
   --attr NAME     The image's name in its file.

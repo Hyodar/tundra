@@ -13,6 +13,7 @@ from tundravm._source import SourceBuild
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.declarative import lifecycle
+from tundravm.show import IMAGE_KEYS
 from tundravm.testing import UPDATE_GOLDEN_ENV
 
 GOLDEN = Path(__file__).parent
@@ -48,6 +49,18 @@ def test_show_selects_profiles(project: Path, cli: Cli) -> None:
     assert "\nBuilt into dev:\n" in dev.out and "Built into production" not in dev.out
     twice = cli("show", "demo.py", "--dev", "--profile", "production")
     assert twice.code == EXIT_SDK_ERROR and "twice" in twice.err
+
+
+def test_show_json_has_the_sections_show_prints(project: Path, cli: Cli) -> None:
+    payload = json.loads(cli("show", "demo.py", "--json").out)
+    assert set(payload) == set(IMAGE_KEYS)
+    assert (payload["schema"], payload["image"], payload["file"]) == (
+        "tundravm.show/1",
+        "demo",
+        "demo.py",
+    )
+    assert [row["name"] for row in payload["profiles"]] == ["production", "dev"]
+    assert set(payload["resolved"]) == {"production", "dev"}
 
 
 def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli) -> None:
@@ -212,9 +225,9 @@ def test_diff_of_the_production_and_development_builds(dev_built: Build, cli: Cl
     assert result.code == EXIT_OK, result.err
     lines = result.out.splitlines()
     assert lines[0].endswith(f"-> {dev_built.id}")
-    assert "packages: unknown (neither build has a package manifest)" in lines
+    assert "Packages:\n  unknown: neither build has a package manifest\n" in result.out
     assert "  + payload/mkosi.profiles/dev/mkosi.conf" in lines
-    assert "boot payload: uki, cmdline" in lines
+    assert "Boot payload:" in lines and "Policy coverage:" not in lines
     report = json.loads(cli("show", "--diff", "latest", "latest-development", "--json").out)
     assert report["schema"] == "tundravm.show/1"
     diff = report["diff"]
@@ -229,3 +242,20 @@ def test_diff_of_the_production_and_development_builds(dev_built: Build, cli: Cl
 def test_a_build_against_itself_differs_in_nothing(built: Build, cli: Cli) -> None:
     diff = json.loads(cli("show", "--diff", built.id, "latest", "--json").out)["diff"]
     assert diff["files"] == [] and diff["boot"] == {} and diff["units"] == []
+    assert "Files:" not in cli("show", "--diff", built.id, "latest").out
+
+
+def test_diff_of_two_image_files(project: Path, cli: Cli) -> None:
+    """The sections show prints, only the lines that differ."""
+    changed = STARTER.replace('"8080"', '"9090"').replace("TCP(8080)", "TCP(9090)")
+    (project / "next.py").write_text(changed, encoding="utf-8")
+    result = cli("show", "--diff", "demo.py", "next.py")
+    assert result.code == EXIT_OK, result.err
+    assert result.out.splitlines()[:4] == ["demo.py -> next.py", "", "Services:", "  app"]
+    lines = result.out.splitlines()
+    assert {"    - ports  TCP(8080)", "    + ports  TCP(9090)"} <= set(lines)
+    assert {"  Firewall", "    - in  8080/tcp  app.service"} <= set(lines)
+    assert "Profiles" not in result.out
+    assert cli("show", "--diff", "demo.py", "demo.py").out == "demo.py -> demo.py: no difference\n"
+    mixed = cli("show", "--diff", "demo.py", "latest")
+    assert mixed.code == EXIT_SDK_ERROR and "two image files or two builds" in mixed.err
