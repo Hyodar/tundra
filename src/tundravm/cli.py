@@ -807,7 +807,7 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
     for rel, text in render_app_files(title=name, template=template).items():
         files[root / rel] = text
     if template == "prover":
-        files[root / "policies" / "README.md"] = POLICIES_README
+        files[root / "policies" / "README.md"] = POLICIES_README.replace("{name}", name)
     if args.ci:
         files[root / WORKFLOW_PATH] = render_workflow(recipe=filename)
     for path, text in files.items():
@@ -839,7 +839,7 @@ check an instance against one of these files.
 
     tundravm build --target gcp
     jq '.records[] | select(.target == "gcp" and .boot == "disk") | .policy' \\
-        build/prover/latest-production/measurements.json > policies/prover-gcp.json
+        build/{name}/latest-production/measurements.json > policies/{name}-gcp.json
 
 Review it, add the platform registers you approve from a quote of a host you trust
 (`platform_approval`: MRTD, RTMR0), and commit it. A policy without them verifies as

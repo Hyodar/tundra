@@ -44,18 +44,20 @@ def test_new_writes_a_project_whose_table_names_the_image(here: Path, cli: Cli) 
 
 
 def test_the_prover_template_with_ci(here: Path, cli: Cli) -> None:
-    result = cli("new", "prover", "--template", "prover", "--ci")
+    result = cli("new", "vault", "--template", "prover", "--ci")
     assert result.code == EXIT_OK, result.err
-    root = here / "prover"
+    root = here / "vault"
     policies = (root / "policies" / "README.md").read_text()
-    assert "measurements.json" in policies and "platform_approval" in policies
+    assert "build/vault/latest-production/measurements.json" in policies
+    assert "platform_approval" in policies
     workflow = (root / ".github" / "workflows" / "tundravm.yml").read_text()
     for verb in ("check", "lock", "build", "verify", "show"):
         assert f"tundravm {verb} " in workflow or f"tundravm {verb}\n" in workflow, verb
+    assert "secrets.TUNDRA_TOOLS_TOKEN" in workflow
     for verb in REMOVED:
         assert not re.search(rf"tundravm {verb}\b", workflow), verb
-    header = (root / "prover.py").read_text().split('"""')[1]
-    assert "tundravm check prover.py" in header and "tundravm build prover.py" in header
+    header = (root / "vault.py").read_text().split('"""')[1]
+    assert "tundravm check vault.py" in header and "tundravm build vault.py" in header
 
 
 def test_the_service_template_app_compiles(here: Path, cli: Cli) -> None:

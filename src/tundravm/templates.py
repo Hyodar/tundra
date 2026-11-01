@@ -111,7 +111,7 @@ class App(Component):
     """The app: a web page busybox httpd serves, its readiness, and a lint rule.
 
     Swap in your program: ship it with a GoBinary, a CargoBinary or a Package and point
-    the service at it. Component name: ``app``.
+    the service at it. `tundravm show` lists it as component ``app``.
     """
 
     version: str
@@ -165,9 +165,9 @@ APP_PORT = 8080
 class App(Component):
     """The app: the Go program in app/, built from that directory, its readiness and a lint rule.
 
-    app/ is a Local source: `tundravm lock` pins its content, so lock again after an edit,
-    and `tundravm build` builds it offline with the Go its go.mod names. Component name:
-    ``app``.
+    app/ is a Local source: `tundravm lock` pins its content. `build --dev` re-pins an edit,
+    a production build wants `tundravm lock` again, and both build it offline with the Go
+    its go.mod names. `tundravm show` lists it as component ``app``.
     """
 
     version: str
@@ -289,8 +289,9 @@ class App(Component):
     """The app: a page busybox httpd serves on the loopback, its state on an encrypted
     volume and a token delivered after attestation.
 
-    Swap in your program: ship it with a GoBinary, a CargoBinary or a Package and point
-    the service at it; it reads the token at ``self.token.path``. Component name: ``app``.
+    Swap in your program: build it with ``GoBinary("app", Local("app"))`` as the service
+    template does, or a CargoBinary or a Package, and point the service at it; it reads the
+    token at ``self.token.path``. `tundravm show` lists it as component ``app``.
     """
 
     version: str
@@ -587,7 +588,9 @@ WORKFLOW_TEMPLATE = """\
 # TUNDRAVM_BACKEND (Settings > Secrets and variables > Actions > Variables) names the
 # backend: local (the runner has no Lima). It builds the production profile twice in independent
 # workspaces (`build --reproduce`), verifies the build directory against its manifest
-# and uploads it.
+# and uploads it. Every image builds the evidence service from the private repository
+# Hyodar/tundra-tools: add a fine-grained token with read-only Contents on it as the
+# repository secret TUNDRA_TOOLS_TOKEN, or the build cannot fetch it.
 name: tundravm
 
 on:
@@ -642,6 +645,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq debian-archive-keyring
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Read tundra-tools with TUNDRA_TOOLS_TOKEN
+        env:
+          TUNDRA_TOOLS_TOKEN: ${{{{ secrets.TUNDRA_TOOLS_TOKEN }}}}
+        run: |
+          [ -n "$TUNDRA_TOOLS_TOKEN" ] || {{ echo "no TUNDRA_TOOLS_TOKEN secret"; exit 0; }}
+          repo=github.com/Hyodar/tundra-tools
+          git config --global \\
+            url."https://x-access-token:${{TUNDRA_TOOLS_TOKEN}}@$repo".insteadOf "https://$repo"
 
       - name: Sync dependencies
         run: if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
@@ -804,7 +816,7 @@ def render_readme(*, title: str, filename: str, template: str, tests: bool) -> s
         ("uv run tundravm show", "what the image contains, profile by profile"),
         ("uv run tundravm check", "declarations, lint, lock and tree drift"),
         *steps,
-        ("uv run tundravm build", "build production into build/<image>/production/<id>/"),
+        ("uv run tundravm build", f"build production into build/{title}/production/<id>/"),
     ]
     lines = render_steps(commands, "    ")
     return Template(README_TEMPLATE).substitute(
