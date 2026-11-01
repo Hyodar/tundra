@@ -558,6 +558,9 @@ dev = ["pytest"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 
+[tool.ruff]
+line-length = 100
+
 $table"""
 
 README_TEMPLATE = r"""# $title: a tundravm image (`$filename`, $template template)

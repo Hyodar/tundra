@@ -6,7 +6,7 @@ Each row is ``<area>:<what>`` and a verdict:
 - ``blocked: <why>: <fix>`` when something installable or configurable is missing,
 - ``unavailable: <why>`` when this host cannot do it (no TDX hardware),
 - ``optional: <why>`` when the image needs no such tool (``not needed by this image``), or
-  no image says whether it does and the tool is missing (never a failure),
+  no image says whether it does and the tool (``rustup``) is missing (never a failure),
 - ``unsupported: <why>`` when tundravm does not do it anywhere.
 
 Every fact comes through :class:`Host`, so tests describe a host instead of probing this one.
@@ -220,8 +220,10 @@ def _as_needed(row: Capability, wanted: Sequence[str] | None) -> Capability:
 
 def go_capability(host: Host, needs: ToolchainNeeds | None = None) -> Capability:
     """``build:go``: the host ``go`` that prefetches Go sources (1.21+ switches toolchains),
-    blocked only when the image *needs* it (:func:`_as_needed`)."""
-    return _as_needed(_go_row(host), None if needs is None else needs.go)
+    blocked when the image *needs* it (:func:`_as_needed`) and, without an image, when it
+    is missing: every image builds its evidence service (``Tdxs``) from Go."""
+    row = _go_row(host)
+    return row if needs is None else _as_needed(row, needs.go)
 
 
 def _go_row(host: Host) -> Capability:

@@ -33,13 +33,14 @@ Breaking changes are marked **Breaking**.
 
 - **Breaking:** twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - `new NAME [--template service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written.
+- A new project's `pyproject.toml` sets `[tool.ruff] line-length = 100`, at which its files are `ruff format` clean.
 - The `service` template builds your own Go program from `app/`; the prover template adds a volume, a secret, attested TLS and `policies/`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds with `TUNDRA_TOOLS_TOKEN` when the repository sets it.
 - `show` leads with the image and its file, then production; with a build, with the build's report; `--diff` compares two builds.
 - `run --mode simulated|tdx` is always explicit; a production build boots fail-closed without TDX, and `--dev` runs the dev build's services.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` run the one replacement workflow on GCP.
 - `attest` verifies fresh evidence and delivers nothing; `secrets` attests again before it delivers or unlocks.
-- `doctor` prints one row per capability with its fix; `build:go` and `build:rustup` block only when the image needs them.
+- `doctor` prints one row per capability with its fix; `build:go` blocks without `go` (every image's `Tdxs` is Go), `build:rustup` only when the image needs it.
 - **Breaking:** `convert --from systemd` prints an `Image` file that loads, and `--mode` is gone; `check` names each program it runs that the image does not ship.
 - `convert --from mkosi` writes Python that parses, converts a tundravm tree's payload, and turns its cloud wrappers into `targets=`.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".

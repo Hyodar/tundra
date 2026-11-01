@@ -146,7 +146,7 @@ NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("raiko",))
             EXIT_FAILURE,
         ),
         ("rustup", None, NEEDS_BOTH, f"blocked: {NO_RUSTUP}", EXIT_FAILURE),
-        ("go", None, None, f"optional: {NO_GO}", EXIT_OK),
+        ("go", None, None, f"blocked: {NO_GO}", EXIT_FAILURE),
         ("rustup", None, None, f"optional: {NO_RUSTUP}", EXIT_OK),
         (
             "rustup",
@@ -177,7 +177,8 @@ def test_the_host_toolchain_rows_block_only_for_an_image_that_needs_them(
     tool: str, version: str | None, needs: ToolchainNeeds | None, row: str, code: int
 ) -> None:
     """build:go and build:rustup say what each tool is for, and block only when the image's
-    sources need it; without an image a missing tool is optional."""
+    sources need it; without an image a missing go blocks (every image's Tdxs is Go) and a
+    missing rustup is optional."""
     tools = {k: v for k, v in TOOLS.items() if k != tool}
     host, _ = _host(tools if version is None else {**tools, tool: version}, files=LINUX_FILES)
     assert _rows(host, needs=needs)[f"build:{tool}"] == row

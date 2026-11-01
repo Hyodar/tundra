@@ -650,7 +650,7 @@ that switches to it. A release the host cannot fetch fails the build with `E_SOU
 naming the release and its module. A `go.mod` older than Go 1.21, which publishes no
 toolchain, builds with Debian's `go`. Every image's `Tdxs` is a Go source, so `build`
 needs a host `go` 1.21 or newer and stops before it fetches anything without one; the
-`build:go` row of `doctor` checks it.
+`build:go` row of `doctor` checks it, and blocks without one even outside a project.
 
 A Cargo source builds with the toolchain its `rust-toolchain.toml` (or the legacy
 `rust-toolchain`) pins, looked up as `rustup` does from the build's directory up to the

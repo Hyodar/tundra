@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -70,6 +71,25 @@ def test_the_service_template_app_compiles(here: Path, cli: Cli) -> None:
             [go, *argv], cwd=here / "demo" / "app", capture_output=True, text=True, check=False
         )
         assert done.returncode == 0, f"go {' '.join(argv)}: {done.stderr}"
+
+
+@pytest.mark.parametrize("template", ["service", "prover"])
+def test_a_new_project_is_ruff_format_clean_at_its_own_setting(
+    here: Path, cli: Cli, template: str
+) -> None:
+    assert cli("new", "demo", "--template", template).code == EXIT_OK
+    root = here / "demo"
+    assert tomllib.loads((root / "pyproject.toml").read_text())["tool"]["ruff"] == {
+        "line-length": 100
+    }
+    done = subprocess.run(
+        [sys.executable, "-m", "ruff", "format", "--check", "."],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
 
 
 @pytest.mark.parametrize("name", ["Demo", "1x", "a/b", "x" * 70])
