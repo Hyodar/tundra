@@ -12,7 +12,7 @@ import pytest
 from tests.cli.conftest import STARTER, Cli
 from tundravm import deployments, instances
 from tundravm.builds import Build
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_OK
 from tundravm.deploy.azure import AzureDeployAdapter
 from tundravm.deploy.gcp import GcpDeployAdapter
 
@@ -87,7 +87,7 @@ def test_every_declared_volume_needs_a_disk(
     prover_build: Build, cli: Cli, cloud: FakeCloud
 ) -> None:
     result = cli("deploy", "gcp", "--build", "latest")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "Volume data needs a disk" in result.err and "data=create:SIZE" in result.err
     unknown = cli(
         "deploy",
@@ -99,22 +99,22 @@ def test_every_declared_volume_needs_a_disk(
         "--volume",
         "logs=create:1G",
     )
-    assert unknown.code == EXIT_SDK_ERROR and "declares no volume logs" in unknown.err
+    assert unknown.code == EXIT_ERROR and "declares no volume logs" in unknown.err
     bad = cli("deploy", "gcp", "--build", "latest", "--volume", "data=100G")
-    assert bad.code == EXIT_SDK_ERROR and "is not NAME=create:SIZE or NAME=existing:ID" in bad.err
+    assert bad.code == EXIT_ERROR and "is not NAME=create:SIZE or NAME=existing:ID" in bad.err
     assert not any("create" in call and "instances" in call for call in cloud.calls)
 
 
 def test_azure_cannot_attach_a_volume(prover_build: Build, cli: Cli, cloud: FakeCloud) -> None:
     result = cli("deploy", "azure", "--build", "latest", "--volume", "data=existing:disk-1")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "identified by LUN" in result.err
     assert cloud.calls == []
 
 
 def test_a_build_without_the_target_is_refused(built: Build, cli: Cli) -> None:
     result = cli("deploy", "gcp", "--build", "latest")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "has no gcp artifact" in result.err and "--target gcp" in result.err
 
 
@@ -131,13 +131,13 @@ def test_status_logs_and_mode(prover_build: Build, cli: Cli, cloud: FakeCloud) -
         "tdx on gcp, production build: a TDX guest whose evidence a production policy" in mode.out
     )
     extra = cli("deploy", "status", "prover-1", "more")
-    assert extra.code == EXIT_SDK_ERROR
+    assert extra.code == EXIT_ERROR
 
 
 def test_run_actions_refuse_a_deployment(prover_build: Build, cli: Cli, cloud: FakeCloud) -> None:
     assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:disk-1").code == 0
     result = cli("run", "status", "prover-1")
-    assert result.code == EXIT_SDK_ERROR and "deploy status prover-1" in result.err
+    assert result.code == EXIT_ERROR and "deploy status prover-1" in result.err
 
 
 def test_upgrade_needs_a_policy_and_a_build(
@@ -169,7 +169,7 @@ def test_upgrade_refuses_a_volume_change(
     policy.write_text("{}")
     other = "demo-build/demo/latest-production"
     result = cli("deploy", "upgrade", "prover-1", "--build", other, "--policy", policy)
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "The new build's volumes differ" in result.err
     assert not any(call[3:4] == ["stop"] for call in cloud.calls)
 
@@ -187,7 +187,7 @@ def test_upgrade_is_refused_on_azure(
     policy = tmp_path / "p.json"
     policy.write_text("{}")
     result = cli("deploy", "upgrade", found.id, "--build", "latest", "--policy", policy)
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "replaces GCP instances" in result.err and "identified by LUN" in result.err
 
 
@@ -198,4 +198,4 @@ def test_rollback_needs_a_replaced_instance(
     policy = tmp_path / "p.json"
     policy.write_text("{}")
     result = cli("deploy", "rollback", "prover-1", "--policy", policy)
-    assert result.code == EXIT_SDK_ERROR and "replaced nothing" in result.err
+    assert result.code == EXIT_ERROR and "replaced nothing" in result.err

@@ -93,6 +93,20 @@ class Located(Keywords):
         return self
 
 
+def raised_at(exc: BaseException) -> str:
+    """The image file's ``file:line`` *exc* was raised from, shown as
+    :func:`display_location` shows it: the innermost frame of its traceback outside
+    tundravm and installed code, else ``""``."""
+    found = ""
+    tb = exc.__traceback__
+    while tb is not None:
+        filename = tb.tb_frame.f_code.co_filename
+        if not filename.startswith("<") and not os.path.abspath(filename).startswith(_SKIPPED):
+            found = f"{os.path.abspath(filename)}:{tb.tb_lineno}"
+        tb = tb.tb_next
+    return display_location(found)
+
+
 def located[T](value: T, location: str) -> T:
     """*value* with :attr:`Located.declared_at` set to *location* (a copy made inside tundravm
     keeps the original's line); returns *value*."""
@@ -129,4 +143,5 @@ __all__ = [
     "declared_at",
     "display_location",
     "located",
+    "raised_at",
 ]

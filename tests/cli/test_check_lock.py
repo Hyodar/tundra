@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests.cli.conftest import STARTER, Cli
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.templates import render_recipe_template
 
 BROKEN = """\
@@ -77,7 +77,7 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     assert "\n\ntree-drift: error\n" in result.out
     assert "\n\nstep-cycle: error\n    internal: an image file cannot reach it" in result.out
     unknown = cli("check", "--explain", "source-unpined")
-    assert unknown.code == EXIT_SDK_ERROR
+    assert unknown.code == EXIT_ERROR
     assert "Did you mean 'source-unpinned'? docs/reference/lint.md lists" in unknown.err
 
 
@@ -101,7 +101,7 @@ def test_a_components_code_is_explained_through_the_image_that_declares_it(
 
 def test_an_unknown_profile_is_refused(project: Path, cli: Cli) -> None:
     result = cli("check", "--profile", "staging")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "Unknown profile(s): staging" in result.err
 
 
@@ -189,7 +189,7 @@ def test_lock_update_without_names_updates_every_input(
 def test_lock_and_check_together_is_a_usage_error(project: Path, cli: Cli) -> None:
     with pytest.raises(SystemExit) as exit_:
         cli("lock", "--check", "--update")
-    assert exit_.value.code == EXIT_SDK_ERROR
+    assert exit_.value.code == EXIT_ERROR
 
 
 LOCAL = """\
@@ -252,7 +252,7 @@ REPINNED = "lock: app re-pinned, local source changed\n"
     ("args", "edit", "code", "said"),
     [
         (("--dev",), True, EXIT_OK, REPINNED),
-        ((), True, EXIT_SDK_ERROR, "local-changed: app changed since the lock"),
+        ((), True, EXIT_ERROR, "local-changed: app changed since the lock"),
         (("--dev",), False, EXIT_OK, ""),
     ],
     ids=["dev re-pins", "production refuses", "unchanged says nothing"],

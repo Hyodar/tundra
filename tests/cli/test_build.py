@@ -15,7 +15,7 @@ import pytest
 from tests.cli.conftest import STARTER, Cli
 from tundravm import builds
 from tundravm.builds import Build
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.compiler.emit_mkosi import KERNEL_RECORDS
 from tundravm.declarative import lifecycle
 from tundravm.errors import StateError
@@ -147,7 +147,7 @@ def test_a_stale_lock_is_refused_and_left_alone(built: Build, project: Path, cli
     before = lock.read_bytes()
     (project / "demo.py").write_text(STARTER.replace('"busybox"]', '"busybox", "jq"]'))
     result = cli("build")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert result.err.startswith("error [E_LOCKFILE]: The lockfile build/tundravm.lock is stale")
     assert "A build never updates the lock" in result.err
     assert lock.read_bytes() == before
@@ -173,7 +173,7 @@ def test_profile_and_dev_are_exclusive(project: Path, cli: Cli) -> None:
 
 def test_targets_add_the_cloud_disks(project: Path, cli: Cli) -> None:
     refused = cli("build", "--target", "gcp")  # the starter targets qemu only
-    assert refused.code == EXIT_SDK_ERROR and "does not target gcp" in refused.err
+    assert refused.code == EXIT_ERROR and "does not target gcp" in refused.err
     (project / "demo.py").write_text(EVERY_CLOUD, encoding="utf-8")
     assert cli("lock").code == EXIT_OK
     result = cli("build", "--target", "azure,gcp")
@@ -193,7 +193,7 @@ def test_targets_add_the_cloud_disks(project: Path, cli: Cli) -> None:
 
 def test_an_unknown_target_is_refused(project: Path, cli: Cli) -> None:
     result = cli("build", "--target", "aws")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "Unknown target(s): aws" in result.err
 
 
@@ -208,7 +208,7 @@ def test_tree_only_writes_a_tree_and_no_build(project: Path, cli: Cli) -> None:
     assert cli("lock").code == EXIT_OK
     assert cli("build", "--tree-only", "tree-out").err == ""
     refused = cli("build", "--tree-only", "x", "--reproduce")
-    assert refused.code == EXIT_SDK_ERROR and "--tree-only builds nothing" in refused.err
+    assert refused.code == EXIT_ERROR and "--tree-only builds nothing" in refused.err
 
 
 def test_reproduce_records_a_match(project: Path, cli: Cli) -> None:
@@ -245,7 +245,7 @@ def test_a_second_workspace_that_cannot_be_removed_is_kept_and_said(
     record = json.loads((build.path / "observations.json").read_text())["reproduction"]
     assert record["state"] == "matched" and record["workspace"] == builds.REPRODUCE
     again = cli("build", "--reproduce")
-    assert again.code == EXIT_SDK_ERROR and "sudo rm -rf" in again.err
+    assert again.code == EXIT_ERROR and "sudo rm -rf" in again.err
 
 
 def test_a_reproduction_that_differs_exits_1_and_is_still_published(
@@ -277,9 +277,9 @@ def test_a_reproduction_that_differs_exits_1_and_is_still_published(
 @pytest.mark.parametrize(
     ("argv", "code", "said"),
     [
-        (("build",), EXIT_SDK_ERROR, "a production build builds only what a lock pins"),
-        (("build", "--offline"), EXIT_SDK_ERROR, "a production build builds only what a lock"),
-        (("build", "--dev", "--offline"), EXIT_SDK_ERROR, "an offline build builds only what"),
+        (("build",), EXIT_ERROR, "a production build builds only what a lock pins"),
+        (("build", "--offline"), EXIT_ERROR, "a production build builds only what a lock"),
+        (("build", "--dev", "--offline"), EXIT_ERROR, "an offline build builds only what"),
         (("build", "--dev"), EXIT_OK, "lock written: build/tundravm.lock (commit it)"),
     ],
     ids=["production", "production-offline", "dev-offline", "dev"],
@@ -295,7 +295,7 @@ def test_without_a_lock_production_is_refused_and_dev_writes_it(
 def test_offline_builds_from_what_an_online_build_fetched(project: Path, cli: Cli) -> None:
     assert cli("lock").code == EXIT_OK
     refused = cli("build", "--offline")
-    assert refused.code == EXIT_SDK_ERROR
+    assert refused.code == EXIT_ERROR
     assert "Cannot fetch 'tdxs': the build is offline." in refused.err
     assert cli("build").code == EXIT_OK
     result = cli("build", "--offline")

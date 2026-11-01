@@ -1153,7 +1153,7 @@ lock, commit it and push again.
 
 ## When something fails
 
-Every error prints `error [CODE]: message`, an optional `Hint:` and context, and exits 2.
+Every error prints `error [CODE]: message`, `fix:`, context and `at:`, and exits 2.
 A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did you mean".
 With `--json`, stderr gets one JSON line instead (`tundravm.error/1`). `--traceback` raises
 with the Python traceback.

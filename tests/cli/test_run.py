@@ -13,7 +13,7 @@ from tests.cli.conftest import receipt as _receipt
 from tundravm import instances
 from tundravm._modules import instance_key
 from tundravm.builds import Build
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_OK
 
 
 def test_run_detached_writes_a_receipt_and_never_the_build(
@@ -102,7 +102,7 @@ def test_a_production_build_runs_simulated_fail_closed(
     mode = cli("run", "mode", "demo-1")
     assert instances.FAIL_CLOSED in mode.out
     ssh = cli("run", "ssh", "demo-1")
-    assert ssh.code == EXIT_SDK_ERROR
+    assert ssh.code == EXIT_ERROR
     assert "runs a production build: it has no debug access" in ssh.err
     cli("run", "stop", "demo-1")
 
@@ -122,7 +122,7 @@ def test_tdx_mode_is_refused_without_a_tdx_host(
 ) -> None:
     monkeypatch.setattr(instances, "tdx_refusal", lambda: "no Intel TDX host: kvm_intel tdx is off")
     result = cli("run", "--mode", "tdx")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "run --mode tdx cannot run here: no Intel TDX host: kvm_intel tdx is off." in result.err
     assert not (project / ".tundravm" / "instances").exists()
 
@@ -153,9 +153,9 @@ def test_tdx_mode_boots_tdvf_without_console_settings(
 
 def test_actions_need_an_existing_instance(project: Path, cli: Cli) -> None:
     missing = cli("run", "status")
-    assert missing.code == EXIT_SDK_ERROR and "`run status` needs INSTANCE" in missing.err
+    assert missing.code == EXIT_ERROR and "`run status` needs INSTANCE" in missing.err
     unknown = cli("run", "logs", "nope")
-    assert unknown.code == EXIT_SDK_ERROR and "No instance 'nope'" in unknown.err
+    assert unknown.code == EXIT_ERROR and "No instance 'nope'" in unknown.err
 
 
 def test_a_missing_qemu_is_named(
@@ -163,7 +163,7 @@ def test_a_missing_qemu_is_named(
 ) -> None:
     monkeypatch.setenv("PATH", "/nonexistent")
     result = cli("run", "--mode", "simulated")
-    assert result.code == EXIT_SDK_ERROR and "qemu-system-x86_64 is not installed" in result.err
+    assert result.code == EXIT_ERROR and "qemu-system-x86_64 is not installed" in result.err
 
 
 def test_a_volume_gets_a_disk_of_its_own(prover: Path, cli: Cli, qemu: Path) -> None:
@@ -215,7 +215,7 @@ def test_run_probe_reads_the_probe_off_the_console_and_refuses_production(
     assert {r["check"] for r in record["results"]} == set(checks)
     cli("run", "stop", "demo-1")
     refused = cli("run", "--mode", "simulated", "--probe")
-    assert refused.code == EXIT_SDK_ERROR
+    assert refused.code == EXIT_ERROR
     assert "is a production build: it carries no boot probe" in refused.err
     assert "tundravm run --mode simulated --dev --probe" in refused.err
     assert not (project / ".tundravm/instances/demo-2").exists()

@@ -15,7 +15,7 @@ from tests.cli.conftest import Cli
 from tests.cli.test_attest import MRTD, PEER, R0, R1, R2, R3, policy
 from tundravm import bootstrap, instances
 from tundravm.builds import Build
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.testing import FakeEndpoint
 from tundravm.testing._endpoint import HOST_KEY, INSTANCE_KEY
 
@@ -110,7 +110,7 @@ def test_attest_deliver_and_unlock_over_the_bound_session(
     kinds = [event["event"] for event in _events(instance)]
     assert kinds == ["attested", "delivered", "unlocked"]
     again = cli("secrets", "deliver", instance.id, "--policy", simulated, f"api-token=@{token}")
-    assert again.code == EXIT_SDK_ERROR and "refused /credentials (409)" in again.err
+    assert again.code == EXIT_ERROR and "refused /credentials (409)" in again.err
 
 
 @pytest.mark.parametrize(
@@ -157,7 +157,7 @@ def test_delivery_is_refused(
     token = _file(tmp_path, "token.txt", TOKEN)
     path = _file(tmp_path, "policy.json", json.dumps(peer))
     result = cli("secrets", "deliver", found.id, "--policy", path, f"api-token=@{token}")
-    assert result.code == EXIT_SDK_ERROR, result.out + result.err
+    assert result.code == EXIT_ERROR, result.out + result.err
     assert refusal in " ".join(result.err.split())
     assert fake.received == {}
     assert not any(method == "POST" for s in fake.sessions for method, _ in s.requests)
@@ -182,10 +182,10 @@ def test_deliver_refuses_what_the_image_does_not_declare(
     simulated = _file(tmp_path, "policy.json", json.dumps(SIMULATED))
     token = _file(tmp_path, "token.txt", TOKEN)
     unknown = cli("secrets", "deliver", instance.id, "--policy", simulated, f"jwt=@{token}")
-    assert unknown.code == EXIT_SDK_ERROR
+    assert unknown.code == EXIT_ERROR
     assert "declares no secret jwt" in unknown.err and "api-token" in unknown.err
     inline = cli("secrets", "deliver", instance.id, "--policy", simulated, "api-token=abc")
-    assert inline.code == EXIT_SDK_ERROR and "is not NAME=@FILE" in inline.err
+    assert inline.code == EXIT_ERROR and "is not NAME=@FILE" in inline.err
     assert endpoint.sessions == []
 
 
@@ -193,7 +193,7 @@ def test_unlock_needs_an_attestation_first(
     instance: instances.Instance, cli: Cli, endpoint: FakeEndpoint
 ) -> None:
     refused = cli("secrets", "unlock", instance.id, "data")
-    assert refused.code == EXIT_SDK_ERROR
+    assert refused.code == EXIT_ERROR
     assert "has not passed an attestation yet" in refused.err
     assert endpoint.sessions == []
 

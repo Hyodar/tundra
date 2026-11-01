@@ -12,7 +12,7 @@ import pytest
 from tests.cli.conftest import Cli, receipt
 from tundravm import instances
 from tundravm.builds import Build
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 
 LOCAL = """\
 from tundravm import Image, Service
@@ -151,6 +151,6 @@ def test_a_host_that_cannot_run_the_mode_is_refused_before_the_build(
 ) -> None:
     monkeypatch.setattr(instances, "tdx_refusal", lambda: "no Intel TDX host: kvm_intel tdx is off")
     result = cli("dev", "--mode", "tdx")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "dev --mode tdx cannot run here" in result.err and "doctor --for tdx" in result.err
     assert not (project / "build").exists()

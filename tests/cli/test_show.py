@@ -11,7 +11,7 @@ import pytest
 from tests.cli.conftest import STARTER, Cli
 from tundravm._source import SourceBuild
 from tundravm.builds import Build
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_OK
 from tundravm.declarative import lifecycle
 from tundravm.show import IMAGE_KEYS
 from tundravm.testing import UPDATE_GOLDEN_ENV
@@ -48,7 +48,7 @@ def test_show_selects_profiles(project: Path, cli: Cli) -> None:
     assert dev.out == cli("show", "demo.py", "--profile", "dev").out
     assert "\nBuilt into dev:\n" in dev.out and "Built into production" not in dev.out
     twice = cli("show", "demo.py", "--dev", "--profile", "production")
-    assert twice.code == EXIT_SDK_ERROR and "twice" in twice.err
+    assert twice.code == EXIT_ERROR and "twice" in twice.err
 
 
 def test_show_json_has_the_sections_show_prints(project: Path, cli: Cli) -> None:
@@ -97,7 +97,7 @@ def test_show_the_image_units_and_tree(project: Path, cli: Cli) -> None:
 
 def test_an_image_has_no_measurements(project: Path, cli: Cli) -> None:
     result = cli("show", "demo.py", "--measurements")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "no measurements until it is built" in result.err
 
 
@@ -201,12 +201,12 @@ def test_show_a_builds_units_tree_and_measurements(built: Build, cli: Cli) -> No
 
 def test_profile_does_not_apply_to_a_build(built: Build, cli: Cli) -> None:
     result = cli("show", "latest", "--profile", "dev")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
 
 
 def test_no_build_yet(project: Path, cli: Cli) -> None:
     result = cli("show", "latest")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "No production build under build/." in result.err
     assert "tundravm build" in result.err
 
@@ -216,7 +216,7 @@ def test_show_the_latest_development_build(dev_built: Build, cli: Cli) -> None:
     assert result.code == EXIT_OK
     assert result.out.startswith(f"build {dev_built.id}  demo dev (development)")
     refused = cli("show", "latest", "--dev")
-    assert refused.code == EXIT_SDK_ERROR
+    assert refused.code == EXIT_ERROR
     assert "`tundravm show latest-development`" in refused.err
 
 
@@ -258,4 +258,4 @@ def test_diff_of_two_image_files(project: Path, cli: Cli) -> None:
     assert "Profiles" not in result.out
     assert cli("show", "--diff", "demo.py", "demo.py").out == "demo.py -> demo.py: no difference\n"
     mixed = cli("show", "--diff", "demo.py", "latest")
-    assert mixed.code == EXIT_SDK_ERROR and "two image files or two builds" in mixed.err
+    assert mixed.code == EXIT_ERROR and "two image files or two builds" in mixed.err

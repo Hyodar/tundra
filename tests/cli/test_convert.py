@@ -17,7 +17,7 @@ import tundravm
 from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
 from tundravm import _mkosi
-from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.compiler.emit_mkosi import MAIN_IMAGE_SETTINGS
 from tundravm.convert import (
     DEFAULTED,
@@ -295,7 +295,7 @@ def test_a_tree_that_runs_scripts_while_parsing_needs_allow_scripts(
     version.write_text("#!/bin/sh\necho 1.2.3\n")
     version.chmod(0o755)
     refused = cli("convert", tree, "--from", "mkosi")
-    assert refused.code == EXIT_SDK_ERROR
+    assert refused.code == EXIT_ERROR
     assert "Parsing" in refused.err and "runs mkosi.version" in refused.err
     assert "--allow-scripts" in refused.err
     allowed = cli("convert", tree, "--from", "mkosi", "--allow-scripts")
@@ -305,14 +305,14 @@ def test_a_tree_that_runs_scripts_while_parsing_needs_allow_scripts(
 
 def test_a_directory_without_mkosi_conf_is_refused(cli: Cli, tmp_path: Path) -> None:
     result = cli("convert", tmp_path, "--from", "mkosi")
-    assert result.code == EXIT_SDK_ERROR and "has no mkosi.conf" in result.err
+    assert result.code == EXIT_ERROR and "has no mkosi.conf" in result.err
 
 
 def test_allow_scripts_applies_to_mkosi_only(cli: Cli, tmp_path: Path) -> None:
     unit = tmp_path / "web.service"
     unit.write_text(SERVICE)
     result = cli("convert", unit, "--from", "systemd", "--allow-scripts")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
 
 
 WORKER = """\
@@ -405,7 +405,7 @@ def test_a_sandbox_that_is_exactly_a_preset_converts_to_its_name(
 
 def test_a_directory_without_units_is_refused(cli: Cli, tmp_path: Path) -> None:
     result = cli("convert", tmp_path, "--from", "systemd")
-    assert result.code == EXIT_SDK_ERROR and "holds no unit file" in result.err
+    assert result.code == EXIT_ERROR and "holds no unit file" in result.err
 
 
 @pytest.mark.parametrize("source", ["mkosi", "systemd"])

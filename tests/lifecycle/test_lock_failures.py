@@ -10,7 +10,7 @@ import pytest
 
 import tundravm._source as source_module
 from tundravm._source import GitSource, Source
-from tundravm.cli import EXIT_FAILURE, EXIT_SDK_ERROR, main
+from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, main
 from tundravm.declarative import Lock, lock, lock_status, read_lock, write_lock
 from tundravm.errors import ErrorCode, LockfileError, SourceError
 from tundravm.recipe import load_recipe
@@ -143,7 +143,7 @@ def test_cli_lock_failure_exits_2_and_leaves_the_lockfile(
         write_lock(lock(load_recipe(image_file), resolver=_Upstream(broken=False)), target)
     before = target.read_bytes() if existing else None
     code, out = _cli(monkeypatch, _Upstream(), str(image_file), *update)
-    assert (code, out) == (EXIT_SDK_ERROR, "")
+    assert (code, out) == (EXIT_ERROR, "")
     assert (target.read_bytes() if target.exists() else None) == before
     assert capsys.readouterr().err == f"error [E_LOCKFILE]: {report}\nfix: {HINT}\n"
 

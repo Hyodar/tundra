@@ -29,7 +29,7 @@ from tundravm.attestation import (
     report_data_for,
 )
 from tundravm.builds import Build
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_OK
 from tundravm.testing import FakeEndpoint
 
 FAIL_CLOSED = (
@@ -201,11 +201,11 @@ def test_deliver_and_unlock_refuse_a_production_build_in_a_simulated_instance(
     token = tmp_path / "token.txt"
     token.write_bytes(TOKEN)
     deliver = cli("secrets", "deliver", production.id, "--policy", policy, f"api-token=@{token}")
-    assert deliver.code == EXIT_SDK_ERROR
+    assert deliver.code == EXIT_ERROR
     assert "Nothing sent to prover-1: a production build in a simulated instance" in deliver.err
     monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(b"never asked\n")))
     unlock = cli("secrets", "unlock", production.id, "data")
-    assert unlock.code == EXIT_SDK_ERROR and "fail-closed" in unlock.err
+    assert unlock.code == EXIT_ERROR and "fail-closed" in unlock.err
     assert endpoint.sessions == []
     events = [
         json.loads(line) for line in (production.path / "events.jsonl").read_text().splitlines()

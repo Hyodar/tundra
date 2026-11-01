@@ -16,7 +16,7 @@ import pytest
 
 from tests.cli.conftest import Cli
 from tests.cli.test_grammar import REMOVED
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_ERROR, EXIT_OK
 from tundravm.recipe import load_file
 
 
@@ -95,7 +95,7 @@ def test_a_new_project_is_ruff_format_clean_at_its_own_setting(
 @pytest.mark.parametrize("name", ["Demo", "1x", "a/b", "x" * 70])
 def test_a_bad_name_is_refused(here: Path, cli: Cli, name: str) -> None:
     result = cli("new", name)
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "Invalid project name" in result.err
 
 
@@ -103,7 +103,7 @@ def test_a_non_empty_directory_is_refused(here: Path, cli: Cli) -> None:
     (here / "demo").mkdir()
     (here / "demo" / "keep.txt").write_text("mine")
     result = cli("new", "demo")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "exists and is not empty" in result.err
     assert sorted(p.name for p in (here / "demo").iterdir()) == ["keep.txt"]
 

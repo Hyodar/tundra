@@ -11,7 +11,7 @@ import pytest
 
 from tests.cli.conftest import Cli
 from tundravm import __version__
-from tundravm.cli import COMMANDS, EXIT_BROKEN_PIPE, EXIT_OK, EXIT_SDK_ERROR, build_parser
+from tundravm.cli import COMMANDS, EXIT_BROKEN_PIPE, EXIT_ERROR, EXIT_OK, build_parser
 from tundravm.completion import verbs_of
 
 THIRTEEN = (
@@ -78,7 +78,7 @@ def test_version(capsys: pytest.CaptureFixture[str], cli: Cli) -> None:
 def test_a_typo_suggests_the_closest_command(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_:
         cli("biuld")
-    assert exit_.value.code == EXIT_SDK_ERROR
+    assert exit_.value.code == EXIT_ERROR
     assert "did you mean 'build'?" in capsys.readouterr().err
 
 
@@ -87,7 +87,7 @@ def test_an_unknown_flag_suggests_the_closest_one(
 ) -> None:
     with pytest.raises(SystemExit) as exit_:
         cli("build", "--reproducible")
-    assert exit_.value.code == EXIT_SDK_ERROR
+    assert exit_.value.code == EXIT_ERROR
     err = capsys.readouterr().err
     assert "did you mean --reproduce?" in err
 
@@ -95,19 +95,19 @@ def test_an_unknown_flag_suggests_the_closest_one(
 def test_a_removed_flag_is_refused(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_:
         cli("build", "--variant", "default")
-    assert exit_.value.code == EXIT_SDK_ERROR
+    assert exit_.value.code == EXIT_ERROR
     assert "unrecognized arguments: --variant" in capsys.readouterr().err
 
 
 def test_run_without_a_mode_is_a_validation_error(project: Path, cli: Cli) -> None:
     result = cli("run")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert result.err.startswith("error [E_VALIDATION]: run needs --mode simulated or --mode tdx")
 
 
 def test_deploy_without_a_build_is_refused(project: Path, cli: Cli) -> None:
     result = cli("deploy", "gcp")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "deploy gcp needs --build BUILD" in result.err
 
 
@@ -116,7 +116,7 @@ def test_an_unknown_deploy_target_is_a_usage_error(
 ) -> None:
     with pytest.raises(SystemExit) as exit_:
         cli("deploy", "aws", "--build", "x")
-    assert exit_.value.code == EXIT_SDK_ERROR
+    assert exit_.value.code == EXIT_ERROR
     assert "invalid choice: 'aws'" in capsys.readouterr().err
 
 
@@ -132,7 +132,7 @@ def test_a_reader_that_closes_the_pipe_ends_the_command_quietly() -> None:
 
 def test_json_errors_are_one_error_line_on_stderr(project: Path, cli: Cli) -> None:
     result = cli("show", "nonexistent-build", "--json")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     [line] = result.err.splitlines()
     payload = json.loads(line)
     assert payload["schema"] == "tundravm.error/1"
@@ -145,7 +145,7 @@ def test_a_missing_image_names_where_it_is_configured(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TUNDRAVM_IMAGE", raising=False)
     result = cli("check")
-    assert result.code == EXIT_SDK_ERROR
+    assert result.code == EXIT_ERROR
     assert "No image file: pass IMAGE." in result.err
     assert "[tool.tundravm] image" in result.err
 
@@ -153,5 +153,5 @@ def test_a_missing_image_names_where_it_is_configured(
 def test_secrets_needs_an_action(cli: Cli, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_:
         cli("secrets")
-    assert exit_.value.code == EXIT_SDK_ERROR
+    assert exit_.value.code == EXIT_ERROR
     assert "deliver" in capsys.readouterr().err

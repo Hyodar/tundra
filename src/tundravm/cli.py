@@ -12,8 +12,10 @@ can do.
 
 Exit codes: 0 success; 1 a failed check (``check`` errors, ``lock --check`` drift, a
 failing ``verify``, an ``attest`` that does not pass, a ``build --reproduce`` that differs,
-a blocked ``doctor`` row, a ``lock --check`` without a lockfile); 2 an SDK error
-(``error [E_CODE]: message`` on stderr, one ``tundravm.error/1`` JSON line with ``--json``)
+a blocked ``doctor`` row, a ``lock --check`` without a lockfile); 2 an error, so a script
+tells "the image has findings" from "tundravm could not do it": a refusal (one block on
+stderr, :func:`report_error`: ``error [E_CODE]: message``, its ``fix:`` line, its context
+and the image file's line, or one ``tundravm.error/1`` JSON line with ``--json``), a crash
 or a usage error; 141 a reader that closed the pipe (``| head``), silently. Every ``--json`` report
 carries ``"schema": "tundravm.<command>/1"``. Shell completion scripts are generated from
 this parser: ``python -m tundravm.completion bash|zsh|fish``.
@@ -38,6 +40,7 @@ from . import __version__, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
 from ._image._lower import component_classes
+from ._location import raised_at
 from ._reporting import TextReporter
 from ._source import (
     SOURCES_DIRNAME,
@@ -97,7 +100,8 @@ from .toolchain import running_toolchain, toolchain_drift
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
-EXIT_SDK_ERROR = 2
+EXIT_ERROR = 2
+"""tundravm could not do it: a refusal, a crash, or a command line argparse refuses."""
 EXIT_BROKEN_PIPE = 141
 """A reader closed stdout (``show --json | head``): 128 + SIGPIPE, as a shell reports it."""
 
@@ -139,7 +143,7 @@ def main(
     """Run the CLI and return an exit code (never raises for SDK errors).
 
     *runner* replaces the host-tool probe ``doctor`` and ``new`` run (tests). Usage errors
-    exit 2 through argparse's ``SystemExit``.
+    exit :data:`EXIT_ERROR` through argparse's ``SystemExit``.
     """
     out = stdout if stdout is not None else sys.stdout
     parser = build_parser()
@@ -159,17 +163,22 @@ def main(
     except TdxError as exc:
         if getattr(args, "traceback", False):
             raise
-        if getattr(args, "json", False):
-            print(json.dumps(error_payload(exc), separators=(",", ":")), file=sys.stderr)
-        else:
-            print(f"error [{exc.code}]: {exc}", file=sys.stderr)
-        return EXIT_SDK_ERROR
+        return report_error(exc, json_line=getattr(args, "json", False) is True)
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
     except BrokenPipeError:
         _silence_stdout()
         return EXIT_BROKEN_PIPE
+    except Exception as exc:
+        if getattr(args, "traceback", False):
+            raise
+        print(
+            f"error: tundravm failed: {type(exc).__name__}: {exc}\n"
+            "fix: Run it again with --traceback, and report what it prints.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
 
 
 def _silence_stdout() -> None:
@@ -188,6 +197,26 @@ def schema(verb: str) -> str:
 ERROR_SCHEMA = schema("error")
 
 
+def report_error(exc: TdxError, *, json_line: bool = False, stream: TextIO | None = None) -> int:
+    """Print *exc* on stderr as one block and return :data:`EXIT_ERROR`: every command's
+    error, in the words of the exception's own text.
+
+    The block is ``error [E_CODE]: <what is wrong>``, the ``fix:`` line, the context, and
+    ``  at: FILE:LINE`` when the error was raised from a line of the image file.
+    """
+    out = stream if stream is not None else sys.stderr
+    if json_line:
+        print(json.dumps(error_payload(exc), separators=(",", ":")), file=out)
+        return EXIT_ERROR
+    at = raised_at(exc)
+    known = any(
+        at and at in value
+        for value in (str(exc.args[0]) if exc.args else "", *exc.context.values())
+    )
+    print(f"error [{exc.code}]: {exc}" + (f"\n  at: {at}" if at and not known else ""), file=out)
+    return EXIT_ERROR
+
+
 def error_payload(exc: TdxError) -> dict[str, object]:
     """The JSON line an SDK error prints to stderr under ``--json``."""
     return {
@@ -196,6 +225,7 @@ def error_payload(exc: TdxError) -> dict[str, object]:
         "message": str(exc.args[0]) if exc.args else "",
         "hint": exc.hint,
         "context": dict(exc.context),
+        "at": raised_at(exc) or None,
     }
 
 
@@ -1674,7 +1704,7 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_secrets_help(args: argparse.Namespace, out: TextIO) -> int:
     del args
     print("tundravm secrets deliver|unlock: see `tundravm secrets --help`", file=out)
-    return EXIT_SDK_ERROR
+    return EXIT_ERROR
 
 
 def _cmd_deliver(args: argparse.Namespace, out: TextIO) -> int:
@@ -1869,9 +1899,9 @@ __all__ = [
     "COMMANDS",
     "DEPLOY_ACTIONS",
     "ERROR_SCHEMA",
+    "EXIT_ERROR",
     "EXIT_FAILURE",
     "EXIT_OK",
-    "EXIT_SDK_ERROR",
     "QUICKSTART",
     "RUN_ACTIONS",
     "build_parser",
@@ -1879,5 +1909,6 @@ __all__ = [
     "error_payload",
     "json_report",
     "main",
+    "report_error",
     "schema",
 ]
