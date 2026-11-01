@@ -11,13 +11,16 @@ from pathlib import Path
 import pytest
 
 import tundravm
-from tundravm import Image, Service
+from tundravm import AptRepository, Debian, Image, Service
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
 from tundravm.systemd import DropIn, Hardening, Notify, TcpProbe
 
 GOLDEN = Path(__file__).with_name("spellings.golden")
-SHOWN = ("prometheus-node-exporter", "ssh.service")
+SHOWN = ("prometheus-node-exporter", "ssh.service", "sources.list.d", "keyrings", "sync")
+DEBIAN = "https://snapshot.debian.org/archive/debian-security"
+KEYRING = "/usr/share/keyrings/debian-archive-keyring.gpg"
+PIN = "0" * 64
 """The compiled paths the golden records: whatever names one of these."""
 
 
@@ -34,6 +37,23 @@ SHOWN = ("prometheus-node-exporter", "ssh.service")
             lambda: Service.packaged("chrony", unit=DropIn(hardening=Hardening.relaxed())),
             "Pass it as hardening=",
         ),
+        (lambda: AptRepository(DEBIAN, "trixie-security", key="key.gpg"), "neither a host"),
+        (lambda: AptRepository("http://x.org", "s", key=KEYRING, sha256=PIN), "https://"),
+        (lambda: AptRepository("https://x.org [trusted=yes]", "s", key=KEYRING), "options"),
+        (lambda: AptRepository("https://x.org", "s", key=KEYRING), "is not pinned"),
+        (
+            lambda: AptRepository("https://x.org", "s", key=KEYRING, snapshot="20261018T082309Z"),
+            "dates a snapshot",
+        ),
+        (lambda: AptRepository(DEBIAN, "s", key=KEYRING, sha256=PIN), "pin it twice"),
+        (lambda: AptRepository(DEBIAN, "s", key=KEYRING, snapshot="today"), "not a date"),
+        (
+            lambda: AptRepository(
+                f"{DEBIAN}/20261018T082309Z", "s", key=KEYRING, snapshot="20261018T082309Z"
+            ),
+            "names its date",
+        ),
+        (lambda: Debian(repositories=[AptRepository(DEBIAN, "s", key=KEYRING)] * 2), "twice"),
     ],
 )
 def test_each_spelling_refuses_what_it_cannot_keep(
@@ -47,8 +67,13 @@ def test_one_image_using_every_spelling_compiles_to_the_golden(tmp_path: Path) -
     exporter = Service.packaged(
         "prometheus-node-exporter.service", expose=[TCP(9100)], readiness=TcpProbe(9100)
     )
+    (tmp_path / "vendor.asc").write_text("-----BEGIN PGP PUBLIC KEY BLOCK-----\n")
+    vendor = AptRepository(
+        "https://apt.example.com/debian", "stable", key=tmp_path / "vendor.asc", sha256=PIN
+    )
     image = Image(
         "spellings",
+        base=Debian(repositories=[AptRepository(DEBIAN, "trixie-security", key=KEYRING), vendor]),
         services=[
             exporter,
             Service("app", ["/usr/bin/app"], requires=[exporter.ready]),
@@ -60,7 +85,8 @@ def test_one_image_using_every_spelling_compiles_to_the_golden(tmp_path: Path) -
             ),
         ],
     )
-    tundravm.compile(image).write(tmp_path)
+    tundravm.compile(image).write(tmp_path / "tree")
+    tmp_path = tmp_path / "tree"
     shown = [
         f"== {path.relative_to(tmp_path)}\n{path.read_text(encoding='utf-8')}"
         for path in sorted(tmp_path.rglob("*"))

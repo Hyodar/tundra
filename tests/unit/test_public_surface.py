@@ -16,6 +16,7 @@ from tundravm import _reference, declarative
 
 # Changing one of these lists changes the public API: update it deliberately, in review.
 ROOT = [
+    "AptRepository",
     "Debian",
     "File",
     "Group",

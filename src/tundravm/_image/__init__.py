@@ -45,6 +45,7 @@ from ._storage import OperatorKey, TpmSeal, Volume, VolumeDirectory
 from ._values import (
     TCP,
     UDP,
+    AptRepository,
     Credential,
     Debian,
     Egress,
@@ -65,6 +66,7 @@ __all__ = [
     "TCP",
     "TLS",
     "UDP",
+    "AptRepository",
     "AttestedTLS",
     "BootReady",
     "BrokerKey",

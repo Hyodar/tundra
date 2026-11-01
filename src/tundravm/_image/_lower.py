@@ -10,6 +10,7 @@ the whole answer to "what did I get".
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -198,6 +199,7 @@ class _Lowering:
             )
         if image.kernel.built:
             body.append(self.kernel())
+        body.extend(self.repositories())
         body.extend(self.mkosi())
         return (*self.baseline(), *body, *self.owned_files())
 
@@ -300,6 +302,35 @@ class _Lowering:
             base=kernel.config,
             patches=tuple(dm.KernelPatch(path) for path in kernel.patches),
         )
+
+    def repositories(self) -> Iterator[dm.Declaration]:
+        """``Debian(repositories=)``: each archive for the build's apt only (an image never
+        runs apt), its keyring, and for a digest pin the ``sync`` step that fails the build
+        when the archive's ``InRelease`` moved."""
+        base = self.image.base
+        for repository in base.repositories:
+            yield dm.Repository(
+                repository.name,
+                repository.address(base.archive),
+                suite=repository.suite,
+                components=tuple(repository.components),
+                keyring=repository.keyring,
+                in_image=False,
+            )
+            if isinstance(repository.key, Path):
+                yield dm.File.copy(repository.keyring, repository.key, mode=0o644)
+            if repository.sha256 is not None:
+                url = shlex.quote(repository.release_url)
+                message = shlex.quote(
+                    f"AptRepository {repository.url} {repository.suite} moved: its InRelease "
+                    f"is no longer sha256 {repository.sha256}"
+                )
+                yield dm.Hook(
+                    f"apt-{repository.name}",
+                    "sync",
+                    f'test "$(curl -fsSL --proto =https {url} | sha256sum | cut -d " " -f 1)" '
+                    f"= {repository.sha256} || {{ echo {message} >&2; exit 1; }}",
+                )
 
     def mkosi(self) -> tuple[dm.Declaration, ...]:
         """``mkosi=Mkosi(settings=, scripts=)``, recorded as settings and hooks."""

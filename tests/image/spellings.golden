@@ -1,3 +1,21 @@
+== mkosi.sandbox/etc/apt/keyrings/apt.example.com-debian-stable.asc
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+== mkosi.sandbox/etc/apt/sources.list.d/apt.example.com-debian-stable.sources
+Types: deb
+URIs: https://apt.example.com/debian
+Suites: stable
+Components: main
+Enabled: yes
+Signed-By: /etc/apt/keyrings/apt.example.com-debian-stable.asc
+== mkosi.sandbox/etc/apt/sources.list.d/debian-security-trixie-security.sources
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian-security/20261018T082309Z/
+Suites: trixie-security
+Components: main
+Enabled: yes
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+== payload/mkosi.extra/etc/apt/keyrings/apt.example.com-debian-stable.asc
+-----BEGIN PGP PUBLIC KEY BLOCK-----
 == payload/mkosi.extra/usr/lib/systemd/system/prometheus-node-exporter-ready.service
 [Unit]
 Description=Wait until prometheus-node-exporter.service is ready
@@ -105,6 +123,11 @@ CapabilityBoundingSet=
 CapabilityBoundingSet=~
 AmbientCapabilities=
 UMask=0022
+== payload/mkosi.sync.d/50-sync.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+test "$(curl -fsSL --proto =https https://apt.example.com/debian/dists/stable/InRelease | sha256sum | cut -d " " -f 1)" = 0000000000000000000000000000000000000000000000000000000000000000 || { echo 'AptRepository https://apt.example.com/debian stable moved: its InRelease is no longer sha256 0000000000000000000000000000000000000000000000000000000000000000' >&2; exit 1; }
 == enabled
 mkosi-chroot useradd --system --shell /usr/sbin/nologin prometheus-node-exporter-ready
 mkosi-chroot systemctl enable prometheus-node-exporter.service

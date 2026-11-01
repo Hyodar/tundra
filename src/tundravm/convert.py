@@ -57,6 +57,7 @@ MAPPED = frozenset(
         "ImageId",
         "Image",
         "Verity",
+        "SandboxTrees",
         *SCRIPTS,
     }
 )
@@ -379,9 +380,24 @@ def _image_source(
     imports = ["Image"]
     args: list[str] = [_quoted(name)]
     distribution, release = config.get("Distribution"), config.get("Release")
+    repositories = _repositories(config, root, unsupported)
+    if repositories:
+        imports.append("AptRepository")
     if distribution == "debian":
         imports.append("Debian")
-        args.append(f"base=Debian({_quoted(str(release))})")
+        if repositories:
+            calls = "".join(
+                "            AptRepository(\n"
+                + "".join(f"                {part},\n" for part in parts)
+                + "            ),\n"
+                for parts in repositories
+            )
+            args.append(
+                f"base=Debian(\n        {_quoted(str(release))},\n"
+                f"        repositories=[\n{calls}        ],\n    )"
+            )
+        else:
+            args.append(f"base=Debian({_quoted(str(release))})")
     else:
         unsupported.append(f"Distribution={distribution}: tundravm builds Debian only")
     verity = str(config.get("Verity") or "") == "hash"
@@ -454,14 +470,74 @@ def _image_source(
             "wrote this tree (its services, components, files, kernel and builds), not copied"
         )
     body = ",\n    ".join(args)
-    header = "from pathlib import Path\n\n" if scripts or trees else ""
+    here = bool(scripts or trees or any("HERE" in parts[-1] for parts in repositories))
+    header = "from pathlib import Path\n\n" if here else ""
     source = (
         f'"""{name}: converted from {root.name} by `tundravm convert --from mkosi`."""\n\n'
         f"{header}from tundravm import {', '.join(sorted(imports))}\n\n"
-        + ("HERE = Path(__file__).parent\n\n" if scripts or trees else "")
+        + ("HERE = Path(__file__).parent\n\n" if here else "")
         + f"image = Image(\n    {body},\n)\n"
     )
     return Converted(source, unsupported, notes)
+
+
+_SOURCES = "etc/apt/sources.list.d"
+_DATED = "https://snapshot.debian.org/archive/"
+
+
+def _repositories(config: Mapping[str, Any], root: Path, unsupported: list[str]) -> list[list[str]]:
+    """Each signed, dated deb822 source of a ``SandboxTrees=`` tree as the arguments of an
+    ``AptRepository``; every other source, and any other file of the tree, is *unsupported*."""
+    from ._image._values import PACKAGE_KEYRINGS
+
+    found: list[list[str]] = []
+    for entry in config.get("SandboxTrees") or ():
+        tree = Path(str(entry.get("Source")))
+        shown = _relative(tree, root)
+        if str(entry.get("Target") or "/") != "/" or not tree.is_dir():
+            unsupported.append(f"SandboxTrees={shown}: not a tree at /")
+            continue
+        used: set[Path] = set()
+        for file in sorted((tree / _SOURCES).glob("*.sources")):
+            used.add(file)
+            for stanza in file.read_text(encoding="utf-8").split("\n\n"):
+                fields = dict(
+                    (key.strip(), value.strip())
+                    for key, _, value in (line.partition(":") for line in stanza.splitlines())
+                    if value and not key.startswith((" ", "#"))
+                )
+                if not fields:
+                    continue
+                where = f"{_relative(file, root)}: {fields.get('URIs', '?')}"
+                url, suite = fields.get("URIs", ""), fields.get("Suites", "")
+                signed = fields.get("Signed-By", "")
+                keyring = tree / signed.lstrip("/")
+                if not signed or fields.get("Trusted", "").lower() == "yes":
+                    unsupported.append(f"{where}: unsigned, and an AptRepository takes key=")
+                    continue
+                if signed.startswith(PACKAGE_KEYRINGS):
+                    key = _quoted(signed)
+                elif keyring.is_file():
+                    used.add(keyring)
+                    key = f"HERE / {_quoted(_relative(keyring, root))}"
+                else:
+                    unsupported.append(f"{where}: Signed-By={signed} is not in the tree")
+                    continue
+                if not url.startswith(_DATED) or url.count("/") < 6:
+                    unsupported.append(
+                        f"{where}: not dated; AptRepository(..., sha256=) takes the digest "
+                        f"`curl -fsSL {url.rstrip('/')}/dists/{suite}/InRelease | sha256sum` prints"
+                    )
+                    continue
+                components = fields.get("Components", "main").split()
+                parts = [_quoted(url.rstrip("/")), _quoted(suite)]
+                if components != ["main"]:
+                    parts.append(f"[{', '.join(map(_quoted, components))}]")
+                found.append([*parts, f"key={key}"])
+        for file in sorted(path for path in tree.rglob("*") if path.is_file()):
+            if file not in used:
+                unsupported.append(f"SandboxTrees={shown}: {_relative(file, tree)}")
+    return found
 
 
 def implied_packages(

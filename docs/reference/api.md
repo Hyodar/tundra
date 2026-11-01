@@ -24,6 +24,31 @@ tundravm: confidential VM images declared as one `Image`.
 __version__ = '0.1.0'
 ```
 
+### `AptRepository`
+
+*dataclass*
+
+```python
+AptRepository(
+    url: str,
+    suite: str,
+    components: Sequence[str] = ('main',),
+    *,
+    key: Path | str,
+    snapshot: str | None = None,
+    sha256: str | None = None,
+)
+```
+
+A second apt archive, pinned and signed: `Debian(repositories=[AptRepository(...)])`.
+
+| Member | Does |
+|---|---|
+| `AptRepository.address(snapshot: str) -> str` | The URL apt reads, dated by *snapshot* (the base's) when nothing else dates it. |
+| `AptRepository.keyring` | The keyring's path in the image and the build's apt sandbox. |
+| `AptRepository.name` | The name its apt source and keyring are written under. |
+| `AptRepository.release_url` | The signed `InRelease` file *sha256* pins. |
+
 ### `build`
 
 *function*
@@ -68,6 +93,7 @@ Debian(
     *,
     snapshot: str | None = None,
     efi_stub: str | None = None,
+    repositories: Sequence[AptRepository] = (),
 )
 ```
 
@@ -125,7 +151,7 @@ Group(name: str, system: bool = True, gid: int | None = None)
 Image(
     name: str,
     *,
-    base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None),
+    base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None, repositories=()),
     packages: Sequence[str | Package] = (),
     files: Sequence[File | Tree] = (),
     services: Sequence[Service] = (),

@@ -11,8 +11,10 @@ Teaches:
 - ``check()`` is a lint rule that sees each resolved profile;
 - ``Service.packaged(unit)`` runs the unit a Debian package ships, installing the
   package, under the same sandbox a ``Service`` gets;
-- ``compose()`` may still yield an internal declaration (``Repository``, ``Task``,
-  ``ConfigFile``, ``Run``) while those concerns have no public spelling.
+- ``Debian(repositories=[AptRepository(...)])`` adds an archive, pinned and signed: a
+  snapshot.debian.org one moves with the image's snapshot;
+- ``compose()`` may still yield an internal declaration (``Task``, ``ConfigFile``,
+  ``Run``) while those concerns have no public spelling.
 
     tundravm show examples/03_components.py
     tundravm check examples/03_components.py
@@ -23,25 +25,26 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tundravm import File, Image, Package, Service
+from tundravm import AptRepository, Debian, File, Image, Package, Service
 from tundravm.components import Component, Diagnostic, Egress, Endpoint, Network, Resolved, Rule
-from tundravm.declarative import Repository, Task
+from tundravm.declarative import Task
 from tundravm.declarative.utils import ConfigFile, Run
 from tundravm.systemd import Every
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
 
+# Debian's security archive at the image's own snapshot, signed by Debian's keyring.
+SECURITY = AptRepository(
+    "https://snapshot.debian.org/archive/debian-security",
+    "trixie-security",
+    key="/usr/share/keyrings/debian-archive-keyring.gpg",
+)
+
 
 class Hardening(Component):
-    """Security updates and a few extra sysctl knobs, on top of the implied baseline."""
+    """A few extra sysctl knobs, on top of the implied baseline."""
 
     def compose(self) -> Iterator[object]:
-        yield Repository(
-            "debian-security",
-            "https://deb.debian.org/debian-security",
-            suite="trixie-security",
-            priority=10,
-        )
         yield File.text("/etc/sysctl.d/90-hardening.conf", SYSCTL)
         # a command run inside the image as it is built (stage="postinst" by default)
         yield Run("update-ca-certificates --fresh", name="ca-certificates")
@@ -120,6 +123,7 @@ metrics = Metrics()  # Metrics(listen="0.0.0.0") makes lint warn for the cloud t
 
 image = Image(
     "components",
+    base=Debian(repositories=[SECURITY]),
     packages=["ca-certificates"],
     components=[Hardening(), NodeExporter(), metrics, HealthCheck(target=metrics.health)],
     # Outbound: only what the baseline sends (NTS time, DNS, cloud metadata).

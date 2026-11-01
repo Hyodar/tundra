@@ -162,7 +162,7 @@ Passing a baseline component in `components=` replaces the implied one.
 
 | Slot | Takes | From |
 |---|---|---|
-| `base` | `Debian(release, snapshot=, efi_stub=)` | `tundravm` |
+| `base` | `Debian(release, snapshot=, efi_stub=, repositories=[AptRepository(...)])` | `tundravm` |
 | `packages` | package names, or `Package(name, backports=True)`: runtime packages only | `tundravm` |
 | `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)` | `tundravm` |
 | `services` | `Service` | `tundravm` |
@@ -177,6 +177,11 @@ Passing a baseline component in `components=` replaces the implied one.
 | `dev` | `DevAccess(ssh_keys=, password=)`: the non-production `dev` profile | `tundravm.components` |
 | `profiles` | `{"name": Profile(...)}` | `tundravm` |
 | `mkosi` | `Mkosi(settings={...}, scripts=[...])`: see [The escape to mkosi](#the-escape-to-mkosi) | `tundravm` |
+
+`AptRepository(url, suite, components, key=)` adds an archive for the build's apt, signed
+by `key=` (a host keyring `Path`, or one under `/usr/share/keyrings/`) and pinned: a
+`https://snapshot.debian.org/archive/NAME` URL by the image's snapshot (or `snapshot=`),
+any other by `sha256=` of its `dists/SUITE/InRelease`, which the build checks first.
 
 `File.copy` and `Tree` read host files when the image lowers: build their paths from
 `Path(__file__).parent`. A file is root-owned unless `owner=` says otherwise;

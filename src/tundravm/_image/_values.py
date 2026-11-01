@@ -3,7 +3,8 @@
 Each one stands for one concern and lowers onto the internal declarations in
 :mod:`tundravm._image._lower`: ports (:class:`TCP`, :class:`UDP`), content
 (:class:`Package`, :class:`File`, :class:`Tree`), the machine around the services
-(:class:`Debian`, :class:`Kernel`, :class:`Egress`, :class:`Mkosi`) and the grouped service options
+(:class:`Debian`, :class:`AptRepository`, :class:`Kernel`, :class:`Egress`,
+:class:`Mkosi`) and the grouped service options
 (:class:`Resources`, :class:`Shutdown`, :class:`HttpProbe`, :class:`TcpProbe`,
 :class:`Notify`, :class:`Credential`).
 """
@@ -29,6 +30,7 @@ from ._change import Ref
 __all__ = [
     "LOCKED_SNAPSHOT",
     "MANAGEMENT_PORT",
+    "AptRepository",
     "Credential",
     "Debian",
     "Egress",
@@ -253,13 +255,134 @@ def _check_owner(owner: object, value: object) -> None:
 # ── The machine ─────────────────────────────────────────────────────────
 
 
+_SNAPSHOT_ARCHIVE = re.compile(
+    r"https://snapshot\.debian\.org/archive/(?P<archive>[a-z0-9-]+)(/(?P<date>[^/]+))?/?"
+)
+_SNAPSHOT_DATE = re.compile(r"\d{8}T\d{6}Z")
+_SUITE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+PACKAGE_KEYRINGS = "/usr/share/keyrings/"
+"""Where a keyring a package installs lives: what a ``str`` ``AptRepository(key=)`` names."""
+
+
+@dataclass(frozen=True, slots=True)
+class AptRepository:
+    """A second apt archive, pinned and signed: ``Debian(repositories=[AptRepository(...)])``.
+
+    A ``https://snapshot.debian.org/archive/<archive>`` *url* is dated by *snapshot*, or by
+    the image's own snapshot, so it moves when the base does; a date in the URL pins it too.
+    Any other *url* takes *sha256*, the digest of its ``dists/<suite>/InRelease``: that file
+    is signed and lists every index's digest, so the build fails when the archive moves.
+    *key* signs it: a host keyring file (``Path``, ``.asc`` when armored), or the path of
+    one a package installs under ``/usr/share/keyrings/``. Unsigned archives are refused.
+    """
+
+    url: str
+    suite: str
+    components: Sequence[str] = ("main",)
+    _: KW_ONLY
+    key: Path | str
+    snapshot: str | None = None
+    sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.components, str):
+            raise _fail(self, "components= takes a list, not one string.")
+        object.__setattr__(self, "components", tuple(self.components))
+        url = self.url
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise _fail(self, f"url {url!r} is not an https:// address.")
+        if any(c.isspace() or c in "[]" for c in url):
+            raise _fail(
+                self,
+                f"url {url!r} carries apt options.",
+                hint="An AptRepository is signed by key= and pinned by snapshot= or sha256=.",
+            )
+        if not isinstance(self.suite, str) or not _SUITE.fullmatch(self.suite):
+            raise _fail(self, f"suite {self.suite!r} is not a suite name.")
+        if not self.components or not all(
+            isinstance(c, str) and _SUITE.fullmatch(c) for c in self.components
+        ):
+            raise _fail(self, f"components {self.components!r} must name one or more.")
+        self._check_key()
+        self._check_pin()
+
+    def _check_key(self) -> None:
+        if isinstance(self.key, Path):
+            return
+        if not isinstance(self.key, str) or not self.key.startswith(PACKAGE_KEYRINGS):
+            raise _fail(
+                self,
+                f"key {self.key!r} is neither a host keyring nor one a package installs.",
+                hint="Pass Path(__file__).parent / 'vendor.asc', or "
+                f"'{PACKAGE_KEYRINGS}debian-archive-keyring.gpg'.",
+            )
+
+    def _check_pin(self) -> None:
+        dated = _SNAPSHOT_ARCHIVE.fullmatch(self.url)
+        if dated is not None:
+            if self.sha256 is not None:
+                raise _fail(
+                    self,
+                    f"{self.url} is dated by its snapshot; sha256= would pin it twice.",
+                    hint="Drop sha256=.",
+                )
+            for date in (dated["date"], self.snapshot):
+                if date is not None and not _SNAPSHOT_DATE.fullmatch(date):
+                    raise _fail(self, f"snapshot {date!r} is not a date such as 20261018T082309Z.")
+            if dated["date"] is not None and self.snapshot is not None:
+                raise _fail(self, f"{self.url} names its date; snapshot= would name another.")
+            return
+        if self.snapshot is not None:
+            raise _fail(
+                self,
+                f"snapshot= dates a snapshot.debian.org archive, not {self.url}.",
+                hint="Pass sha256= of its dists/<suite>/InRelease instead.",
+            )
+        if not isinstance(self.sha256, str) or not _SHA256.fullmatch(self.sha256):
+            raise _fail(
+                self,
+                f"{self.url} {self.suite} is not pinned.",
+                hint=f"Pass sha256= of `curl -fsSL {self.release_url} | sha256sum`.",
+            )
+
+    @property
+    def release_url(self) -> str:
+        """The signed ``InRelease`` file *sha256* pins."""
+        return f"{self.url.rstrip('/')}/dists/{self.suite}/InRelease"
+
+    @property
+    def name(self) -> str:
+        """The name its apt source and keyring are written under."""
+        dated = _SNAPSHOT_ARCHIVE.fullmatch(self.url)
+        place = dated["archive"] if dated is not None else self.url.removeprefix("https://")
+        return re.sub(r"[^a-z0-9.]+", "-", f"{place}-{self.suite}".lower()).strip("-")
+
+    @property
+    def keyring(self) -> str:
+        """The keyring's path in the image and the build's apt sandbox."""
+        if isinstance(self.key, str):
+            return self.key
+        suffix = ".asc" if self.key.suffix == ".asc" else ".gpg"
+        return f"/etc/apt/keyrings/{self.name}{suffix}"
+
+    def address(self, snapshot: str) -> str:
+        """The URL apt reads, dated by *snapshot* (the base's) when nothing else dates it."""
+        dated = _SNAPSHOT_ARCHIVE.fullmatch(self.url)
+        if dated is None:
+            return self.url
+        date = dated["date"] or self.snapshot or snapshot
+        return f"https://snapshot.debian.org/archive/{dated['archive']}/{date}/"
+
+
 @dataclass(frozen=True, slots=True)
 class Debian:
     """The distribution an image is built from: ``Debian("trixie")``, the tested baseline.
 
     *snapshot* is the snapshot.debian.org archive the packages come from
     (:data:`LOCKED_SNAPSHOT` by default, which the lockfile records). Another release
-    (``Debian("bookworm")``) is advanced and untested.
+    (``Debian("bookworm")``) is advanced and untested. *repositories* adds archives beside
+    it, each an :class:`AptRepository`, pinned and signed.
     """
 
     release: str = "trixie"
@@ -267,6 +390,7 @@ class Debian:
     snapshot: str | None = None
     efi_stub: str | None = None
     """Pin the UKI's EFI stub to that ``systemd-boot-efi`` version from *snapshot*."""
+    repositories: Sequence[AptRepository] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.release, str) or not self.release or "/" in self.release:
@@ -275,6 +399,16 @@ class Debian:
             value = getattr(self, what)
             if value is not None and (not isinstance(value, str) or not value):
                 raise _fail(self, f"{what}= must be a string or None, got {value!r}.")
+        if isinstance(self.repositories, (str, AptRepository)):
+            raise _fail(self, "repositories= takes a list of AptRepository values.")
+        object.__setattr__(self, "repositories", tuple(self.repositories))
+        names: set[str] = set()
+        for repository in self.repositories:
+            if not isinstance(repository, AptRepository):
+                raise _fail(self, f"repositories= holds {repository!r}, not an AptRepository.")
+            if repository.name in names:
+                raise _fail(self, f"repositories= names {repository.name!r} twice.")
+            names.add(repository.name)
 
     @property
     def archive(self) -> str:

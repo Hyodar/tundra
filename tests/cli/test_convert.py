@@ -106,6 +106,29 @@ def test_a_tree_tundravm_wrote_converts_its_payload_and_targets_and_checks(
     assert "# unsupported:" not in result.out
 
 
+def test_a_signed_dated_apt_source_becomes_an_apt_repository(cli: Cli, tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    sources = tree / "mkosi.sandbox" / "etc" / "apt" / "sources.list.d"
+    sources.mkdir(parents=True)
+    (tree / "mkosi.conf").write_text("[Distribution]\nDistribution=debian\nRelease=trixie\n")
+    (tree / "mkosi.sandbox" / "etc" / "apt" / "vendor.asc").write_text("key\n")
+    (sources / "extra.sources").write_text(
+        "Types: deb\nURIs: https://snapshot.debian.org/archive/debian-security/20261018T082309Z/\n"
+        "Suites: trixie-security\nComponents: main\nSigned-By: /etc/apt/vendor.asc\n\n"
+        "Types: deb\nURIs: https://apt.example.com\nSuites: stable\nTrusted: yes\n"
+    )
+    result = cli("convert", tree, "--from", "mkosi")
+    assert result.code == EXIT_OK, result.err
+    (tree / "image.py").write_text(result.out, encoding="utf-8")
+    (repository,) = tundravm.load(tree / "image.py").base.repositories
+    assert (repository.suite, repository.key) == (
+        "trixie-security",
+        tree / "mkosi.sandbox/etc/apt/vendor.asc",
+    )
+    assert "https://apt.example.com: unsigned" in result.out
+    assert "# unsupported: SandboxTrees" not in result.out
+
+
 def test_a_tree_that_runs_scripts_while_parsing_needs_allow_scripts(
     cli: Cli, tmp_path: Path
 ) -> None:
