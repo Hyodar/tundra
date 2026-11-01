@@ -766,6 +766,31 @@ The directory is assembled beside its final place and published with one rename.
 file is read-only, and nothing writes into a published directory again. Building the same
 identity twice leaves the existing directory alone.
 
+`build` ends with a report, read back from that directory, so `show BUILD` prints it too.
+The fixture's production build in CI, digests cut short:
+
+```text
+built build/fixture/production/c51b7d941cf88309
+  payload.efi    68.0 MiB  sha256 4484014ecb65d546  ESP 128.0 MiB, 58.1 MiB left
+  qemu.raw      129.0 MiB  sha256 54675b3b4771aee6
+source            kind  ref           pin           toolchain  checkout  deps
+  git-codereview  git   6c2c97b0f412  6c2c97b0f412  go1.26.0   fetched   fetched
+  rust-probe      git   7fdfe4315f7b  7fdfe4315f7b  1.91.0     fetched   fetched
+time  checkouts 1.4s  prefetch 11.0s  mkosi 2m04s  measurements 0.9s  total 2m18s
+measured  payload.efi authenticode sha384 cd9f923dfb43ae67…
+  qemu   uki   RTMR1      e1cb07ce75668255…
+  qemu   uki   RTMR2      4667a5f86d3fbeb7…
+  qemu   disk  RTMR1      1a5af53790d7b1d4…
+  qemu   disk  RTMR2      4667a5f86d3fbeb7…
+  unchecked: RTMR3: outside the policy: no event schema is defined for RTMR3
+```
+
+Every disk boots the UKI from a fixed 128 MiB ESP, which holds a UKI of up to 126 MiB. A
+larger one fails the build with both sizes and the fix: `RootFS.verity()` keeps the OS
+out of the UKI. The `authenticode` line is the UKI's identity in RTMR1's event log, and the
+register rows are predictions. [What `build` prints](trust.md#what-build-prints) says which
+printed value is which.
+
 ### The manifest
 
 `manifest.json` (schema `tundravm.manifest/1`) is canonical JSON. Its `id` is the first 16
@@ -774,7 +799,7 @@ hex digits of the sha256 of the document without `id`. It binds:
 | Key | Binds |
 |---|---|
 | `artifacts` | every file's sha256 and size |
-| `uki` | the UKI's sha256 and command line |
+| `uki` | the UKI's sha256, command line and SHA-384 Authenticode digest (`authenticode_sha384`, what RTMR1's event log records for it) |
 | `root_hash`, `rootfs` | the verity root hash (or `null`) and the layout |
 | `tree` | a digest over the tree's paths, modes, contents and symlink targets |
 | `lock` | the lock it was built against and the committed one it was checked against |
@@ -784,7 +809,8 @@ hex digits of the sha256 of the document without `id`. It binds:
 | `kind`, `profile`, `targets`, `ports` | what the build is |
 | `unchecked` | what the build could not check, by name |
 
-`observations.json` holds what is not identity: when, where, how long, and the reproduction.
+`observations.json` holds what is not identity: when, where, how long (per phase), what the
+fetch found cached, and the reproduction.
 
 ### Reproduce, sign, verify
 
@@ -816,8 +842,9 @@ $ tundravm show --diff OLD NEW
 Without a build, `show` prints the image as it resolves: its name and file on the first
 line, then the production profile and the others as declared (`--profile P` and `--dev`
 pick them). With one (a directory, an id
-prefix or `latest`), it prints the manifest, provenance and unchecked guarantees;
-`--units`, `--tree` and `--measurements` narrow it. `--diff` compares two builds:
+prefix or `latest`), it prints the build's report (as `build` printed it; `--json` puts
+it under `report`), then the manifest's provenance and unchecked guarantees; `--units`,
+`--tree` and `--measurements` narrow it. `--diff` compares two builds:
 packages, files, units, boot payload, measurements and policy coverage.
 
 ## Run

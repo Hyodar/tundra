@@ -134,6 +134,9 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   every `CompiledTree` reader, `fragment_plan(profile=)`, `assert_diagnostic(profile=,
   profiles=)`, `profiles=` on `compile_tree`, `assert_clean`, `assert_tree_matches` and the
   `compiled` fixture, and the `Profiles` alias (was `Variants`).
+- `FakeMkosi` writes a PE UKI, GPT disks and the GCP tarball around one, so a test build is
+  measured and reported like a real one. `uki_size=` pads its UKI, and a failing build
+  writes that UKI first. `FakeSources` keeps a dependency cache it already prefetched.
 - The rest of the SDK says profile too: `Diagnostic(profile=)` and `.profile`, `"profile"`
   in `check --json`, `Resolved.profile`, `Tree.profiles` from `tundravm.compile()`,
   `Artifact.profile` from `tundravm.bake()`, `profiles` and `profile` in `show --json`, the
@@ -172,8 +175,10 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
 - The ESP is a fixed 128M FAT32 of 512-byte clusters (9894da4):
   `SizeMinBytes=SizeMaxBytes=128M`, `Minimize=off`,
   `SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"`. OVMF reads it as FAT32 by cluster count,
-  and the disks no longer carry a 481 MiB ESP. A UKI over about 125 MiB fails the disk
-  build; `RootFS.verity()` keeps the OS out of the UKI.
+  and the disks no longer carry a 481 MiB ESP. Its FAT32 holds a UKI of up to 126 MiB. A
+  larger one fails the disk build, and `build` says so with the UKI's size, the ESP's and
+  the fix (`RootFS.verity()` keeps the OS out of the UKI) instead of mkosi's disk-full.
+  The build report prints the room the UKI leaves.
 - The changelog and plan record both (79dd67a).
 
 ### The operator's loop
@@ -195,9 +200,19 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   hash, the lock, the sources (each Go source with its toolchain and checksum, each Cargo
   source with its Rust toolchain and what its `rustc -vV` says), the package manifest, the
   SBOM, the measurement records and the toolchain, with explicit `missing` and `unchecked`
-  states; `show BUILD` prints the Go and Rust toolchains. `verify` checks it
+  states. The UKI's record carries its SHA-384 Authenticode digest
+  (`uki.authenticode_sha384`), the event RTMR1's log records for the loaded UKI, which
+  `verify` recomputes. `verify` checks it
   offline, a signature against an OpenSSH allowed-signers file, and `--rebuild`
   reproduces it. A signed manifest was verified from a second checkout.
+- `build` ends with a report, and `show BUILD` (`--json`: under `report`) leads with the
+  same one, read back from the build directory. It lists each artifact with its size and
+  sha256, the UKI with the room the ESP leaves it, and a sources table: kind, ref, pin, the
+  Go or Rust toolchain, and whether the checkout and the dependency prefetch were fetched,
+  copied or cached. Then come the time per phase (checkouts, prefetch, mkosi,
+  measurements, total), the UKI's Authenticode digest, and one row per measurement record
+  and predicted register. `observations.json` records the phase times and the fetch
+  states. The fetch reports the checkouts and the dependency prefetch as two phases.
 - `build --reproduce` builds again in an independent workspace and records the comparison
   in `observations.json`.
 - `measurements.json` holds one record per target and boot path: predictions, unknowns

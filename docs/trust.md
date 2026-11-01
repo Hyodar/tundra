@@ -73,6 +73,24 @@ which never releases a secret. For `qemu`, approve MRTD and RTMR0 in the policy'
 Predictions (the build), observations (`attest --output`) and the approved policy
 (`policies/`) are three files, never one.
 
+### What `build` prints
+
+The report at the end of `build` (and at the top of `show BUILD`) mixes three kinds of
+value. Only the measurements are something a quote is checked against.
+
+| Printed | Kind | Comes from |
+|---|---|---|
+| artifact sizes and sha256s, source pins and toolchains, the UKI's Authenticode digest | facts about the bytes, recomputed by `verify` | `manifest.json` |
+| `checkout` and `deps` (fetched, copied or cached), the time per phase | observations of this build on this host, not identity | `observations.json` |
+| MRTD, RTMR0, RTMR1, RTMR2 per target and boot path | predictions, replayed offline from the UKI and the disk | `measurements.json` |
+
+The Authenticode digest (SHA-384, over the UKI as a PE image) is the event OVMF extends
+RTMR1 with when it loads the UKI, so a fleet can match a running image to a build by the
+event log alone. It names the UKI. It is not a register value and attests nothing by
+itself. A row such as `MRTD/RTMR0 3/27 accepted values` is a firmware table that the
+policy pairs by firmware. A record with no prediction prints its state (`unknown: ...`)
+in place of a value.
+
 ### The channel is not attested yet
 
 This is the largest gap, and it is gate 3 work in tundra-tools.
