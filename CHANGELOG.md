@@ -121,6 +121,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - The guide's stage section follows the stage files, and says why the example leaves out `TpmSeal`, `AptRepository`, `Kernel.build`, `Tdxs.from_policy` and `Service.packaged`.
 - `docs/release.md`: a `v*` tag tests, builds, installs and releases tundravm on GitHub, with the wheel and the sdist; install a release with `uv tool install git+https://github.com/Hyodar/tundra@vX.Y.Z`.
 - `README.md` and `docs/release.md` name the four Debian or Ubuntu packages `dev` needs beside tundravm: `debian-archive-keyring`, `golang`, `qemu-system-x86`, `ovmf`.
+- The README, the guide, the trust page and the release page read end to end as a first user after the day's landings: each stage section adds one idea, every term links to where it is defined, every claim about a command matches what it prints, and the old example's names are gone from the deploy, attest and recovery commands (`docs/design/walkthrough-4-2026-11-01.md`).
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 
 ### Removed
