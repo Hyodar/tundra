@@ -792,7 +792,7 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 
 | Member | Does |
 |---|---|
-| `JournalExport.service(proxy: str \| None = None) -> Service` | The `journal-export` service, through *proxy* (`IP:PORT`) when given. |
+| `JournalExport.service(proxy: Proxy \| None = None) -> Service` | The `journal-export` service, through *proxy* when given. |
 
 ### `Lighthouse`
 
@@ -874,7 +874,7 @@ Observability(
     *,
     logs: JournalExport | None = None,
     metrics: PrometheusRemoteWrite | None = None,
-    proxy: str | None = None,
+    proxy: str | Proxy | None = None,
 )
 ```
 
@@ -902,8 +902,23 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 
 | Member | Does |
 |---|---|
-| `PrometheusRemoteWrite.config(proxy: str \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*, through *proxy* (`IP:PORT`) when given. |
-| `PrometheusRemoteWrite.service() -> Service` | The `metrics-export` service: Prometheus in agent mode. |
+| `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*, through *proxy* when given. |
+| `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, through *proxy*. |
+
+### `Proxy`
+
+*dataclass*
+
+```python
+Proxy(address: str, port: int, *, tls_name: str | None = None)
+```
+
+The fixed-address proxy both exporters reach their sinks through: `Proxy("10.0.0.9", 3128)`, which `proxy="10.0.0.9:3128"` also spells.
+
+| Member | Does |
+|---|---|
+| `Proxy.endpoint` | `IP:PORT` (`[IPv6]:PORT`), what the firewall allows. |
+| `Proxy.url` | The URL the exporters reach the proxy at: `https://<tls_name>:<port>` or `http://<endpoint>`. |
 
 ### `Raiko`
 

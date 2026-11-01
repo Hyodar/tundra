@@ -7,13 +7,15 @@ with Prometheus in agent mode (remote write only, no query API). Both run as the
 users in the preset sandbox, read their credentials as systemd credentials, keep bounded
 buffers, retry on their own, and are required by nothing, so an exporter that cannot
 reach its sink never holds an application back. ``proxy="IP:PORT"`` sends both through
-one fixed-address proxy, the only destination a filtered egress then needs.
+one fixed-address proxy, the only destination a filtered egress then needs, and
+``proxy=Proxy(address, port, tls_name=...)`` through one that speaks TLS itself.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from urllib.parse import urlsplit
 
 from tundravm._image._component import Component
@@ -25,7 +27,7 @@ from tundravm.declarative.config import ConfigFile
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
-__all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite"]
+__all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite", "Proxy"]
 
 LOGS_SERVICE = "journal-export"
 """The journal uploader's service."""
@@ -86,23 +88,107 @@ def _destination(url: str) -> str:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
-def _proxy_url(proxy: str | None) -> str | None:
-    """The ``http://`` URL the exporters reach *proxy* (``IP:PORT``) at."""
-    return None if proxy is None else f"http://{proxy}"
+PROXY_HOSTS = "/etc/tundravm/hosts.d/observability-proxy"
+"""The TLS proxy's ``ADDRESS NAME`` line: this component's own fragment of ``/etc/hosts``,
+apart from the file the GCP glue's ``gcp-hostname`` appends the host's name to."""
+
+PROXY_HOSTS_SCRIPT = "/usr/lib/tundravm/observability-hosts"
+"""What each exporter runs as root before it starts when its proxy speaks TLS: appends
+:data:`PROXY_HOSTS`'s lines ``/etc/hosts`` does not have yet."""
+
+_PROXY_HOSTS_STEP = f"""\
+#!/bin/sh
+# tundravm Observability: the TLS proxy's name, which no resolver answers, in /etc/hosts.
+while read -r line; do
+    grep -qxF "$line" /etc/hosts 2>/dev/null || echo "$line" >> /etc/hosts
+done < {PROXY_HOSTS}
+"""
 
 
-def _check_proxy(owner: object, proxy: object) -> None:
+@dataclass(frozen=True, slots=True)
+class Proxy:
+    """The fixed-address proxy both exporters reach their sinks through:
+    ``Proxy("10.0.0.9", 3128)``, which ``proxy="10.0.0.9:3128"`` also spells.
+
+    Without *tls_name* the exporters speak plain HTTP CONNECT to it, and only each sink's
+    own TLS, inside the tunnel, is encrypted. With *tls_name* the proxy speaks TLS itself:
+    the exporters reach ``https://<tls_name>:<port>``, send *tls_name* as the SNI and check
+    the proxy's certificate for it against the image's CA store, and the image maps the
+    name to *address* in ``/etc/hosts`` (a line in :data:`PROXY_HOSTS`, merged at each
+    exporter's start), so the name never reaches a resolver and the firewall still allows
+    the address alone. Not verified without a boot: that ``systemd-journal-upload``'s
+    libcurl and Prometheus negotiate TLS with a given proxy, and that its certificate
+    chains to a CA the image trusts (a private CA needs its certificate in the image).
+    """
+
+    address: str
+    port: int
+    _: KW_ONLY
+    tls_name: str | None = None
+
+    def __post_init__(self) -> None:
+        hint = "Pass Proxy('10.0.0.9', 3128), the proxy's address and port."
+        try:
+            ipaddress.ip_address(self.address)
+        except (TypeError, ValueError):
+            raise ValidationError(
+                f"Proxy: address {self.address!r} is not an IP address; the firewall matches "
+                "the proxy by its address.",
+                hint=hint,
+            ) from None
+        if isinstance(self.port, bool) or not isinstance(self.port, int):
+            raise ValidationError(f"Proxy: port {self.port!r} is not a number.", hint=hint)
+        egress_host(self, self.endpoint)
+        if self.tls_name is not None:
+            if not isinstance(self.tls_name, str):
+                raise ValidationError(
+                    f"Proxy: tls_name {self.tls_name!r} is not a name.",
+                    hint="Pass tls_name='proxy.example'.",
+                )
+            _, _, named = egress_host(self, f"{self.tls_name}:{self.port}")
+            if not named:
+                raise ValidationError(
+                    f"Proxy: tls_name {self.tls_name!r} is an address, not the name the "
+                    "proxy's certificate is for.",
+                    hint="Pass tls_name='proxy.example'.",
+                )
+
+    @property
+    def endpoint(self) -> str:
+        """``IP:PORT`` (``[IPv6]:PORT``), what the firewall allows."""
+        host = f"[{self.address}]" if ":" in self.address else self.address
+        return f"{host}:{self.port}"
+
+    @property
+    def url(self) -> str:
+        """The URL the exporters reach the proxy at: ``https://<tls_name>:<port>`` or
+        ``http://<endpoint>``."""
+        if self.tls_name is None:
+            return f"http://{self.endpoint}"
+        return f"https://{self.tls_name}:{self.port}"
+
+
+def _as_proxy(owner: object, proxy: object) -> Proxy | None:
+    """*proxy* as a :class:`Proxy`: ``IP:PORT`` (``[IPv6]:PORT``) or a ``Proxy`` itself."""
+    if proxy is None or isinstance(proxy, Proxy):
+        return proxy
     hint = "Pass proxy='10.0.0.9:3128', the proxy's address and port: '[fd00::9]:3128' for IPv6."
     try:
-        _, port, named = egress_host(owner, proxy)
+        address, port, named = egress_host(owner, proxy)
     except ValidationError:
-        port, named = None, True
+        address, port, named = "", None, True
     if port is None or named:
         raise ValidationError(
             f"Observability: proxy {proxy!r} is not IP:PORT; the firewall matches the "
             "proxy by its address.",
             hint=hint,
         )
+    return Proxy(address, port)
+
+
+def _start_steps(proxy: Proxy | None) -> tuple[str, ...]:
+    """The root steps an exporter runs before it starts: the TLS proxy's name, if any."""
+    return () if proxy is None or proxy.tls_name is None else (f"+/bin/sh {PROXY_HOSTS_SCRIPT}",)
 
 
 def _check_credential(owner: object, credential: object) -> None:
@@ -130,8 +216,8 @@ class JournalExport:
         _check_url(self, self.url)
         _check_credential(self, self.credential)
 
-    def service(self, proxy: str | None = None) -> Service:
-        """The ``journal-export`` service, through *proxy* (``IP:PORT``) when given."""
+    def service(self, proxy: Proxy | None = None) -> Service:
+        """The ``journal-export`` service, through *proxy* when given."""
         argv = [
             "/usr/lib/systemd/systemd-journal-upload",
             f"--url={self.url}",
@@ -139,7 +225,7 @@ class JournalExport:
         ]
         if self.credential is not None:
             argv += [f"--key={self.credential.path}", f"--cert={self.credential.path}"]
-        url = _proxy_url(proxy)
+        url = None if proxy is None else proxy.url
         return Service(
             LOGS_SERVICE,
             argv,
@@ -147,7 +233,7 @@ class JournalExport:
             state="journal-export",
             groups=["systemd-journal"],
             environment={} if url is None else {"https_proxy": url, "http_proxy": url},
-            unit=dm.DropIn(exec_start_pre=(f"+/bin/sh {JOURNAL_ACCESS}",)),
+            unit=dm.DropIn(exec_start_pre=(*_start_steps(proxy), f"+/bin/sh {JOURNAL_ACCESS}")),
         )
 
 
@@ -177,13 +263,12 @@ class PrometheusRemoteWrite:
                     hint="Use a number with s, m or h: '30s', '1h'.",
                 )
 
-    def config(self, proxy: str | None = None) -> dict[str, object]:
+    def config(self, proxy: Proxy | None = None) -> dict[str, object]:
         """The agent's configuration: scrape the node exporter, write to *url*, through
-        *proxy* (``IP:PORT``) when given."""
+        *proxy* when given."""
         remote: dict[str, object] = {"url": self.url}
-        url = _proxy_url(proxy)
-        if url is not None:
-            remote["proxy_url"] = url
+        if proxy is not None:
+            remote["proxy_url"] = proxy.url
         if self.credential is not None:
             remote["authorization"] = {
                 "type": "Bearer",
@@ -205,8 +290,9 @@ class PrometheusRemoteWrite:
             "remote_write": [remote],
         }
 
-    def service(self) -> Service:
-        """The ``metrics-export`` service: Prometheus in agent mode."""
+    def service(self, proxy: Proxy | None = None) -> Service:
+        """The ``metrics-export`` service: Prometheus in agent mode, through *proxy*."""
+        steps = _start_steps(proxy)
         return Service(
             METRICS_SERVICE,
             [
@@ -219,6 +305,7 @@ class PrometheusRemoteWrite:
             ],
             credentials=[] if self.credential is None else [self.credential],
             state="metrics-export",
+            unit=dm.DropIn(exec_start_pre=steps) if steps else None,
         )
 
 
@@ -229,16 +316,16 @@ class Observability(Component):
     is optional. Their credentials are secrets, which the image collects from them.
     :meth:`outbound` is each sink's host and port (a host name stands for its port).
 
-    *proxy* (``"IP:PORT"``, ``"[IPv6]:PORT"``) is an HTTP CONNECT proxy at a fixed address
-    through which both reach their sinks: :meth:`outbound` is then the proxy alone, so a
-    filtered egress opens one address instead of a port to any. The TLS session to each
-    sink runs end to end inside the tunnel, with the sink's name as its SNI and its
-    certificate checked, so the proxy can allow by name what the firewall can only allow by
-    address, and the guest resolves no sink. ``systemd-journal-upload`` reads it from
-    ``https_proxy``, Prometheus from ``proxy_url``. A proxy that itself speaks TLS is not
-    supported: neither exporter can be given its name apart from its URL, which would then
-    have to resolve to the fixed address through an ``/etc/hosts`` entry the image does
-    not write.
+    *proxy* (``"IP:PORT"``, ``"[IPv6]:PORT"`` or a :class:`Proxy`) is an HTTP CONNECT
+    proxy at a fixed address through which both reach their sinks: :meth:`outbound` is
+    then the proxy alone, so a filtered egress opens one address instead of a port to any.
+    The TLS session to each sink runs end to end inside the tunnel, with the sink's name as
+    its SNI and its certificate checked, so the proxy can allow by name what the firewall
+    can only allow by address, and the guest resolves no sink. ``systemd-journal-upload``
+    reads it from ``https_proxy``, Prometheus from ``proxy_url``. A proxy that speaks TLS
+    itself is ``Proxy(address, port, tls_name=...)``: neither exporter takes the proxy's
+    TLS name apart from its URL, so the component writes the name's address to its own
+    ``/etc/hosts`` fragment.
 
     Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Component name:
     ``observability``.
@@ -246,11 +333,10 @@ class Observability(Component):
 
     logs: JournalExport | None = None
     metrics: PrometheusRemoteWrite | None = None
-    proxy: str | None = None
+    proxy: str | Proxy | None = None
 
     def __post_init__(self) -> None:
-        if self.proxy is not None:
-            _check_proxy(self, self.proxy)
+        _as_proxy(self, self.proxy)
         if self.logs is not None and not isinstance(self.logs, JournalExport):
             raise ValidationError(
                 f"Observability: logs= holds {self.logs!r}, not JournalExport.",
@@ -269,30 +355,35 @@ class Observability(Component):
 
     def outbound(self) -> Egress:
         """*proxy*, or each sink's ``HOST:PORT`` without one."""
-        if self.proxy is not None:
-            return Egress(hosts=[self.proxy])
+        proxy = _as_proxy(self, self.proxy)
+        if proxy is not None:
+            return Egress(hosts=[proxy.endpoint])
         sinks = (sink for sink in (self.logs, self.metrics) if sink is not None)
         return Egress(hosts=list(dict.fromkeys(_destination(sink.url) for sink in sinks)))
 
     def compose(self) -> Iterator[object]:
+        proxy = _as_proxy(self, self.proxy)
+        if proxy is not None and proxy.tls_name is not None:
+            yield File(PROXY_HOSTS, f"{proxy.address} {proxy.tls_name}\n")
+            yield File(PROXY_HOSTS_SCRIPT, _PROXY_HOSTS_STEP, mode=0o755)
         if self.logs is not None:
             yield Package("systemd-journal-remote")
             yield File(JOURNAL_ACCESS, _JOURNAL_ACCESS_SCRIPT, mode=0o755)
             # The packaged uploader reads /etc; ours runs from its own unit and arguments.
             yield dm.Unit("systemd-journal-upload.service", masked=True)
-            yield self.logs.service(self.proxy)
+            yield self.logs.service(proxy)
         if self.metrics is not None:
             yield Package("prometheus")
             yield Package("prometheus-node-exporter")
             # Debian's prometheus.service would serve a query API on every interface.
             yield dm.Unit("prometheus.service", masked=True)
-            config = self.metrics.config(self.proxy)
+            config = self.metrics.config(proxy)
             yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
             yield ConfigFile.env(
                 _NODE_EXPORTER_DEFAULTS, {"ARGS": "--web.listen-address=127.0.0.1:9100"}
             )
             yield dm.Unit("prometheus-node-exporter.service", enabled=True)
-            yield self.metrics.service()
+            yield self.metrics.service(proxy)
 
     rules = (
         Rule(

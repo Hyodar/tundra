@@ -64,6 +64,7 @@ COMPONENTS = [
     "Network",
     "Observability",
     "PrometheusRemoteWrite",
+    "Proxy",
     "Raiko",
     "Resolved",
     "Rule",

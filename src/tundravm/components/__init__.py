@@ -13,8 +13,8 @@ findings, a lint rule ``tundravm check`` runs, of the codes the class declares a
   :class:`StaticAddress` and :class:`Egress`), :class:`Firewall`, :class:`Tdxs` (the
   evidence service; :data:`EVIDENCE` is its readiness).
 - Ways in for people: :class:`SshAccess`, :class:`DevAccess` (``image.dev``).
-- :class:`Observability` with :class:`JournalExport` and :class:`PrometheusRemoteWrite`
-  (``image.observability``).
+- :class:`Observability` with :class:`JournalExport`, :class:`PrometheusRemoteWrite` and
+  :class:`Proxy` (``image.observability``).
 - Workloads: :class:`Nethermind`, :class:`Lighthouse`, :class:`TaikoClient` and
   :class:`Raiko`.
 """
@@ -35,7 +35,7 @@ from tundravm.diagnostics import Rule
 from ._base import EVIDENCE, DevAccess, Firewall, Network, SshAccess, Tdxs, TeeBase
 from ._lighthouse import Lighthouse
 from ._nethermind import Nethermind
-from ._observability import JournalExport, Observability, PrometheusRemoteWrite
+from ._observability import JournalExport, Observability, PrometheusRemoteWrite, Proxy
 from ._taiko import Raiko, TaikoClient
 
 __all__ = [
@@ -53,6 +53,7 @@ __all__ = [
     "Network",
     "Observability",
     "PrometheusRemoteWrite",
+    "Proxy",
     "Raiko",
     "Resolved",
     "Rule",

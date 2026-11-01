@@ -23,12 +23,14 @@ from tundravm.components import (
     Network,
     Observability,
     PrometheusRemoteWrite,
+    Proxy,
     Raiko,
     SshAccess,
     TaikoClient,
     Tdxs,
     TeeBase,
 )
+from tundravm.components._observability import PROXY_HOSTS, PROXY_HOSTS_SCRIPT
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
@@ -220,6 +222,8 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
             lambda: Observability(logs=JournalExport("https://l.example"), proxy="p.example:80"),
             "proxy 'p.example:80' is not IP:PORT",
         ),
+        (lambda: Proxy("p.example", 3128), "is not an IP address"),
+        (lambda: Proxy("10.0.0.9", 3128, tls_name="10.0.0.9"), "is an address"),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
         (lambda: replace(beacon, network="goerli"), "not one Lighthouse ships"),
         (lambda: replace(beacon, checkpoint_sync_url="checkpoint.example"), "http"),
@@ -284,6 +288,47 @@ def test_dev_access_joins_the_control_plane_sshd_instead_of_a_second_one() -> No
 # ── Observability ───────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("proxy", "url", "allowed", "hosts"),
+    [
+        ("[fd00::9]:3128", "http://[fd00::9]:3128", "[fd00::9]:3128", None),
+        (Proxy("10.0.0.9", 3128), "http://10.0.0.9:3128", "10.0.0.9:3128", None),
+        (
+            Proxy("10.0.0.9", 3128, tls_name="p.example"),
+            "https://p.example:3128",
+            "10.0.0.9:3128",
+            "10.0.0.9 p.example\n",
+        ),
+        (
+            Proxy("fd00::9", 3128, tls_name="p.example"),
+            "https://p.example:3128",
+            "[fd00::9]:3128",
+            "fd00::9 p.example\n",
+        ),
+    ],
+)
+def test_the_exporters_reach_their_sinks_through_the_proxy(
+    proxy: str | Proxy, url: str, allowed: str, hosts: str | None
+) -> None:
+    observability = Observability(
+        logs=JournalExport("https://logs.example"),
+        metrics=PrometheusRemoteWrite("https://metrics.example"),
+        proxy=proxy,
+    )
+    planned = plan(Image("x", observability=observability), "production")
+    environment = planned.service("journal-export").values("Service", "Environment")
+    assert f"https_proxy={url}" in environment
+    config = planned.file("/etc/tundravm/metrics-export.yml").text.replace('"', "")
+    assert f"proxy_url: {url}" in config
+    assert observability.outbound().hosts == (allowed,)
+    step = f"+/bin/sh {PROXY_HOSTS_SCRIPT}"
+    for unit in ("journal-export", "metrics-export"):
+        dropin = planned.files.get(f"/usr/lib/systemd/system/{unit}.service.d/20-tundravm.conf")
+        assert (step in (dropin.text if dropin else "")) == (hosts is not None), unit
+    found = planned.files.get(PROXY_HOSTS)
+    assert (found.text if found else None) == hosts
+
+
 def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     logs_key = Secret("logs-key")
     token = Secret("metrics-token")
@@ -310,12 +355,7 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     for unit in ("journal-export.service", "metrics-export.service"):
         dependents = [path for path in units if unit in planned.file(path).text]
         assert dependents == [f"/usr/lib/systemd/system/{unit}"], unit
-    proxied = replace(observability, proxy="[fd00::9]:3128")
-    planned = plan(Image("x", observability=proxied), "production")
-    environment = planned.service("journal-export").values("Service", "Environment")
-    assert "https_proxy=http://[fd00::9]:3128" in environment
-    config_text = planned.file("/etc/tundravm/metrics-export.yml").text
-    assert 'proxy_url: "http://[fd00::9]:3128"' in config_text and "max_shards: 4" in config_text
+    assert "max_shards: 4" in config_text
     plaintext = Image("x", observability=Observability(logs=JournalExport("http://logs:19532")))
     assert "observability-plaintext" in {d.code for d in plan(plaintext).lint()}
     with pytest.raises(ValidationError, match="exports nothing"):

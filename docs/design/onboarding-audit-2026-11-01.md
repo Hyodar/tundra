@@ -181,10 +181,10 @@ and `show`. The generated workflow was parsed as YAML.
    writes a tree that drifts once locked, without a word (S; `cli.py`).
 9. `convert --from mkosi` of a tundravm tree lists implied packages (`chrony`, `nftables`)
    as the image's own (S; `convert.py`).
-10. `Observability(proxy=)` is plain HTTP CONNECT: a proxy that speaks TLS itself needs
-    its name to resolve to its fixed address, an `/etc/hosts` entry the image does not
-    write (GCP's glue owns that file), since neither `systemd-journal-upload` nor
-    Prometheus takes the proxy's TLS name apart from its URL (S; `_observability.py`).
+10. ~~`Observability(proxy=)` is plain HTTP CONNECT: a proxy that speaks TLS itself needs its name to resolve to its fixed address, an `/etc/hosts` entry the image does not write~~
+    (fixed on `leftovers-5`: `Proxy(address, port, tls_name=)` gives both exporters an
+    `https://` proxy URL and writes the name's address through the component's own
+    fragment, merged into `/etc/hosts` at each exporter's start).
 
 The guide's word budget (once item 10) was cut on `walkthrough-3` (section 6); the default
 snapshot (once item 11) moved to `20261018T082309Z` on `ec5e339`.

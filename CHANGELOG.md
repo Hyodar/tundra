@@ -33,6 +33,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks, peers and collateral, `TaikoClient(l1=)` and `Raiko(l1=)` name their L1, and `Observability(proxy=)` sends through one proxy.
+- `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
 - The SSH key delivery on 8745 takes one key once per boot, then the firewall drops the port.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.
 
