@@ -1,0 +1,34 @@
+
+# Transport configuration
+transport:
+  type: socket
+  config:
+    file_path: ./tdxs.sock
+    owner: root
+    group: root
+    perm: 0660
+
+# Issuer configuration
+issuer:
+  type: simulator  # Options: azure, gcp, simulator, tdx
+  # No config needed for any issuer type
+
+# Validator configuration
+validator:
+  type: simulator  # Options: azure, gcp, simulator, tdx
+  # config:  # Only needed for azure, gcp, or tdx types
+  #   expected_measurements:
+  #     mrtd: "0x..."
+  #     mrowner: "0x..."
+  #     mrseam: "0x..."
+  #     rtmr0: "0x..."
+  #     rtmr1: "0x..."
+  #     rtmr2: "0x..."
+  #     rtmr3: "0x..."
+  #     xfam: "0x..."
+  #   check_revocations: false
+  #   get_collateral: false
+  #   # Azure-specific:
+  #   # verify_imds: false
+  #   # GCP-specific:
+  #   # verify_identity_token: false
