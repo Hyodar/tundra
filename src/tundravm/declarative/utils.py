@@ -394,13 +394,16 @@ class DevTools(Composite):
     hex digits of ``sha256("tundravm-devtools:<profile name>")``, computed in the
     postinst script from mkosi's ``$IMAGE_ID``. The serial getty on ``ttyS0`` is enabled
     at build time. ``reproducible=False`` keeps the historical random salt and the
-    ``serial-console.service`` that enables the getty at boot.
+    ``serial-console.service`` that enables the getty at boot. The password logs in on the
+    console only; ``network_login=True`` is a network login: it also lets root in over SSH
+    (openssh and dropbear) with that password.
     Component name: ``devtools``.
     """
 
     root_password: str = _DEFAULT_ROOT_PASSWORD
     salt: str | None = None
     reproducible: bool = True
+    network_login: bool = False
 
     def compose(self) -> Fragment:
         if not self.root_password or _UNSAFE_PASSWORD & set(self.root_password):
@@ -426,6 +429,8 @@ class DevTools(Composite):
         else:
             line = f"ROOT_PASS=$({hashed})"
         login = _devtools.DEVTOOLS_POSTINST_SCRIPT.replace(_devtools.HISTORICAL_HASH_LINE, line)
+        if self.network_login:
+            login += _devtools.NETWORK_LOGIN_SCRIPT
         return Fragment(
             "devtools",
             items=(

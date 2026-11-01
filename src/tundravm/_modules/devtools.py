@@ -3,7 +3,8 @@
 Development/debugging only: it enables password-based root login. The root password is
 hashed with a fixed salt (:data:`DERIVED_SALT_LINE`) so that two builds of the variant
 write the same ``/etc/shadow``; :data:`DEVTOOLS_POSTINST_SCRIPT` is the historical script,
-whose ``openssl passwd`` picks a random salt on every build.
+whose ``openssl passwd`` picks a random salt on every build. The password is a console
+login unless :data:`NETWORK_LOGIN_SCRIPT` opens SSH to it as well.
 """
 
 from __future__ import annotations
@@ -56,21 +57,28 @@ where mkosi's ``$IMAGE_ID`` is the variant's name (tundravm sets ``ImageId=`` an
 SALTED_HASH_LINE = 'ROOT_PASS=$(openssl passwd -6 -salt "$SALT" "tdx")'
 """The line that hashes the password with ``$SALT``, which the line before it sets."""
 
-DEVTOOLS_POSTINST_SCRIPT = """\
+SET_PASSWORD_LINE = "printf 'root:%s\\n' \"$ROOT_PASS\" | mkosi-chroot chpasswd -e"
+"""The line that writes the hash into the image's ``/etc/shadow``. A postinst script runs
+outside the image with the tools tree's ``/etc`` bound read-only, so only ``mkosi-chroot``
+reaches the image's account files; the hash replaces the whole field, which unlocks root."""
+
+DEVTOOLS_POSTINST_SCRIPT = f"""\
 # Set root password and unlock account
 ROOT_PASS=$(openssl passwd -6 "tdx")
-usermod -p "$ROOT_PASS" root
-passwd -u root
+{SET_PASSWORD_LINE}
+"""
 
+NETWORK_LOGIN_SCRIPT = """
 # Enable password authentication for dropbear (remove restrictive flags)
-if [ -f /etc/default/dropbear ]; then
-    sed -i 's/ -s//g; s/ -w//g; s/ -g//g' /etc/default/dropbear
+if [ -f "$BUILDROOT/etc/default/dropbear" ]; then
+    sed -i 's/ -s//g; s/ -w//g; s/ -g//g' "$BUILDROOT/etc/default/dropbear"
 fi
 
 # Enable password authentication for openssh
-mkdir -p /etc/ssh/sshd_config.d
-cat > /etc/ssh/sshd_config.d/99-devtools.conf << 'SSHEOF'
+mkdir -p "$BUILDROOT/etc/ssh/sshd_config.d"
+cat > "$BUILDROOT/etc/ssh/sshd_config.d/99-devtools.conf" << 'SSHEOF'
  PermitRootLogin yes
  PasswordAuthentication yes
 SSHEOF
 """
+"""What ``DevTools(network_login=True)`` appends: root logs in with the password over SSH."""

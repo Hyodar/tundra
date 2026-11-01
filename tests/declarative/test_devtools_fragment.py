@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from tundravm import Image
+from tundravm._image import recipe_of
 from tundravm._units import v1
+from tundravm.components import DevAccess
 from tundravm.declarative import Debloat, Package, Recipe, Unit, Variant
 from tundravm.declarative.utils import DevTools
 from tundravm.testing._model import CompiledTree, compile_tree
@@ -72,3 +75,29 @@ def test_unreproducible_devtools_keep_the_boot_time_serial_console(tmp_path: Pat
     postinst = tree.script("postinst", profile="devtools")
     enable = postinst.index(f"mkosi-chroot systemctl enable {SERIAL_UNIT}")
     assert enable < postinst.index("openssl passwd")  # the hook keeps its historical place
+
+
+@pytest.mark.parametrize(
+    ("declared", "profile", "network"),
+    [
+        (Recipe("debug", variants=(Variant("devtools", add=DevTools()),)), "devtools", False),
+        (recipe_of(Image("debug", dev=DevAccess(password="tdx"))), "dev", False),
+        (
+            Recipe("debug", variants=(Variant("devtools", add=DevTools(network_login=True)),)),
+            "devtools",
+            True,
+        ),
+    ],
+)
+def test_the_root_password_is_set_inside_the_image(
+    tmp_path: Path, declared: Recipe, profile: str, network: bool
+) -> None:
+    """A postinst script sees the tools tree's ``/etc`` read-only: the hash reaches the
+    image's ``/etc/shadow`` through ``mkosi-chroot``, every other write is under
+    ``$BUILDROOT``, and SSH takes the password only with ``network_login=True``."""
+    tree = compile_tree(declared, path=tmp_path / "tree")
+    postinst = tree.script("postinst", profile=profile).splitlines()
+    assert "printf 'root:%s\\n' \"$ROOT_PASS\" | mkosi-chroot chpasswd -e" in postinst
+    assert not [line for line in postinst if line.startswith(("usermod", "passwd"))]
+    assert not [line for line in postinst if " /etc/" in line and "BUILDROOT" not in line]
+    assert (" PasswordAuthentication yes" in postinst) is network
