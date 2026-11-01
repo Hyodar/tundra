@@ -141,8 +141,20 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   to fix it. `check --explain CODE ...` prints them, and a text report ends with the
   `--explain` command naming its codes.
 - `check`'s text report prints a finding several profiles share as one line naming them
-  (`[dev, production]`), and a hint consecutive findings share once after them. `--json`,
-  the GitHub annotations and the Markdown table keep one finding per profile and subject.
+  (`[dev, production]`), and a hint consecutive findings share once after them. `--json`
+  and the GitHub annotations keep one finding per profile and subject. `[image]` marks a
+  finding about the whole image.
+- `check --tree DIR` reports a missing tree once, and says of each drifted file whether
+  the tree misses it, has it extra or has it modified.
+- `new` prints the first loop after `uv sync` (`lock`, `build --tree-only mkosi`, `pytest`,
+  `build --dev`, `run --mode simulated --dev`), and the project README and the image's
+  docstring list the same commands with `uv run`. The generated image is `ruff format`
+  clean. The `--ci` workflow fences `show` in the job summary, checks out without
+  credentials and uses the actions tundravm's own CI uses.
+- Hints name the fix: a lock that cannot read tundra-tools says the repository is private
+  and how to reach it or a mirror; `deploy` of a target the build lacks says to add it to
+  `targets=`; an unknown `--explain` code points at the lint reference; a missing instance
+  and a `run` without `--mode` give the command to start one.
 - Where each removed verb went:
 
   | Removed | Now |

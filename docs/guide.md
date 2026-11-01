@@ -43,8 +43,15 @@ commit it ran from:
 $ uvx --from git+https://github.com/Hyodar/tundra tundravm new demo --ci
 $ cd demo
 $ uv sync
-$ uv run tundravm check
+$ uv run tundravm lock
+$ uv run tundravm build --tree-only mkosi
+$ uv run pytest
 ```
+
+`lock` pins every source, tundra-tools included, so it needs read access to that
+repository (see [the shipped library](#the-shipped-library)). The generated tests and the
+CI's `check --tree mkosi` compare the image with the committed `mkosi/` tree, which depends
+on the lock: write the tree after locking and commit both. `new` prints this loop.
 
 `new NAME` writes:
 
@@ -966,9 +973,10 @@ A failed check exits 1, an interrupt 130. An unknown command or flag gets a "did
 | `E_ATTESTATION` | the issuer or validator was unreachable or failed | `run logs`, `journalctl -u tdxs` |
 | `E_DEPLOYMENT` | a missing tool, no TDX for `--mode tdx`, a refused upgrade | the hint names it |
 
-A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint. A finding
-several profiles share is one line naming them, and a hint several findings share follows
-the last of them once. The report ends with the command that explains its codes:
+A `check` finding is `SEVERITY CODE [PROFILES] SUBJECT: message` and its hint, where
+`[image]` marks a finding about the whole image. A finding several profiles share is one
+line naming them, and a hint several findings share follows the last of them once. The
+report ends with the command that explains its codes:
 
 ```console
 $ tundravm check --explain source-unpinned
@@ -986,5 +994,5 @@ source-unpinned (warning)
 ```
 
 The [lint reference](reference/lint.md) lists every code with what it checks and how to
-fix it. `--json`, the GitHub annotations and the Markdown table keep one finding per
+fix it. `--json` and the GitHub annotations (in GitHub Actions) keep one finding per
 profile and subject.
