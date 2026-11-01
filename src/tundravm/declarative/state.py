@@ -466,18 +466,24 @@ class StateBuilder:
         _set_targets(profile, ("azure",))
 
     def _gcp(self, profile: ProfileState) -> None:
-        """The GCP integration: udev, metadata DNS, disk naming rules and their helper.
+        """The GCP integration: metadata DNS, hostname and forwarded-IP routes, Google's
+        disk naming rules and their NVMe helper, each unit gated to Compute Engine.
 
         The metadata resolver ships under ``/usr/lib`` and is copied into place at boot on
         Compute Engine only."""
-        profile.packages.add("udev")
+        profile.packages.update(("udev", *gcp.GCP_PACKAGES))
         _add_file(profile, "/etc/hosts", gcp.GCP_HOSTS)
         _add_file(profile, gcp.GCP_RESOLV_CONF_PATH, gcp.GCP_RESOLV_CONF)
         _service(profile, gcp.metadata_dns_service(), users=())
-        _add_file(
-            profile, "/usr/lib/udev/rules.d/65-gce-disk-naming.rules", gcp.GCE_DISK_NAMING_RULES
-        )
-        _add_file(profile, "/usr/lib/udev/google_nvme_id", gcp.GOOGLE_NVME_ID, "0755")
+        _add_file(profile, gcp.HOSTNAME_SCRIPT_PATH, gcp.HOSTNAME_SCRIPT, "0755")
+        _service(profile, gcp.hostname_service(), users=())
+        _add_file(profile, gcp.ROUTES_SCRIPT_PATH, gcp.ROUTES_SCRIPT, "0755")
+        _task(profile, gcp.forwarded_ips_task(), users=())
+        _add_file(profile, gcp.DISK_RULES_PATH, gcp.GCE_DISK_NAMING_RULES)
+        _add_file(profile, gcp.NVME_ID_PATH, gcp.GOOGLE_NVME_ID, "0755")
+        _shell(profile, gcp.NVME_HOST_IDS, phase="postinst")
+        for unit in gcp.NVME_MASKED_UNITS:
+            _unit_state(profile, "mask", unit)
         _set_targets(profile, ("gcp",))
 
 
@@ -1415,9 +1421,14 @@ def _task(
         )
     )
     if task.schedule is not None:
+        # The task's conditions gate its timer too: a timer whose service never runs
+        # here does not tick.
         timer = activation_unit(
             "Timer",
-            [("Description", task.description or stem)],
+            [
+                ("Description", task.description or stem),
+                *(condition.entry for condition in task.conditions),
+            ],
             task.schedule.entries(),
             [("WantedBy", "timers.target")],
         )

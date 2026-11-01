@@ -86,7 +86,15 @@ def test_describe_structure() -> None:
     assert info["mirror"] == "https://deb.example"
     assert info["kernel"] is None
     # The payload carries the glue of every cloud target the recipe names.
-    assert info["packages"] == ["curl", "dmidecode", "jq", "systemd", "udev"]
+    assert info["packages"] == [
+        "curl",
+        "dmidecode",
+        "iproute2",
+        "jq",
+        "nvme-cli",
+        "systemd",
+        "udev",
+    ]
     assert info["build_packages"] == ["gcc"]
     assert info["targets"] == ["qemu"]
     assert info["policy"] == {
@@ -169,7 +177,16 @@ def test_describe_per_variant() -> None:
 
     assert azure["profile"] == "azure"
     assert azure["inherits"] == "default"
-    assert azure["packages"] == ["curl", "dmidecode", "jq", "systemd", "udev", "waagent"]
+    assert azure["packages"] == [
+        "curl",
+        "dmidecode",
+        "iproute2",
+        "jq",
+        "nvme-cli",
+        "systemd",
+        "udev",
+        "waagent",
+    ]
     assert "modules" not in azure
     lineage = describe(image, profile="azure", inherits="base", fragments=("common", "azure"))
     assert (lineage["inherits"], lineage["fragments"]) == ("base", ["common", "azure"])
@@ -208,7 +225,7 @@ def test_summary_contains_key_strings() -> None:
 
     assert text.startswith("profile=default  debian/trixie (x86_64)  reproducible=yes\n")
     assert "Mirror: https://deb.example" in text
-    assert "Packages (5): curl dmidecode jq systemd udev" in text
+    assert "Packages (7): curl dmidecode iproute2 jq nvme-cli systemd udev" in text
     assert "Build packages (1): gcc" in text
     assert "debian-security  https://deb.example/security  trixie-security  main  prio=10" in text
     assert re.search(r"\n  /etc/motd +0644  12B  sha256:a948904f2f0f\n", text)
@@ -221,7 +238,7 @@ def test_summary_contains_key_strings() -> None:
     )
     assert "data  4G  /data  ext4" in text
     assert "Hooks:\n" in text
-    assert "  postinst (2):\n    echo first\n" in text
+    assert "  postinst (3):\n    echo first\n" in text
     assert "Runtime init: 1 (steps: init)" in text
     assert "Debloat: enabled," in text
     assert text.endswith("Targets: qemu\n")
@@ -230,7 +247,7 @@ def test_summary_contains_key_strings() -> None:
     azure_text = render(describe(image, profile="azure"))
     assert "profile=azure" in azure_text
     assert "Extends: default\n" in azure_text
-    assert "Packages (6): curl dmidecode jq systemd udev waagent" in azure_text
+    assert "Packages (8): curl dmidecode iproute2 jq nvme-cli systemd udev waagent" in azure_text
     assert "Extends" not in text
     for internal in ("variant=", "Inherits", "Fragments", "Policy:"):
         assert internal not in text and internal not in azure_text

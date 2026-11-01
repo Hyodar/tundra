@@ -11,6 +11,8 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin raiko-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin attested-tls-443
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-metadata-dns.service
+mkosi-chroot systemctl enable gcp-hostname.service
+mkosi-chroot systemctl enable gcp-forwarded-ips.timer
 mkosi-chroot systemctl enable chrony.service
 mkosi-chroot systemctl enable tdxs.socket
 mkosi-chroot systemctl enable systemd-networkd.service
@@ -34,6 +36,8 @@ mkosi-chroot systemctl enable runtime-init.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-metadata-dns.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/gcp-hostname.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/gcp-forwarded-ips.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/chrony.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/systemd-networkd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -54,7 +58,9 @@ ln -sf "/etc/systemd/system/attested-tls-443.service" "$BUILDROOT/etc/systemd/sy
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
+rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
+
+mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")

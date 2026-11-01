@@ -1,18 +1,20 @@
 """The GCP integration's files: what lowering adds to a ``gcp`` target variant.
 
-``tundravm.declarative.state`` installs ``udev``, ships the metadata DNS
-files, the disk naming rules and their NVMe helper, and sets the ``gcp``
-target. The metadata DNS is applied at boot through :func:`metadata_dns_service` (on
-Compute Engine only); the disk rules match GCE disk models only, so the glue is inert on
-other clouds. The ``gcp`` wrapper image converts the disk to the ``tar.gz`` GCE imports.
+``tundravm.declarative.state`` installs ``udev`` and :data:`GCP_PACKAGES`, ships the
+metadata DNS files, Google's disk naming rules and their NVMe helper (vendored from
+guest-configs at :data:`GUEST_CONFIGS_COMMIT`), the hostname and forwarded-IP scripts, and
+sets the ``gcp`` target. Every unit is gated by ``ConditionVirtualization=google`` and the
+disk rules match Google's disk models only, so the same UKI stays inert on other clouds.
+The ``gcp`` wrapper image converts the disk to the ``tar.gz`` GCE imports.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tundravm.declarative.model import Service
+    from tundravm.declarative.model import Service, Task
 
 # ---------------------------------------------------------------------------
 # /etc/hosts — GCP metadata server DNS entries
@@ -31,55 +33,46 @@ nameserver 169.254.169.254
 options edns0 trust-ad"""
 
 # ---------------------------------------------------------------------------
-# 65-gce-disk-naming.rules — udev rules for GCE persistent disk naming
+# Disk naming: Google's udev rules and their NVMe helper, vendored unchanged
 # ---------------------------------------------------------------------------
 
-GCE_DISK_NAMING_RULES = """\
-# Google Compute Engine persistent disk naming rules
+GUEST_CONFIGS_COMMIT = "699f84a253e8008427252a45515f22fcdd7341d9"
+"""The https://github.com/GoogleCloudPlatform/guest-configs commit the two files below are
+copied from, byte for byte (``src/lib/udev/``; Apache-2.0, their headers kept). No Debian
+package ships them: Debian's ``google-guest-agent`` carries neither."""
 
-# SCSI persistent disks
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*[!0-9]", IMPORT{program}="scsi_id --export --whitelisted -d /dev/%k", ENV{ID_SERIAL_SHORT}=="?*", SYMLINK+="disk/by-id/google-$env{ID_SERIAL_SHORT}"
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*", ATTR{partition}=="?*", IMPORT{parent}=="ID_SERIAL_SHORT", ENV{ID_SERIAL_SHORT}=="?*", SYMLINK+="disk/by-id/google-$env{ID_SERIAL_SHORT}-part%n"
+_VENDORED = Path(__file__).with_name("guest-configs")
 
-# SCSI local SSDs
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*[!0-9]", ATTRS{model}=="EphemeralDisk   ", PROGRAM="scsi_id --whitelisted --export -d /dev/%k", SYMLINK+="disk/by-id/google-local-ssd-$env{ID_SERIAL_SHORT}"
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*", ATTRS{model}=="EphemeralDisk   ", ATTR{partition}=="?*", PROGRAM="scsi_id --whitelisted --export -d /dev/%k", SYMLINK+="disk/by-id/google-local-ssd-$env{ID_SERIAL_SHORT}-part%n"
+DISK_RULES_PATH = "/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
+NVME_ID_PATH = "/usr/lib/udev/google_nvme_id"
 
-# NVMe persistent disks
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*", ATTRS{model}=="nvme_card-pd", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-%c"
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*p*", ATTRS{model}=="nvme_card-pd", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-%c-part%n"
+GCE_DISK_NAMING_RULES = (_VENDORED / "65-gce-disk-naming.rules").read_text()
+"""``/dev/disk/by-id/google-<device name>`` for SCSI and NVMe persistent disks and local
+SSDs: what a ``Volume`` attached as ``tundravm-NAME`` is found by. The rules match Google's
+disk models only, so they are inert on other clouds."""
 
-# NVMe local SSDs
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*", ATTRS{model}=="nvme_card        ", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-local-nvme-ssd-%c"
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="nvme*n*p*", ATTRS{model}=="nvme_card        ", PROGRAM="/usr/lib/udev/google_nvme_id %k", SYMLINK+="disk/by-id/google-local-nvme-ssd-%c-part%n"
-"""
+GOOGLE_NVME_ID = (_VENDORED / "google_nvme_id").read_text()
+"""The helper the rules call for NVMe disks: the device name is the JSON in the vendor
+area of the namespace's identify data, which ``nvme id-ns -b`` reads (``nvme-cli``)."""
 
-# ---------------------------------------------------------------------------
-# google_nvme_id — helper script for NVMe disk identification
-# ---------------------------------------------------------------------------
+GCP_PACKAGES = ("curl", "iproute2", "nvme-cli")
+"""What the GCP glue runs: ``curl`` for the metadata server, ``ip`` for the forwarded-IP
+routes, ``nvme`` for :data:`GOOGLE_NVME_ID`."""
 
-GOOGLE_NVME_ID = """\
-#!/bin/bash
-# Google NVMe ID helper for udev
-# Extracts disk serial from NVMe namespace for /dev/disk/by-id symlinks
+NVME_MASKED_UNITS = (
+    "nvmf-autoconnect.service",
+    "nvmefc-boot-connections.service",
+    "uuidd.socket",
+    "uuidd.service",
+)
+"""What ``nvme-cli`` brings and enables, masked: its NVMe-over-fabrics units (a cloud disk is
+PCIe NVMe; ``nvmf-autoconnect`` runs on the ``discovery.conf`` the package ships and fails
+without a fabric) and ``uuid-runtime``'s ``uuidd``, which it depends on: nothing listens
+that the image did not declare."""
 
-set -euo pipefail
-
-DISK="$1"
-
-# Strip partition suffix to get the namespace device
-NAMESPACE="${DISK%%p*}"
-
-# Read the serial from sysfs
-SERIAL=$(cat "/sys/class/block/${NAMESPACE}/device/serial" 2>/dev/null) || exit 1
-
-if [[ -z "$SERIAL" ]]; then
-    exit 1
-fi
-
-# Trim trailing whitespace
-echo "${SERIAL}" | sed 's/[[:space:]]*$//'
-"""
+NVME_HOST_IDS = 'rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"\n'
+"""``nvme-cli``'s postinst writes a random host NQN and host ID, which would make every
+build differ; NVMe over fabrics, their only reader, is not used."""
 
 # ---------------------------------------------------------------------------
 # Metadata DNS, applied at boot on GCP only
@@ -113,5 +106,121 @@ def metadata_dns_service() -> Service:
         needs=(),
         hardening=Hardening.relaxed(),
         write_paths=("/etc/resolv.conf",),
+        conditions=(Condition.virtualization("google"),),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hostname from the metadata server
+# ---------------------------------------------------------------------------
+
+METADATA = "http://169.254.169.254/computeMetadata/v1/instance"
+_CURL = (
+    "curl --fail --silent --show-error --connect-timeout 2 --retry 10 --retry-all-errors "
+    '--retry-delay 1 --header "Metadata-Flavor: Google"'
+)
+
+HOSTNAME_SCRIPT_PATH = "/usr/lib/tundravm/gcp/hostname"
+HOSTNAME_SCRIPT = f"""\
+#!/bin/sh
+# tundravm: the hostname is the instance's name, as the metadata server reports it.
+set -eu
+name=$({_CURL} {METADATA}/name)
+case $name in
+    [a-z]*) ;;
+    *) echo "instance name '$name' is not a hostname" >&2; exit 1 ;;
+esac
+case $name in
+    *[!a-z0-9-]*) echo "instance name '$name' is not a hostname" >&2; exit 1 ;;
+esac
+/usr/bin/hostname "$name"
+grep -qx "127.0.1.1 $name" /etc/hosts || echo "127.0.1.1 $name" >> /etc/hosts
+"""
+
+
+def hostname_service() -> Service:
+    """``gcp-hostname.service``: a root oneshot gated by ``ConditionVirtualization=google``
+    that names the host after the instance once the network is up and before
+    ``network-online.target``, so a service ordered after the network sees the name."""
+    from tundravm.declarative.model import Service
+    from tundravm.declarative.systemd import Condition, Hardening, Root
+
+    return Service(
+        "gcp-hostname",
+        (HOSTNAME_SCRIPT_PATH,),
+        description="GCP hostname from the metadata server",
+        user=Root(),
+        type="oneshot",
+        remain_after_exit=True,
+        restart="no",
+        restart_sec=None,
+        after=("systemd-networkd-wait-online.service",),
+        before=("network-online.target",),
+        needs=(),
+        hardening=Hardening.relaxed(),
+        write_paths=("/etc/hosts",),
+        conditions=(Condition.virtualization("google"),),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Forwarded-IP routes: what a passthrough load balancer delivers
+# ---------------------------------------------------------------------------
+
+ROUTES_SCRIPT_PATH = "/usr/lib/tundravm/gcp/forwarded-ips"
+ROUTES_SCRIPT = f"""\
+#!/bin/sh
+# tundravm: accept what GCP's passthrough load balancers and protocol forwarding deliver.
+# Each NIC's forwarded IPs become local routes (proto 66, as Google's guest agent marks
+# them); a route whose IP is no longer forwarded is removed.
+set -eu
+md="{METADATA}/network-interfaces"
+get() {{ {_CURL} "$md/$1"; }}
+for nic in $(get ""); do
+    nic=${{nic%/}}
+    mac=$(get "$nic/mac")
+    dev=
+    for link in /sys/class/net/*; do
+        [ "$(cat "$link/address")" = "$mac" ] && dev=${{link##*/}}
+    done
+    [ -n "$dev" ] || continue
+    wanted=
+    for index in $(get "$nic/forwarded-ips/"); do
+        ip=$(get "$nic/forwarded-ips/$index")
+        case $ip in
+            *[!0-9.]*|"") continue ;;
+        esac
+        wanted="$wanted $ip"
+        ip route replace local "$ip" dev "$dev" proto 66 scope host table local
+    done
+    ip route show table local dev "$dev" proto 66 | while read -r _ ip _; do
+        case " $wanted " in
+            *" $ip "*) ;;
+            *) ip route del local "$ip" dev "$dev" proto 66 table local ;;
+        esac
+    done
+done
+"""
+
+
+def forwarded_ips_task() -> Task:
+    """``gcp-forwarded-ips``: a root task on a one-minute timer, both gated by
+    ``ConditionVirtualization=google``, that keeps :data:`ROUTES_SCRIPT`'s routes in step
+    with the load balancers forwarding to the instance (Google's guest agent does this on
+    a stock image; a tundravm image runs no agent)."""
+    from tundravm.declarative.model import Every, Task
+    from tundravm.declarative.systemd import Condition, Hardening, Root
+
+    return Task(
+        "gcp-forwarded-ips",
+        (ROUTES_SCRIPT_PATH,),
+        schedule=Every("1min", first="10s"),
+        description="GCP forwarded-IP routes",
+        user=Root(),
+        timeout="1min",
+        after=("network-online.target",),
+        wants=("network-online.target",),
+        needs=(),
+        hardening=Hardening.relaxed(),
         conditions=(Condition.virtualization("google"),),
     )

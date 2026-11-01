@@ -5,6 +5,8 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin greeter
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-metadata-dns.service
+mkosi-chroot systemctl enable gcp-hostname.service
+mkosi-chroot systemctl enable gcp-forwarded-ips.timer
 mkosi-chroot systemctl enable greeter.service
 mkosi-chroot systemctl enable systemd-networkd.service
 mkosi-chroot systemctl enable systemd-networkd.socket
@@ -15,6 +17,8 @@ mkosi-chroot systemctl enable tdx-evidence.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-metadata-dns.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/gcp-hostname.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/gcp-forwarded-ips.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/greeter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/systemd-networkd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -22,6 +26,9 @@ ln -sf "/etc/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/et
 ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/boot-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
+
+mkosi-chroot systemctl mask nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
 
 # Debloat: remove unwanted systemd binaries
 systemd_bin_whitelist=("journalctl" "systemctl" "systemd" "systemd-tty-ask-password-agent")

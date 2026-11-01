@@ -1,0 +1,19 @@
+[Unit]
+Description=GCP forwarded-IP routes
+After=network-online.target
+Wants=network-online.target
+ConditionVirtualization=google
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/tundravm/gcp/forwarded-ips
+TimeoutStartSec=1min
+ProtectSystem=full
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ProtectKernelLogs=yes
+ProtectClock=yes

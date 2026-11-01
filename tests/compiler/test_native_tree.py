@@ -263,7 +263,7 @@ def test_payload_subimage_includes_the_payload_directory() -> None:
         "[Content]\nPackages=\n    busybox\n"
     )
     assert (tree / "payload/mkosi.conf.d/40-cloud-glue.conf").read_text(encoding="utf-8") == (
-        "[Content]\nPackages=\n    dmidecode\n"
+        "[Content]\nPackages=\n    dmidecode\n    iproute2\n    nvme-cli\n"
     )
     machine_id = tree / "payload/mkosi.extra/etc/machine-id"
     assert machine_id.read_text(encoding="utf-8") == "uninitialized\n"

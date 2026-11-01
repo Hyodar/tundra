@@ -1,12 +1,17 @@
 """A ``gcp`` target: the GCP glue in the payload, inert off GCE, and the tar.gz wrapper."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
 from tundravm._platforms.gcp import (
+    DISK_RULES_PATH,
     GCP_RESOLV_CONF,
     GCP_RESOLV_CONF_PATH,
+    NVME_HOST_IDS,
+    NVME_ID_PATH,
+    NVME_MASKED_UNITS,
 )
 from tundravm.declarative import Recipe, Variant
 from tundravm.testing._model import CompiledTree, compile_tree
@@ -33,3 +38,32 @@ def test_gcp_variant_applies_metadata_dns_at_boot_on_gcp_only(tree: CompiledTree
     assert "ConditionVirtualization=google" in unit
     assert f"ExecStart=/usr/bin/cp {GCP_RESOLV_CONF_PATH} /etc/resolv.conf" in unit
     assert "Before=network-pre.target network-setup.service" in unit
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "gcp-metadata-dns.service",
+        "gcp-hostname.service",
+        "gcp-forwarded-ips.service",
+        "gcp-forwarded-ips.timer",
+    ],
+)
+def test_every_gcp_unit_is_inert_off_gce(tree: CompiledTree, unit: str) -> None:
+    assert "ConditionVirtualization=google" in tree.unit(unit, profile="gcp")
+
+
+def test_disk_naming_is_googles_own_at_the_pinned_commit(tree: CompiledTree) -> None:
+    """Byte for byte guest-configs at GUEST_CONFIGS_COMMIT (by blob id), with the tool its
+    NVMe helper runs and without the random NVMe host ids nvme-cli writes."""
+    blobs = {
+        DISK_RULES_PATH: "884ec2199930a8850c6d6281b85b0a05ccfd7e06",
+        NVME_ID_PATH: "960e795d6e7ca8c33ea2e8ed8bff2cc8cca7b566",
+    }
+    for path, blob in blobs.items():
+        data = tree.read(f"mkosi.extra{path}", profile="gcp").encode()
+        assert hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() == blob
+    assert "nvme-cli" in tree.conf(profile="gcp")
+    postinst = tree.read("mkosi.postinst.d/50-postinst.sh", profile="gcp")
+    assert NVME_HOST_IDS in postinst
+    assert "systemctl mask " + " ".join(NVME_MASKED_UNITS) in postinst

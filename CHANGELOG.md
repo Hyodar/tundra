@@ -26,6 +26,7 @@ Breaking changes are marked **Breaking**.
 - `Volume` with `OperatorKey`, `TpmSeal` or `BrokerKey`, `Secret` as a systemd credential, `AttestedTLS` and `TLS` ingress, `RootFS.verity()`, `Observability`.
 - `network=Network(egress=Egress(...))` drops every other outbound packet, and accepts the baseline's NTS time, resolvers and cloud metadata servers for you.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it: the shipped ones cover their sinks, peers and collateral, `Egress(hosts=)` takes `HOST:PORT`, and each `nftables.conf` rule names who asked for it.
+- On GCP, Google's own udev rules and `google_nvme_id` name NVMe disks, the hostname comes from the metadata server and load-balancer forwarded IPs are routed; each unit is inert off GCE.
 - `Kernel(cmdline=)` appends kernel parameters after the image's own and refuses the ones tundravm sets.
 - `Mkosi(settings=, scripts=)` is the escape to mkosi, and refuses each setting the compiler writes, naming the slot that sets it.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`.

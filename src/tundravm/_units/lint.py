@@ -294,6 +294,8 @@ CLOUD_GLUE: dict[str, str] = {
     "google-shutdown-scripts.service": "google",
     "google-osconfig-agent.service": "google",
     "gcp-metadata-dns.service": "google",
+    "gcp-hostname.service": "google",
+    "gcp-forwarded-ips.service": "google",
 }
 """Units that only make sense on one cloud -> the ``ConditionVirtualization=`` id that gates
 them (``microsoft``: Azure, ``google``: Compute Engine)."""
