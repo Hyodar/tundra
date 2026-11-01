@@ -1128,13 +1128,13 @@ the unit differs from what the image implies (`Type=exec`, the generated user, t
 $ tundravm convert ./old-tree --from mkosi
 ```
 
-prints an `Image` file for a tree mkosi itself resolves, each setting it cannot carry
-listed as `# unsupported:`. Save it beside the tree: its `Tree(...)` and script paths are
-relative to the file. Implied packages are dropped, with a note. A tree tundravm wrote
-converts its payload; what tundravm generates is named in notes, and the wrappers become
-`targets=`.
-A tree with an executable `mkosi.version` or `mkosi.configure` is refused unless
-`--allow-scripts`, since parsing would run it.
+prints an `Image` file for a tree mkosi resolves, then a line per setting:
+`# kept:` (the image's tree resolves it to the same value), `# mapped:` (the slot carrying
+it: `Debian(...)`, `packages=`, a `Tree` with its units as `Service` values,
+`Kernel(cmdline=)`, `profiles=`), `# defaulted:` (the opinion that replaced it) or
+`# refused:` (why nothing carries it). Nothing is dropped without a line; `--json` prints
+both as one object. A tree with an executable `mkosi.version` or `mkosi.configure` is
+refused unless `--allow-scripts`, which parsing runs.
 
 ## CI
 

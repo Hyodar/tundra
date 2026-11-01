@@ -744,9 +744,9 @@ def build_parser() -> argparse.ArgumentParser:
         "resolved by mkosi itself, as an Image file, then a report with one line per setting\n"
         "the tree sets: kept (the image's tree resolves it to the same value), mapped (the\n"
         "slot that carries it), defaulted (the opinion that replaced it) or refused (why\n"
-        "nothing carries it). Parsing a tree runs its executable mkosi.version or\n"
-        "mkosi.configure: refused unless --allow-scripts. --json prints the source and the\n"
-        "report as one object.",
+        "nothing carries it). Save the file beside the tree: its paths are relative to it.\n"
+        "Parsing a tree runs its executable mkosi.version or mkosi.configure: refused unless\n"
+        "--allow-scripts. --json prints the source and the report as one object.",
         as_json,
     )
     convert.add_argument("path", type=Path, metavar="PATH")

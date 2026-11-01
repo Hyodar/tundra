@@ -500,9 +500,9 @@ implies a note says so, and what no slot holds is reported. --from mkosi: the tr
 resolved by mkosi itself, as an Image file, then a report with one line per setting
 the tree sets: kept (the image's tree resolves it to the same value), mapped (the
 slot that carries it), defaulted (the opinion that replaced it) or refused (why
-nothing carries it). Parsing a tree runs its executable mkosi.version or
-mkosi.configure: refused unless --allow-scripts. --json prints the source and the
-report as one object.
+nothing carries it). Save the file beside the tree: its paths are relative to it.
+Parsing a tree runs its executable mkosi.version or mkosi.configure: refused unless
+--allow-scripts. --json prints the source and the report as one object.
 
 positional arguments:
   PATH
