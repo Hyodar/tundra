@@ -52,7 +52,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### CLI
 
-- `new NAME [--template node|service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; `node`, the default, is the example's first stage, the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
+- **Breaking:** `new NAME [--ci]` writes stage 1 of the attested node, its tests and `pyproject.toml`, and nothing else: the `minimal`, `service`, `cloud` and `prover` templates and `--template` are gone. Its printed loop, README, tests and workflow run as written, `ruff format` clean, and end at `tundravm dev`.
 - **Breaking:** thirteen commands: `new`, `check`, `lock`, `build`, `show`, `run`, `dev`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds when `TUNDRAVM_BACKEND` is set.
 - **Breaking:** `show IMAGE` reads like the image file: components by class and keyword, services with their program, source, ports, hardening, volume, credentials and probe, profiles with what each changes, then what each profile builds (build and boot steps said by what they do), a profile beyond the one it extends; no internal fragment, probe unit or shell.

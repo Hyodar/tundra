@@ -19,7 +19,6 @@ from tests.helpers import fake_ovmf
 from tundravm import instances
 from tundravm.builds import Build
 from tundravm.cli import main
-from tundravm.templates import render_recipe_template
 
 STARTER = """\
 from tundravm import File, Image, Service
@@ -41,6 +40,37 @@ image = Image(
 )
 """
 """Gate 4's starter, with a dev profile."""
+
+PROVER = """\
+from tundravm import File, Image, Service
+from tundravm.components import DevAccess, Egress, Network
+from tundravm.ports import AttestedTLS
+from tundravm.secrets import Secret
+from tundravm.storage import OperatorKey, Volume
+from tundravm.systemd import TcpProbe
+
+data = Volume("data", unlock=OperatorKey())
+app = Service(
+    "app",
+    ["/usr/bin/busybox", "httpd", "-f", "-p", "127.0.0.1:8080", "-h", "/srv/www"],
+    readiness=TcpProbe(8080),
+    state=data.directory("app"),
+    credentials=[Secret("api-token")],
+)
+
+image = Image(
+    "prover",
+    packages=["busybox"],
+    files=[File.text("/srv/www/index.html", "<h1>prover</h1>\\n")],
+    services=[app],
+    ingress=[AttestedTLS(443, upstream=app.endpoint(8080))],
+    network=Network(egress=Egress()),
+    targets=("qemu", "azure", "gcp"),
+    dev=DevAccess(password="tdx"),
+)
+"""
+"""A page behind attested TLS on every target, its state on a volume an operator unlocks
+and a token delivered after attestation."""
 
 PYPROJECT = '[project]\nname = "demo"\nversion = "0"\n\n[tool.tundravm]\nimage = "demo.py"\n'
 
@@ -96,22 +126,13 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def prover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A project holding the prover template (a volume an operator unlocks, a secret)."""
-    source = render_recipe_template(
-        title="prover", filename="prover.py", release="trixie", template="prover"
-    )
-    (tmp_path / "prover.py").write_text(source, encoding="utf-8")
+    """A project holding :data:`PROVER` (a volume an operator unlocks, a secret)."""
+    (tmp_path / "prover.py").write_text(PROVER, encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "prover"\nversion = "0"\n\n[tool.tundravm]\nimage = "prover.py"\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    import tundravm._source as source_module
-
-    def resolve(source: object) -> str:  # the EfiStub package: an http source, by sha256
-        return "1" * 40 if hasattr(source, "ref") else "a" * 64
-
-    monkeypatch.setattr(source_module, "default_resolver", resolve)
     return tmp_path
 
 

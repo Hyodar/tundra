@@ -1,12 +1,10 @@
-"""``tundravm new NAME [--template service|prover] [--ci]``."""
+"""``tundravm new NAME [--ci]``: stage 1 of the attested node and its project."""
 
 from __future__ import annotations
 
 import ast
 import importlib.util
-import os
 import re
-import shutil
 import subprocess
 import sys
 import tomllib
@@ -44,40 +42,20 @@ def test_new_writes_a_project_whose_table_names_the_image(here: Path, cli: Cli) 
     assert "tundravm build --tree-only mkosi" in readme and "tundravm dev" in readme
 
 
-def test_the_prover_template_with_ci(here: Path, cli: Cli) -> None:
-    result = cli("new", "vault", "--template", "prover", "--ci")
+def test_the_ci_workflow(here: Path, cli: Cli) -> None:
+    result = cli("new", "vault", "--ci")
     assert result.code == EXIT_OK, result.err
     root = here / "vault"
-    policies = (root / "policies" / "README.md").read_text()
-    assert "build/vault/latest-production/measurements.json" in policies
-    assert "platform_approval" in policies
     workflow = (root / ".github" / "workflows" / "tundravm.yml").read_text()
     for verb in ("check", "lock", "build", "verify", "show"):
         assert f"tundravm {verb} " in workflow or f"tundravm {verb}\n" in workflow, verb
     assert "TUNDRA_TOOLS_TOKEN" not in workflow
     for verb in REMOVED:
         assert not re.search(rf"tundravm {verb}\b", workflow), verb
-    header = (root / "vault.py").read_text().split('"""')[1]
-    assert "tundravm check vault.py" in header and "tundravm dev vault.py" in header
 
 
-def test_the_service_template_app_compiles(here: Path, cli: Cli) -> None:
-    go = shutil.which("go")
-    if go is None:
-        pytest.skip("no go on PATH to vet and build the service template's app/")
-    assert cli("new", "demo", "--template", "service").code == EXIT_OK
-    for argv in (("vet", "./..."), ("build", "-o", os.devnull, "./...")):
-        done = subprocess.run(
-            [go, *argv], cwd=here / "demo" / "app", capture_output=True, text=True, check=False
-        )
-        assert done.returncode == 0, f"go {' '.join(argv)}: {done.stderr}"
-
-
-@pytest.mark.parametrize("template", ["service", "prover"])
-def test_a_new_project_is_ruff_format_clean_at_its_own_setting(
-    here: Path, cli: Cli, template: str
-) -> None:
-    assert cli("new", "demo", "--template", template).code == EXIT_OK
+def test_a_new_project_is_ruff_format_clean_at_its_own_setting(here: Path, cli: Cli) -> None:
+    assert cli("new", "demo").code == EXIT_OK
     root = here / "demo"
     assert tomllib.loads((root / "pyproject.toml").read_text())["tool"]["ruff"] == {
         "line-length": 100
@@ -113,11 +91,10 @@ def test_an_empty_directory_is_used(here: Path, cli: Cli) -> None:
     assert cli("new", "demo").code == EXIT_OK
 
 
-@pytest.mark.parametrize("template", ["node", "service", "prover"])
 def test_the_generated_tests_use_the_public_api_and_pass(
-    here: Path, cli: Cli, template: str, monkeypatch: pytest.MonkeyPatch
+    here: Path, cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert cli("new", "demo", "--template", template).code == EXIT_OK
+    assert cli("new", "demo").code == EXIT_OK
     path = here / "demo" / "tests" / "test_demo.py"
     tree = ast.parse(path.read_text())
     imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}

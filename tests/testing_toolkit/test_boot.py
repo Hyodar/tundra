@@ -1,7 +1,7 @@
 """``tundravm.testing.boot`` against a fake QEMU that prints a console transcript.
 
 The real boot (QEMU + OVMF booting a baked UKI) runs in CI's ``boot`` job:
-``tests/integration/test_templates_boot.py``.
+``tests/integration/test_stages_boot.py``.
 """
 
 from __future__ import annotations

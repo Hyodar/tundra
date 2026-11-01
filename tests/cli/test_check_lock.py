@@ -11,7 +11,6 @@ import pytest
 
 from tests.cli.conftest import STARTER, Cli
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
-from tundravm.templates import render_recipe_template
 
 BROKEN = """\
 from tundravm.declarative import Disk, Key, Recipe
@@ -81,13 +80,38 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     assert "Did you mean 'source-unpinned'? docs/reference/lint.md lists" in unknown.err
 
 
+PRIVILEGED_APP = """\
+from collections.abc import Iterator
+
+from tundravm import Image, Service
+from tundravm.components import Component, Diagnostic, Egress, Network, Resolved, Rule
+
+
+class App(Component):
+    port: int
+
+    def compose(self) -> Iterator[Service]:
+        yield Service("app", ["/usr/bin/busybox", "httpd", "-f", "-p", str(self.port)])
+
+    rules = (Rule("app-privileged-port", "error", "It cannot bind below 1024.", "Pass 1024."),)
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+        if self.port >= 1024:
+            return ()
+        return (Diagnostic("app-privileged-port", "error", f"app cannot bind {self.port}"),)
+
+
+image = Image(
+    "demo", packages=["busybox"], components=[App(port=80)], network=Network(egress=Egress())
+)
+"""
+"""An image whose own component reports a declared rule."""
+
+
 def test_a_components_code_is_explained_through_the_image_that_declares_it(
     project: Path, cli: Cli
 ) -> None:
-    source = render_recipe_template(
-        title="demo", filename="demo.py", release="trixie", template="cloud"
-    )
-    (project / "demo.py").write_text(source.replace("APP_PORT = 8080", "APP_PORT = 80"))
+    (project / "demo.py").write_text(PRIVILEGED_APP, encoding="utf-8")
     report = cli("check")
     assert report.code == EXIT_FAILURE
     assert report.out.splitlines()[-1] == "explain: tundravm check --explain app-privileged-port"

@@ -17,23 +17,30 @@ from tundravm.show import IMAGE_KEYS
 from tundravm.testing import UPDATE_GOLDEN_ENV
 
 GOLDEN = Path(__file__).parent
-"""``show-<template>.txt``: ``tundravm show`` of a template (``TUNDRAVM_UPDATE_GOLDEN=1``
-rewrites them)."""
+"""``show-<project>.txt``: ``tundravm show`` of what ``new`` writes and of the ``prover``
+fixture (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites them)."""
 
 INTERNAL = ("dev-access", "devtools", "app-ready", "SALT=", "mkosi-chroot", "Hooks")
 """What ``show`` never prints: internal fragment and unit names, and shell."""
 
 
-@pytest.mark.parametrize("template", ["service", "prover"])
+@pytest.mark.parametrize("which", ["new", "prover"])
 def test_show_reads_like_the_image_file(
-    template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
+    which: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli: Cli,
+    request: pytest.FixtureRequest,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert cli("new", "demo", "--template", template).code == EXIT_OK
-    monkeypatch.chdir(tmp_path / "demo")
+    if which == "new":
+        monkeypatch.chdir(tmp_path)
+        assert cli("new", "demo").code == EXIT_OK
+        monkeypatch.chdir(tmp_path / "demo")
+    else:
+        request.getfixturevalue("prover")
     result = cli("show")
     assert result.code == EXIT_OK, result.err
-    golden = GOLDEN / f"show-{template}.txt"
+    golden = GOLDEN / f"show-{which}.txt"
     if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
         golden.write_text(result.out, encoding="utf-8")
     assert result.out == golden.read_text(encoding="utf-8")

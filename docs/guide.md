@@ -57,13 +57,11 @@ the lock: write the tree after locking and commit both.
 
 | File | Holds |
 |---|---|
-| `NAME.py` | the image: [stage 1](#1-the-boot) of the example (or `--template service` or `prover`) |
-| `app/` | with `service`: the Go program it builds through `Local("app")` |
+| `NAME.py` | the image: [stage 1](#1-the-boot) of the example |
 | `tests/test_NAME.py` | lint, compile and committed-tree tests |
 | `pyproject.toml` | tundravm from git at a commit, pytest, and `[tool.tundravm]` |
 | `README.md` | the commands of the loop |
 | `.gitignore` | ignores `/.tundravm/` and `/build/*`, keeps `build/tundravm.lock` |
-| `policies/README.md` | with `--template prover`: where approved verifier policies go |
 | `.github/workflows/tundravm.yml` | with `--ci`: see [CI](#ci) |
 
 Run the commands with `uv run` inside the project. The examples below leave it out. Commit
@@ -1061,8 +1059,7 @@ key, the SSH host keys and the instance public key, and checks MRTD and RTMR0 to
 against the policy. On success it writes `known_hosts`, prints the instance key and hands
 over your SSH key (`--identity`). The policy is a build's `measurements.json`, or a
 `tundravm.policy/2` record copied into `policies/` with the platform registers you approve
-(`platform_approval`: MRTD, RTMR0); the prover template's `policies/README.md` has the `jq`
-line.
+(`platform_approval`: MRTD, RTMR0).
 
 | Verdict | Means |
 |---|---|

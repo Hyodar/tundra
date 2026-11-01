@@ -89,7 +89,6 @@ from .recipe import RecipeFile, load_file
 from .templates import (
     GITIGNORE_BLOCK,
     WORKFLOW_PATH,
-    render_app_files,
     render_pyproject,
     render_readme,
     render_recipe_template,
@@ -122,7 +121,6 @@ COMMANDS = (
 )
 RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "probe")
 DEPLOY_ACTIONS = ("status", "logs", "mode", "upgrade", "rollback")
-NEW_TEMPLATES = ("node", "service", "prover")
 DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 
 QUICKSTART = """\
@@ -330,21 +328,12 @@ def build_parser() -> argparse.ArgumentParser:
         "new",
         _cmd_new,
         "Create a project: an image file, its tests, pyproject.toml.",
-        "Write NAME/NAME.py from a template, tests/test_NAME.py, pyproject.toml with\n"
-        '[tool.tundravm] image = "NAME.py", README.md and .gitignore; --ci adds a GitHub\n'
-        "workflow that runs check, lock --check and build. The service template also makes\n"
-        'app/, the Go program its image builds through Local("app"); the prover template\n'
-        "makes policies/, where the operator-approved verifier policies go.",
+        "Write NAME/NAME.py, stage 1 of the guide's attested node (the boot: Debian from one\n"
+        "snapshot, the TEE baseline, filtered egress and a dev profile), tests/test_NAME.py,\n"
+        'pyproject.toml with [tool.tundravm] image = "NAME.py", README.md and .gitignore;\n'
+        "--ci adds a GitHub workflow that runs check, lock --check and build.",
     )
     new.add_argument("name", metavar="NAME", help="Project directory and image name.")
-    new.add_argument(
-        "--template",
-        choices=NEW_TEMPLATES,
-        default="node",
-        help="node: stage 1 of the guide's attested node, the boot (default); service: your "
-        "Go program in app/ as a sandboxed web service, and a dev profile; prover: a "
-        "service behind attested TLS, its state on an operator-unlocked volume, a secret.",
-    )
     new.add_argument("--ci", action="store_true", help=f"Also write {WORKFLOW_PATH}.")
 
     check = command(
@@ -873,25 +862,14 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
         raise ValidationError(f"{root} exists and is not empty.", hint="Pick another NAME.")
     stem = name.replace("-", "_")
     filename = f"{stem}.py"
-    template = args.template
     source = scaffold.tundravm_source()
     files: dict[Path, str] = {
-        root / filename: render_recipe_template(
-            title=name, filename=filename, release="trixie", template=template
-        ),
-        root / "tests" / f"test_{stem}.py": render_test_module(
-            filename=filename, template=template
-        ),
+        root / filename: render_recipe_template(title=name, filename=filename, release="trixie"),
+        root / "tests" / f"test_{stem}.py": render_test_module(filename=filename),
         root / "pyproject.toml": render_pyproject(name=name, recipe=filename, source=source),
-        root / "README.md": render_readme(
-            title=name, filename=filename, template=template, tests=True
-        ),
+        root / "README.md": render_readme(title=name, filename=filename, tests=True),
         root / ".gitignore": GITIGNORE_BLOCK,
     }
-    for rel, text in render_app_files(title=name, template=template).items():
-        files[root / rel] = text
-    if template == "prover":
-        files[root / "policies" / "README.md"] = POLICIES_README.replace("{name}", name)
     if args.ci:
         files[root / WORKFLOW_PATH] = render_workflow(recipe=filename)
     for path, text in files.items():
@@ -913,22 +891,6 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
     lines = scaffold.render_steps(steps, "  ").splitlines()
     print("next:", *(line.rstrip() for line in lines), sep="\n", file=out)
     return EXIT_OK
-
-
-POLICIES_README = """\
-# Verifier policies
-
-The operator-approved copies of a build's predictions: `attest` and `secrets deliver`
-check an instance against one of these files.
-
-    uv run tundravm build --target gcp
-    jq '.records[] | select(.target == "gcp" and .boot == "disk") | .policy' \\
-        build/{name}/latest-production/measurements.json > policies/{name}-gcp.json
-
-Review it, add the platform registers you approve from a quote of a host you trust
-(`platform_approval`: MRTD, RTMR0), and commit it. A policy without them verifies as
-`partial` at best.
-"""
 
 
 # ── check ────────────────────────────────────────────────────────────────

@@ -55,26 +55,20 @@ $TUNDRAVM_BACKEND, else its `backend` key (default: local on Linux x86-64, lima 
 Create a project: an image file, its tests, pyproject.toml.
 
 ```text
-usage: tundravm new [-h] [--traceback] [--template {node,service,prover}] [--ci] NAME
+usage: tundravm new [-h] [--traceback] [--ci] NAME
 
-Write NAME/NAME.py from a template, tests/test_NAME.py, pyproject.toml with
-[tool.tundravm] image = "NAME.py", README.md and .gitignore; --ci adds a GitHub
-workflow that runs check, lock --check and build. The service template also makes
-app/, the Go program its image builds through Local("app"); the prover template
-makes policies/, where the operator-approved verifier policies go.
+Write NAME/NAME.py, stage 1 of the guide's attested node (the boot: Debian from one
+snapshot, the TEE baseline, filtered egress and a dev profile), tests/test_NAME.py,
+pyproject.toml with [tool.tundravm] image = "NAME.py", README.md and .gitignore;
+--ci adds a GitHub workflow that runs check, lock --check and build.
 
 positional arguments:
-  NAME                  Project directory and image name.
+  NAME         Project directory and image name.
 
 options:
-  -h, --help            show this help message and exit
-  --traceback           Raise errors with the Python traceback.
-  --template {node,service,prover}
-                        node: stage 1 of the guide's attested node, the boot (default); service:
-                        your Go program in app/ as a sandboxed web service, and a dev profile;
-                        prover: a service behind attested TLS, its state on an operator-unlocked
-                        volume, a secret.
-  --ci                  Also write .github/workflows/tundravm.yml.
+  -h, --help   show this help message and exit
+  --traceback  Raise errors with the Python traceback.
+  --ci         Also write .github/workflows/tundravm.yml.
 ```
 
 ## tundravm check

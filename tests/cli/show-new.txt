@@ -1,17 +1,11 @@
 demo  demo.py
 Debian trixie, snapshot 20261018T082309Z, x86_64, reproducible
 
-Components (2):
-  App(version="0.1.0", port=8080)
+Components (1):
   Network(egress=Egress())
 
-Services (1):
-  app  App
-    program    /usr/bin/server -port 8080 -version 0.1.0
-    source     GoBinary("server", Local("app"))
-    ports      TCP(8080)
-    hardening  static
-    probe      yes, TcpProbe(8080)
+Content (1):
+  Package("ca-certificates")
 
 Profiles (2):
   production  the image
@@ -22,12 +16,11 @@ Built into production:
   Targets (1): qemu
   Packages (10): ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-sysv udev
   Build packages (1): golang
-  Sources (2):
-    server  local app               pinned=-
-    tdxs    local tundravm:tools    pinned=-
+  Sources (1):
+    tdxs  local tundravm:tools    pinned=-
   Files (13):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
-    /etc/nftables.conf                                                                       0755  1408B  sha256:855d89cd4114
+    /etc/nftables.conf                                                                       0755  1362B  sha256:a61d2063f723
     /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
@@ -39,17 +32,17 @@ Built into production:
     /usr/lib/tundravm/instance-key                                                           0755  1112B  sha256:63e33f30e3b8
     /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
-  Users (2): app tdxs
+  Users (1): tdxs
   Groups (1): tdx
-  Enabled units (9): chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service nftables.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (8): chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (1): tdxs.service
   Masked units (4): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
   Firewall (2):
-    in   8080/tcp                             app.service
+    in   nothing beyond replies and DHCP
     out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1  tee-base
   Instance key: secp256k1, fresh each boot; taken by no service
   Build steps (2):
-    builds server and tdxs from source
+    builds tdxs from source
     removes IMAGE_VERSION from os-release, so a rebuild matches
   Debloat: enabled, 30 paths removed, systemd minimize=yes
 
@@ -57,7 +50,7 @@ Built into dev, beyond production:
   Packages: +apt +bash-completion +curl +dnsutils +iputils-ping +net-tools +netcat-openbsd +openssh-server +socat +strace +tcpdump +tcpflow +vim
   Files
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  6702B  sha256:04a027f0326d
+    + /usr/lib/tundravm/probe  0755  4147B  sha256:364f5322bcd3
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps
     + sets the dev root password

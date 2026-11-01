@@ -1,10 +1,12 @@
-"""Bake the ``service`` and ``cloud`` starter templates for real and check what lands in the image.
+"""Bake stage 1 of the attested node for real and check what lands in the image.
 
-Each bake builds the tree's default selection (``payload.efi`` and ``qemu.raw``); the checks
-read the payload's root, unpacked as root from the UKI's ``.initrd`` (the whole OS of an
-initramfs payload). Every template's evidence service builds from this checkout's tools/.
+Stage 1 is the image ``tundravm new`` writes; stages 2 to 6 build Nethermind from Git with
+.NET, which is too slow for CI's ``stages`` job. Each bake builds the tree's default
+selection (``payload.efi`` and ``qemu.raw``); the checks read the payload's root, unpacked
+as root from the UKI's ``.initrd`` (the whole OS of an initramfs payload). The evidence
+service builds from this checkout's tools/.
 Needs a host the Linux backend builds on and non-interactive sudo; skipped otherwise.
-Run with: uv run pytest tests/integration/test_templates_bake.py -m integration
+Run with: uv run pytest tests/integration/test_stages_bake.py -m integration
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers import write_template
+from tests.helpers import EXAMPLE_RECIPES
 from tundravm.backends.base import BOOT_PAYLOAD_NAME, MountSpec, Requirement
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative import Repository, lower
@@ -28,7 +30,6 @@ from tundravm.errors import BackendExecutionError
 from tundravm.measure import pe
 from tundravm.models import BakeRequest, BakeResult
 from tundravm.recipe import load_file
-from tundravm.templates import render_recipe_template
 from tundravm.testing import build_unavailable
 
 pytestmark = pytest.mark.integration
@@ -95,14 +96,13 @@ def _sudo_readlink(path: Path) -> str:
 
 
 @pytest.fixture(scope="module")
-def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """The ``service`` template's ``production`` variant baked once, its payload unpacked into
+def stage1_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """Stage 1's ``production`` profile baked once, its payload unpacked into
     ``<build>/root``."""
     if build_unavailable() is not None or not _sudo_works():
         pytest.skip("needs a Linux build host and non-interactive sudo")
-    tmp_path = tmp_path_factory.mktemp("service")
-    recipe_path = write_template(tmp_path / "node.py", "service", backend="local")
-    lowered = load_file(recipe_path).lowered()
+    tmp_path = tmp_path_factory.mktemp("stage1")
+    lowered = load_file(EXAMPLE_RECIPES[0]).lowered()
     backend = LocalLinuxBackend()
     out = tmp_path / "build"
     try:
@@ -115,29 +115,28 @@ def service_build(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)
 
 
-def test_service_template_bakes_with_its_app(service_build: Path) -> None:
-    """The service template builds; its unit, the Go program it builds from app/ and its
-    user are in the tree."""
-    root = service_build / "root"
-    unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
-    assert "ExecStart=/usr/bin/server -port 8080 -version 0.1.0" in unit
-    assert "User=app\n" in unit and "ProtectSystem=strict\n" in unit
-    assert _sudo_test("-x", root / "usr/bin/server")
+def test_stage1_bakes_with_its_evidence_service(stage1_build: Path) -> None:
+    """Stage 1 builds; the evidence service's unit, the Go program it builds from tools/ and
+    its user are in the tree, and its socket is enabled."""
+    root = stage1_build / "root"
+    unit = _sudo_read(root / "usr/lib/systemd/system/tdxs.service")
+    assert "ExecStart=/usr/bin/tdxs " in unit and "User=tdxs\n" in unit
+    assert _sudo_test("-x", root / "usr/bin/tdxs")
 
-    wants = root / "etc/systemd/system/minimal.target.wants"
-    assert _sudo_test("-L", wants / "app.service"), f"app.service is not linked into {wants}"
-    assert _sudo_readlink(wants / "app.service").endswith("/app.service")
+    wants = root / "etc/systemd/system/sockets.target.wants"
+    assert _sudo_test("-L", wants / "tdxs.socket"), f"tdxs.socket is not linked into {wants}"
+    assert _sudo_readlink(wants / "tdxs.socket").endswith("/tdxs.socket")
     # Debloat masks the systemd package's units but keeps the activation targets.
     for target in ("sockets.target", "timers.target"):
         assert not _sudo_test("-L", root / "etc/systemd/system" / target), target
 
     passwd = _sudo_read(root / "etc/passwd").splitlines()
-    assert any(line.startswith("app:") and "/usr/sbin/nologin" in line for line in passwd)
+    assert any(line.startswith("tdxs:") and "/usr/sbin/nologin" in line for line in passwd)
 
 
-def test_service_template_keeps_its_curated_kernel_modules(service_build: Path) -> None:
+def test_stage1_keeps_its_curated_kernel_modules(stage1_build: Path) -> None:
     """mkosi kept ``KernelModules=`` (the qemu set) and dropped the rest; debloat kept them."""
-    root = service_build / "root"
+    root = stage1_build / "root"
     found = subprocess.run(
         ["sudo", "find", str(root / "usr/lib/modules"), "-name", "*.ko*", "-printf", "%f\\n"],
         capture_output=True,
@@ -152,14 +151,12 @@ def test_service_template_keeps_its_curated_kernel_modules(service_build: Path) 
 
 
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
-def test_service_template_units_verify_and_are_sandboxed(service_build: Path) -> None:
-    """``systemd-analyze verify`` accepts every generated unit in the baked image, and the
-    strict sandbox keeps ``app.service`` at exposure level OK (1.4 with systemd 255; the
-    pre-step-7 unit scored 9.0 UNSAFE)."""
-    root = service_build / "root"
-    generated = service_build / "mkosi" / "payload" / "mkosi.extra" / "usr/lib/systemd/system"
+def test_stage1_units_verify(stage1_build: Path) -> None:
+    """``systemd-analyze verify`` accepts every generated unit in the baked image."""
+    root = stage1_build / "root"
+    generated = stage1_build / "mkosi" / "payload" / "mkosi.extra" / "usr/lib/systemd/system"
     units = sorted(p.name for p in generated.iterdir() if p.is_file())
-    assert "app.service" in units
+    assert "tdxs.socket" in units
     verify = subprocess.run(
         ["sudo", "systemd-analyze", "verify", f"--root={root}", *units],
         capture_output=True,
@@ -167,17 +164,6 @@ def test_service_template_units_verify_and_are_sandboxed(service_build: Path) ->
         check=False,
     )
     assert verify.returncode == 0, verify.stdout + verify.stderr
-    security = subprocess.run(
-        ["sudo", "systemd-analyze", "security", "--offline=yes", f"--root={root}", "app.service"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    found = re.search(r"Overall exposure level for app\.service: ([0-9.]+) (\w+)", security.stdout)
-    assert found, security.stdout + security.stderr
-    print(f"app.service exposure: {found[1]} {found[2]}")  # recorded in the test log
-    assert found[2] in ("PERFECT", "SAFE", "OK"), security.stdout
-    assert float(found[1]) < 5.0
 
 
 NETWORK_UNITS = (
@@ -189,15 +175,16 @@ NETWORK_UNITS = (
 """The packaged units TeeBase's Network and Firewall enable; debloat must leave them unmasked."""
 
 
-def test_service_template_brings_up_the_network_behind_a_firewall(service_build: Path) -> None:
-    """TeeBase's ``Network`` and ``Firewall``: the ``.network`` file and the ruleset survive
-    debloat, their units are enabled and unmasked, and the kernel keeps nftables' modules."""
-    root = service_build / "root"
+def test_stage1_brings_up_the_network_behind_a_firewall(stage1_build: Path) -> None:
+    """TeeBase's ``Network`` and ``Firewall``: the ``.network`` file and the ruleset (inbound
+    and, with ``Egress``, outbound dropped) survive debloat, their units are enabled and
+    unmasked, and the kernel keeps nftables' modules."""
+    root = stage1_build / "root"
     network = _sudo_read(root / "etc/systemd/network/50-tundravm.network")
     assert "Name=en* eth*\n" in network and "DHCP=yes\n" in network
     ruleset = _sudo_read(root / "etc/nftables.conf")
     assert "policy drop;" in ruleset
-    assert 'tcp dport 8080 accept comment "app.service"' in ruleset
+    assert "hook output priority filter; policy drop" in ruleset
     system = root / "etc/systemd/system"
     for unit in NETWORK_UNITS:
         wants = "sockets.target.wants" if unit.endswith(".socket") else "minimal.target.wants"
@@ -237,13 +224,11 @@ def _modules_dir(root: Path) -> Path:
     return Path(found[0])
 
 
-def test_service_template_loads_nftables_modules_with_their_dependencies(
-    service_build: Path,
-) -> None:
+def test_stage1_loads_nftables_modules_with_their_dependencies(stage1_build: Path) -> None:
     """Every module ``modules.dep`` names for nf_tables and nft_ct is in the image, libcrc32c's
     ``crc32c`` softdep has a provider (the first boots' nftables.service failed without one),
     and the index lists only kept modules (depmod ran after mkosi pruned them)."""
-    root = service_build / "root"
+    root = stage1_build / "root"
     kdir = _modules_dir(root)
     present = set(
         subprocess.run(
@@ -264,11 +249,11 @@ def test_service_template_loads_nftables_modules_with_their_dependencies(
     assert set(deps) == present, set(deps) ^ present
 
 
-def test_service_template_debloat_masks_triggers_and_keeps_ordering(service_build: Path) -> None:
+def test_stage1_debloat_masks_triggers_and_keeps_ordering(stage1_build: Path) -> None:
     """A trigger whose unit debloat masks is masked too (systemd-ask-password-console.path
     failed the first boots), the targets enabled units order against stay, networkd waits for
     the firewall, and no SSH host private key is left in the image."""
-    root = service_build / "root"
+    root = stage1_build / "root"
     system = root / "etc/systemd/system"
     for unit in ("systemd-ask-password-console.path", "proc-sys-fs-binfmt_misc.automount"):
         assert _sudo_readlink(system / unit) == "/dev/null", unit
@@ -286,9 +271,9 @@ def test_service_template_debloat_masks_triggers_and_keeps_ordering(service_buil
 
 
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
-def test_service_template_network_units_verify(service_build: Path) -> None:
+def test_stage1_network_units_verify(stage1_build: Path) -> None:
     """``systemd-analyze verify`` accepts the networkd and nftables units with their drop-ins."""
-    root = service_build / "root"
+    root = stage1_build / "root"
     verify = subprocess.run(
         ["sudo", "systemd-analyze", "verify", f"--root={root}", *NETWORK_UNITS],
         capture_output=True,
@@ -323,21 +308,25 @@ class _Capturing:
 
 
 SNAPSHOT_ARCHIVE = "https://snapshot.debian.org/archive/{}/20261018T082309Z"
-"""The template's snapshot; the test's extra repositories read from it too."""
+"""Stage 1's snapshot; the test's extra repositories read from it too."""
+
+EFI_STUB = "257.13-1~deb13u1"
+"""The systemd-boot-efi trixie ships in that snapshot."""
 
 
 @requires_mkosi
-def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) -> None:
-    """The cloud template bakes with pinned backports and extra repositories added: snapshot,
-    sandbox apt sources, EFI stub, repositories."""
+def test_stage1_bakes_for_every_cloud_with_backports_and_a_pinned_efi_stub(
+    tmp_path: Path,
+) -> None:
+    """Stage 1 with every target and a pinned EFI stub bakes with pinned backports and extra
+    repositories added: snapshot, sandbox apt sources, EFI stub, repositories."""
+    stage = EXAMPLE_RECIPES[0].read_text(encoding="utf-8")
+    snapshot = 'snapshot="20261018T082309Z"'
+    assert snapshot in stage and "    dev=" in stage
     recipe_path = tmp_path / "node.py"
     recipe_path.write_text(
-        render_recipe_template(
-            title="node",
-            filename="node.py",
-            release="trixie",
-            backend="local",
-            template="cloud",
+        stage.replace(snapshot, f'{snapshot}, efi_stub="{EFI_STUB}"').replace(
+            "    dev=", '    targets=("qemu", "azure", "gcp"),\n    dev='
         ),
         encoding="utf-8",
     )
@@ -355,7 +344,7 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
             in_image=False,
         ),
     )
-    # The template declares no backports; Backports() puts them and sid in the build sandbox.
+    # Stage 1 declares no backports; Backports() puts them and sid in the build sandbox.
     # The checks read the payload; the production variant declares all three disks.
     lowered = lower(replace(recipe, items=(*recipe.items, *repositories, Backports())))
     backend = _Capturing(LocalLinuxBackend())
@@ -411,9 +400,5 @@ def test_cloud_template_bakes_with_backports_and_network_online(tmp_path: Path) 
         assert "trixie-updates" in _sudo_read(listed / "debian-updates.sources")
         assert not _sudo_test("-e", listed / "bookworm-security.sources")
         assert not _sudo_test("-e", listed / "debian-backports.sources")
-        # No boot steps: the app waits for no runtime-init chain.
-        unit = _sudo_read(root / "usr/lib/systemd/system/app.service")
-        assert "busybox httpd" in unit and "runtime-init" not in unit
-        assert not _sudo_test("-e", root / "usr/lib/systemd/system/runtime-init.service")
     finally:
         subprocess.run(["sudo", "rm", "-rf", str(out)], check=False)

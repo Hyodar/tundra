@@ -156,15 +156,13 @@ EXPECTED_UNIT_FINDINGS: dict[str, set[str]] = {}
 node and the nethermind-tdx base included, emits typed units only."""
 
 
-def test_repository_recipes_report_only_the_expected_unit_findings(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
+def test_repository_recipes_report_only_the_expected_unit_findings() -> None:
     from tests.helpers import REPO_ROOT
     from tests.unit_corpus import recipe_paths
     from tundravm.declarative import load
     from tundravm.declarative.lifecycle import check_report
 
-    paths = recipe_paths(tmp_path_factory.mktemp("templates"))
+    paths = recipe_paths()
     seen = {
         name: {
             d.code

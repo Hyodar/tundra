@@ -22,7 +22,7 @@ from tundravm.declarative.lower import lower
 from tundravm.declarative.utils import DevTools, Run
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
-from tundravm.templates import TEMPLATES, render_recipe_template
+from tundravm.templates import render_recipe_template
 
 EXAMPLES = REPO_ROOT / "examples"
 
@@ -160,11 +160,5 @@ def test_environment_with_values_passes() -> None:
 
 def test_examples_and_templates_never_spell_the_chroot_prefix() -> None:
     sources = {path.name: path.read_text(encoding="utf-8") for path in EXAMPLES.rglob("*.py")}
-    for template in TEMPLATES:
-        sources[f"init-{template}"] = render_recipe_template(
-            title=template,
-            filename="node.py",
-            release="trixie",
-            template=template,
-        )
+    sources["new"] = render_recipe_template(title="node", filename="node.py", release="trixie")
     assert [name for name, text in sources.items() if "mkosi-chroot" in text] == []

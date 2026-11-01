@@ -15,7 +15,7 @@ from tundravm.cli import main
 from tundravm.declarative import Lock, Recipe, lower
 from tundravm.declarative.lifecycle import FetchedSource, fetch_image, variant_names
 from tundravm.models import BakeRequest, FileEntry
-from tundravm.templates import render_app_files, render_recipe_template
+from tundravm.templates import render_recipe_template
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ATTESTED_NODE = REPO_ROOT / "examples" / "attested-node"
@@ -81,19 +81,13 @@ def run_main(*argv: str) -> tuple[int, str]:
     return code, out.getvalue()
 
 
-def write_template(
-    path: Path, template: str, *, title: str = "node", backend: str | None = None
-) -> Path:
-    """Write the image file of *template* at *path* and the program files ``new`` writes
-    beside it (the ``service`` template's ``app/``); return *path*."""
+def write_new_image(path: Path, *, title: str = "node", backend: str | None = None) -> Path:
+    """Write the image ``tundravm new`` writes (stage 1 of the attested node) at *path*."""
     path.parent.mkdir(parents=True, exist_ok=True)
     source = render_recipe_template(
-        title=title, filename=path.name, release="trixie", template=template, backend=backend
+        title=title, filename=path.name, release="trixie", backend=backend
     )
     path.write_text(source, encoding="utf-8")
-    for rel, text in render_app_files(title=title, template=template).items():
-        (path.parent / rel).parent.mkdir(parents=True, exist_ok=True)
-        (path.parent / rel).write_text(text, encoding="utf-8")
     return path
 
 

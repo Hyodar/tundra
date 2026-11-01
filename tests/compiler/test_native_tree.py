@@ -24,7 +24,7 @@ from typing import Any, Literal
 
 import pytest
 
-from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT, write_template
+from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT, write_new_image
 from tundravm.check import declaration_check
 from tundravm.compiler.emit_mkosi import (
     ESP_MKFS_ENVIRONMENT,
@@ -45,7 +45,6 @@ from tundravm.declarative import (
     mkosi_argv,
 )
 from tundravm.errors import ValidationError
-from tundravm.templates import TEMPLATES
 from tundravm.testing import UPDATE_GOLDEN_ENV
 from tundravm.testing._model import assert_tree_matches
 from tundravm.toolchain import ToolsTree
@@ -542,14 +541,11 @@ def test_every_tree_sets_the_reproducibility_knobs(path: Path, tmp_path: Path) -
                 assert "=" in line.removeprefix("Environment="), f"{conf}: {line}"
 
 
-@pytest.mark.parametrize("template", sorted(TEMPLATES))
-def test_every_template_pins_the_tools_tree_to_its_release_and_snapshot(
-    template: str, tmp_path: Path
-) -> None:
+def test_the_new_image_pins_the_tools_tree_to_its_release_and_snapshot(tmp_path: Path) -> None:
     """``ToolsTreeRelease`` and ``ToolsTreeSnapshot`` equal the image's: mkosi's default tools
     release is ``testing``, whose package-manager profile installs a dnf5 a trixie snapshot
     lacks, so an unpinned release breaks the tools tree."""
-    path = write_template(tmp_path / "node.py", template)
+    path = write_new_image(tmp_path / "node.py")
     recipe = load(path)
     compile(recipe).write(tmp_path / "tree")
     main = (tmp_path / "tree" / "mkosi.conf").read_text(encoding="utf-8")

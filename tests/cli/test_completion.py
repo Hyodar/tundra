@@ -23,7 +23,7 @@ def test_every_command_and_no_removed_one(shell: Shell) -> None:
     assert "python -m tundravm.completion" in script.splitlines()[1 if shell == "zsh" else 0]
     for name in THIRTEEN:
         assert re.search(rf"\b{name}\b", script), name
-    for choices in ("simulated tdx", "mkosi systemd", "service prover", "deliver unlock"):
+    for choices in ("simulated tdx", "mkosi systemd", "deliver unlock"):
         assert choices in script, choices
 
 

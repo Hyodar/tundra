@@ -89,7 +89,7 @@ jobs:
       - name: Bake the smoke recipe and the templates
         run: >-
           uv run pytest tests/integration/test_mkosi_smoke.py
-          tests/integration/test_templates_bake.py -m integration -v -rsP
+          tests/integration/test_stages_bake.py -m integration -v -rsP
 
   boot:
     # Bakes the minimal and service templates and boots them under QEMU with OVMF (KVM when
@@ -116,7 +116,7 @@ jobs:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/boot-logs
-        run: uv run pytest tests/integration/test_templates_boot.py -m boot -v -rsP
+        run: uv run pytest tests/integration/test_stages_boot.py -m boot -v -rsP
 
       - name: Upload console logs
         if: always()

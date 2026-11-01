@@ -1,12 +1,11 @@
-demo  demo.py
+prover  prover.py
 Debian trixie, snapshot 20261018T082309Z, x86_64, reproducible
 
-Components (2):
-  App(version="0.1.0", port=8080, state=Volume("data", unlock=OperatorKey()).directory("app"), token=Secret("api-token"))
+Components (1):
   Network(egress=Egress())
 
 Services (1):
-  app  App
+  app
     program      /usr/bin/busybox httpd -f -p 127.0.0.1:8080 -h /srv/www
     hardening    static
     volume       /persistent/data/app on Volume("data", unlock=OperatorKey())
@@ -15,6 +14,10 @@ Services (1):
 
 Ingress (1):
   AttestedTLS(443, upstream=Endpoint("http://127.0.0.1:8080/"))
+
+Content (2):
+  Package("busybox")
+  File("/srv/www/index.html")
 
 Profiles (2):
   production  the image
@@ -45,7 +48,7 @@ Built into production:
     /etc/tdx/secrets.yaml                                                                    0644  367B  sha256:38bbdaa61675
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
     /etc/tundravm/runtime.json                                                               0644  968B  sha256:0cea9de4f1f1
-    /srv/www/index.html                                                                      0644  56B  sha256:b71cf70b8c9e
+    /srv/www/index.html                                                                      0644  16B  sha256:75186e1a779a
     /usr/bin/azure-complete-provisioning                                                     0755  2517B  sha256:fd3d32e3d33f
     /usr/lib/systemd/system/gcp-forwarded-ips.timer                                          0644  152B  sha256:2725564dde76
     /usr/lib/systemd/system/ssh.service.d/10-tundravm-needs.conf                             0644  66B  sha256:1ded5f651ee1

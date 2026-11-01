@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 
-from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT, write_template
+from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT
 
 _UNIT_PATH = re.compile(r"(^|/)(usr/lib|etc)/systemd/system/")
 _UNIT_SUFFIX = re.compile(r"\.(service|socket|target|timer|mount|path|conf)$")
@@ -40,26 +40,22 @@ def constant_units() -> Iterator[tuple[str, str]]:
     yield "SERIAL_CONSOLE_SERVICE", devtools.SERIAL_CONSOLE_SERVICE
 
 
-def recipe_paths(scratch: Path) -> dict[str, Path]:
-    """Every example recipe, the attested node and every ``init`` template, by name; the
-    templates are rendered into *scratch*."""
-    from tundravm.templates import TEMPLATES
-
+def recipe_paths() -> dict[str, Path]:
+    """Every stage of the attested node and its ``image.py``, by name."""
     paths = {path.stem: path for path in EXAMPLE_RECIPES}
     paths["attested-node"] = ATTESTED_NODE / "image.py"
-    for template in TEMPLATES:
-        path = write_template(scratch / template / f"{template}.py", template, title=template)
-        paths[f"init-{template}"] = path
     return paths
 
 
 @cache
-def emitted_units(scratch: Path) -> tuple[tuple[str, str], ...]:
-    """``(recipe:path, text)`` for every unit file of every recipe's emitted tree."""
+def emitted_units(scratch: Path | None = None) -> tuple[tuple[str, str], ...]:
+    """``(recipe:path, text)`` for every unit file of every recipe's emitted tree; every
+    recipe is a file of the example, so *scratch* (the ``emitted_unit_corpus`` fixture's)
+    stays empty."""
     from tundravm.declarative import compile, load
 
     found: list[tuple[str, str]] = []
-    for name, path in sorted(recipe_paths(scratch).items()):
+    for name, path in sorted(recipe_paths().items()):
         tree = compile(load(path, extra_paths=[REPO_ROOT]))
         for entry in tree.entries:
             if entry.content is not None and entry.symlink is None and is_unit_file(entry.path):
