@@ -110,6 +110,7 @@ Helper = Literal[
     "modules",
     "keys",
     "instance",
+    "endpoint",
 ]
 
 
@@ -186,7 +187,8 @@ def derive(
     *modules* is the curated module set the profile keeps (``None``: no module check, the
     image keeps every module); *kernel_off* the options a built kernel turns off (empty for
     a distribution kernel)."""
-    from tundravm.declarative.model import Disk, Firewall, Port, Service, Task
+    from tundravm._modules.secret_delivery import ENDPOINT_UNIT
+    from tundravm.declarative.model import Disk, Firewall, Port, Secrets, Service, Task
     from tundravm.declarative.systemd import ceiling
     from tundravm.declarative.utils import SSH_HOST_KEY
 
@@ -264,6 +266,18 @@ def derive(
                     ("nftables.service",),
                 )
             )
+    endpoints = [item for item in items if isinstance(item, Secrets)]
+    for item in endpoints:
+        unit = ENDPOINT_UNIT if len(endpoints) == 1 else f"tundravm-endpoint-{item.name}.service"
+        checks.append(
+            Check(
+                f"endpoint:{item.port}",
+                f"the attested endpoint on {item.port} serves evidence with the nonce it is given",
+                f"probe_endpoint {item.port} {unit}",
+                "endpoint",
+                (unit,),
+            )
+        )
     checks += observed
     checks += hardened
     off = sorted(option for option in set(kernel_off) if option in SYMBOLS)
@@ -511,6 +525,26 @@ probe_service() {{
     else
         fail "$state ($result): journalctl -u $1 says why"
     fi
+}}
+""",  # noqa: E501
+    "endpoint": f"""\
+probe_endpoint() {{
+    if ! command -v curl >/dev/null 2>&1; then
+        skip "no curl in the image to ask the endpoint"
+        return
+    fi
+    nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+    waited=0
+    while :; do
+        said=$(curl -ksS --max-time 10 "https://127.0.0.1:$1/evidence?nonce=$nonce" 2>&1) || true
+        case $said in
+            *"\"nonce\":\"$nonce\""*) ok "listening, evidence answers nonce $nonce"; return ;;
+        esac
+        [ "$waited" -ge {WAIT_SECONDS} ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    fail "no evidence for nonce $nonce on :$1: journalctl -u $2 -u tdxs; ${{said:-no answer}}"
 }}
 """,  # noqa: E501
     "active": """\

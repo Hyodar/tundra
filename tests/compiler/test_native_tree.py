@@ -195,6 +195,7 @@ def test_tree_has_the_native_shape() -> None:
         "payload/mkosi.conf.d/40-cloud-glue.conf",
         "payload/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.postinst.d/50-postinst.sh",
+        "payload/mkosi.profiles/dev/mkosi.build.d/50-build.sh",
         "payload/mkosi.profiles/dev/mkosi.conf",
         "payload/mkosi.profiles/dev/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.profiles/dev/mkosi.postinst.d/50-postinst.sh",
