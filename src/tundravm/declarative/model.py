@@ -2023,12 +2023,15 @@ class Install:
 
 @dataclass(frozen=True, slots=True)
 class Build(Declared):
-    """Build the fetched source with *script* or the toolchain it is ``using`` and install it.
+    """Build the fetched source with *command*, *script* or the toolchain it is ``using``
+    and install what it made: its inputs are the source and ``packages``, its outputs
+    ``install``, and it runs in the build environment, never in the image.
 
-    Set exactly one of ``script`` (a shell script run in the source tree, with
-    ``env`` exported and ``packages`` installed for it) and ``using`` (:class:`Go`,
-    :class:`Cargo` or :class:`Dotnet`, which carry their own ``env`` and
-    ``packages``). ``install`` paths are relative to the source tree; a toolchain's
+    Set exactly one of ``command`` (an argv run in the source tree, each word quoted for
+    you: ``["hugo", "--minify"]``), ``script`` (a shell script of several steps) and
+    ``using`` (:class:`Go`, :class:`Cargo` or :class:`Dotnet`, which carry their own
+    ``env`` and ``packages``); ``env`` is exported and ``packages`` installed for the
+    first two. ``install`` paths are relative to the source tree; a toolchain's
     output is at its ``artifact`` path, e.g. ``build/<output>`` for ``Go``.
     ``cache_namespace`` names the build cache entry (default: ``name``); the key
     itself is fingerprinted: the build caches under ``<namespace>-<fingerprint>``, a
@@ -2044,17 +2047,28 @@ class Build(Declared):
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     cache_namespace: str | None = None
     using: Go | Cargo | Dotnet | None = field(default=None, hash=False)
+    command: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         _freeze(self, "install", "packages")
         if not isinstance(self.name, str) or not _BUILD_NAME.fullmatch(self.name):
             raise _fail(self, f"invalid build name {self.name!r}.")
-        if (self.script is None) == (self.using is None):
+        if self.command is not None:
+            if isinstance(self.command, str) or not isinstance(self.command, Sequence):
+                raise _fail(
+                    self,
+                    f"build {self.name!r} command= is an argv, not {self.command!r}.",
+                    hint='Pass command=["make", "dist"]; script= is for a shell script.',
+                )
+            object.__setattr__(self, "command", tuple(self.command))
+            if not self.command or not all(isinstance(w, str) and w for w in self.command):
+                raise _fail(self, f"build {self.name!r} command= must name a program.")
+        if [self.script, self.command, self.using].count(None) != 2:
             raise _fail(
                 self,
-                f"build {self.name!r} needs exactly one of script= and using=.",
-                hint="script='make' runs a shell script; using=Go(...), Cargo(...) or "
-                "Dotnet(...) renders the toolchain's build command.",
+                f"build {self.name!r} needs exactly one of command=, script= and using=.",
+                hint="command=['make'] runs a program; script= a shell script; using=Go(...), "
+                "Cargo(...) or Dotnet(...) renders the toolchain's build command.",
             )
         if self.using is not None:
             if not isinstance(self.using, (Go, Cargo, Dotnet)):

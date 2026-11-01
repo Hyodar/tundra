@@ -128,7 +128,7 @@ UMask=0022
 set -euo pipefail
 
 test "$(curl -fsSL --proto =https https://apt.example.com/debian/dists/stable/InRelease | sha256sum | cut -d " " -f 1)" = 0000000000000000000000000000000000000000000000000000000000000000 || { echo 'AptRepository https://apt.example.com/debian stable moved: its InRelease is no longer sha256 0000000000000000000000000000000000000000000000000000000000000000' >&2; exit 1; }
-== enabled
+== mkosi.postinst.d/50-postinst.sh: the lines naming them
 mkosi-chroot useradd --system --shell /usr/sbin/nologin prometheus-node-exporter-ready
 mkosi-chroot systemctl enable prometheus-node-exporter.service
 mkosi-chroot systemctl enable prometheus-node-exporter-ready.service
@@ -136,3 +136,6 @@ mkosi-chroot systemctl enable ssh.service
 ln -sf "/etc/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/prometheus-node-exporter-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+== mkosi.build.d/50-build.sh: the lines naming them
+# tundravm build: {"build":{"kind":"script","output":"public","packages":["hugo"],"script":"hugo --minify"},"install":[{"dest":"/srv/www","kind":"tree","path":"public"}],"name":"site","source":{"kind":"local","path":"."}}
+echo 'tundravm: source build site is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

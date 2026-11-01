@@ -1186,9 +1186,10 @@ def source_build(build: Build) -> SourceBuild:
     if build.using is not None:
         recipe = build.using
     else:
-        assert build.script is not None  # Build allows exactly one of script and using
+        script = build.script if build.command is None else shlex.join(build.command)
+        assert script is not None  # Build allows exactly one of command, script and using
         recipe = ScriptBuild(
-            script=build.script,
+            script=script,
             output=build.install[0].source,
             packages=build.packages,
             env=dict(build.env),

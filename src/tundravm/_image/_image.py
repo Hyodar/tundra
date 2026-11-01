@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
-from tundravm.declarative.model import TARGETS, Group, Target, User
+from tundravm.declarative.model import TARGETS, Build, Group, Target, User
 from tundravm.errors import ValidationError
 
 from ._change import Change, Edit, Remove
@@ -175,7 +175,8 @@ class Image(Located):
     _: KW_ONLY
     base: Debian = Debian("trixie")
     packages: Sequence[str | Package] = ()
-    files: Sequence[File | Tree] = ()
+    files: Sequence[File | Tree | Build] = ()
+    """Files, trees, and builds whose ``install=`` ships files."""
     services: Sequence[Service] = ()
     components: Sequence[Component] = ()
     ingress: Sequence[Ingress] = ()
@@ -227,7 +228,7 @@ class Image(Located):
     def _check_slots(self) -> None:
         slots: tuple[tuple[str, Sequence[object], type | tuple[type, ...], str], ...] = (
             ("packages", self.packages, (str, Package), "a package name or Package"),
-            ("files", self.files, (File, Tree), "a File or Tree"),
+            ("files", self.files, (File, Tree, Build), "a File, Tree or Build"),
             ("users", self.users, User, "a User"),
             ("groups", self.groups, Group, "a Group"),
         )

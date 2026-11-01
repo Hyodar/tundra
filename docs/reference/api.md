@@ -153,7 +153,7 @@ Image(
     *,
     base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None, repositories=()),
     packages: Sequence[str | Package] = (),
-    files: Sequence[File | Tree] = (),
+    files: Sequence[File | Tree | Build] = (),
     services: Sequence[Service] = (),
     components: Sequence[Component] = (),
     ingress: Sequence[Ingress] = (),
@@ -1268,6 +1268,7 @@ Build(
     env: Mapping[str, str] = FrozenMap(),
     cache_namespace: str | None = None,
     using: Go | Cargo | Dotnet | None = None,
+    command: tuple[str, ...] | None = None,
 )
 ```
 

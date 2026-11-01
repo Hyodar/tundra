@@ -14,13 +14,23 @@ import tundravm
 from tundravm import AptRepository, Debian, Image, Service
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
+from tundravm.sources import Build, Install, Local
 from tundravm.systemd import DropIn, Hardening, Notify, TcpProbe
 
 GOLDEN = Path(__file__).with_name("spellings.golden")
-SHOWN = ("prometheus-node-exporter", "ssh.service", "sources.list.d", "keyrings", "sync")
+SHOWN = (
+    "prometheus-node-exporter",
+    "ssh.service",
+    "sources.list.d",
+    "keyrings",
+    "sync",
+    "hugo",
+    "build site",
+)
 DEBIAN = "https://snapshot.debian.org/archive/debian-security"
 KEYRING = "/usr/share/keyrings/debian-archive-keyring.gpg"
 PIN = "0" * 64
+INSTALL = Install("public", "/srv/www", mode=None, directory=True)
 """The compiled paths the golden records: whatever names one of these."""
 
 
@@ -54,6 +64,13 @@ PIN = "0" * 64
             "names its date",
         ),
         (lambda: Debian(repositories=[AptRepository(DEBIAN, "s", key=KEYRING)] * 2), "twice"),
+        (
+            lambda: Build("b", Local("."), command="make all", install=(INSTALL,)),  # type: ignore[arg-type]
+            "is an argv",
+        ),
+        (lambda: Build("b", Local("."), command=(), install=(INSTALL,)), "name a program"),
+        (lambda: Build("b", Local("."), command=("m",), script="m", install=(INSTALL,)), "one of"),
+        (lambda: Build("b", Local("."), command=("make",)), "installs nothing"),
     ],
 )
 def test_each_spelling_refuses_what_it_cannot_keep(
@@ -71,8 +88,12 @@ def test_one_image_using_every_spelling_compiles_to_the_golden(tmp_path: Path) -
     vendor = AptRepository(
         "https://apt.example.com/debian", "stable", key=tmp_path / "vendor.asc", sha256=PIN
     )
+    site = Build(
+        "site", Local("."), command=("hugo", "--minify"), packages=("hugo",), install=(INSTALL,)
+    )
     image = Image(
         "spellings",
+        files=[site],
         base=Debian(repositories=[AptRepository(DEBIAN, "trixie-security", key=KEYRING), vendor]),
         services=[
             exporter,
@@ -92,13 +113,10 @@ def test_one_image_using_every_spelling_compiles_to_the_golden(tmp_path: Path) -
         for path in sorted(tmp_path.rglob("*"))
         if path.is_file() and any(name in str(path.relative_to(tmp_path)) for name in SHOWN)
     ]
-    postinst = (tmp_path / "payload/mkosi.postinst.d/50-postinst.sh").read_text(encoding="utf-8")
-    shown.append(
-        "== enabled\n"
-        + "".join(
-            f"{line}\n" for line in postinst.splitlines() if any(name in line for name in SHOWN)
-        )
-    )
+    for script in ("mkosi.postinst.d/50-postinst.sh", "mkosi.build.d/50-build.sh"):
+        lines = (tmp_path / "payload" / script).read_text(encoding="utf-8").splitlines()
+        picked = [line for line in lines if any(name in line for name in SHOWN)]
+        shown.append(f"== {script}: the lines naming them\n" + "".join(f"{x}\n" for x in picked))
     text = "".join(shown)
     if os.environ.get("TUNDRAVM_UPDATE_GOLDEN") == "1":
         GOLDEN.write_text(text, encoding="utf-8")

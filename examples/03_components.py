@@ -13,8 +13,10 @@ Teaches:
   package, under the same sandbox a ``Service`` gets;
 - ``Debian(repositories=[AptRepository(...)])`` adds an archive, pinned and signed: a
   snapshot.debian.org one moves with the image's snapshot;
-- ``compose()`` may still yield an internal declaration (``Task``, ``ConfigFile``,
-  ``Run``) while those concerns have no public spelling.
+- no command runs inside the image as it is built: a build step is a
+  ``tundravm.sources.Build(..., command=[...], install=[...])`` with declared outputs;
+- ``compose()`` may still yield an internal declaration (``Task``, ``ConfigFile``)
+  while those concerns have no public spelling.
 
     tundravm show examples/03_components.py
     tundravm check examples/03_components.py
@@ -28,7 +30,7 @@ from collections.abc import Iterator
 from tundravm import AptRepository, Debian, File, Image, Package, Service
 from tundravm.components import Component, Diagnostic, Egress, Endpoint, Network, Resolved, Rule
 from tundravm.declarative import Task
-from tundravm.declarative.utils import ConfigFile, Run
+from tundravm.declarative.utils import ConfigFile
 from tundravm.systemd import Every
 
 SYSCTL = "kernel.kptr_restrict=2\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1\n"
@@ -46,8 +48,6 @@ class Hardening(Component):
 
     def compose(self) -> Iterator[object]:
         yield File.text("/etc/sysctl.d/90-hardening.conf", SYSCTL)
-        # a command run inside the image as it is built (stage="postinst" by default)
-        yield Run("update-ca-certificates --fresh", name="ca-certificates")
 
 
 class NodeExporter(Component):

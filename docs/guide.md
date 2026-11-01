@@ -164,7 +164,7 @@ Passing a baseline component in `components=` replaces the implied one.
 |---|---|---|
 | `base` | `Debian(release, snapshot=, efi_stub=, repositories=[AptRepository(...)])` | `tundravm` |
 | `packages` | package names, or `Package(name, backports=True)`: runtime packages only | `tundravm` |
-| `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)` | `tundravm` |
+| `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)`, a `Build` | `tundravm` |
 | `services` | `Service` | `tundravm` |
 | `components` | `Component` instances | `tundravm.components` |
 | `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) | `tundravm.ports` |
@@ -603,6 +603,11 @@ pull their build and install into the image, and `binary.executable` is the inst
 path. Go builds the module root (`package="./cmd/server"` for a sub-command) with
 `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with `cargo auditable build --frozen`
 and reproducible `rustflags`, so the SBOM can read the crate graph from the binary.
+
+`Build(name, source, command=["hugo", "--minify"], packages=["hugo"], install=[...])` runs
+one program in the build environment, never in the image, and `files=[build]` ships what
+its `install=` names. A command over the image's own contents has no spelling beside the
+recorded `Mkosi(scripts=)` escape, since nothing could say what it changed.
 
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`

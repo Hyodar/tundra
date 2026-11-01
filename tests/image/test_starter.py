@@ -128,10 +128,10 @@ def test_a_service_in_components_is_refused() -> None:
     assert "not a Component" in str(caught.value)
 
 
-def test_files_takes_file_and_tree_only() -> None:
+def test_files_takes_file_tree_and_build_only() -> None:
     with pytest.raises(ValidationError) as caught:
         Image("x", files=["/etc/motd"])  # type: ignore[list-item]
-    assert "not a File or Tree" in str(caught.value)
+    assert "not a File, Tree or Build" in str(caught.value)
     only = Image("x", files=[File.text("/etc/motd", "hi\n")]).files[0]
     assert isinstance(only, File) and only.path == "/etc/motd"
 
