@@ -221,7 +221,7 @@ api = Service(
 ```
 
 What a bare `Service(name, argv)` gets: `Type=exec`, `Restart=on-failure` with
-`RestartSec=5s`, a system user named after the service, `Hardening.preset("static")`, and
+`RestartSec=5s`, a system user named after the service, `hardening="static"`, and
 `WantedBy=minimal.target`. Each argv element is quoted the way systemd parses it. The one
 visible exception for a shell is `["/bin/sh", "-eu", "-c", script]`. A built binary is a
 valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
@@ -253,7 +253,7 @@ A component's setup `Task` that fails writes nothing;
 
 ### The sandbox
 
-`hardening=Hardening.preset(NAME)` picks a sandbox per runtime class. Each preset is the
+`hardening="NAME"` picks a sandbox per runtime class. Each preset is the
 strict sandbox minus what that runtime cannot live without:
 
 | Preset | Differs from `static` | Because |
@@ -266,7 +266,7 @@ The `static` sandbox is `ProtectSystem=strict`, private `/tmp` and devices, no n
 privileges, an empty capability bounding set, the kernel and namespace protections, the
 `@system-service` syscall filter and `UMask=0077`.
 `Hardening.preset("static", devices=["/dev/tdx_guest"])` replaces `PrivateDevices=yes`
-with an allow list. `Hardening.relaxed()` and `Hardening.none()` are for programs you
+with an allow list. `hardening="relaxed"` and `Hardening.none()` are for programs you
 cannot fix.
 
 ### Timers, sockets and the rest
@@ -276,7 +276,7 @@ cannot fix.
 | run periodically | `timer=Every("15m")` or `timer=Calendar("daily")` |
 | socket activation | `socket=Listen(8080)` or `Listen("/run/app.sock")` |
 | persistent state | `state=volume.directory("app")`; a bare name is a volatile `StateDirectory=` |
-| a delivered secret | `credentials=[secret]` |
+| a delivered secret | `[app, "--key-file", secret]` |
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
@@ -451,8 +451,9 @@ A change names a declaration that exists, or the image does not resolve. Removin
 service removes its unit, its user, its firewall rule and the dependencies nothing else
 uses. A component's service is `component.service("name").ref`. An edit takes the keywords
 of the value's own constructor and is checked like a new value. What decides other units
-(`readiness=`, `credentials=`, `unit=`, a timer turned on or off, another built binary, a
-state moved onto a volume) is refused: remove the value and add the new one in `add=`.
+(`readiness=`, a credential bound or unbound, `unit=`, a timer turned on or off, another
+built binary, a state moved onto a volume, another `user=` for a directory on one) is
+refused: remove the value and add the new one in `add=`.
 
 How profiles lower: tundravm resolves every profile's whole image, writes what all of them
 build once in the shared `payload/`, and puts what each builds beyond that in
@@ -521,9 +522,10 @@ $ tundravm secrets deliver prover-1 --policy policies/prover-gcp.json raiko-conf
 ```
 
 It lands in `/run/tundravm/credentials/<name>`, root-owned tmpfs, mode 0600. A service
-binds it with `credentials=[secret]`, which renders
-`LoadCredential=<name>:/run/tundravm/credentials/<name>`. systemd copies it into the unit's
-read-only `$CREDENTIALS_DIRECTORY` at start, and `secret.path` is the argv word for it.
+binds it by naming it as an argv element or an `environment=` value, where it renders as
+the path the service reads it at, or with `credentials=[secret]` for a program that finds
+it otherwise; either renders `LoadCredential=<name>:/run/tundravm/credentials/<name>`.
+systemd copies it into the unit's read-only `$CREDENTIALS_DIRECTORY` at start.
 
 | Option | Meaning |
 |---|---|
@@ -584,9 +586,9 @@ yet ([trust](trust.md#the-channel-is-not-attested-yet)).
 
 `GoBinary`, `CargoBinary` and `Build` (from `tundravm.sources`) are valid argv elements: they
 pull their build and install into the image, and `binary.executable` is the installed
-path. Go builds with `-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with
-`cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the crate
-graph from the binary.
+path. Go builds the module root (`package="./cmd/server"` for a sub-command) with
+`-trimpath -buildvcs=false` and `CGO_ENABLED=0`; Rust with `cargo auditable build --frozen`
+and reproducible `rustflags`, so the SBOM can read the crate graph from the binary.
 
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`

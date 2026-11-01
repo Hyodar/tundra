@@ -19,13 +19,13 @@ reverses a decision already taken, weakens an opinion, or touches a section 6 co
 |---|---|---|---|
 | 1 | The common values (`TCP`, `Secret`, `Volume`, probes, ingress, `GoBinary`) in the root | M | **Refuse**: it reverses the namespaces decision of 2026-10-31 (one home per name, the root is the image and its foundation), taken a day ago on the same trade-off |
 | 2 | `Service.endpoint(port)`: the `Endpoint` a plain service answers at, with its readiness | S | **Do** |
-| 3 | `GoBinary(package=".")` as the default | S | **Do later**: `GoBinary` is defined in `declarative/utils.py`, outside this branch's files |
+| 3 | `GoBinary(package=".")` as the default | S | **Done** later the same day (below) |
 | 4 | A volume mounts at a path derived from its name | S | **Do** |
-| 5 | `hardening="python"`: a preset by name | S | **Do later**: `_image/_lower.py` passes `service.hardening` on as a `Hardening`, so the field cannot widen to a name here |
+| 5 | `hardening="python"`: a preset by name | S | **Done** later the same day: the name resolves at construction, so the lowering still sees a `Hardening` |
 | 6 | `Service(quotes=True)` for `requires=[EVIDENCE]` plus `groups=["tdx"]` | S | **Do later**: `EVIDENCE` and the Raiko service that uses it live in `components/_base.py` and `components/_taiko.py`; both move with it |
 | 7 | The image collects the volumes and secrets its services bind | L | **Do**: S here, since lowering already reads `image.volumes` and `image.secrets` |
-| 8 | A secret reference binds itself | L | **Do later**, in a smaller form (a `Secret` as an argv element, as an `Endpoint` already is): an edit of `argv=` could then add a binding, which `_image/_change.py` must refuse as it refuses `credentials=` |
-| 9 | A profile edit may change readiness, credentials and units, regenerating them | L | **Do later**: `_image/_change.py` and `_image/_lower.py` (the unit graph is rebuilt per edit) |
+| 8 | A secret reference binds itself | L | **Done** later the same day, in the smaller form (a `Secret` as an argv element or an `environment=` value); an edit that binds or unbinds one is refused |
+| 9 | A profile edit may change readiness, credentials and units, regenerating them | L | **Refusal side done** later the same day; editing `readiness=`, `credentials=` and `unit=` **still later**: each adds or drops units outside the one declaration an edit rewrites (a probe, delivery waits, a drop-in), so `_image/_lower.py` would rebuild the unit graph per profile |
 | 10 | `AttestedTLS` binds its key to the quote, with a verified client | L | **Do later**: gate 3 (tundra-tools, `attestation.py`); the image side does not change |
 
 Codex's rejections, which stand: one mixed content list instead of slots; exposed ports
@@ -80,6 +80,39 @@ ingress=[AttestedTLS(443, upstream=app.endpoint(8080))]                         
 
 A component's `self.service("app")` is a `ServiceRef` (`_image/_component.py`); giving it
 the same method is the follow-up that shortens the templates' `http` property.
+
+## Done later the same day
+
+**3. `GoBinary` builds the module root.** `package="."` is the default; `package=` stays
+for a sub-command.
+
+```python
+app = GoBinary("app", Local("app"), package=".")  # before
+app = GoBinary("app", Local("app"))               # after; package="./cmd/server" for a sub-command
+```
+
+**5. `hardening=` takes a preset's name**: `"static"`, `"jit"`, `"node"`, `"python"`,
+`"dotnet"` or `"relaxed"`, the names the probe's ceilings know, resolved to the
+`Hardening` at construction; an unknown name is refused listing them. A deviation is still
+`Hardening.preset("jit", devices=[...])`. `convert --from systemd` writes the name when a
+unit's sandbox is exactly a preset.
+
+**8. A secret named in argv or `environment=` binds itself.** The argv element renders as
+`${CREDENTIALS_DIRECTORY}/<name>`, the environment value as `%d/<name>` (`Environment=`
+expands specifiers, not variables). `credentials=` stays for a program that finds the
+credential otherwise (a word embedding `secret.path`, a config file). An edit of `argv=` or
+`environment=` that binds or unbinds a credential is refused, as `credentials=` is.
+
+```python
+Service("app", [APP, "--token-file", token.path], credentials=[token])  # before
+Service("app", [APP, "--token-file", token])                            # after
+```
+
+**9. What an edit regenerates.** Every keyword an edit accepts was compiled for a plain, a
+timer, a socket and a volume service: each regenerates the unit, timer, socket or firewall
+it affects, except `user=` on a service whose state is a volume directory, which changed
+`User=` while the boot step still prepared the directory for the old user. That edit is
+refused (share the directory through a group, or add a new service).
 
 ## Also seen, not ranked
 

@@ -15,10 +15,11 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - **Breaking:** `profile` replaces `variant` everywhere, `--json` and `tundravm.testing` included; `show --json` says `image`, `components` and `extends`.
 - **Breaking:** the API speaks the public model (`Resolved.targets`, `.components`, `.production`, `class X(Component, name=)`, `ImageFile.component`); the internal-model test helpers and fixtures are gone.
 - **Breaking:** `Image(volumes=, secrets=)` are gone: the image collects each volume and secret from what binds it.
+- **Breaking:** a profile edit that binds or unbinds a credential, or gives a service whose state is on a volume another `user=`, is refused.
 - `Image` implies the TEE baseline, a curated kernel, a firewall that opens only exposed ports and 8745, one hardened user per service, and `tdxs`.
-- `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `Hardening.preset(NAME)` picks the sandbox per runtime.
+- `Service` takes an argv; `expose=` alone opens a port; `requires=` waits for real readiness (`Notify`, `TcpProbe`, `HttpProbe`, `service.endpoint(port)`, or `setup.output(path)`, which skips the service when its setup task wrote nothing); `hardening="python"` names the sandbox per runtime (`static`, `jit`, `node`, `python`, `dotnet`, `relaxed`), `Hardening.preset(NAME, ...)` a deviation.
 - `Component` is a dataclass with `compose()`, typed exports and an optional `check()`; `Profile(extends=, add=, changes=, production=)` edits with `value.ref.edit(...)` and `.remove()`.
-- `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
+- `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential, bound by naming it in argv or `environment=`; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`, `Nethermind`, `TaikoClient`, `Raiko`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
 
 ### Network and clouds
@@ -38,7 +39,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
 - `attest` verifies fresh evidence and delivers nothing; `secrets` attests again first.
 - `doctor` prints one row per capability with its fix; `build:go` blocks without `go`.
-- **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`; `convert --from mkosi` converts a tundravm tree's payload and its cloud wrappers into `targets=`; both write double-quoted Python.
+- **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset; `convert --from mkosi` converts a tundravm tree's payload and its cloud wrappers into `targets=`; both write double-quoted Python.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".
 
 ### Build and lock
@@ -51,6 +52,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - The ESP is a fixed 128 MiB; a UKI over 126 MiB fails, naming `RootFS.verity()`.
 - `Kernel.build` compiles in the image and fails when a driver a target needs is not `=y` or a denied one is on, keeping its configs in the build.
 - `Local("app")` sources are pinned by content digest (an edit is `local-changed`); `Git` and `Http` are fetched on the host, never in the sandbox.
+- `GoBinary` builds the module root unless `package=` names a sub-command.
 - Go builds with the toolchain `go.mod` names, fetched by the host's `go` 1.21+, which every image needs (`Tdxs` is Go); Cargo with the one `rust-toolchain.toml` pins, installed by the host's `rustup`, and an unpinned channel is refused.
 
 ### Lint
