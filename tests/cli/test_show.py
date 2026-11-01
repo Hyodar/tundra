@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,10 @@ from tundravm._source import SourceBuild
 from tundravm.builds import Build
 from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
 from tundravm.declarative import lifecycle
+from tundravm.testing import UPDATE_GOLDEN_ENV
+
+SERVICE_SHOW = Path(__file__).with_name("show-service.txt")
+"""``tundravm show`` of the ``service`` template (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it)."""
 
 
 def test_show_an_image_file(project: Path, cli: Cli) -> None:
@@ -41,6 +46,25 @@ def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli)
     (origin,) = rows["File(extra, /srv/www/index.html)"]
     assert origin["action"] == "declared" and origin["location"].startswith("demo.py:")
     assert (origin["profile"], origin["components"]) == ("image", [])
+
+
+def test_show_lists_what_the_service_template_declares(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert cli("new", "demo").code == EXIT_OK
+    monkeypatch.chdir(tmp_path / "demo")
+    result = cli("show")
+    assert result.code == EXIT_OK, result.err
+    if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
+        SERVICE_SHOW.write_text(result.out, encoding="utf-8")
+    assert result.out == SERVICE_SHOW.read_text(encoding="utf-8")
+    dev = json.loads(cli("show", "--json", "--profile", "dev").out)["profiles"]["dev"]
+    assert dev["components"] == [
+        {"components": [], "name": "app"},
+        {"components": [], "name": "network"},
+        {"components": [], "name": "dev-access"},
+    ]
 
 
 def test_without_a_build_show_reads_the_project_image(project: Path, cli: Cli) -> None:

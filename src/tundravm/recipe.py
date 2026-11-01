@@ -25,6 +25,7 @@ from .declarative.model import Recipe
 from .errors import TdxError, ValidationError
 
 if TYPE_CHECKING:
+    from ._image import Image
     from .declarative._lowered import Lowered
 
 IMAGE_NAMES: tuple[str, ...] = ("image", "IMAGE")
@@ -257,12 +258,20 @@ def _as_recipe(value: object) -> Recipe | None:
 
 def _discover_image(module: ModuleType, recipe_path: Path) -> Recipe | None:
     """The ``Image`` the file binds, as the internal recipe; ``None`` when it binds none."""
-    from tundravm._image import Image, recipe_of
+    from tundravm._image import recipe_of
+
+    image = _find_image(module, recipe_path)
+    return None if image is None else recipe_of(image)
+
+
+def _find_image(module: ModuleType, recipe_path: Path) -> Image | None:
+    """The ``Image`` the file binds; ``None`` when it binds none."""
+    from tundravm._image import Image
 
     for name in IMAGE_NAMES:
         value = getattr(module, name, None)
         if isinstance(value, Image):
-            return recipe_of(value)
+            return value
     images = {
         name: value
         for name, value in vars(module).items()
@@ -275,7 +284,7 @@ def _discover_image(module: ModuleType, recipe_path: Path) -> Recipe | None:
             context={"recipe": str(recipe_path)},
         )
     if images:
-        return recipe_of(next(iter(images.values())))
+        return next(iter(images.values()))
     return None
 
 
@@ -400,7 +409,8 @@ class RecipeFile:
     """A loaded recipe file: its ``recipe``, its ``backend`` and the lowered image once built.
 
     *backend* is the file's own ``backend`` when it binds one, else :func:`default_backend`;
-    *backend_origin* says which.
+    *backend_origin* says which. *declared* is the ``Image`` the file binds, which *recipe*
+    lowers; ``None`` for a file that binds an internal recipe.
     """
 
     path: Path
@@ -408,6 +418,7 @@ class RecipeFile:
     image: Lowered | None
     backend: BuildBackend | None
     backend_origin: BackendOrigin = "recipe"
+    declared: Image | None = None
 
     @property
     def variants(self) -> tuple[str, ...]:
@@ -438,16 +449,23 @@ def load_file(
             context={"recipe": str(recipe_path)},
         )
     module = import_recipe_module(recipe_path, extra_paths=extra_paths)
-    found = (
-        _resolve_attr(module, attribute, recipe_path)
-        if attribute is not None
-        else _discover(module, recipe_path)
-    )
+    from tundravm._image import Image, recipe_of
+
+    named = None if attribute is None else getattr(module, attribute, None)
+    declared = _find_image(module, recipe_path) if attribute is None else named
+    if not isinstance(declared, Image):
+        declared = None
+    if declared is not None:
+        found = recipe_of(declared)
+    elif attribute is not None:
+        found = _resolve_attr(module, attribute, recipe_path)
+    else:
+        found = _discover(module, recipe_path)
     raw = getattr(module, BACKEND_NAME, None)
     if raw is not None:
-        return RecipeFile(recipe_path, found, None, _backend(raw, recipe_path))
+        return RecipeFile(recipe_path, found, None, _backend(raw, recipe_path), declared=declared)
     backend, origin = default_backend()
-    return RecipeFile(recipe_path, found, None, backend, origin)
+    return RecipeFile(recipe_path, found, None, backend, origin, declared)
 
 
 __all__ = [

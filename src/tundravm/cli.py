@@ -35,7 +35,7 @@ from typing import TextIO, cast
 from . import __version__, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
-from ._describe import describe
+from ._describe import declared_components, describe
 from ._image._image import DEV_PROFILE
 from ._image._lower import component_classes
 from ._reporting import TextReporter
@@ -1219,9 +1219,14 @@ def _show_image(args: argparse.Namespace, out: TextIO) -> int:
     described = {}
     for name in names:
         declared = name in loaded.variants
-        fragments = resolve(loaded.recipe, variant=name).components if declared else ()
+        resolved = resolve(loaded.recipe, variant=name).components if declared else ()
+        components = (
+            [{"components": [], "name": n} for n in resolved]
+            if loaded.declared is None
+            else declared_components(loaded.declared, name, resolved)
+        )
         inherits = loaded.recipe.variant(name).inherits if declared else None
-        described[name] = describe(img, profile=name, inherits=inherits, fragments=fragments)
+        described[name] = describe(img, profile=name, inherits=inherits, components=components)
     report = show.image_report(img, names, described, file=found.image)
     if args.json:
         report["provenance"] = show.provenance(loaded.recipe, names)

@@ -18,6 +18,7 @@ from .lockfile import LockedFetch
 from .models import InitScriptEntry, Kernel, ProfileState, UnitAction, unit_name
 
 if TYPE_CHECKING:
+    from ._image import Component, Image
     from .declarative._lowered import Lowered
 
 PREVIEW_WIDTH = 80
@@ -33,7 +34,7 @@ def describe(
     *,
     profile: str | None = None,
     inherits: str | None = _IMAGE_PARENT,
-    fragments: Sequence[str] = (),
+    components: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
     """Describe what *image* will produce for *profile* (default: the active one).
 
@@ -42,8 +43,8 @@ def describe(
     File and init-script contents are summarized as short sha256 digests.
     A profile built on another is described as built: merged over it. Hooks and
     sources show the pins of the lockfile *image* reads, as compile renders them.
-    *inherits* and *fragments* (the keys ``extends`` and ``components``) are the recipe's
-    ``Variant.inherits`` and the fragment names the profile resolved to.
+    *inherits* and *components* (the keys ``extends`` and ``components``) are the recipe's
+    ``Variant.inherits`` and :func:`declared_components` of the profile.
     """
     selected = image.profile(profile)
     pins = image.build_pins()
@@ -60,7 +61,7 @@ def describe(
         "build_source_mounts": [
             {"dest": dest, "src": src} for src, dest in sorted(profile_state.build_sources)
         ],
-        "components": list(fragments),
+        "components": [dict(row) for row in components],
         "debloat": image.explain_debloat(profile=selected),
         "extends": profile_state.extends if inherits is _IMAGE_PARENT else inherits,
         "files": _describe_files(profile_state.files),
@@ -179,7 +180,8 @@ def render(description: dict[str, object]) -> str:
         )
     if description.get("extends") not in (None, "", BASE_VARIANT):
         lines.append(f"Extends: {description['extends']}")
-    _append_inline_list(lines, "Components", _as_list(description.get("components")))
+    components = _as_list(description.get("components"))
+    _append_inline_list(lines, "Components", [_component_text(row) for row in components])
 
     _append_inline_list(lines, "Packages", _as_list(description.get("packages")))
     _append_inline_list(lines, "Build packages", _as_list(description.get("build_packages")))
@@ -327,6 +329,46 @@ def render(description: dict[str, object]) -> str:
     if output:
         lines.append("Targets: " + " ".join(str(t) for t in output))
     return "\n".join(lines) + "\n"
+
+
+def declared_components(
+    image: Image, profile: str, resolved: Sequence[str]
+) -> list[dict[str, object]]:
+    """The components *image*'s *profile* holds that the image file wrote (``components=``,
+    ``network=``, ``observability=``, a profile's ``add=``, ``dev=``), each with the components
+    it composed nested under ``components``. The implied baseline, the internal pieces and
+    the source builds are not components here; a component a profile change removed (not in
+    *resolved*, the names the profile resolved to) is left out."""
+    from ._image import Component
+    from ._image._image import BASE_PROFILE, DEV_PROFILE
+
+    written: list[Component] = [*image.components]
+    written += [c for c in (image.network, image.observability) if c is not None]
+    chain: list[str] = []
+    name: str | None = profile
+    while name is not None and name in image.profiles and name not in chain:
+        chain.append(name)
+        name = image.profiles[name].extends or BASE_PROFILE
+    for ancestor in reversed(chain):
+        written += [c for c in image.profiles[ancestor].add if isinstance(c, Component)]
+    kept = [c for c in written if c.name in resolved]
+    if profile == DEV_PROFILE and image.dev is not None:
+        kept.append(image.dev)
+    return [_component_row(c) for c in dict.fromkeys(kept)]
+
+
+def _component_row(component: Component) -> dict[str, object]:
+    from ._image import Component
+    from ._image._component import composed
+
+    nested = [c for c in composed(component) if isinstance(c, Component)]
+    return {"components": [_component_row(c) for c in nested], "name": component.name}
+
+
+def _component_text(row: Mapping[str, Any]) -> str:
+    """``name``, then what it composed in parentheses: ``observability (journal-export)``."""
+    nested = [_component_text(child) for child in row.get("components", ())]
+    return f"{row['name']} ({' '.join(nested)})" if nested else str(row["name"])
 
 
 def _describe_files(entries: Sequence[Any]) -> list[dict[str, object]]:

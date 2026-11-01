@@ -1,0 +1,88 @@
+demo  demo.py
+profile=production  debian/trixie (x86_64)  reproducible=yes
+Components (2): app network
+Packages (9): ca-certificates chrony kmod linux-image-amd64 nftables systemd systemd-boot-efi systemd-sysv udev
+Build packages (1): golang
+Sources (2):
+  server  local app  pinned=-
+  tdxs    git https://github.com/Hyodar/tundra-tools.git  ref=master  pinned=-
+Files (12):
+  /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
+  /etc/nftables.conf                                                                       0755  1408B  sha256:855d89cd4114
+  /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
+  /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
+  /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
+  /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
+  /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
+  /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
+  /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
+  /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
+  /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
+  /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
+Groups (1):
+  tdx  system
+Users (3):
+  app  system  shell=/usr/sbin/nologin
+  app-ready  system  shell=/usr/sbin/nologin
+  tdxs  system  gid=tdx  home=/home/tdxs  shell=/usr/sbin/nologin
+Units: enable chrony.service, tdxs.socket, systemd-networkd.service, systemd-networkd.socket, systemd-networkd-wait-online.service, nftables.service; mask apt-daily.timer, apt-daily-upgrade.timer, dpkg-db-backup.timer, getty@tty1.service
+Services (4):
+  app-ready             /bin/bash -c until (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; do sleep 0....  restart=no  type=oneshot  user=app-ready  after=app.service  requires=app.service
+  app.service           /usr/bin/server -port 8080 -version 0.1.0  restart=on-failure  type=exec  user=app  after=tdx-evidence.service  requires=tdx-evidence.service
+  tdx-evidence.service  /usr/lib/tundravm/tdx-evidence  restart=no  type=oneshot  env=TUNDRAVM_EXECUTION  after=systemd-udev-trigger.service
+  tdxs.service          /usr/bin/tdxs --config /etc/tdxs/config.yaml --log-level info  restart=on-failure  type=notify  user=tdxs  group=tdx  after=tdxs.socket,tdx-evidence.service  requires=tdxs.socket,tdx-evidence.service  disabled
+Hooks:
+  build (2):
+    echo 'tundravm: source build tdxs is not pinned: run tundravm lock, then tund...
+    echo 'tundravm: source build server is not pinned: run tundravm lock, then tu...
+  finalize (1):
+    sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release"
+Debloat: enabled, 30 paths removed, systemd minimize=yes
+Targets: qemu
+
+profile=dev  debian/trixie (x86_64)  reproducible=yes
+Extends: production
+Components (3): app network dev-access
+Packages (22): apt bash-completion ca-certificates chrony curl dnsutils iputils-ping kmod linux-image-amd64 net-tools netcat-openbsd nftables openssh-server socat strace systemd systemd-boot-efi systemd-sysv tcpdump tcpflow udev vim
+Build packages (1): golang
+Sources (2):
+  server  local app  pinned=-
+  tdxs    git https://github.com/Hyodar/tundra-tools.git  ref=master  pinned=-
+Files (14):
+  /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
+  /etc/nftables.conf                                                                       0755  1408B  sha256:855d89cd4114
+  /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
+  /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
+  /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
+  /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
+  /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
+  /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
+  /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
+  /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf                0644  53B  sha256:08546e89161d
+  /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
+  /usr/lib/tundravm/probe                                                                  0755  5539B  sha256:247a6a2056c2
+  /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
+  /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
+Groups (1):
+  tdx  system
+Users (3):
+  app  system  shell=/usr/sbin/nologin
+  app-ready  system  shell=/usr/sbin/nologin
+  tdxs  system  gid=tdx  home=/home/tdxs  shell=/usr/sbin/nologin
+Units: enable chrony.service, tdxs.socket, systemd-networkd.service, systemd-networkd.socket, systemd-networkd-wait-online.service, nftables.service, serial-getty@ttyS0.service; mask apt-daily.timer, apt-daily-upgrade.timer, dpkg-db-backup.timer, getty@tty1.service
+Services (5):
+  app-ready               /bin/bash -c until (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; do sleep 0....  restart=no  type=oneshot  user=app-ready  after=app.service  requires=app.service
+  app.service             /usr/bin/server -port 8080 -version 0.1.0  restart=on-failure  type=exec  user=app  after=tdx-evidence.service  requires=tdx-evidence.service
+  tdx-evidence.service    /usr/lib/tundravm/tdx-evidence  restart=no  type=oneshot  env=TUNDRAVM_EXECUTION  after=systemd-udev-trigger.service
+  tdxs.service            /usr/bin/tdxs --config /etc/tdxs/config.yaml --log-level info  restart=on-failure  type=notify  user=tdxs  group=tdx  after=tdxs.socket,tdx-evidence.service  requires=tdxs.socket,tdx-evidence.service  disabled
+  tundravm-probe.service  /bin/sh /usr/lib/tundravm/probe  restart=no  type=oneshot  after=tdx-evidence.service,tdxs.socket,app.service,app-ready.service,nftables.service,systemd-udev-trigger.service,systemd-modules-load.service
+Hooks:
+  build (2):
+    echo 'tundravm: source build tdxs is not pinned: run tundravm lock, then tund...
+    echo 'tundravm: source build server is not pinned: run tundravm lock, then tu...
+  postinst (1):
+    SALT=$(printf 'tundravm-devtools:%s' "${IMAGE_ID:-devtools}" | sha256sum | cu...
+  finalize (1):
+    sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release"
+Debloat: enabled, 30 paths removed, systemd minimize=yes
+Targets: qemu

@@ -34,6 +34,7 @@ quotes and the attested channel land, `attest` and `secrets` say `unverified fir
 - **Breaking:** twelve commands: `new`, `check`, `lock`, `build`, `show`, `run`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor`.
 - `new NAME [--template service|prover] [--ci]` writes a project whose printed loop, README, tests and workflow run as written, `ruff format` clean; the `service` template builds your Go program from `app/`, the prover adds a volume, a secret, attested TLS and `policies/`.
 - The `--ci` workflow checks the image, the lock and the committed tree, and builds with `TUNDRA_TOOLS_TOKEN`, or warns without it.
+- **Breaking:** `show IMAGE` lists the components the image file wrote, each with what it composed (`--json`: `{"name", "components"}`), and a source build only under sources.
 - `show` leads with the image, then production; with a build, its report and boot probe checks; `--diff` compares two builds.
 - `run --mode simulated|tdx` is explicit, and a production build boots fail-closed without TDX; `run --probe` and `run probe INSTANCE` read the boot probe every development profile carries, write `probe.json` and exit 1 on a failed check.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.

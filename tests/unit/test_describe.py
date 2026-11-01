@@ -188,8 +188,9 @@ def test_describe_per_variant() -> None:
         "waagent",
     ]
     assert "modules" not in azure
-    lineage = describe(image, profile="azure", inherits="base", fragments=("common", "azure"))
-    assert (lineage["extends"], lineage["components"]) == ("base", ["common", "azure"])
+    rows = [{"components": [], "name": "common"}]
+    lineage = describe(image, profile="azure", inherits="base", components=rows)
+    assert (lineage["extends"], lineage["components"]) == ("base", rows)
     assert azure["targets"] == ["azure"]
     assert azure["users"] == describe(image, profile="default")["users"]
     assert describe(image, profile="cloud")["targets"] == ["qemu", "gcp"]
