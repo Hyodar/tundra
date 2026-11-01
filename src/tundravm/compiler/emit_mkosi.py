@@ -1303,7 +1303,7 @@ class DeterministicMkosiEmitter:
                     else []
                 ),
                 *([f"ToolsTreeSnapshot={config.snapshot}"] if config.snapshot else []),
-                *(["ToolsTreePackages=qemu-utils"] if config.bootable else []),
+                *_tools_tree_packages(config, recipe),
                 "History=no",
                 f"WithNetwork={'yes' if config.with_network else 'no'}",
                 *(
@@ -1883,6 +1883,26 @@ def _payload_trees(config: EmitConfig) -> list[str]:
             f"ExtraTrees=%O/{PAYLOAD}.root-verity.raw:{VERITY_HASH}",
         ]
     return trees
+
+
+def _tools_tree_packages(config: EmitConfig, recipe: RecipeState) -> list[str]:
+    """``ToolsTreePackages=``: ``qemu-utils`` for a disk, and ``debian-archive-keyring`` when
+    a repository is signed by one of its keyrings. The build's apt reads ``Signed-By=`` in
+    the tools tree, whose ``package-manager`` profile ships that package only while
+    ``ToolsTreeProfiles=`` keeps it, so the tree asks for it by name."""
+    packages = ["qemu-utils"] if config.bootable else []
+    if any(
+        (repository.keyring or "").startswith(DEBIAN_ARCHIVE_KEYRINGS)
+        for profile in recipe.profiles.values()
+        for repository in profile.repositories
+    ):
+        packages.append("debian-archive-keyring")
+    return [f"ToolsTreePackages={' '.join(packages)}"] if packages else []
+
+
+DEBIAN_ARCHIVE_KEYRINGS = "/usr/share/keyrings/debian-archive-"
+"""The keyrings ``debian-archive-keyring`` installs: ``debian-archive-keyring.gpg`` and the
+ones per release beside it."""
 
 
 def _build_sources(recipe: RecipeState) -> list[str]:

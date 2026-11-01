@@ -275,7 +275,8 @@ class AptRepository:
     Any other *url* takes *sha256*, the digest of its ``dists/<suite>/InRelease``: that file
     is signed and lists every index's digest, so the build fails when the archive moves.
     *key* signs it: a host keyring file (``Path``, ``.asc`` when armored), or the path of
-    one a package installs under ``/usr/share/keyrings/``. Unsigned archives are refused.
+    one a package installs under ``/usr/share/keyrings/`` in the tools tree, where the build's
+    apt reads it (``debian-archive-keyring``'s are added there). Unsigned archives are refused.
     """
 
     url: str

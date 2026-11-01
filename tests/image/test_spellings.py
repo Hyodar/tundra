@@ -121,3 +121,19 @@ def test_one_image_using_every_spelling_compiles_to_the_golden(tmp_path: Path) -
     if os.environ.get("TUNDRAVM_UPDATE_GOLDEN") == "1":
         GOLDEN.write_text(text, encoding="utf-8")
     assert text == GOLDEN.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("key", "packages"),
+    [
+        (None, "ToolsTreePackages=qemu-utils\n"),
+        (KEYRING, "ToolsTreePackages=qemu-utils debian-archive-keyring\n"),
+    ],
+    ids=["no-repository", "debian-keyring"],
+)
+def test_a_debian_keyed_repository_puts_its_keyring_in_the_tools_tree(
+    tmp_path: Path, key: str | None, packages: str
+) -> None:
+    repositories = [] if key is None else [AptRepository(DEBIAN, "trixie-security", key=key)]
+    tundravm.compile(Image("keyring", base=Debian(repositories=repositories))).write(tmp_path)
+    assert packages in (tmp_path / "mkosi.conf").read_text(encoding="utf-8")
