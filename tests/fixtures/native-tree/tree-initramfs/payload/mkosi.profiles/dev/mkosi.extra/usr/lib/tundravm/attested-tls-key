@@ -1,0 +1,23 @@
+#!/bin/sh
+# tundravm attested TLS key: a fresh P-256 key and self-signed certificate for the port
+# given, every boot, on tmpfs only. The key is root:root 0600; the relay reads it through
+# LoadCredential=, and the attested endpoint reads the certificate to bind its key.
+set -eu
+port=$1
+dir=/run/tundravm/attested-tls/$port
+fingerprint() {
+    openssl x509 -in "$dir/cert.pem" -outform DER | sha256sum | cut -d ' ' -f 1
+}
+mkdir -p -m 0711 /run/tundravm /run/tundravm/attested-tls "$dir"
+if [ -s "$dir/key.pem" ] && [ -s "$dir/cert.pem" ]; then
+    echo "tundravm-attested-tls: :$port sha256:$(fingerprint)"
+    exit 0
+fi
+umask 077
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+    -subj "/CN=tundravm attested TLS :$port" \
+    -keyout "$dir/key.pem.tmp" -out "$dir/cert.pem.tmp" 2>/dev/null
+chmod 0644 "$dir/cert.pem.tmp"
+mv "$dir/key.pem.tmp" "$dir/key.pem"
+mv "$dir/cert.pem.tmp" "$dir/cert.pem"
+echo "tundravm-attested-tls: :$port sha256:$(fingerprint)"

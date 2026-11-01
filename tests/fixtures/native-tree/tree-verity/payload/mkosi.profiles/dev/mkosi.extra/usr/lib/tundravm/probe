@@ -49,6 +49,33 @@ probe_endpoint() {
     done
     fail "no evidence for nonce $nonce on :$1: journalctl -u $2 -u tdxs; ${said:-no answer}"
 }
+probe_attested_tls() {
+    if ! command -v curl >/dev/null 2>&1; then
+        skip "no curl in the image to ask the endpoint"
+        return
+    fi
+    waited=0
+    while :; do
+        served=$(openssl s_client -connect "127.0.0.1:$1" </dev/null 2>/dev/null |
+            openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | base64 -w 0)
+        nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+        said=$(curl -ksS --max-time 10 "https://127.0.0.1:$2/evidence?nonce=$nonce" 2>&1) || true
+        if [ -n "$served" ]; then
+            case $said in
+                *"\"port\":$1,\"public_key\":\"$served\""*) ok "certificate served, its key bound by the evidence on :$2"; return ;;
+                *"\"nonce\":\"$nonce\""*) fail "the certificate on :$1 carries a key the evidence on :$2 does not bind for it: journalctl -u $3 -u $4"; return ;;
+            esac
+        fi
+        [ "$waited" -ge 30 ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -z "$served" ]; then
+        fail "no certificate served on :$1 after 30s: journalctl -u $3"
+    else
+        fail "no evidence for nonce $nonce on :$2: journalctl -u $4 -u tdxs; ${said:-no answer}"
+    fi
+}
 probe_active() {
     state=$(systemctl show -P ActiveState "$1")
     if [ "$state" = active ]; then ok active; else fail "$state: $2"; fi
@@ -321,18 +348,24 @@ check=service:sink.service
 probe_service sink.service
 check=socket:tdxs.socket
 probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
+check=service:attested-tls-8443.service
+probe_service attested-tls-8443.service
 check=port:8080/tcp
 probe_port tcp 8080
+check=port:8443/tcp
+probe_port tcp 8443
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
+check=attested-tls:8443
+probe_attested_tls 8443 8745 attested-tls-8443.service tundravm-endpoint.service
 check=observability:journal-export.service
 probe_upload journal-export.service 'http://127.0.0.2:19580' /var/lib/journal-export/state 19582
 check=observability:metrics-export.service
 probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- greeter.service web.service sink.service tdxs.service
+probe_nowait journal-export.service metrics-export.service -- greeter.service web.service sink.service tdxs.service attested-tls-8443.service
 check=observability:egress
 probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:greeter.service
@@ -343,6 +376,8 @@ check=hardening:journal-export.service
 probe_hardening journal-export.service 2.5 static
 check=hardening:metrics-export.service
 probe_hardening metrics-export.service 2.5 static
+check=hardening:attested-tls-8443.service
+probe_hardening attested-tls-8443.service 2.5 static
 check=kernel:modules
 probe_modules crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys

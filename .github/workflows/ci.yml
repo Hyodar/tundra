@@ -242,14 +242,29 @@ jobs:
 
       - name: Attest the dev instance and deliver a secret over its attested endpoint
         # Plan 6.3 under QEMU: the simulator issuer the dev profile picked at boot binds the
-        # nonce, the endpoint's TLS key, the SSH host keys and the instance key; deliver
-        # verifies on its own session.
+        # nonce, the endpoint's TLS key, the SSH host keys, the instance key and the attested
+        # TLS port's certificate key; deliver verifies on its own session. `attest --tls`
+        # checks the certificate the port serves against that binding, as the Go client does.
         run: |
           ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/operator"
           policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
+          receipt=.tundravm/instances/fixture-1/instance.json
+          console=.tundravm/instances/fixture-1/console.log
           uv run tundravm attest fixture-1 --policy "$policy" --identity "$RUNNER_TEMP/operator"
-          jq -e '.attested.verdict == "simulated"' .tundravm/instances/fixture-1/instance.json
+          jq -e '.attested.verdict == "simulated"' "$receipt"
           test -s .tundravm/instances/fixture-1/known_hosts
+          uv run tundravm attest fixture-1 --policy "$policy" --tls 8443 | tee "$RUNNER_TEMP/attest-tls.txt"
+          grep -E '^certificate   :8443  sha256:[0-9a-f]{64}  \(key bound to the quote\)$' "$RUNNER_TEMP/attest-tls.txt"
+          grep -E 'tundravm-attested-tls: :8443 sha256:[0-9a-f]{64}' "$console"
+          jq -e '.results[] | select(.check == "attested-tls:8443") | .verdict == "ok"' \
+            .tundravm/instances/fixture-1/probe.json
+          tls=$(jq -r '.ports["8443"]' "$receipt")
+          management=$(jq -r '.ports["8745"]' "$receipt")
+          (cd tools && go run ./cmd/attested-client --dev --endpoint "127.0.0.1:$management" \
+            "https://127.0.0.1:$tls" | tee "$RUNNER_TEMP/attested-client.txt")
+          grep -E '^certificate  127.0.0.1:[0-9]+  sha256:[0-9a-f]{64}  \(bound to the quote for :8443\)$' \
+            "$RUNNER_TEMP/attested-client.txt"
+          grep -F 'verdict: simulated' "$RUNNER_TEMP/attested-client.txt"
           printf 'fixture-token\n' > "$RUNNER_TEMP/greeting-token"
           uv run tundravm secrets deliver fixture-1 --policy "$policy" \
             "greeting-token=@$RUNNER_TEMP/greeting-token"

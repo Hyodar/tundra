@@ -49,6 +49,33 @@ probe_endpoint() {
     done
     fail "no evidence for nonce $nonce on :$1: journalctl -u $2 -u tdxs; ${said:-no answer}"
 }
+probe_attested_tls() {
+    if ! command -v curl >/dev/null 2>&1; then
+        skip "no curl in the image to ask the endpoint"
+        return
+    fi
+    waited=0
+    while :; do
+        served=$(openssl s_client -connect "127.0.0.1:$1" </dev/null 2>/dev/null |
+            openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | base64 -w 0)
+        nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+        said=$(curl -ksS --max-time 10 "https://127.0.0.1:$2/evidence?nonce=$nonce" 2>&1) || true
+        if [ -n "$served" ]; then
+            case $said in
+                *"\"port\":$1,\"public_key\":\"$served\""*) ok "certificate served, its key bound by the evidence on :$2"; return ;;
+                *"\"nonce\":\"$nonce\""*) fail "the certificate on :$1 carries a key the evidence on :$2 does not bind for it: journalctl -u $3 -u $4"; return ;;
+            esac
+        fi
+        [ "$waited" -ge 30 ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -z "$served" ]; then
+        fail "no certificate served on :$1 after 30s: journalctl -u $3"
+    else
+        fail "no evidence for nonce $nonce on :$2: journalctl -u $4 -u tdxs; ${said:-no answer}"
+    fi
+}
 probe_active() {
     state=$(systemctl show -P ActiveState "$1")
     if [ "$state" = active ]; then ok active; else fail "$state: $2"; fi
@@ -327,6 +354,8 @@ check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
+check=attested-tls:8546
+probe_attested_tls 8546 8745 attested-tls-8546.service tundravm-endpoint.service
 check=observability:journal-export.service
 probe_upload journal-export.service 'http://127.0.0.1:19532' /var/lib/journal-export/state 19532
 check=observability:metrics-export.service

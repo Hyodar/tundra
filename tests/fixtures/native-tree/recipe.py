@@ -32,7 +32,9 @@ import tundravm
 from tundravm import Image
 from tundravm._image import recipe_of
 from tundravm._image._lower import OWNERS_STEP
-from tundravm.components import JournalExport, Observability, PrometheusRemoteWrite
+from tundravm._image._runtime import Runtime
+from tundravm._modules import attested_tls
+from tundravm.components import Endpoint, JournalExport, Observability, PrometheusRemoteWrite
 from tundravm.components._base import egress_rules
 from tundravm.declarative import (
     BootStep,
@@ -66,6 +68,7 @@ from tundravm.declarative.utils import (
     SshAccess,
     Tdxs,
 )
+from tundravm.ports import AttestedTLS
 
 SNAPSHOT = "20261018T082309Z"
 SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
@@ -238,6 +241,27 @@ DEV_SECRET = Secret(
 """The secret CI delivers to the dev boot over the attested endpoint; optional, so nothing
 waits for it and ``run --probe`` finishes before it arrives."""
 
+ATTESTED_PORT = 8443
+ATTESTED = AttestedTLS(ATTESTED_PORT, upstream=Endpoint("127.0.0.1", WEB_PORT))
+"""Attested TLS in front of :class:`Web`'s page, whose certificate key the endpoint's
+evidence binds: the probe's ``attested-tls:`` row reads the certificate back, and CI checks
+it from the host with ``attest --tls``."""
+
+
+def relayed(way: AttestedTLS) -> tuple[Declaration, ...]:
+    """*way* as an ``Image`` lowers an attested ingress: the key unit's script, the key
+    unit, the relay and their packages."""
+    runtime = Runtime(
+        volumes=(),
+        secrets=(),
+        ingress=(way,),
+        services=(),
+        tools=tundravm.components.Tdxs().source,
+        rootfs="initramfs",
+    )
+    return (File(attested_tls.SCRIPT_PATH, attested_tls.SCRIPT, mode=0o755), *runtime.relay(way))
+
+
 DEV = Fragment(
     "dev",
     items=(
@@ -259,7 +283,8 @@ DEV = Fragment(
             hardening=Hardening.none(),
         ),
         Tdxs(),
-        Secrets(entries=(DEV_SECRET,), port=MANAGEMENT_PORT),
+        Secrets(entries=(DEV_SECRET,), port=MANAGEMENT_PORT, attested_tls=(ATTESTED_PORT,)),
+        *relayed(ATTESTED),
     ),
 )
 """What the ``dev`` variant adds: SSH by public key, a firewall whose output chain allows
@@ -268,10 +293,11 @@ nothing once built), a scheduled job, and the export path with its proxy and rec
 the derived probe boots its ``egress:``, ``timer:`` and ``observability:`` checks, and the
 console shows the ``sink:`` lines of what arrived. The evidence service with the simulator
 issuer and the attested endpoint on :data:`MANAGEMENT_PORT` taking :data:`DEV_SECRET` give
-the probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``.
-:data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No ``Volume``: ``run``
-attaches disks only for an ``Image``'s runtime manifest, which this plain ``Recipe`` has
-none of."""
+the probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``;
+:data:`ATTESTED` in front of the page gives it the ``attested-tls:`` check and CI its
+``attest --tls``. :data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No
+``Volume``: ``run`` attaches disks only for an ``Image``'s runtime manifest, which this
+plain ``Recipe`` has none of."""
 
 
 def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:

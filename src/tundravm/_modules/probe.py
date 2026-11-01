@@ -45,6 +45,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   root is a tmpfs or erofs, which carry no ``chattr +i``);
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
   ``root:root 0600`` and its public key file holds its public key;
+- ``attested-tls:PORT``: the attested TLS listener on ``PORT`` serves a certificate, and
+  its key is the one the attested endpoint's evidence binds for that port
+  (``Secrets(attested_tls=)``);
 - ``owner:PATH``: each path a ``File(owner=)`` or ``Tree(owner=)`` declares is owned by
   that user and group once the ``owners`` runtime-init step ran, with the mode its ``File``
   declares.
@@ -116,6 +119,7 @@ Helper = Literal[
     "keys",
     "instance",
     "endpoint",
+    "attested-tls",
     "owner",
 ]
 
@@ -286,6 +290,18 @@ def derive(
                 (unit,),
             )
         )
+        for port in item.attested_tls:
+            relay = f"attested-tls-{port}.service"
+            checks.append(
+                Check(
+                    f"attested-tls:{port}",
+                    f"the certificate served on {port} carries the key the evidence on "
+                    f"{item.port} binds for it",
+                    f"probe_attested_tls {port} {item.port} {relay} {unit}",
+                    "attested-tls",
+                    (relay, unit),
+                )
+            )
     checks += observed
     checks += hardened
     off = sorted(option for option in set(kernel_off) if option in SYMBOLS)
@@ -601,6 +617,35 @@ probe_endpoint() {{
         waited=$((waited + 1))
     done
     fail "no evidence for nonce $nonce on :$1: journalctl -u $2 -u tdxs; ${{said:-no answer}}"
+}}
+""",  # noqa: E501
+    "attested-tls": f"""\
+probe_attested_tls() {{
+    if ! command -v curl >/dev/null 2>&1; then
+        skip "no curl in the image to ask the endpoint"
+        return
+    fi
+    waited=0
+    while :; do
+        served=$(openssl s_client -connect "127.0.0.1:$1" </dev/null 2>/dev/null |
+            openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | base64 -w 0)
+        nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+        said=$(curl -ksS --max-time 10 "https://127.0.0.1:$2/evidence?nonce=$nonce" 2>&1) || true
+        if [ -n "$served" ]; then
+            case $said in
+                *"\\"port\\":$1,\\"public_key\\":\\"$served\\""*) ok "certificate served, its key bound by the evidence on :$2"; return ;;
+                *"\\"nonce\\":\\"$nonce\\""*) fail "the certificate on :$1 carries a key the evidence on :$2 does not bind for it: journalctl -u $3 -u $4"; return ;;
+            esac
+        fi
+        [ "$waited" -ge {WAIT_SECONDS} ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -z "$served" ]; then
+        fail "no certificate served on :$1 after {WAIT_SECONDS}s: journalctl -u $3"
+    else
+        fail "no evidence for nonce $nonce on :$2: journalctl -u $4 -u tdxs; ${{said:-no answer}}"
+    fi
 }}
 """,  # noqa: E501
     "active": """\
