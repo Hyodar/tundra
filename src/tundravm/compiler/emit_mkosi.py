@@ -406,6 +406,8 @@ class EmitConfig:
     clean_package_metadata: bool = True
     kernel_modules: tuple[str, ...] | Literal["all"] = ()
     """``Debian(kernel_modules=...)``: see :func:`tundravm.kernel_modules.module_selection`."""
+    kernel_cmdline: tuple[str, ...] = ()
+    """``Debian(kernel_cmdline=...)``: parameters after the compiler's own, in order."""
     manifest_format: str = "json"
     sandbox_trees: tuple[str, ...] = ()
     sandbox_files: tuple[tuple[str, str], ...] = ()
@@ -1280,20 +1282,16 @@ class DeterministicMkosiEmitter:
         if verity:
             content.append("Bootloader=uki")
         content.append(f"CleanPackageMetadata={'yes' if config.clean_package_metadata else 'no'}")
-        cmdline = config.kernel.cmdline if config.kernel and config.kernel.cmdline else ""
+        parts = [config.kernel.cmdline] if config.kernel and config.kernel.cmdline else []
         if verity:
             data, hashes = verity_uuids(config.seed)
-            cmdline = " ".join(
-                part
-                for part in (
-                    cmdline,
-                    f"root={VERITY_ROOT_DEVICE}",
-                    f"systemd.verity_root_data=/dev/disk/by-partuuid/{data}",
-                    f"systemd.verity_root_hash=/dev/disk/by-partuuid/{hashes}",
-                    "systemd.volatile=overlay",
-                )
-                if part
-            )
+            parts += [
+                f"root={VERITY_ROOT_DEVICE}",
+                f"systemd.verity_root_data=/dev/disk/by-partuuid/{data}",
+                f"systemd.verity_root_hash=/dev/disk/by-partuuid/{hashes}",
+                "systemd.volatile=overlay",
+            ]
+        cmdline = " ".join((*parts, *config.kernel_cmdline))
         if cmdline:
             content.append(f"KernelCommandLine={cmdline}")
         content += _list_setting("KernelModules", modules.modules)

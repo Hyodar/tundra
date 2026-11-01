@@ -76,6 +76,12 @@ delivery and unlock (gate 3) are not done; until gate 3, `attest` and `secrets` 
   waits for real readiness (`Notify()`, `HttpProbe`, `TcpProbe`); `expose=` opens the
   firewall; `state=`, `credentials=`, `resources=`, `shutdown=`, `timer=`, `socket=` and
   `unit=DropIn(...)` group the rest.
+- `Kernel.default(cmdline=[...])` and `Kernel.build(..., cmdline=[...])` append kernel
+  parameters to the UKI's command line after the image's own; none is added by default.
+  Each entry is one parameter, and the ones tundravm sets (`root=`, `roothash=`,
+  `systemd.verity*`, `systemd.volatile=`, `init=`, `systemd.unit=`, `console=`) are refused
+  with what sets them. They move the recipe digest. `Mkosi(settings=)` refuses
+  `KernelCommandLine` at construction and names `cmdline=`.
 - `Hardening.preset("static" | "dotnet" | "jit" | "node" | "python")` names the runtime
   class; each preset's deviation from `static` is written beside it.
 - `Component` is a class with configuration fields, `compose()`, typed exports

@@ -1,4 +1,5 @@
-"""Volumes, secrets, ingress and the root layout: each slot lowers onto today's stack.
+"""Volumes, secrets, ingress, the root layout and the kernel command line: each slot lowers
+onto today's stack.
 
 The prover shape throughout: a volume an operator unlocks, a service keeping its state
 on it and reading a delivered secret, and an attested TLS ingress in front of it.
@@ -11,7 +12,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from tundravm import Image, RootFS, Service
+from tundravm import Image, Kernel, RootFS, Service
 from tundravm._image import lower, recipe_of
 from tundravm._image._values import MANAGEMENT_PORT
 from tundravm.components import Endpoint
@@ -373,3 +374,37 @@ def test_the_root_layout_is_chosen_explicitly() -> None:
     assert verity.mkosi.root == "verity"
     with pytest.raises(ValidationError, match="erofs"):
         RootFS.verity(filesystem="ext4")  # type: ignore[arg-type]
+
+
+# ── The kernel command line ─────────────────────────────────────────────
+
+
+def test_kernel_parameters_follow_the_images_own_and_enter_its_digest() -> None:
+    kernel = Kernel.default(cmdline=["nospectre_v2", "mitigations=auto"])
+    image = prover(rootfs=RootFS.verity(), kernel=kernel)
+    (line,) = plan(image, "production").settings("Content")["KernelCommandLine"]
+    assert line.split()[0] == "root=/dev/mapper/root"
+    assert line.split()[-3:] == ["systemd.volatile=overlay", "nospectre_v2", "mitigations=auto"]
+    digest = lower(image).digest()
+    assert digest != lower(prover(rootfs=RootFS.verity())).digest()
+    assert digest == lower(prover(rootfs=RootFS.verity(), kernel=kernel)).digest()
+
+
+@pytest.mark.parametrize(
+    ("cmdline", "message"),
+    [
+        ("nospectre_v2", "a list of kernel parameters"),
+        (["a b"], "not one kernel parameter"),
+        ([""], "not one kernel parameter"),
+        (["root=/dev/sda1"], "rootfs="),
+        (["roothash=ab"], "rootfs=RootFS.verity"),
+        (["rd.systemd.verity=0"], "rootfs=RootFS.verity"),
+        (["systemd.volatile=yes"], "rootfs=RootFS.verity"),
+        (["init=/bin/sh"], "boots systemd"),
+        (["systemd.unit=rescue.target"], "minimal.target"),
+        (["console=tty0"], "console=ttyS0 at boot"),
+    ],
+)
+def test_a_kernel_parameter_tundravm_sets_is_refused(cmdline: object, message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Kernel.default(cmdline=cmdline)  # type: ignore[arg-type]

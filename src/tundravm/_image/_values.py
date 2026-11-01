@@ -58,6 +58,7 @@ operator's SSH public key there, once per boot.
 
 _OWNER = re.compile(r"[a-z_][a-z0-9_-]{0,31}(:[a-z_][a-z0-9_-]{0,31})?")
 _MKOSI_KEY = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+_KERNEL_PARAMETER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(=[^\s\x00-\x1f\x7f]*)?")
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -277,6 +278,22 @@ class Debian:
         return self.snapshot or LOCKED_SNAPSHOT
 
 
+_COMPILER_PARAMETERS: Mapping[str, str] = {
+    "root": "Pick the root with rootfs=: the UKI's initrd (the default) or RootFS.verity().",
+    "roothash": "Use rootfs=RootFS.verity(): mkosi writes the root hash it computed.",
+    "usrhash": "Use rootfs=RootFS.verity(): mkosi writes the root hash it computed.",
+    "systemd.verity": "Use rootfs=RootFS.verity(): it opens the root through dm-verity.",
+    "systemd.volatile": "Use rootfs=RootFS.verity(): it stacks a tmpfs over the read-only root.",
+    "init": "Drop it: the image boots systemd, and services= say what it starts.",
+    "rdinit": "Drop it: the image boots systemd, and services= say what it starts.",
+    "systemd.unit": "Drop it: the image boots minimal.target, and services= say what it starts.",
+    "console": "Drop it: tundravm run and tundravm.testing.boot pass console=ttyS0 at boot.",
+}
+"""Kernel parameters the compiler, mkosi or the run set, each with the hint naming what sets
+it: ``Kernel(cmdline=)`` refuses them, with an ``rd.`` prefix too and every
+``systemd.verity*``."""
+
+
 @dataclass(frozen=True, slots=True)
 class Kernel:
     """The kernel: ``Kernel.default()`` (the distribution's, tested) or ``Kernel.build(...)``.
@@ -285,6 +302,11 @@ class Kernel:
     module set (``tdx_guest``, virtio, NVMe, Hyper-V, gVNIC, and the ones each target
     needs). ``Kernel.build(version, source, config=, patches=)`` compiles one instead,
     with every driver built in and no loadable modules.
+
+    *cmdline* adds kernel parameters to the UKI's measured command line, after the ones
+    the image sets itself: ``Kernel.default(cmdline=["nospectre_v2"])``. Each entry is one
+    parameter, ``name`` or ``name=value``. None is added by default, and the parameters the
+    image owns (the root and its verity, the init, the boot target, the console) are refused.
     """
 
     version: str | None = None
@@ -294,6 +316,8 @@ class Kernel:
     patches: Sequence[Path] = ()
     modules: Sequence[str] = ()
     """Extra modules of the distribution kernel to keep, beyond the curated set."""
+    cmdline: Sequence[str] = ()
+    """Kernel parameters appended to the image's own command line, in this order."""
 
     def __post_init__(self) -> None:
         if (self.version is None) != (self.source is None):
@@ -306,8 +330,17 @@ class Kernel:
             raise _fail(self, f"source must be Git(...) or Http(...), got {self.source!r}.")
         if self.config is not None and not isinstance(self.config, Path):
             raise _fail(self, "config= must be a pathlib.Path.")
+        if isinstance(self.cmdline, str):
+            raise _fail(
+                self,
+                "cmdline= takes a list of kernel parameters, not one string.",
+                hint=f"Pass cmdline={self.cmdline.split()!r}.",
+            )
         object.__setattr__(self, "patches", tuple(self.patches))
         object.__setattr__(self, "modules", tuple(self.modules))
+        object.__setattr__(self, "cmdline", tuple(self.cmdline))
+        for parameter in self.cmdline:
+            _check_kernel_parameter(self, parameter)
         if self.built and self.config is None:
             raise _fail(
                 self,
@@ -329,9 +362,10 @@ class Kernel:
         return self.version is not None
 
     @classmethod
-    def default(cls, *, modules: Sequence[str] = ()) -> Kernel:
-        """Debian's kernel with the curated module set, plus *modules*."""
-        return cls(modules=modules)
+    def default(cls, *, modules: Sequence[str] = (), cmdline: Sequence[str] = ()) -> Kernel:
+        """Debian's kernel with the curated module set plus *modules*, booted with *cmdline*
+        after the image's own parameters."""
+        return cls(modules=modules, cmdline=cmdline)
 
     @classmethod
     def build(
@@ -341,9 +375,27 @@ class Kernel:
         *,
         config: Path,
         patches: Sequence[Path] = (),
+        cmdline: Sequence[str] = (),
     ) -> Kernel:
-        """Compile *version* from *source* with *config* and *patches*."""
-        return cls(version, source, config=config, patches=tuple(patches))
+        """Compile *version* from *source* with *config* and *patches*, booted with *cmdline*
+        after the image's own parameters."""
+        return cls(version, source, config=config, patches=tuple(patches), cmdline=cmdline)
+
+
+def _check_kernel_parameter(owner: Kernel, parameter: object) -> None:
+    if not isinstance(parameter, str) or not _KERNEL_PARAMETER.fullmatch(parameter):
+        raise _fail(
+            owner,
+            f"cmdline= entry {parameter!r} is not one kernel parameter.",
+            hint="Pass each parameter as its own entry, name or name=value without spaces: "
+            "cmdline=['nospectre_v2', 'mitigations=auto'].",
+        )
+    name = parameter.partition("=")[0]
+    owned = name.removeprefix("rd.")
+    if owned.startswith("systemd.verity"):
+        owned = "systemd.verity"
+    if (hint := _COMPILER_PARAMETERS.get(owned)) is not None:
+        raise _fail(owner, f"cmdline= sets {name}, which tundravm sets itself.", hint=hint)
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,6 +482,8 @@ RESERVED_SETTINGS: dict[str, str] = {
     "Format": "the payload's format follows from the root layout and the targets",
     "Profiles": "profiles are the image's own, named by Profile(...)",
     "Dependencies": "the subimage graph is the compiler's",
+    "KernelCommandLine": "the command line is measured and the image writes its own; "
+    "kernel=Kernel.default(cmdline=[...]) appends parameters to it",
 }
 """mkosi keys :class:`Mkosi` refuses, with the invariant each would contradict."""
 

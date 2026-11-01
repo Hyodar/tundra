@@ -26,6 +26,9 @@ class MkosiOptions:
     kernel_modules: tuple[str, ...] | Literal["all"] = ()
     """``Debian(kernel_modules=...)``: names added to the curated module set
     (``KernelModules=``), or ``"all"``."""
+    kernel_cmdline: tuple[str, ...] = ()
+    """``Debian(kernel_cmdline=...)``: parameters after the compiler's own on
+    ``KernelCommandLine=``."""
     manifest_format: str = "json"
     """``ManifestFormat=``."""
     compress_output: str | None = None

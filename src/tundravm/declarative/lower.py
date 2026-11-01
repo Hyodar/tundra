@@ -131,7 +131,7 @@ _COMPILER_KEYS: dict[str, str] = {
     "Packages": "Package(name)",
     "BuildPackages": "the packages= of the Build, GoBinary or CargoBinary that needs them",
     "Bootable": "Kernel(...) or Package('linux-image-amd64'); only Bootable=no is accepted",
-    "KernelCommandLine": "nothing: the compiler writes the kernel command line itself",
+    "KernelCommandLine": "Debian(kernel_cmdline=...)",
     **{
         key: "Debian(kernel_modules=...)"
         for key in ("KernelModules", "KernelModulesInclude", "KernelModulesExclude")
@@ -682,6 +682,7 @@ def _typed_options(recipe: Recipe) -> dict[str, Any]:
         "root": config.root,
         "clean_package_metadata": getattr(recipe.platform, "clean_package_metadata", True),
         "kernel_modules": getattr(recipe.platform, "kernel_modules", ()),
+        "kernel_cmdline": getattr(recipe.platform, "kernel_cmdline", ()),
     }
     defaults = MkosiOptions()
     return {key: value for key, value in typed.items() if value != getattr(defaults, key)}

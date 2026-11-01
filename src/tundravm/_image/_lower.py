@@ -141,6 +141,7 @@ class _Lowering:
             efi_stub=base.efi_stub,
             kernel_package=None if kernel.built else "linux-image-amd64",
             kernel_modules=() if kernel.built else tuple(kernel.modules),
+            kernel_cmdline=tuple(kernel.cmdline),
         )
 
     def items(self) -> tuple[dm.Declaration | dm.Fragment, ...]:

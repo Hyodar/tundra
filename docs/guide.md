@@ -183,7 +183,7 @@ Passing one of them in `components=` replaces the default one.
 | `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) | `tundravm.ports` |
 | `network` | `Network(dhcp=, static=, egress=, interfaces=)` | `tundravm.components` |
 | `users`, `groups` | `User`, `Group` for resources several services share | `tundravm` |
-| `kernel` | `Kernel.default()` or `Kernel.build(version, source, config=, patches=)` | `tundravm` |
+| `kernel` | `Kernel.default(modules=, cmdline=)` or `Kernel.build(version, source, config=, patches=, cmdline=)` | `tundravm` |
 | `rootfs` | `RootFS.initramfs()` (default) or `RootFS.verity()` | `tundravm` |
 | `observability` | `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))` | `tundravm.components` |
 | `targets` | a subset of `("qemu", "azure", "gcp")`; `qemu` is always built | |
@@ -196,6 +196,16 @@ Passing one of them in `components=` replaces the default one.
 root-owned unless `owner=` says otherwise; systemd-tmpfiles applies the owner at
 boot. Build dependencies are not image packages: they belong to the `GoBinary`,
 `CargoBinary` or `Build` that needs them.
+
+`cmdline=` on either `Kernel` appends parameters to the UKI's measured command line, after
+the ones the image writes itself: `kernel=Kernel.default(cmdline=["nospectre_v2"])`. None is
+added by default (flashbots' `nospectre_v2` is a choice to make, not one to copy). Each
+entry is one parameter, `name` or `name=value`. The ones tundravm sets are refused, each
+with what sets it: `root=`, `roothash=`, `usrhash=`, `systemd.verity*` and
+`systemd.volatile=` follow from `rootfs=`, the image boots systemd into `minimal.target`
+(`init=`, `rdinit=`, `systemd.unit=`), and `run` passes `console=` at boot. The parameters
+are part of the image: they move the recipe digest the lockfile records, and the manifest
+records the UKI's command line, which `show --diff` compares.
 
 ### Imports
 

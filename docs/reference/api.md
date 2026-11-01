@@ -160,6 +160,7 @@ Kernel(
     config: Path | None = None,
     patches: Sequence[Path] = (),
     modules: Sequence[str] = (),
+    cmdline: Sequence[str] = (),
 )
 ```
 
@@ -167,9 +168,9 @@ The kernel: `Kernel.default()` (the distribution's, tested) or `Kernel.build(...
 
 | Member | Does |
 |---|---|
-| `Kernel.build(version: str, source: Git \| Http, *, config: Path, patches: Sequence[Path] = ()) -> Kernel` | Compile *version* from *source* with *config* and *patches*. |
+| `Kernel.build(version: str, source: Git \| Http, *, config: Path, patches: Sequence[Path] = (), cmdline: Sequence[str] = ()) -> Kernel` | Compile *version* from *source* with *config* and *patches*, booted with *cmdline* after the image's own parameters. |
 | `Kernel.built` | Whether the build compiles this kernel. |
-| `Kernel.default(*, modules: Sequence[str] = ()) -> Kernel` | Debian's kernel with the curated module set, plus *modules*. |
+| `Kernel.default(*, modules: Sequence[str] = (), cmdline: Sequence[str] = ()) -> Kernel` | Debian's kernel with the curated module set plus *modules*, booted with *cmdline* after the image's own parameters. |
 
 ### `load`
 

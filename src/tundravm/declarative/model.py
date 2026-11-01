@@ -465,11 +465,18 @@ class Debian(Platform):
     """The modules of ``kernel_package`` the image keeps (mkosi ``KernelModules=``, which adds
     their dependencies): the curated set of each variant's outputs
     (:mod:`tundravm.kernel_modules`) plus these names; ``"all"`` keeps every module."""
+    kernel_cmdline: tuple[str, ...] = ()
+    """Kernel parameters appended to the command line the compiler writes (mkosi
+    ``KernelCommandLine=``), whichever kernel boots."""
 
     def __post_init__(self) -> None:
         Platform.__post_init__(self)
         _require_bool(self, self.clean_package_metadata, "clean_package_metadata")
         _check_kernel_modules(self)
+        object.__setattr__(self, "kernel_cmdline", tuple(self.kernel_cmdline))
+        for parameter in self.kernel_cmdline:
+            if not isinstance(parameter, str) or parameter.split() != [parameter]:
+                raise _fail(self, f"kernel_cmdline entry {parameter!r} is not one parameter.")
         if self.boot is not None:
             _require_choice(self, self.boot, tuple(BOOT_PACKAGES), "boot")
         if self.kernel_package is not None:

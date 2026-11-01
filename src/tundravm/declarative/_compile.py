@@ -154,6 +154,7 @@ def _emit_config(lowered: Lowered, pins: Mapping[str, LockedFetch]) -> EmitConfi
         "with_network": options.with_network,
         "clean_package_metadata": options.clean_package_metadata,
         "kernel_modules": options.kernel_modules,
+        "kernel_cmdline": options.kernel_cmdline,
         "manifest_format": options.manifest_format,
         "compress_output": options.compress_output,
         "output_directory": options.output_directory,
