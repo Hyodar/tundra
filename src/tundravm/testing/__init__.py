@@ -8,8 +8,9 @@ hooks). :func:`assert_clean` and :func:`assert_diagnostic` check lint findings,
 :func:`read_lock` reads the lockfile those take. :class:`FakeMkosi` and
 :class:`FakeSources` stand in for mkosi and the source fetches, so a real backend runs a
 whole build with nothing forked or fetched; :func:`boot` boots a built image under QEMU
-and reads its serial console; :func:`run_cli` runs the CLI in-process, on an image
-:func:`image_file` writes.
+and reads its serial console, and :func:`assert_probe` (:func:`read_probe`) reads the boot
+probe a development profile prints there; :func:`run_cli` runs the CLI in-process, on an
+image :func:`image_file` writes.
 
 Importing this package does not import pytest. The fixtures live in
 ``tundravm.testing.pytest_plugin``, which pytest loads automatically once
@@ -27,16 +28,20 @@ from pathlib import Path
 from typing import Literal
 
 from tundravm._image._image import Image
+from tundravm._modules.probe import Report as ProbeReport
 from tundravm.check import render
 from tundravm.declarative.lifecycle import Tree, check_report, read_lock, read_tree
 from tundravm.diagnostics import Diagnostic, Severity
 from tundravm.testing._boot import (
+    PROBE_DONE,
     BootResult,
     BootUnavailable,
     ConsoleScan,
     HttpResponse,
+    assert_probe,
     boot,
     boot_unavailable,
+    read_probe,
     scan_console,
 )
 from tundravm.testing._fake_mkosi import FakeCall, FakeMkosi, build_unavailable
@@ -216,6 +221,8 @@ __all__ = [
     "FakeMkosi",
     "FakeSources",
     "HttpResponse",
+    "PROBE_DONE",
+    "ProbeReport",
     "ImageFile",
     "InitStep",
     "Lintable",
@@ -224,6 +231,7 @@ __all__ = [
     "UnitView",
     "assert_clean",
     "assert_diagnostic",
+    "assert_probe",
     "assert_tree",
     "boot",
     "boot_unavailable",
@@ -231,6 +239,7 @@ __all__ = [
     "image_file",
     "plan",
     "read_lock",
+    "read_probe",
     "run_cli",
     "scan_console",
 ]

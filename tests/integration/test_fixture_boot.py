@@ -34,7 +34,7 @@ import pytest
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.recipe import load_file
-from tundravm.testing import BootResult, boot
+from tundravm.testing import BootResult, boot, read_probe
 from tundravm.testing._boot import BootPath, expected_cmdline
 
 from .support import (
@@ -157,3 +157,9 @@ def test_the_kernel_boots_the_ukis_cmdline(
     expected = expected_cmdline(output / "payload.efi")
     assert result.kernel_cmdline == expected
     assert probe_lines(result.console, "cmdline") == [expected]
+
+
+def test_the_production_build_carries_no_boot_probe(disk_boot: BootResult) -> None:
+    """The derived probe ships only in a development profile: a production boot prints
+    none of its lines (``tundravm.testing.read_probe``)."""
+    assert read_probe(disk_boot).results == ()

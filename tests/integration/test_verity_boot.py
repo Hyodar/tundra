@@ -30,7 +30,7 @@ from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.compiler.emit_mkosi import verity_uuids
 from tundravm.declarative.lifecycle import bake_image
 from tundravm.recipe import load_file
-from tundravm.testing import BootResult, boot
+from tundravm.testing import BootResult, boot, read_probe
 from tundravm.testing._boot import expected_cmdline, on_console, uki_cmdline
 
 from .support import (
@@ -180,3 +180,9 @@ def test_usr_bin_writes_land_in_the_volatile_overlay(verity_boot: BootResult) ->
     """``systemd.volatile=overlay`` is in effect: a write under ``/usr/bin`` goes to the
     tmpfs upper layer (the verity root below it stays read-only, as above)."""
     assert probe_lines(verity_boot.console, "usr-bin") == ["write=accepted"]
+
+
+def test_the_production_build_carries_no_boot_probe(verity_boot: BootResult) -> None:
+    """The derived probe ships only in a development profile: a production boot prints
+    none of its lines (``tundravm.testing.read_probe``)."""
+    assert read_probe(verity_boot).results == ()

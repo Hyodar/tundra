@@ -1454,6 +1454,16 @@ assert_diagnostic(
 
 Return the first diagnostic matching every given field, else fail listing them all.
 
+### `assert_probe`
+
+*function*
+
+```python
+assert_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.Report
+```
+
+`read_probe`, raising `AssertionError` with its table unless the probe finished, nothing failed and every *expected* check printed.
+
 ### `assert_tree`
 
 *function*
@@ -1756,6 +1766,36 @@ One profile of an image, planned in memory: what its compiled tree holds, as val
 | `PlannedImage.unit(name: str) -> UnitView` | The shipped unit *name* (a bare name means `.service`), parsed. |
 | `PlannedImage.users` | The declared users, by name. |
 
+### `PROBE_DONE`
+
+*value*
+
+```python
+PROBE_DONE = 'tundravm-probe: done '
+```
+
+### `ProbeReport`
+
+*dataclass*
+
+```python
+ProbeReport(
+    results: tuple[Result, ...] = (),
+    done: tuple[int, int] | None = None,
+    expected: tuple[str, ...] = (),
+)
+```
+
+What the probe printed: each check's last line, and its `done` counts (`None` until it printed them).
+
+| Member | Does |
+|---|---|
+| `Report.failed` |  |
+| `Report.missing` | Expected checks that printed no line. |
+| `Report.ok` | It finished, nothing failed and every expected check printed. |
+| `Report.table() -> str` | The results as a table: check, verdict, detail; then the counts. |
+| `Report.to_dict() -> dict[str, object]` |  |
+
 ### `Profiles`
 
 *value*
@@ -1773,6 +1813,16 @@ read_lock(path: Path) -> Lock
 ```
 
 The lockfile at *path* (`build/tundravm.lock`), as `tundravm.compile(image, lock=)` and `plan(image, lock=)` take it.
+
+### `read_probe`
+
+*function*
+
+```python
+read_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.Report
+```
+
+What the boot probe (`tundravm-probe.service`, which every development profile carries) printed on *console*: each check's last line and its `done` counts. A production boot's report is empty. *expected* names checks that must have printed.
 
 ### `run_cli`
 

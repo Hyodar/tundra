@@ -138,8 +138,9 @@ jobs:
     # (payload.efi through -kernel, qemu.raw through its ESP) by the harness: no TDX here,
     # so it must be fail-closed (tdx-evidence.service refuses, web.service never starts,
     # the boot probe still prints). The dev build runs as an instance with
-    # `tundravm run --mode simulated` (KVM when the runner has it, TCG otherwise), where the
-    # gate records simulated, until the host fetches the fixture's page through the forward.
+    # `tundravm run --mode simulated --probe` (KVM when the runner has it, TCG otherwise),
+    # where the gate records simulated and the boot probe its declarations compile in must
+    # pass every check, until the host fetches the fixture's page through the forward.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 120
@@ -189,9 +190,11 @@ jobs:
           TUNDRAVM_FIXTURE_BUILD: ${{ runner.temp }}/fixture/fixture/latest-production
         run: uv run pytest tests/integration/test_fixture_boot.py -m boot -v -rsP
 
-      - name: Run the dev build as an instance and fetch its page
+      - name: Run the dev build as an instance, probe it and fetch its page
         run: |
-          uv run tundravm run latest-development --mode simulated --detach
+          uv run tundravm show latest-development
+          uv run tundravm run latest-development --mode simulated --probe
+          jq -e '.ok' .tundravm/instances/fixture-1/probe.json
           receipt=.tundravm/instances/fixture-1/instance.json
           port=$(jq -r '.ports["8080"]' "$receipt")
           for attempt in $(seq 1 150); do

@@ -12,7 +12,12 @@ subimages).
 ``tundravm build ... --attr verity_recipe`` selects. Both boot in CI from ``qemu.raw``
 through the ESP (``tests/integration/test_fixture_boot.py``, ``test_verity_boot.py``):
 ``Web`` serves a page the host fetches, and ``BootProbe`` prints the command line, what
-the root is and the first line each built program prints on the console.
+the root is and the first line each built program prints on the console. ``BootProbe`` is
+the half the derived boot probe cannot be: it runs in the production profile, which carries
+no ``tundravm-probe.service``, and it reads what no declaration states (the root's layers,
+the built programs). The ``dev`` profile's derived probe checks the rest (``web`` and
+``greeter`` active and sandboxed, :data:`WEB_PORT` bound, the curated modules, the SSH host
+key) and CI's ``fixture-boot`` job runs it with ``tundravm run --probe``.
 """
 
 from __future__ import annotations

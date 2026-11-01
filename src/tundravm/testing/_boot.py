@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from tundravm._modules import probe
 from tundravm.deploy.qemu import OVMF_CODE_PATHS, OVMF_VARS_PATHS
 from tundravm.measure import pe
 
@@ -575,3 +576,26 @@ def boot(
 
 _POLL = 0.25
 """Seconds between reads of the console log."""
+
+
+PROBE_DONE = f"{probe.PREFIX}{probe.DONE} "
+"""The line a development profile's boot probe ends with: a ``boot(markers=...)`` entry
+waits for it."""
+
+
+def read_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.Report:
+    """What the boot probe (``tundravm-probe.service``, which every development profile
+    carries) printed on *console*: each check's last line and its ``done`` counts. A
+    production boot's report is empty. *expected* names checks that must have printed."""
+    text = console.console if isinstance(console, BootResult) else console
+    return probe.read(console_lines(text), expected)
+
+
+def assert_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.Report:
+    """:func:`read_probe`, raising ``AssertionError`` with its table unless the probe
+    finished, nothing failed and every *expected* check printed."""
+    report = read_probe(console, expected)
+    if not report.ok:
+        why = "did not finish" if report.done is None else "failed"
+        raise AssertionError(f"the boot probe {why}\n{report.table()}")
+    return report

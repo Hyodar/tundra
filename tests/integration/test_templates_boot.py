@@ -11,7 +11,9 @@ The templates are ``Image`` files, and their evidence service builds tundra-tool
 source repository, which the bake fetches. There is no TDX here, so a production profile is
 fail-closed (plan 6.1: ``tdx-evidence.service`` refuses and no service starts): the
 ``minimal`` template's production profile is booted to show that, and the
-``service`` template's ``dev`` profile, which runs simulated, serves its page.
+``service`` template's ``dev`` profile, which runs simulated, serves its page and passes the
+boot probe its declarations compile in (``tundravm.testing.assert_probe``); the production
+profile prints no probe.
 Needs a host the Linux backend builds on (user namespaces or non-interactive sudo),
 ``qemu-system-x86_64``, OVMF and read access to tundra-tools (``support.require_sources``);
 skipped otherwise. ``test_fixture_boot.py`` boots the same
@@ -33,8 +35,8 @@ from tundravm._modules.execution import REFUSED
 from tundravm.backends.local_linux import LocalLinuxBackend
 from tundravm.declarative.lifecycle import Artifact, bake_image
 from tundravm.recipe import load_file
-from tundravm.testing import BootResult, boot
-from tundravm.testing._boot import BootPath, expected_cmdline, on_console
+from tundravm.testing import PROBE_DONE, BootResult, assert_probe, boot, read_probe
+from tundravm.testing._boot import DEFAULT_MARKERS, BootPath, expected_cmdline, on_console
 
 from .support import (
     ESP_TYPE,
@@ -86,9 +88,10 @@ def _boot(
     expect_units: tuple[str, ...],
     forward: Mapping[int, int] | None = None,
     wait_http: Sequence[str] = (),
+    markers: Sequence[str] = DEFAULT_MARKERS,
 ) -> BootResult:
     """Boot *artifact* through *via*, its console in ``<name>.console.log`` under
-    ``TUNDRAVM_BOOT_LOGS`` (else *logs*)."""
+    ``TUNDRAVM_BOOT_LOGS`` (else *logs*), until *markers* are on it."""
     log = Path(LOG_DIR or logs) / f"{name}.console.log"
     result = boot(
         artifact,
@@ -96,6 +99,7 @@ def _boot(
         timeout=BOOT_TIMEOUT,
         memory="4G",
         expect_units=expect_units,
+        markers=markers,
         log=log,
         forward=forward,
         wait_http=wait_http,
@@ -139,7 +143,10 @@ def _service_boot(artifact: Artifact, logs: Path, via: BootPath) -> BootResult:
     SERVICE_URL[via] = url = f"http://127.0.0.1:{host}/"
     name = "service" if via == "kernel" else "service-disk"
     forward = {host: APP_PORT}
-    return _boot(artifact, logs, name, via, ("app",), forward=forward, wait_http=(url,))
+    markers = (*DEFAULT_MARKERS, PROBE_DONE)
+    return _boot(
+        artifact, logs, name, via, ("app",), forward=forward, wait_http=(url,), markers=markers
+    )
 
 
 @pytest.fixture(scope="module")
@@ -185,6 +192,18 @@ def test_service_template_boots_with_its_app_running(service_boot: BootResult) -
     service_boot.assert_booted()
     assert {"minimal.target", "app.service"} <= set(service_boot.started)
     assert service_boot.failed == ()
+
+
+def test_service_template_dev_probe_passes(service_boot: BootResult) -> None:
+    """The dev profile's boot probe, derived from the template's declarations, finds every
+    check it carries holding (the app active, its port bound, its sandbox scored)."""
+    report = assert_probe(service_boot)
+    print(report.table())
+    assert {"mode", "service:app.service", "port:8080/tcp"} <= {r.check for r in report.results}
+
+
+def test_the_production_template_carries_no_probe(minimal_boot: BootResult) -> None:
+    assert read_probe(minimal_boot).results == ()
 
 
 def test_service_template_serves_its_page_to_the_host(service_boot: BootResult) -> None:
