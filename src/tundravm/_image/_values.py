@@ -19,7 +19,7 @@ from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from tundravm._location import Located
+from tundravm._location import Located, caller_location
 from tundravm._modules.instance_key import KEY as INSTANCE_KEY
 from tundravm.declarative import model as dm
 from tundravm.declarative.model import Git, Http
@@ -207,6 +207,8 @@ class File(Located):
                 f"mode=None keeps a copied file's execute bit; {self.path!r} is not copied.",
                 hint="Pass mode=0o644.",
             )
+        if isinstance(self.content, Path):
+            object.__setattr__(self, "content", _beside_image(self.content))
         _check_owner(self, self.owner)
 
     @classmethod
@@ -228,7 +230,8 @@ class File(Located):
         mode: int | None = None,
         owner: str | None = None,
     ) -> File:
-        """The host file *src*, read when the image lowers, shipped at *dst*.
+        """The host file *src*, read when the image lowers, shipped at *dst*. A relative
+        *src* is beside the file that declares it, as ``Local`` is, not the working directory.
 
         ``mode=None`` ships ``0755`` when *src* has an execute bit, else ``0644``.
         """
@@ -249,7 +252,8 @@ class File(Located):
 
 @dataclass(frozen=True, slots=True)
 class Tree(Located):
-    """The host directory *src* shipped at *dst*, keeping each file's permission bits.
+    """The host directory *src* shipped at *dst*, keeping each file's permission bits. A
+    relative *src* is beside the file that declares it, as ``Local`` is.
 
     *owner* is applied to the whole tree at boot (``chown -R``), as :class:`File`'s is."""
 
@@ -268,6 +272,7 @@ class Tree(Located):
                 f"src= {self.src!r} is not a host path.",
                 hint='Tree("app/static", "/srv/www"): a directory beside the image file.',
             )
+        object.__setattr__(self, "src", _beside_image(self.src))
         object.__setattr__(self, "dst", _absolute(self, self.dst, "dst"))
         if isinstance(self.exclude, str):
             raise _fail(
@@ -282,6 +287,16 @@ class Tree(Located):
     def ref(self) -> Ref:
         """What a :class:`~tundravm.Profile` change targets."""
         return Ref(self, dm.Ref("FileTree", ("extra", self.dst)))
+
+
+def _beside_image(path: Path) -> Path:
+    """*path* as the image file means it: a relative one is beside the file that declares
+    it (the image file, or the file constructing a component), as ``Local`` resolves, so a
+    build reads the same file from any working directory."""
+    if path.is_absolute():
+        return path
+    location = caller_location().rpartition(":")[0]
+    return (Path(location).parent if location else Path.cwd()) / path
 
 
 def _check_owner(owner: object, value: object) -> None:
@@ -369,6 +384,7 @@ class AptRepository(Keywords):
 
     def _check_key(self) -> None:
         if isinstance(self.key, Path):
+            object.__setattr__(self, "key", _beside_image(self.key))
             return
         if not isinstance(self.key, str) or not self.key.startswith(PACKAGE_KEYRINGS):
             raise _fail(
@@ -578,7 +594,13 @@ class Kernel(Keywords):
                 if isinstance(self.modules, str)
                 else 'Kernel.default(modules=["kvm"])',
             )
-        object.__setattr__(self, "patches", tuple(self.patches))
+        if self.config is not None:
+            object.__setattr__(self, "config", _beside_image(self.config))
+        object.__setattr__(
+            self,
+            "patches",
+            tuple(_beside_image(p) if isinstance(p, Path) else p for p in self.patches),
+        )
         object.__setattr__(self, "modules", tuple(self.modules))
         object.__setattr__(self, "cmdline", tuple(self.cmdline))
         for parameter in self.cmdline:

@@ -129,7 +129,7 @@ A file in the image: `File.text(path, text)` or `File.copy(src, dst)`.
 
 | Member | Does |
 |---|---|
-| `File.copy(src: str \| Path, dst: str, *, mode: int \| None = None, owner: str \| None = None) -> File` | The host file *src*, read when the image lowers, shipped at *dst*. |
+| `File.copy(src: str \| Path, dst: str, *, mode: int \| None = None, owner: str \| None = None) -> File` | The host file *src*, read when the image lowers, shipped at *dst*. A relative *src* is beside the file that declares it, as `Local` is, not the working directory. |
 | `File.ref` | What a `Profile` change targets. |
 | `File.text(path: str, text: str, *, mode: int = 420, owner: str \| None = None) -> File` | The UTF-8 text *text* at *path*. |
 
@@ -346,7 +346,7 @@ Tree(
 )
 ```
 
-The host directory *src* shipped at *dst*, keeping each file's permission bits.
+The host directory *src* shipped at *dst*, keeping each file's permission bits. A relative *src* is beside the file that declares it, as `Local` is.
 
 | Member | Does |
 |---|---|

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
-from tundravm import File, Image, Mkosi, Package, Profile, Service, Tree
+from tundravm import AptRepository, File, Image, Kernel, Mkosi, Package, Profile, Service, Tree
 from tundravm._image import recipe_of
 from tundravm._image._values import RESERVED_SETTINGS
 from tundravm.components import (
@@ -23,12 +23,13 @@ from tundravm.components import (
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
-from tundravm.sources import GoBinary, Local
+from tundravm.sources import Git, GoBinary, Local
 from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import Resources, TcpProbe
 from tundravm.testing import plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
+URL = "https://example.com/linux"
 
 
 class Database(Component):
@@ -233,6 +234,25 @@ def test_a_file_under_a_volume_is_refused() -> None:
     )
     with pytest.raises(ValidationError, match="hides what the image ships"):
         recipe_of(image)
+
+
+@pytest.mark.parametrize(
+    ("declare", "path"),
+    [
+        (lambda: File.copy("etc/app.conf", "/etc/app.conf").content, "etc/app.conf"),
+        (lambda: Tree("www", "/srv/www").src, "www"),
+        (
+            lambda: Kernel.build("6.12", Git(URL, "v6.12"), config=Path("k.config")).config,
+            "k.config",
+        ),
+        (lambda: AptRepository(URL, "stable", key=Path("v.asc"), sha256="0" * 64).key, "v.asc"),
+    ],
+    ids=["File.copy", "Tree", "Kernel config", "AptRepository key"],
+)
+def test_a_relative_host_path_is_beside_the_file_that_declares_it(
+    declare: Callable[[], object], path: str
+) -> None:
+    assert declare() == Path(__file__).parent / path
 
 
 def test_a_profile_removes_a_service_by_reference() -> None:
