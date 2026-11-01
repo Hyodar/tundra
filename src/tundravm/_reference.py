@@ -292,15 +292,16 @@ def _factories(cls: type) -> dict[str, str]:
     }
 
 
-def _members(cls: type) -> list[tuple[str, str]]:
-    """``(signature, paragraph)`` of the public methods and properties *cls* itself defines.
+def _members(cls: type, exported: str | None = None) -> list[tuple[str, str]]:
+    """``(signature, paragraph)`` of the public methods and properties *cls* itself defines,
+    qualified by *exported*, the name the namespace exports it under (default: its own).
 
     An undocumented override of a base class's method (a shipped component's
     ``compose()``) is the base's contract, which the base's entry lists.
     """
     found: list[tuple[str, str]] = []
     for name, value in sorted(vars(cls).items()):
-        qualified = f"{cls.__name__}.{name}"
+        qualified = f"{exported or cls.__name__}.{name}"
         if name.startswith("_") or _undocumented_override(cls, name, value):
             continue
         if isinstance(value, property):
@@ -362,7 +363,7 @@ def _entry(name: str, obj: object) -> list[str]:
         lines += ["```python", signature, "```", ""]
     if paragraph:
         lines += [paragraph, ""]
-    members = _members(obj) if isinstance(obj, type) and kind != "exception" else []
+    members = _members(obj, name) if isinstance(obj, type) and kind != "exception" else []
     if members:
         lines += ["| Member | Does |", "|---|---|"]
         lines += [f"| `{_cell(member)}` | {_cell(does)} |" for member, does in members]

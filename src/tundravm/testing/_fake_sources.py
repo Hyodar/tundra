@@ -15,11 +15,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tundravm.lockfile import LockedToolchain
+
 if TYPE_CHECKING:
     from tundravm._source import Source, SourceBuild
 
 CHECKOUT_FILE = "FAKE-CHECKOUT"
 """The one file a fake checkout holds: the source's url and the pin, as JSON."""
+SDK = "9.0.100"
+"""The .NET SDK every fake Dotnet build is pinned to."""
+SDK_KIND = "dotnet-sdk"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,12 +44,25 @@ class FakeSources:
     answers git's ``rev-parse`` with its pin and ``status`` with a clean tree, so a second
     build reuses it. A dependency prefetch records an empty, complete cache, so an offline
     build reuses it too and a second prefetch keeps it; a Go build's toolchain is ``local``
-    and a Cargo build's ``debian`` (a fake checkout has no go.mod or rust-toolchain.toml).
-    *fetched* lists
+    and a Cargo build's ``debian`` (a fake checkout has no go.mod or rust-toolchain.toml),
+    and a Dotnet build's SDK is :data:`SDK` (``lock`` pins it without reading a global.json
+    or a release manifest, and the prefetch records it without a download). *fetched* lists
     every checkout made, in order.
     """
 
     fetched: list[FakeFetch] = field(default_factory=list)
+
+    def lock_dotnet_sdk(self, build: SourceBuild, pin: str, checkout: Path) -> LockedToolchain:
+        del checkout
+        return LockedToolchain(
+            name=build.key,
+            kind=SDK_KIND,
+            source=pin,
+            requested=f"{SDK} disable",
+            version=SDK,
+            url=f"https://example.invalid/dotnet-sdk-{SDK}-linux-x64.tar.gz",
+            sha512="0" * 128,
+        )
 
     def fetch_source(self, source: Source, pin: str, dest: Path) -> None:
         dest.mkdir(parents=True)
@@ -66,7 +84,7 @@ class FakeSources:
     ) -> str | None:
         from tundravm import _source
 
-        del checkout, kwargs
+        del checkout
         marker = build.deps_marker(pin)
         if marker is None or not isinstance(build.build, _source.LanguageBuild):
             return None
@@ -85,6 +103,12 @@ class FakeSources:
             if isinstance(build.build, _source.GoBuild):
                 name = _source.GO_TOOLCHAIN_LOCAL
                 record["toolchain"], _ = _source._go_toolchain_entries(name, deps)
+            elif isinstance(build.build, _source.DotnetBuild):
+                sdk = kwargs.get("sdk")
+                if not isinstance(sdk, LockedToolchain):
+                    sdk = self.lock_dotnet_sdk(build, pin, Path(root))
+                name = sdk.version
+                record["toolchain"] = _source._dotnet_record(sdk)
             else:
                 name = _source.RUST_TOOLCHAIN_DEBIAN
                 record["toolchain"] = {"name": name, "reason": _source._RUST_DEBIAN_REASON}
@@ -102,5 +126,6 @@ class FakeSources:
         setattr(_source, "_git_output", self.git_output)
         setattr(lifecycle, "fetch_source", self.fetch_source)
         setattr(lifecycle, "prefetch_deps", self.prefetch_deps)
+        setattr(lifecycle, "lock_dotnet_sdk", self.lock_dotnet_sdk)
         setattr(lifecycle, "require_host_go", lambda builds: None)
         return self

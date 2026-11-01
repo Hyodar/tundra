@@ -347,7 +347,7 @@ def _fetched_sources(
         if not offline or not isinstance(spec, SourceBuild):
             continue
         recipe = spec.build
-        problem = deps_problem(spec, pin, root)
+        problem = deps_problem(spec, pin, root, sdk=lowered.sdk_pins().get(name))
         if not isinstance(recipe, LanguageBuild) or problem is None:
             continue
         marker = str(root / DEPS_DIRNAME / (spec.deps_marker(pin) or ""))

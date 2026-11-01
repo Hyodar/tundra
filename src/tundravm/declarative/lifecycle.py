@@ -26,8 +26,11 @@ from typing import Final, Literal, get_args
 from tundravm import check as _check
 from tundravm._reporting import Event, Progress, Reporter, TextReporter
 from tundravm._source import (
+    DOTNET_RELEASES_HOST,
+    DOTNET_SDK_KIND,
     LOCAL_CHANGED,
     SOURCES_DIRNAME,
+    DotnetBuild,
     GitSource,
     LanguageBuild,
     LocalSource,
@@ -37,6 +40,7 @@ from tundravm._source import (
     checkout_rust_toolchain,
     fetch_source,
     is_fetched,
+    lock_dotnet_sdk,
     prefetch_deps,
     require_host_go,
     require_host_rustup,
@@ -52,6 +56,7 @@ from tundravm.backends.base import BuildBackend, is_mkosi_state
 from tundravm.errors import ArtifactError, LockfileError, PolicyError, ValidationError
 from tundravm.lockfile import (
     LockedFetch,
+    LockedToolchain,
     Lockfile,
     build_lockfile,
     lock_variants,
@@ -599,6 +604,7 @@ def lock_image(
     offline: bool = False,
     resolver: Resolver | None = None,
     release: ReleaseFetcher | None = None,
+    sources: Path | None = None,
 ) -> Lock:
     """Lock *img*'s *profiles*, keeping *previous* pins except for the *update* sources.
 
@@ -607,7 +613,11 @@ def lock_image(
     The build toolchain is recorded too (:func:`~tundravm.toolchain.lock_toolchain`);
     naming ``toolchain`` in *update* records it again instead of keeping *previous*'s.
     Each ``AptRepository(sha256=)`` records its ``InRelease`` (:func:`lock_repositories`,
-    read through *release*).
+    read through *release*). Each Dotnet build's SDK is pinned from the ``global.json``
+    of its checkout at the pin, resolved against the .NET release manifest
+    (``lock_dotnet_sdk``): the checkout is made under *sources* (the workspace's
+    ``.sources``, where ``build`` finds it again), or in a scratch directory without one;
+    *previous*'s pin is kept while the source pin is, unless the build is in *update*.
     """
     offline = offline or img.policy.network_mode == "offline"
     scoped = img.select(profiles)
@@ -646,15 +656,69 @@ def lock_image(
     repositories = lock_repositories(
         scoped.pinned_repositories(), previous, offline=offline, release=release
     )
+    pins = {fetch.name: fetch.digest for fetch in fetches if fetch.name is not None}
+    toolchains = _lock_sdks(builds, pins, previous, update, offline=offline, sources=sources)
     return Lock.of(
         build_lockfile(
-            image=payload, fetches=fetches, toolchain=toolchain, repositories=repositories
+            image=payload,
+            fetches=fetches,
+            toolchain=toolchain,
+            repositories=repositories,
+            toolchains=toolchains,
         )
     )
 
 
 def _named_pins(locked: Lock) -> dict[str, LockedFetch]:
     return {f.name: f for f in locked.lockfile.fetches if f.name is not None}
+
+
+def _lock_sdks(
+    builds: Mapping[str, NamedSource],
+    pins: Mapping[str, str],
+    previous: Lock | None,
+    update: Sequence[str],
+    *,
+    offline: bool,
+    sources: Path | None,
+) -> list[LockedToolchain]:
+    """The ``toolchains`` entries of *builds*: each Dotnet build's SDK at its pin in *pins*."""
+    prior = {} if previous is None else {t.name: t for t in previous.lockfile.toolchains}
+    found: list[LockedToolchain] = []
+    for name, build in sorted(builds.items()):
+        if not isinstance(build, SourceBuild) or not isinstance(build.build, DotnetBuild):
+            continue
+        pin, kept = pins[name], prior.get(name)
+        if kept is not None and kept.kind == DOTNET_SDK_KIND and kept.source == pin:
+            if name not in update:
+                found.append(kept)
+                continue
+        if offline:
+            raise LockfileError(
+                f"Cannot lock offline: the .NET SDK of source build {name!r} needs the network "
+                "to resolve.",
+                hint=f"Run `{lock_command()}` where the network reaches {DOTNET_RELEASES_HOST}.",
+                context={"source": build.source.describe()},
+            )
+        with _sdk_checkout(build, pin, sources) as checkout:
+            found.append(lock_dotnet_sdk(build, pin, checkout))
+    return found
+
+
+@contextmanager
+def _sdk_checkout(build: SourceBuild, pin: str, sources: Path | None) -> Iterator[Path]:
+    """A tree holding *build*'s source at *pin*: a local source's directory, its checkout
+    under *sources* (kept, or fetched as ``build`` would), else a scratch checkout."""
+    if isinstance(build.source, LocalSource):
+        yield build.source.directory
+        return
+    if sources is not None:
+        yield _checkout(build, pin, sources, Progress(None), offline=False, copies={}).path
+        return
+    with tempfile.TemporaryDirectory(prefix="tundravm-lock-") as scratch:
+        tree = Path(scratch) / "tree"
+        fetch_source(build.source, pin, tree)
+        yield tree
 
 
 def lock(
@@ -839,7 +903,9 @@ def fetch_image(
     Cargo and .NET build's dependencies are prefetched into ``<build>/.sources/deps``
     with the host's toolchain (``prefetch_deps``); without it the build downloads them
     as before. A Cargo source that pins a Rust toolchain needs the host's ``rustup``,
-    which ``require_host_rustup`` checks before any toolchain runs.
+    which ``require_host_rustup`` checks before any toolchain runs. A .NET build's SDK is
+    the one *locked* pins, else the one its checkout's ``global.json`` resolves to now
+    (``lock_dotnet_sdk``); its own ``dotnet`` restores, so the host needs none.
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
@@ -890,13 +956,17 @@ def fetch_image(
     if not prefetches:
         return tuple(fetched)
     noun = "dependency cache" if len(prefetches) == 1 else "dependency caches"
+    sdks = {} if locked is None else {t.name: t for t in locked.lockfile.toolchains}
     with progress.phase("prefetch", f"prefetch {len(prefetches)} {noun}", profile=None):
         if not offline:
             pinned = {b.key: checkout_rust_toolchain(b, fetched[i].path) for i, b in prefetches}
             require_host_rustup({key: rust for key, rust in pinned.items() if rust is not None})
         for index, source_build in prefetches:
             source = fetched[index]
-            deps = _prefetch(source_build, source, root, progress, offline=offline)
+            sdk = sdks.get(source_build.key)
+            if sdk is None and not offline and isinstance(source_build.build, DotnetBuild):
+                sdk = lock_dotnet_sdk(source_build, source.pin, source.path)
+            deps = _prefetch(source_build, source, root, progress, offline=offline, sdk=sdk)
             fetched[index] = replace(source, deps=deps)
     return tuple(fetched)
 
@@ -908,10 +978,11 @@ def _prefetch(
     progress: Progress,
     *,
     offline: bool,
+    sdk: LockedToolchain | None,
 ) -> str | None:
     """Prefetch *build*'s dependencies next to its checkout (``prefetch_deps``), with a notice."""
     cache = build.build.deps if isinstance(build.build, LanguageBuild) else None
-    outcome = prefetch_deps(build, source.pin, source.path, root, offline=offline)
+    outcome = prefetch_deps(build, source.pin, source.path, root, offline=offline, sdk=sdk)
     if outcome is None or cache is None:
         return None
     message = f"{build.key}: deps: {outcome}"

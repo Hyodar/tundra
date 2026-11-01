@@ -24,6 +24,7 @@ from tundravm.errors import LockfileError
 from tundravm.lockfile import (
     LOCKFILE_VERSION,
     LockDrift,
+    LockedToolchain,
     build_lockfile,
     compare_lock,
     describe_change,
@@ -248,10 +249,20 @@ def test_partial_comparison_checks_the_digest_for_the_locks_full_set() -> None:
 
 
 def test_lockfile_round_trips_its_toolchain() -> None:
-    current = build_lockfile(image=_two_variants({"a": {"packages": ["curl"]}}))
+    sdk = LockedToolchain(
+        name="app",
+        kind="dotnet-sdk",
+        source="a" * 40,
+        requested="9.0.2 latestFeature",
+        version="9.0.320",
+        url="https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.320/dotnet-sdk-9.0.320-linux-x64.tar.gz",
+        sha512="e" * 128,
+    )
+    current = build_lockfile(image=_two_variants({"a": {"packages": ["curl"]}}), toolchains=[sdk])
 
     parsed = parse_lockfile(serialize_lockfile(current))
 
     assert parsed == current
-    assert LOCKFILE_VERSION == 7
+    assert LOCKFILE_VERSION == 8
     assert parsed.toolchain is not None and parsed.toolchain.tundravm
+    assert "toolchains" not in serialize_lockfile(build_lockfile(image=current.image))

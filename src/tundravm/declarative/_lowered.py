@@ -18,6 +18,7 @@ from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
 from tundravm._source import (
     DebFile,
+    DotnetBuild,
     HttpSource,
     KernelFile,
     KernelSource,
@@ -33,6 +34,7 @@ from tundravm.errors import ValidationError
 from tundravm.lockfile import (
     LockDrift,
     LockedFetch,
+    LockedToolchain,
     Lockfile,
     compare_lock,
     image_digest,
@@ -414,6 +416,14 @@ class Lowered:
         """The lockfile's source pins, then :attr:`fetched_pins` for the sources it lacks."""
         return {**self.source_pins(), **self.fetched_pins}
 
+    def sdk_pins(self, path: Path | None = None) -> dict[str, LockedToolchain]:
+        """The .NET SDK pins (``toolchains``) of the lockfile at *path* (default
+        :attr:`lock_path`), by source build, if it exists."""
+        lock_path = self.lock_path if path is None else Path(path)
+        if not lock_path.exists():
+            return {}
+        return {item.name: item for item in read_lockfile(lock_path).toolchains}
+
     def unpinned_sources(self, path: Path | None = None) -> list[str]:
         """Names of the active :meth:`lock_sources` the lockfile at *path* does not pin."""
         pins = self.source_pins(path)
@@ -468,11 +478,16 @@ class Lowered:
         """The :func:`~tundravm._source.fingerprint` of *profile*'s :meth:`build_distribution`."""
         return fingerprint(self.build_distribution(profile))
 
-    def pinned_state(self, pins: Mapping[str, LockedFetch]) -> RecipeState:
+    def pinned_state(
+        self, pins: Mapping[str, LockedFetch], sdks: Mapping[str, LockedToolchain] | None = None
+    ) -> RecipeState:
         """The state with every pinned source build's hook rendered at its pin from *pins*.
 
-        A hook's fingerprint takes the distribution of the profile that declares the build.
+        A hook's fingerprint takes the distribution of the profile that declares the build
+        and, for a Dotnet build, the SDK version *sdks* (default :meth:`sdk_pins`) pins.
         """
+        if sdks is None:
+            sdks = self.sdk_pins()
         profiles: dict[str, ProfileState] = {}
         changed = False
         for name, profile in self.state.profiles.items():
@@ -482,7 +497,9 @@ class Lowered:
                 for spec in profile.source_builds.values()
                 if (
                     pinned := spec.render(
-                        self.keyed(name, spec).pin_from(pins), distribution=distribution
+                        self.keyed(name, spec).pin_from(pins),
+                        distribution=distribution,
+                        sdk=self._sdk_version(self.keyed(name, spec), sdks),
                     )
                 )
                 != spec.render()
@@ -536,17 +553,40 @@ class Lowered:
         partial = not set(self.state.profiles) <= set(self.active)
         return self.drift(lock, resolver=resolver, partial=partial)
 
+    @staticmethod
+    def _sdk_version(spec: SourceBuild, sdks: Mapping[str, LockedToolchain]) -> str | None:
+        """The SDK version *sdks* pins for the Dotnet build *spec* at its key, if any."""
+        pinned = sdks.get(spec.key) if isinstance(spec.build, DotnetBuild) else None
+        return None if pinned is None else pinned.version
+
     def drift(self, lock: Lockfile, *, resolver: Resolver | None, partial: bool) -> LockDrift:
-        """Section and source drift of the active profiles against *lock*."""
+        """Section, source and toolchain drift of the active profiles against *lock*.
+
+        A Dotnet build whose SDK the lock does not pin, or pinned for another source pin,
+        drifts as ``toolchains.<name>``; so does a pin for a build that is gone.
+        """
         payload = self.payload()
         drift = compare_lock(lock, payload, partial=partial)
         pins = {fetch.name: fetch for fetch in lock.fetches if fetch.name is not None}
-        added, changed, removed, details = source_drift(
-            self.lock_sources(), pins, resolver=resolver
-        )
+        sources = self.lock_sources()
+        added, changed, removed, details = source_drift(sources, pins, resolver=resolver)
+        unselected = unselected_sources(lock, payload) if partial else frozenset()
         if partial:
-            elsewhere = {source_section(key) for key in unselected_sources(lock, payload)}
+            elsewhere = {source_section(key) for key in unselected}
             removed = [s for s in removed if s not in elsewhere]
+        sdks = {item.name: item for item in lock.toolchains}
+        for name, source in sources.items():
+            section = f"toolchains.{name}"
+            if not isinstance(source, SourceBuild) or not isinstance(source.build, DotnetBuild):
+                continue
+            sdk, pin = sdks.pop(name, None), pins.get(name)
+            if sdk is None:
+                added.append(section)
+                details[section] = f"the .NET SDK of source build {name} is not pinned"
+            elif pin is not None and sdk.source != pin.digest:
+                changed.append(section)
+                details[section] = f".NET SDK {sdk.version} was pinned for {sdk.source[:7]}"
+        removed.extend(f"toolchains.{name}" for name in sorted(sdks) if name not in unselected)
         declared = self.pinned_repositories()
         recorded = {item.name: item for item in lock.repositories}
         for name in sorted(declared.keys() | recorded.keys()):

@@ -52,6 +52,7 @@ from ._reporting import Event, Reporter
 from ._source import (
     SOURCES_DIRNAME,
     CargoBuild,
+    DotnetBuild,
     GoBuild,
     LocalSource,
     SourceBuild,
@@ -752,13 +753,18 @@ _TOOLCHAIN_MISSING = {
         "rust_toolchain",
         "no prefetch recorded it: the host had no `cargo` or `rustup`, or a download failed",
     ),
+    DotnetBuild: (
+        "dotnet_sdk",
+        "no prefetch recorded it: the SDK download failed",
+    ),
 }
 """The recipes whose prefetch records a toolchain: its key in the source, and why it is missing."""
 
 
 def _toolchains(img: Lowered, profile: str, locked: Lock, work: Path) -> dict[str, Any]:
-    """Each Go and Cargo source build of *profile* by lock name: ``{go_toolchain: ...}`` or
-    ``{rust_toolchain: ...}``, the toolchain its prefetch recorded."""
+    """Each Go, Cargo and Dotnet source build of *profile* by lock name: ``{go_toolchain:
+    ...}``, ``{rust_toolchain: ...}`` or ``{dotnet_sdk: ...}``, the toolchain its prefetch
+    recorded."""
     pins = {f.name: f for f in locked.lockfile.fetches if f.name is not None}
     found: dict[str, Any] = {}
     for spec in img.select([profile]).lock_sources().values():

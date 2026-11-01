@@ -1215,6 +1215,32 @@ Build(
 )
 ```
 
+### `Cargo`
+
+*dataclass*
+
+```python
+Cargo(
+    *,
+    output: str,
+    bin: str | None = None,
+    package: str | None = None,
+    features: Sequence[str] = (),
+    profile: str = 'release',
+    env: Mapping[str, str] = FrozenMap(),
+    packages: Sequence[str] = ('cargo',),
+    auditable: bool | None = None,
+    reproducible: bool | None = None,
+)
+```
+
+`cargo fetch && cargo build --frozen`; *bin* or *package* selects the target.
+
+| Member | Does |
+|---|---|
+| `Cargo.artifact` | `target/<profile>/<bin>`: the built binary, relative to the source tree. |
+| `Cargo.command(workdir: str) -> str` | The build's shell command in *workdir*, the checkout's copy inside the sandbox. |
+
 ### `CargoBinary`
 
 *dataclass*
@@ -1241,6 +1267,31 @@ A Rust program built from *source* and installed at `executable`.
 |---|---|
 | `CargoBinary.executable` | The absolute path the binary is installed at. |
 
+### `Dotnet`
+
+*dataclass*
+
+```python
+Dotnet(
+    *,
+    project: str,
+    output: str,
+    configuration: str = 'Release',
+    runtime: str = 'linux-x64',
+    env: Mapping[str, str] = FrozenMap(),
+    packages: Sequence[str] = ('libicu76', 'libssl3t64', 'libstdc++6'),
+    restore_args: Sequence[str] = (),
+    properties: Mapping[str, str] = FrozenMap(),
+)
+```
+
+Deterministic self-contained `dotnet publish` of *project* into `publish/`.
+
+| Member | Does |
+|---|---|
+| `Dotnet.artifact` | `publish/<output>`: the published program, relative to the source tree. |
+| `Dotnet.command(workdir: str) -> str` | The build's shell command in *workdir*, the checkout's copy inside the sandbox. |
+
 ### `Git`
 
 *dataclass*
@@ -1250,6 +1301,33 @@ Git(url: str, ref: str, subdir: str | None = None, submodules: bool = False)
 ```
 
 A git repository at *ref* (a tag, a branch, or a 40-hex commit `tundravm lock` pins).
+
+### `Go`
+
+*dataclass*
+
+```python
+Go(
+    *,
+    output: str,
+    package: str = '.',
+    ldflags: str = '-s -w -buildid=',
+    tags: Sequence[str] = (),
+    env: Mapping[str, str] = FrozenMap(),
+    packages: Sequence[str] = ('golang',),
+    output_dir: str = './build',
+    mkdir: bool = True,
+    reproducible: bool | None = None,
+    cgo: bool = False,
+)
+```
+
+`go build -trimpath` of *package* (the module root, `"."`, by default) into `<output_dir>/<output>`.
+
+| Member | Does |
+|---|---|
+| `Go.artifact` | `<output_dir>/<output>`: the built binary, relative to the source tree. |
+| `Go.command(workdir: str) -> str` | The build's shell command in *workdir*, the checkout's copy inside the sandbox. |
 
 ### `GoBinary`
 
@@ -1719,6 +1797,7 @@ Records source checkouts instead of fetching them.
 | `FakeSources.fetch_source(source: Source, pin: str, dest: Path) -> None` |  |
 | `FakeSources.git_output(checkout: Path, *args: str) -> str \| None` |  |
 | `FakeSources.install(setattr: Callable[[object, str, object], None]) -> FakeSources` | Put this fake in place of the fetch boundary using *setattr* (pytest's `monkeypatch.setattr`, which undoes it after the test). |
+| `FakeSources.lock_dotnet_sdk(build: SourceBuild, pin: str, checkout: Path) -> LockedToolchain` |  |
 | `FakeSources.prefetch_deps(build: SourceBuild, pin: str, checkout: Path, root: Path, **kwargs: object) -> str \| None` |  |
 
 ### `HttpResponse`
@@ -1859,11 +1938,11 @@ What the probe printed: each check's last line, and its `done` counts (`None` un
 
 | Member | Does |
 |---|---|
-| `Report.failed` |  |
-| `Report.missing` | Expected checks that printed no line. |
-| `Report.ok` | It finished, nothing failed and every expected check printed. |
-| `Report.table() -> str` | The results as a table: check, verdict, detail; then the counts. |
-| `Report.to_dict() -> dict[str, object]` |  |
+| `ProbeReport.failed` |  |
+| `ProbeReport.missing` | Expected checks that printed no line. |
+| `ProbeReport.ok` | It finished, nothing failed and every expected check printed. |
+| `ProbeReport.table() -> str` | The results as a table: check, verdict, detail; then the counts. |
+| `ProbeReport.to_dict() -> dict[str, object]` |  |
 
 ### `Profiles`
 

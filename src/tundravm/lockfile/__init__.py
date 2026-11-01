@@ -9,7 +9,7 @@ from .drift import (
     unselected_sources,
 )
 from .io import parse_lockfile, read_lockfile, serialize_lockfile
-from .model import LOCKFILE_VERSION, LockedFetch, LockedRepository, Lockfile
+from .model import LOCKFILE_VERSION, LockedFetch, LockedRepository, LockedToolchain, Lockfile
 from .resolve import build_lockfile, image_digest, section_digests, section_values
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "LockDrift",
     "LockedFetch",
     "LockedRepository",
+    "LockedToolchain",
     "Lockfile",
     "build_lockfile",
     "compare_lock",

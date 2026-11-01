@@ -11,10 +11,14 @@ from tundravm.lockfile.model import (
     LOCKFILE_VERSION,
     LockedFetch,
     LockedRepository,
+    LockedToolchain,
     Lockfile,
 )
 from tundravm.project import lock_command
 from tundravm.toolchain import Toolchain
+
+_TOOLCHAIN_KEYS = ("name", "kind", "source", "requested", "version", "url", "sha512")
+"""The keys of a ``toolchains`` entry, all strings."""
 
 
 def _regenerate() -> str:
@@ -41,6 +45,10 @@ def serialize_lockfile(lockfile: Lockfile) -> str:
                 "date": item.date,
             }
             for item in lockfile.repositories
+        ]
+    if lockfile.toolchains:
+        payload["toolchains"] = [
+            {key: getattr(item, key) for key in _TOOLCHAIN_KEYS} for item in lockfile.toolchains
         ]
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -77,6 +85,9 @@ def parse_lockfile(raw: str) -> Lockfile:
     repositories_raw = payload.get("repositories", [])
     if not isinstance(repositories_raw, list):
         raise LockfileError("Invalid lockfile `repositories` value.", hint=_regenerate())
+    toolchains_raw = payload.get("toolchains", [])
+    if not isinstance(toolchains_raw, list):
+        raise LockfileError("Invalid lockfile `toolchains` value.", hint=_regenerate())
     return Lockfile(
         version=version,
         image_digest=image_digest,
@@ -86,6 +97,7 @@ def parse_lockfile(raw: str) -> Lockfile:
         sections=sections,
         toolchain=toolchain,
         repositories=[_parse_locked_repository(item) for item in repositories_raw],
+        toolchains=[_parse_locked_toolchain(item) for item in toolchains_raw],
     )
 
 
@@ -129,6 +141,12 @@ def _parse_locked_repository(item: Any) -> LockedRepository:
     return LockedRepository(
         **{key: _required_str(item, key) for key in ("name", "url", "suite", "sha256", "date")}
     )
+
+
+def _parse_locked_toolchain(item: Any) -> LockedToolchain:
+    if not isinstance(item, dict):
+        raise LockfileError("Invalid toolchain entry in lockfile.", hint=_regenerate())
+    return LockedToolchain(**{key: _required_str(item, key) for key in _TOOLCHAIN_KEYS})
 
 
 def _optional_str(payload: dict[str, Any], key: str) -> str | None:

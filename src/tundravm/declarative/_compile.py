@@ -41,7 +41,7 @@ def emit(lowered: Lowered, destination: Path) -> tuple[CompileResult, MkosiEmiss
     _enforce_source_policy(lowered, pins)
     initialized = _with_init(lowered)
     emission = emit_mkosi_tree(
-        recipe=initialized.pinned_state(pins),
+        recipe=initialized.pinned_state(pins, lowered.sdk_pins()),
         destination=Path(destination),
         config=_emit_config(lowered, pins),
     )

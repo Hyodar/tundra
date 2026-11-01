@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -197,19 +198,34 @@ def test_dotnet_recipe_renders_dotnet_publish() -> None:
     assert (
         "bash -c 'if [ -d /build/.tundravm-deps/nuget ]; then "
         "export NUGET_PACKAGES=/build/.tundravm-deps/nuget && "
-        '{ [ "$WITH_NETWORK" != 0 ] || export RestoreSources=/build/.tundravm-deps/nuget; }; '
-        "fi && cd /build/app && "
+        '{ [ "$WITH_NETWORK" != 0 ] || { echo '
     ) in hooks
-    assert "dotnet restore src/App/App.csproj --runtime linux-x64 && dotnet publish" in hooks
-    assert "--output /build/app/publish -p:Deterministic=true" in hooks
+    assert "export RestoreConfigFile=/build/.tundravm-deps/nuget.config; }; }; fi && " in hooks
+    assert 'cp -a --no-preserve=ownership "$SRCDIR/tundravm-sources/deps/dotnet"/"$(cat ' in hooks
+    assert (
+        'export DOTNET_ROOT=/build/.tundravm-deps/dotnet/"$(cat /build/.tundravm-deps/app-'
+    ) in hooks
+    assert (
+        'export PATH="$DOTNET_ROOT:$PATH" DOTNET_CLI_HOME="$DOTNET_ROOT" NUGET_HTTP_CACHE_PATH='
+    ) in hooks
+    assert (
+        "dotnet restore src/App/App.csproj --runtime linux-x64 -p:SelfContained=true "
+        "-p:Configuration=Release -p:Deterministic=true -p:ContinuousIntegrationBuild=true "
+        "-p:NuGetAudit=false -p:UseSharedCompilation=false -nodeReuse:false && dotnet publish "
+        "src/App/App.csproj --configuration Release --runtime linux-x64 --self-contained true "
+        "--no-restore --output /build/app/publish -p:Deterministic=true"
+    ) in hooks
     assert 'cp -a "$BUILDROOT/build/app/publish/."' in hooks
     assert 'cp -a "${BUILDDIR:-$BUILDROOT/build}/app-' in hooks and "cp -r" not in hooks
 
 
-@pytest.mark.parametrize(("network", "sources"), [("1", ""), ("0", "/deps/nuget")])
-def test_dotnet_restores_from_the_packages_cache_alone_offline(network: str, sources: str) -> None:
-    script = f'{DotnetBuild.deps_env("/deps/nuget")} && printf "%s|%s" "$NUGET_PACKAGES" '
-    script += '"${RestoreSources-}"'
+@pytest.mark.parametrize("network", ["1", "0"])
+def test_dotnet_restores_from_the_packages_cache_alone_offline(
+    tmp_path: Path, network: str
+) -> None:
+    cache = tmp_path / "nuget"
+    script = f'{DotnetBuild._deps_env(str(cache))} && printf "%s|%s" "$NUGET_PACKAGES" '
+    script += '"${RestoreConfigFile-}"'
     done = subprocess.run(
         ["bash", "-c", script],
         env={"PATH": os.environ["PATH"], "WITH_NETWORK": network},
@@ -217,7 +233,14 @@ def test_dotnet_restores_from_the_packages_cache_alone_offline(network: str, sou
         capture_output=True,
         text=True,
     )
-    assert done.stdout == f"/deps/nuget|{sources}"
+    config = tmp_path / "nuget.config"
+    assert done.stdout == f"{cache}|{config if network == '0' else ''}"
+    assert config.exists() == (network == "0")
+    if network == "0":
+        assert config.read_text(encoding="utf-8") == (
+            '<configuration><packageSources><clear/><add key="tundravm" '
+            f'value="{cache}"/></packageSources></configuration>\n'
+        )
 
 
 def test_lock_payload_records_the_recipe() -> None:

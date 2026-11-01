@@ -1035,7 +1035,8 @@ def _cmd_lock(args: argparse.Namespace, out: TextIO) -> int:
     update: tuple[str, ...] = ()
     if args.update is not None:
         update = tuple(args.update) or tuple(img.lock_sources())
-    locked = lock_image(img, img.profile_names, previous=previous, update=update)
+    sources = found.build / img.image_id / builds.WORK / SOURCES_DIRNAME
+    locked = lock_image(img, img.profile_names, previous=previous, update=update, sources=sources)
     write_lock(locked, path)
     if args.json:
         print(

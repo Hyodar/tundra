@@ -38,15 +38,63 @@ from tundravm.declarative import (
     lock_status,
     lower,
 )
+from tundravm.declarative import lifecycle as lifecycle_module
 from tundravm.declarative.lifecycle import bake_image, check_report, compile_image
 from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ErrorCode, PolicyError, SourceError, StateError
+from tundravm.lockfile import LockedToolchain, parse_lockfile
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
 pytestmark = [pytest.mark.usefixtures("isolated_cwd"), pytest.mark.boundary]
 
 EFI_VERSION = "257.8-1~deb13u1"
 DEB_BYTES = b"!<arch>\ndebian-binary   fake systemd-boot-efi\n"
+GLOBAL_JSON = (
+    '{"sdk": {"version": "9.0.2", "allowPrerelease": false, "rollForward": "latestFeature"}}\n'
+)
+"""Nethermind 1.32.3's global.json: a feature band and patch below every released 9.0 SDK."""
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "dotnet"
+MANIFESTS = {
+    _source.DOTNET_RELEASES_INDEX: FIXTURES / "releases-index.json",
+    "https://builds.dotnet.microsoft.com/dotnet/release-metadata/9.0/releases.json": (
+        FIXTURES / "releases-9.0.json"
+    ),
+}
+"""The recorded .NET release manifests, by the url ``read_dotnet_manifest`` reads."""
+SDK = "9.0.100"
+"""The SDK the fake lock pins for every Dotnet build."""
+SDK_URL = f"https://example.invalid/dotnet-sdk-{SDK}-linux-x64.tar.gz"
+
+
+def _manifest(url: str) -> object:
+    return json.loads(MANIFESTS[url].read_text(encoding="utf-8"))
+
+
+def _sdk_entry(build: object, pin: str, checkout: Path) -> LockedToolchain:
+    """What the fake lock pins for *build* at *pin*: :data:`SDK`, never read from *checkout*."""
+    del checkout
+    name = getattr(build, "key", "tool")
+    return LockedToolchain(
+        name=name,
+        kind="dotnet-sdk",
+        source=pin,
+        requested=f"{SDK} disable",
+        version=SDK,
+        url=SDK_URL,
+        sha512="0" * 128,
+    )
+
+
+def _lay_out_sdk(deps_dotnet: Path, version: str, sha512: str = "0" * 128) -> dict[str, str]:
+    """A fake SDK unpacked at ``<deps_dotnet>/<version>``: what its content manifest covers."""
+    root = deps_dotnet / version
+    (root / "sdk" / version).mkdir(parents=True, exist_ok=True)
+    (root / "dotnet").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "sdk" / version / "dotnet.dll").write_bytes(b"dll")
+    (root / "sdk" / version / ".version").write_text(f"{version}\n", encoding="utf-8")
+    (root / _source.DOTNET_SDK_MARKER).write_text(f"{sha512}\n", encoding="utf-8")
+    files = _source._dotnet_sdk_files(version)
+    return {rel: entry for rel in files if (entry := _source._cache_entry(deps_dotnet / rel))}
 
 
 def _git(*args: str, cwd: Path) -> str:
@@ -67,6 +115,7 @@ def repo(tmp_path: Path) -> tuple[str, str]:
     (path / "Cargo.toml").write_text('[package]\nname = "tool"\n', encoding="utf-8")
     (path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
     (path / "App.csproj").write_text("<Project />\n", encoding="utf-8")
+    (path / "global.json").write_text(GLOBAL_JSON, encoding="utf-8")
     _git("add", ".", cwd=path)
     _git("commit", "-qm", "one", cwd=path)
     return path.as_uri(), _git("rev-parse", "HEAD", cwd=path)
@@ -121,9 +170,21 @@ def _toolchain_download(argv: Sequence[str], env: Mapping[str, str]) -> bool:
 
 
 class _Toolchain:
-    """Fake host toolchains: ``which`` finds *present*; ``run`` records and fills the cache."""
+    """Fake host toolchains: ``which`` finds *present*; ``run`` records and fills the cache.
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, present: Sequence[str], code: int = 0):
+    A Dotnet build's lock pins :data:`SDK` without reading the checkout, and its prefetch
+    lays the SDK out instead of downloading it (*sdk*; a test of the download itself
+    passes ``False``).
+    """
+
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        present: Sequence[str],
+        code: int = 0,
+        *,
+        sdk: bool = True,
+    ):
         self.calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
         self.code = code
         found = set(present)
@@ -132,6 +193,18 @@ class _Toolchain:
         )
         monkeypatch.setattr(_source, "host_go_version", lambda: HOST_GO if "go" in found else None)
         monkeypatch.setattr(_source, "run_tool", self.run)
+        monkeypatch.setattr(_source, "lock_dotnet_sdk", _sdk_entry)
+        monkeypatch.setattr(lifecycle_module, "lock_dotnet_sdk", _sdk_entry)
+        if sdk:
+            monkeypatch.setattr(_source, "_fetch_dotnet_sdk", self.fetch_sdk)
+
+    @staticmethod
+    def fetch_sdk(
+        build: object, sdk: LockedToolchain, deps: Path
+    ) -> tuple[dict[str, object], dict[str, str]]:
+        del build
+        contents = _lay_out_sdk(deps / "dotnet", sdk.version, sdk.sha512)
+        return _source._dotnet_record(sdk), contents
 
     def run(
         self, argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]
@@ -140,11 +213,16 @@ class _Toolchain:
         assert cwd.is_dir() and not (cwd / ".git").exists()  # a scratch copy, not the checkout
         if _toolchain_download(argv, env):
             return subprocess.CompletedProcess(list(argv), 0, "", "")
-        cache = env.get("GOMODCACHE") or env.get("CARGO_HOME") or argv[-1]
+        cache = env.get("GOMODCACHE") or env.get("CARGO_HOME") or _packages_folder(argv)
         (Path(cache) / "downloaded").write_text("dep\n", encoding="utf-8")
         return subprocess.CompletedProcess(
             list(argv), self.code, "", "" if not self.code else "boom"
         )
+
+
+def _packages_folder(argv: Sequence[str]) -> str:
+    """The ``--packages`` folder of a ``dotnet restore`` argv."""
+    return argv[list(argv).index("--packages") + 1]
 
 
 class _Recording:
@@ -486,6 +564,13 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
             "linux-x64",
             "--packages",
             str(cache),
+            "-p:SelfContained=true",
+            "-p:Configuration=Release",
+            "-p:Deterministic=true",
+            "-p:ContinuousIntegrationBuild=true",
+            "-p:NuGetAudit=false",
+            "-p:UseSharedCompilation=false",
+            "-nodeReuse:false",
         ),
     }[kind]
     assert argv == expected
@@ -494,6 +579,13 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
         assert env["GOTOOLCHAIN"] == TOOLCHAIN
     if kind == "cargo":
         assert env["CARGO_HOME"] == str(cache)
+    if kind == "dotnet":
+        root = (out / ".sources" / "deps" / "dotnet" / SDK).resolve()
+        assert env["DOTNET_ROOT"] == str(root) and env["PATH"].startswith(f"{root}:")
+        assert env["DOTNET_CLI_HOME"].startswith(str(cache.parent)) and "nologo" not in env
+        assert env["MSBUILDDISABLENODEREUSE"] == "1"
+        record = out / ".sources" / "deps" / f"{source_dir('tool', first, url)}.nuget.toolchain"
+        assert record.read_text(encoding="utf-8") == f"{SDK}\n"
     assert not cwd.exists()  # the scratch copy is gone
     marker = out / ".sources" / "deps" / f"{source_dir('tool', first, url)}.{CACHES[kind]}.json"
     recorded = json.loads(marker.read_text(encoding="utf-8"))
@@ -728,8 +820,9 @@ def test_cargo_and_nuget_manifests_come_from_the_lock_and_the_restore(
             target.parent.mkdir(parents=True)
             target.write_bytes(b"crate")
         else:
-            (Path(argv[-1]) / "newtonsoft.json" / "13.0.1").mkdir(parents=True)
-            (Path(argv[-1]) / "newtonsoft.json" / "13.0.1" / ".nupkg.metadata").write_text("{}")
+            packages = Path(_packages_folder(argv))
+            (packages / "newtonsoft.json" / "13.0.1").mkdir(parents=True)
+            (packages / "newtonsoft.json" / "13.0.1" / ".nupkg.metadata").write_text("{}")
             (cwd / "obj").mkdir()
             assets = {
                 "libraries": {
@@ -754,7 +847,179 @@ def test_cargo_and_nuget_manifests_come_from_the_lock_and_the_restore(
         shutil.rmtree(out / ".sources" / "deps" / "nuget" / "newtonsoft.json")
     _Toolchain(monkeypatch, [])
     (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=out)
-    assert fetched.deps is not None and fetched.deps.startswith(f"{CACHES[kind]}: incomplete (")
+    # without a host cargo the cache stays incomplete; the fetched SDK's dotnet repairs its own
+    expected = "cargo: incomplete (" if kind == "cargo" else "nuget: prefetched (was incomplete: "
+    assert fetched.deps is not None and fetched.deps.startswith(expected)
+
+
+# ── the .NET SDK ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("sdk", "expected"),
+    [
+        ({"version": "9.0.2", "rollForward": "latestFeature"}, "9.0.320"),
+        ({"version": "9.0.100", "rollForward": "latestFeature"}, "9.0.320"),
+        ({"version": "9.0.100", "rollForward": "latestPatch"}, "9.0.123"),
+        ({"version": "9.0.100"}, "9.0.123"),
+        ({"version": "9.0.2", "rollForward": "latestPatch"}, "no .NET 9.0 SDK satisfies"),
+        ({"version": "9.0.101", "rollForward": "disable"}, "9.0.101"),
+        ({"version": "9.0.104", "rollForward": "disable"}, "no .NET 9.0 SDK satisfies"),
+        ({"version": "9.0.300", "rollForward": "patch"}, "9.0.320"),
+        ({"version": "9.0.150", "rollForward": "feature"}, "9.0.200"),
+        ({"version": "9.0.100-rc.2.24474.11", "rollForward": "disable"}, "9.0.100-rc.2.24474.11"),
+        ({"version": "9.0.100", "rollForward": "latestMajor"}, "reaches past .NET 9.0"),
+        ({"version": "9.0", "rollForward": "disable"}, "not a full SDK version"),
+        ({"rollForward": "latestPatch"}, "names no version"),
+        ({"version": "11.0.100"}, "no .NET 11.0 in the release index"),
+        (None, "no global.json"),
+    ],
+    ids=[
+        "nethermind",
+        "latest-feature",
+        "latest-patch",
+        "default",
+        "band-below-every-sdk",
+        "disable",
+        "disable-unreleased",
+        "patch",
+        "feature-next-band",
+        "prerelease-asked-for",
+        "latest-major",
+        "short-version",
+        "no-version",
+        "no-release",
+        "no-file",
+    ],
+)
+def test_the_sdk_is_the_one_global_json_resolves_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sdk: dict[str, object] | None, expected: str
+) -> None:
+    """``dotnet``'s selection over every SDK the release published, from the recorded
+    manifests; a request nothing satisfies, a policy reaching past the release and a
+    missing or unreadable global.json are refused naming the fix."""
+    monkeypatch.setattr(_source, "read_dotnet_manifest", _manifest)
+    if sdk is not None:
+        (tmp_path / "global.json").write_text(json.dumps({"sdk": sdk}), encoding="utf-8")
+
+    def resolve() -> str:
+        request = _source.dotnet_sdk(tmp_path, tmp_path, "git https://x @ v1")
+        return _source.resolve_dotnet_sdk(request, "git https://x @ v1").version
+
+    if expected[:1].isdigit():
+        assert resolve() == expected
+        return
+    with pytest.raises(SourceError) as info:
+        resolve()
+    assert expected in info.value.reason and info.value.hint
+
+
+def test_lock_pins_the_sdk_the_checkouts_global_json_resolves_to(
+    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``lock`` reads global.json from a scratch checkout at the pin and resolves it against
+    the manifests; the pin is kept while the source pin is, re-resolved for ``--update``,
+    and a lock without it drifts."""
+    url, first = repo
+    reads: list[str] = []
+
+    def manifest(url: str) -> object:
+        reads.append(url)
+        return _manifest(url)
+
+    monkeypatch.setattr(_source, "read_dotnet_manifest", manifest)
+    recipe = _recipe(_build(url, "dotnet"))
+    tarball = (
+        "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.320/dotnet-sdk-9.0.320-linux-x64.tar.gz"
+    )
+    locked = lock(recipe, resolver=lambda s: first)
+    assert locked.lockfile.toolchains == [
+        LockedToolchain(
+            name="tool",
+            kind="dotnet-sdk",
+            source=first,
+            requested="9.0.2 latestFeature",
+            version="9.0.320",
+            url=tarball,
+            sha512="eb371100b5c40641a812b3683bfda1772f0b69e5232091293c715d49eb837f52174b9b9a9"
+            "3375d692bddbfd1d57005f1a9aa774b4b30276665b0c0b1a9b66427",
+        )
+    ]
+    assert len(reads) == 2
+    assert parse_lockfile(locked.text()).toolchains == locked.lockfile.toolchains
+    kept = lock(recipe, previous=locked, resolver=lambda s: first)
+    assert kept.lockfile.toolchains == locked.lockfile.toolchains and len(reads) == 2
+    lock(recipe, previous=locked, update=["tool"], resolver=lambda s: first)
+    assert len(reads) == 4
+    stale = Lock.of(replace(locked.lockfile, toolchains=[]))
+    assert [(d.code, d.subject) for d in lock_status(recipe, stale)] == [
+        ("lock-added", "toolchains.tool")
+    ]
+
+
+def test_fetch_downloads_the_sdk_the_lock_pins_and_restores_with_it(
+    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tarball the lock names is downloaded, checked against its sha512 and unpacked
+    into ``deps/dotnet/<version>``, whose ``dotnet`` runs the restore; the marker records it,
+    a second fetch keeps it, and a lock with another sha512 is refused at the download."""
+    url, first = repo
+    root = tmp_path / "www"
+    _lay_out_sdk(root, "9.0.320")
+    (root / "9.0.320" / _source.DOTNET_SDK_MARKER).unlink()
+    subprocess.run(
+        ["tar", "-czf", str(root / "sdk.tar.gz"), "-C", str(root / "9.0.320"), "."], check=True
+    )
+    sha512 = hashlib.sha512((root / "sdk.tar.gz").read_bytes()).hexdigest()
+    server = HTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(root)))
+    threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    ).start()
+    try:
+        tools = _Toolchain(monkeypatch, [], sdk=False)
+        recipe = _recipe(_build(url, "dotnet"))
+        entry = replace(
+            _sdk_entry(None, first, tmp_path),
+            version="9.0.320",
+            url=f"http://127.0.0.1:{server.server_port}/sdk.tar.gz",
+            sha512=sha512,
+        )
+        locked = Lock.of(replace(_locked(recipe, first).lockfile, toolchains=[entry]))
+        out = tmp_path / "out"
+
+        (fetched,) = fetch(recipe, lock=locked, build=out)
+
+        deps = out / ".sources" / "deps"
+        assert fetched.deps == "nuget: prefetched"
+        assert (deps / "dotnet" / "9.0.320" / "sdk" / "9.0.320" / ".version").is_file()
+        assert (
+            deps / "dotnet" / "9.0.320" / _source.DOTNET_SDK_MARKER
+        ).read_text() == f"{sha512}\n"
+        (marker,) = deps.glob("*.nuget.json")
+        recorded = json.loads(marker.read_text(encoding="utf-8"))
+        assert recorded["toolchain"] == {
+            "name": "9.0.320",
+            "version": "9.0.320",
+            "requested": f"{SDK} disable",
+            "url": entry.url,
+            "sha512": sha512,
+        }
+        assert sorted(recorded["toolchain_contents"]) == sorted(
+            _source._dotnet_sdk_files("9.0.320")
+        )
+        ((argv, _, env),) = tools.calls
+        assert argv[:2] == ("dotnet", "restore")
+        assert env["DOTNET_ROOT"] == str((deps / "dotnet" / "9.0.320").resolve())
+
+        (again,) = fetch(recipe, lock=locked, build=out)
+        assert again.deps == "nuget: kept" and len(tools.calls) == 1
+
+        other = Lock.of(replace(locked.lockfile, toolchains=[replace(entry, sha512="f" * 128)]))
+        with pytest.raises(SourceError, match="sha512 .* does not match the lock"):
+            fetch(recipe, lock=other, build=out)
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 # ── bake --offline ───────────────────────────────────────────────────
@@ -838,6 +1103,35 @@ def test_offline_bake_after_fetch_builds_without_network(
     assert '"$SRCDIR/tundravm-sources/deps/go"' in hooks
     assert "export GOMODCACHE=/build/.tundravm-deps/go GOFLAGS=-mod=mod" in hooks
     assert "export GOPROXY=file:///build/.tundravm-deps/go/cache/download GOSUMDB=off" in hooks
+
+
+def test_offline_bake_runs_the_dotnet_build_with_the_fetched_sdk(
+    tmp_path: Path, repo: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hook copies the SDK the prefetch unpacked beside the packages, puts its ``dotnet``
+    first and restores from the packages folder alone; a lock pinning another SDK than the
+    prefetched one is refused before mkosi runs."""
+    url, first = repo
+    _Toolchain(monkeypatch, [])
+    recipe = _recipe(_build(url, "dotnet"))
+    out = tmp_path / "out"
+    locked = _locked(recipe, first)
+    fetch(recipe, lock=locked, build=out)
+    backend = _Recording()
+
+    bake_image(lower(recipe), None, locked=locked, backend=backend, build=out, offline=True)
+
+    hooks = (out / "mkosi" / "payload" / "mkosi.build.d" / "50-build.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'cp -a --no-preserve=ownership "$SRCDIR/tundravm-sources/deps/dotnet"/"$(cat ' in hooks
+    assert 'export DOTNET_ROOT=/build/.tundravm-deps/dotnet/"$(cat /build/.tundravm-deps/' in hooks
+    assert "export RestoreConfigFile=/build/.tundravm-deps/nuget.config" in hooks
+    assert "--self-contained true --no-restore --output /build/tool/publish" in hooks
+    (entry,) = locked.lockfile.toolchains
+    other = Lock.of(replace(locked.lockfile, toolchains=[replace(entry, version="9.0.101")]))
+    with pytest.raises(StateError, match=f"prefetched with .NET SDK {SDK}, not the 9.0.101"):
+        bake_image(lower(recipe), None, locked=other, backend=backend, build=out, offline=True)
 
 
 def test_online_bake_keeps_the_trees_network(

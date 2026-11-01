@@ -7,7 +7,13 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from tundravm.lockfile.model import LOCKFILE_VERSION, LockedFetch, LockedRepository, Lockfile
+from tundravm.lockfile.model import (
+    LOCKFILE_VERSION,
+    LockedFetch,
+    LockedRepository,
+    LockedToolchain,
+    Lockfile,
+)
 from tundravm.toolchain import Toolchain, tundravm_identity
 
 PROFILES_KEY = "profiles"
@@ -56,6 +62,7 @@ def build_lockfile(
     fetches: list[LockedFetch] | None = None,
     toolchain: Toolchain | None = None,
     repositories: list[LockedRepository] | None = None,
+    toolchains: list[LockedToolchain] | None = None,
 ) -> Lockfile:
     """The lockfile for the *image* payload; *toolchain* defaults to this tundravm alone."""
     dependencies: dict[str, list[str]] = {}
@@ -77,4 +84,5 @@ def build_lockfile(
         sections=section_digests(image),
         toolchain=toolchain if toolchain is not None else Toolchain(tundravm_identity()),
         repositories=list(repositories or []),
+        toolchains=list(toolchains or []),
     )

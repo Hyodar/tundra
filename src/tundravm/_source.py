@@ -42,7 +42,7 @@ from urllib.request import urlopen
 
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, SourceError, StateError, TdxError, ValidationError
-from .lockfile.model import LockedFetch
+from .lockfile.model import LockedFetch, LockedToolchain
 from .project import lock_command
 
 if TYPE_CHECKING:
@@ -98,6 +98,50 @@ _RUST_PROFILES = ("minimal", "default", "complete")
 _RUST_DEBIAN_REASON = (
     "the source has no rust-toolchain.toml or rust-toolchain, so Debian's cargo builds it"
 )
+SHA512_PATTERN = re.compile(r"^[0-9a-f]{128}$")
+DOTNET_RELEASES_HOST = "builds.dotnet.microsoft.com"
+"""Where the .NET release manifests and the SDK tarballs are served from."""
+DOTNET_RELEASES_INDEX = (
+    f"https://{DOTNET_RELEASES_HOST}/dotnet/release-metadata/releases-index.json"
+)
+"""The .NET release index: one entry per release (``9.0``), naming its ``releases.json``."""
+DOTNET_GLOBAL_JSON = "global.json"
+"""The file a .NET source names its SDK in, read as ``dotnet`` reads it."""
+DOTNET_GLOBAL_JSON_PIN = "<global.json>"
+"""The SDK version a cache fingerprint records before a lock resolved it."""
+DOTNET_SDK_KIND = "dotnet-sdk"
+"""The ``kind`` of a lockfile ``toolchains`` entry pinning a .NET SDK."""
+DOTNET_DIRNAME = "dotnet"
+"""``<out>/.sources/deps/dotnet/<version>``: where ``tundravm build`` unpacks each SDK."""
+DOTNET_RID = "linux-x64"
+"""The runtime identifier of every SDK ``tundravm build`` fetches: the build sandbox's."""
+DOTNET_ROLL_FORWARD_DEFAULT = "latestPatch"
+"""The ``rollForward`` of a global.json that names none, as ``dotnet`` reads it."""
+_DOTNET_ROLL_FORWARD = ("disable", "patch", "feature", "latestPatch", "latestFeature")
+"""The policies that keep the SDK within the .NET release ``sdk.version`` names."""
+_DOTNET_ROLL_FORWARD_REFUSED = ("minor", "major", "latestMinor", "latestMajor")
+"""The policies that reach past it: the SDK would move with each .NET release."""
+_DOTNET_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
+DOTNET_ENV = {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_NOLOGO": "1",
+    "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+    "DOTNET_CLI_USE_MSBUILD_SERVER": "0",
+    "MSBUILDDISABLENODEREUSE": "1",
+}
+"""The environment of every ``dotnet`` tundravm runs: no telemetry, banner or first-run
+setup, and no build server or MSBuild node outliving the build (one would hold the build
+sandbox open)."""
+DOTNET_PROPERTIES = {
+    "Deterministic": "true",
+    "ContinuousIntegrationBuild": "true",
+    "NuGetAudit": "false",
+    "UseSharedCompilation": "false",
+}
+"""The MSBuild properties of every restore and publish: deterministic output, no package
+audit (it reads a moving advisory database over the network, so a project that treats
+warnings as errors would fail its pinned build the day an advisory lands) and no compiler
+server outliving the build."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,7 +513,7 @@ class GoBuild:
                 "names it (its toolchain line, else its go line).",
             )
 
-    def prefetch(
+    def _prefetch(
         self, cache: str, toolchain: str = GO_MOD_TOOLCHAIN
     ) -> tuple[tuple[str, ...], dict[str, str]]:
         """``go mod download`` into the module cache *cache* with the Go *toolchain*.
@@ -487,7 +531,7 @@ class GoBuild:
         return ("go", "mod", "download"), env
 
     @staticmethod
-    def deps_env(cache: str) -> str:
+    def _deps_env(cache: str) -> str:
         """The exports pointing the in-build ``go`` at the copied module cache *cache*.
 
         Without network the cache is the only proxy and the checksum database is off: the
@@ -501,7 +545,7 @@ class GoBuild:
         )
 
     @staticmethod
-    def toolchain_env(record: str) -> str:
+    def _toolchain_env(record: str) -> str:
         """The export selecting the toolchain the prefetch wrote to *record*.
 
         Without a record (no host ``go``), ``local``: Debian's ``go``, which refuses a
@@ -511,9 +555,11 @@ class GoBuild:
 
     @property
     def artifact(self) -> str:
+        """``<output_dir>/<output>``: the built binary, relative to the source tree."""
         return posixpath.normpath(f"{self.output_dir}/{self.output}")
 
     def command(self, workdir: str) -> str:
+        """The build's shell command in *workdir*, the checkout's copy inside the sandbox."""
         env = f"{_env_assignments(self.env)} " if self.env else ""
         tags = f" -tags {','.join(self.tags)}" if self.tags else ""
         mkdir = f"mkdir -p {self.output_dir} && " if self.mkdir else ""
@@ -585,7 +631,7 @@ class CargoBuild:
                 'rust-toolchain.toml pins it (channel = "1.91.0").',
             )
 
-    def prefetch(
+    def _prefetch(
         self, cache: str, toolchain: str = RUST_TOOLCHAIN_FILE
     ) -> tuple[tuple[str, ...], dict[str, str]]:
         """``cargo fetch --locked`` into the cargo home *cache* with the Rust *toolchain*.
@@ -600,7 +646,7 @@ class CargoBuild:
         return ("cargo", "fetch", "--locked"), env
 
     @staticmethod
-    def deps_env(cache: str) -> str:
+    def _deps_env(cache: str) -> str:
         """The exports pointing the in-build ``cargo`` at the copied cargo home *cache*."""
         return (
             f"export CARGO_HOME={cache} && "
@@ -608,7 +654,7 @@ class CargoBuild:
         )
 
     @staticmethod
-    def toolchain_env(record: str, rustup: str) -> str:
+    def _toolchain_env(record: str, rustup: str) -> str:
         """The exports selecting the toolchain the prefetch wrote to *record*.
 
         Its own ``cargo`` and ``rustc`` come first on ``PATH``: Debian's ``cargo`` is not
@@ -624,6 +670,7 @@ class CargoBuild:
 
     @property
     def artifact(self) -> str:
+        """``target/<profile>/<bin>``: the built binary, relative to the source tree."""
         return f"target/{self.profile}/{self.bin or self.package or self.output}"
 
     def _environment(self, workdir: str) -> tuple[dict[str, str], str]:
@@ -645,6 +692,7 @@ class CargoBuild:
         return env, f" --config {shlex.quote(toml)}"
 
     def command(self, workdir: str) -> str:
+        """The build's shell command in *workdir*, the checkout's copy inside the sandbox."""
         environment, config = self._environment(workdir)
         exports = _env_assignments(environment)
         if self.reproducible and "SOURCE_DATE_EPOCH" not in environment:
@@ -666,29 +714,49 @@ class CargoBuild:
 class DotnetBuild:
     """Deterministic self-contained ``dotnet publish`` of *project* into ``publish/``.
 
-    ``restore_args`` are appended to ``dotnet restore``; ``properties`` become extra
-    ``-p:<name>=<value>`` publish properties after the deterministic ones.
+    The build runs the .NET SDK the source's ``global.json`` names (:func:`dotnet_sdk`):
+    ``tundravm lock`` resolves it under the file's ``rollForward`` policy against the .NET
+    release manifest and ``tundravm build`` downloads it on the host with the NuGet
+    packages, so the sandbox builds offline and the host needs no ``dotnet`` of its own.
+    ``packages`` are the Debian packages the SDK runs on, trixie's names: the C++ runtime,
+    OpenSSL for NuGet's and the compiler's hashes, ICU for the compiler's generators.
+    ``restore_args`` are appended to ``dotnet restore``; ``properties`` become
+    ``-p:<name>=<value>`` on the restore and the publish, after :data:`DOTNET_PROPERTIES`.
     """
 
     project: str
     output: str
     configuration: str = "Release"
-    runtime: str = "linux-x64"
+    runtime: str = DOTNET_RID
     env: Mapping[str, str] = field(default_factory=FrozenMap)
-    packages: Sequence[str] = ("dotnet-sdk-8.0",)
+    packages: Sequence[str] = ("libicu76", "libssl3t64", "libstdc++6")
     restore_args: Sequence[str] = field(default=(), metadata=_since(()))
     properties: Mapping[str, str] = field(default_factory=FrozenMap, metadata=_since({}))
 
     kind: Literal["dotnet"] = field(default="dotnet", init=False, repr=False)
     tool: ClassVar[str] = "dotnet"
-    """The host executable ``tundravm build`` prefetches the dependencies with."""
+    """The executable the prefetch runs: the fetched SDK's own, never the host's."""
     deps: ClassVar[str] = "nuget"
     """The dependency cache, ``<out>/.sources/deps/nuget``: a NuGet global packages folder."""
 
     def __post_init__(self) -> None:
         _freeze_recipe(self, ("env", "properties"), ("packages", "restore_args"))
 
-    def prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
+    def _properties(self, *first: tuple[str, str]) -> tuple[str, ...]:
+        """``-p:<name>=<value>`` for *first*, :data:`DOTNET_PROPERTIES` and the recipe's."""
+        pairs = (*first, *DOTNET_PROPERTIES.items(), *self.properties.items())
+        return tuple(f"-p:{_assignment(key, value)}" for key, value in pairs)
+
+    def _restore_arguments(self) -> tuple[str, ...]:
+        """What both restores take after ``--runtime``: the publish's properties (a
+        self-contained single-file publish restores more than a plain restore, the ILLink
+        tasks package for one), no node reuse, then ``restore_args``."""
+        properties = self._properties(
+            ("SelfContained", "true"), ("Configuration", self.configuration)
+        )
+        return (*properties, "-nodeReuse:false", *self.restore_args)
+
+    def _prefetch(self, cache: str) -> tuple[tuple[str, ...], dict[str, str]]:
         """``dotnet restore`` of *project* for *runtime* into the packages folder *cache*."""
         argv = (
             "dotnet",
@@ -696,38 +764,76 @@ class DotnetBuild:
             self.project,
             "--runtime",
             self.runtime,
-            *self.restore_args,
             "--packages",
             cache,
+            *self._restore_arguments(),
         )
-        env = {**self.env, "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"}
-        return argv, env
+        return argv, {**DOTNET_ENV, **self.env}
 
     @staticmethod
-    def deps_env(cache: str) -> str:
-        """The exports pointing the in-build ``dotnet restore`` at the copied packages *cache*.
+    def _host_env(root: Path, scratch: Path) -> dict[str, str]:
+        """The exports running the SDK unpacked at *root* on the host, its state under *scratch*
+        (the first-run sentinel, NuGet's http and plugin caches); the packages folder and the
+        user's NuGet configuration stay where they are."""
+        return {
+            "DOTNET_ROOT": str(root),
+            "PATH": os.pathsep.join((str(root), os.environ.get("PATH", ""))),
+            "DOTNET_CLI_HOME": str(scratch),
+            "NUGET_HTTP_CACHE_PATH": str(scratch / "http-cache"),
+            "NUGET_PLUGINS_CACHE_PATH": str(scratch / "plugins-cache"),
+        }
 
-        Without network, MSBuild reads ``RestoreSources`` from the environment, so
-        restore (and ``publish``'s implicit one) resolves from *cache* alone.
+    @staticmethod
+    def _deps_env(cache: str) -> str:
+        """The exports pointing the in-build ``dotnet`` at the copied packages *cache*.
+
+        Without network a ``nuget.config`` naming the cache as the only package source
+        replaces the project's (``RestoreConfigFile``, what ``--configfile`` sets): a
+        project that maps packages to its sources would otherwise keep NuGet from
+        considering the cache at all.
         """
+        config = f"{cache}.config"
+        xml = (
+            '<configuration><packageSources><clear/><add key="tundravm" '
+            f'value="{cache}"/></packageSources></configuration>'
+        )
         return (
             f"export NUGET_PACKAGES={cache} && "
-            f'{{ [ "$WITH_NETWORK" != 0 ] || export RestoreSources={cache}; }}'
+            f"{{ [ \"$WITH_NETWORK\" != 0 ] || {{ echo '{xml}' > {config} && "
+            f"export RestoreConfigFile={config}; }}; }}"
+        )
+
+    @staticmethod
+    def _toolchain_env(record: str, root: str) -> str:
+        """The exports selecting the SDK the prefetch wrote to *record*, unpacked under *root*.
+
+        Its ``dotnet`` comes first on ``PATH``, ``DOTNET_ROOT`` names it and its own
+        directory holds the CLI's state. Without a record there is no ``dotnet`` at all
+        (Debian ships none), and the build fails at its first ``dotnet``.
+        """
+        return (
+            f'if [ -f {record} ]; then export DOTNET_ROOT={root}/"$(cat {record})" && '
+            'export PATH="$DOTNET_ROOT:$PATH" DOTNET_CLI_HOME="$DOTNET_ROOT" '
+            'NUGET_HTTP_CACHE_PATH="$DOTNET_ROOT/.nuget/http-cache" '
+            'NUGET_PLUGINS_CACHE_PATH="$DOTNET_ROOT/.nuget/plugins-cache"; fi'
         )
 
     @property
     def artifact(self) -> str:
+        """``publish/<output>``: the published program, relative to the source tree."""
         return f"publish/{self.output}"
 
     def command(self, workdir: str) -> str:
-        env = f"export {_env_assignments(self.env)} && " if self.env else ""
-        restore = "".join(f" {arg}" for arg in self.restore_args)
-        props = "".join(f" -p:{_assignment(k, v)}" for k, v in self.properties.items())
+        """The build's shell command in *workdir*, the checkout's copy inside the sandbox."""
+        env = _env_assignments({**DOTNET_ENV, **self.env})
+        restore = " ".join(self._restore_arguments())
+        publish = " ".join((*self._properties(), "-nodeReuse:false"))
         return (
-            f"{env}cd {workdir} && dotnet restore {self.project} --runtime {self.runtime}"
-            f"{restore} && dotnet publish {self.project} --configuration {self.configuration} "
-            f"--runtime {self.runtime} --self-contained true --output {workdir}/publish "
-            f"-p:Deterministic=true -p:ContinuousIntegrationBuild=true{props}"
+            f"export {env} && cd {workdir} && "
+            f"dotnet restore {self.project} --runtime {self.runtime} {restore} && "
+            f"dotnet publish {self.project} --configuration {self.configuration} "
+            f"--runtime {self.runtime} --self-contained true --no-restore "
+            f"--output {workdir}/publish {publish}"
         )
 
 
@@ -753,6 +859,7 @@ class ScriptBuild:
         return self.output
 
     def command(self, workdir: str) -> str:
+        """The build's shell command in *workdir*, the checkout's copy inside the sandbox."""
         env = f"export {_env_assignments(self.env)} && " if self.env else ""
         return f"{env}cd {workdir} && {self.script}"
 
@@ -1108,16 +1215,17 @@ class SourceBuild(NamedSource):
         pin: str | None = None,
         *,
         distribution: Mapping[str, object] | None = None,
+        sdk: str | None = None,
     ) -> str:
         """The build-phase hook: copy the checkout, build, cache, install.
 
         *pin* is a lockfile pin; an inline pin (commit ref, ``sha256=``) wins. The hook
         copies the host-fetched checkout ``$SRCDIR/tundravm-sources/<name>-<pin[:12]>``;
         unpinned, it only fails, naming ``tundravm lock`` and ``tundravm build``.
-        *distribution* (the variant's ``Lowered.build_distribution``) enters the cache
-        fingerprint.
+        *distribution* (the variant's ``Lowered.build_distribution``) and *sdk* (the .NET
+        SDK version the lock pins for a Dotnet build) enter the cache fingerprint.
         """
-        return f"{self.marker()}\n{self._render(pin, distribution)}"
+        return f"{self.marker()}\n{self._render(pin, distribution, sdk)}"
 
     def marker(self) -> str:
         """``# tundravm build: <json>``: the declaration a mounted hook is rendered from.
@@ -1140,7 +1248,9 @@ class SourceBuild(NamedSource):
         )
         return BUILD_MARKER + json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    def _render(self, pin: str | None, distribution: Mapping[str, object] | None) -> str:
+    def _render(
+        self, pin: str | None, distribution: Mapping[str, object] | None, sdk: str | None
+    ) -> str:
         effective = self.source.inline_pin or pin
         workdir = Build.chroot_path(self.name).rel
         if isinstance(self.source, GitSource) and self.source.subdir:
@@ -1156,7 +1266,7 @@ class SourceBuild(NamedSource):
         copy_deps, uses_deps = self._deps(effective)
         inner = f"{uses_deps}{build}".replace("'", "'\\''")
         command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
-        fingerprint = self.cache_fingerprint(effective, distribution=distribution or {})
+        fingerprint = self.cache_fingerprint(effective, distribution=distribution or {}, sdk=sdk)
         key = f"{self.cache_key or self.name}-{fingerprint}"
         return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
 
@@ -1176,11 +1286,12 @@ class SourceBuild(NamedSource):
 
         *copy* (``&&``-joined after the checkout copy) copies
         ``$SRCDIR/tundravm-sources/deps/<cache>`` to ``$BUILDROOT/build/.tundravm-deps``
-        once, when ``tundravm build`` filled it, and a Go or Cargo build's toolchain record
+        once, when ``tundravm build`` filled it, and the build's toolchain record
         (:meth:`toolchain_file`) beside it, with the Rust toolchain it names from
-        ``deps/rustup``; *exports* (inside mkosi-chroot) point the toolchain at that copy,
-        offline when mkosi runs the build without network, and select the build's
-        toolchain. Both are empty for a script build.
+        ``deps/rustup`` or the .NET SDK it names from ``deps/dotnet``; *exports* (inside
+        mkosi-chroot) point the toolchain at that copy, offline when mkosi runs the build
+        without network, and select the build's toolchain. Both are empty for a script
+        build.
         """
         if not isinstance(self.build, LanguageBuild):
             return "", ""
@@ -1194,7 +1305,7 @@ class SourceBuild(NamedSource):
             f"{{ mkdir -p {parent} && cp -a --no-preserve=ownership {mounted} {target}; }}; }}"
         )
         chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{cache}")
-        exports = f"if [ -d {chroot} ]; then {self.build.deps_env(str(chroot))}; fi && "
+        exports = f"if [ -d {chroot} ]; then {self.build._deps_env(str(chroot))}; fi && "
         record = self.toolchain_file(pin)
         if record is None:
             return copy, exports
@@ -1205,8 +1316,17 @@ class SourceBuild(NamedSource):
         )
         in_chroot = Build.chroot_path(f"{DEPS_BUILD_DIR}/{record}")
         if isinstance(self.build, GoBuild):
-            return copy, exports + f"{GoBuild.toolchain_env(str(in_chroot))} && "
+            return copy, exports + f"{GoBuild._toolchain_env(str(in_chroot))} && "
         name = f'"$(cat {mounted_record})"'
+        if isinstance(self.build, DotnetBuild):
+            copied = f'"{Build.build_path(f"{DEPS_BUILD_DIR}/{DOTNET_DIRNAME}")}"'
+            copy += (
+                f" && {{ [ ! -f {mounted_record} ] || [ -d {copied}/{name} ] || "
+                f"{{ mkdir -p {copied} && cp -a --no-preserve=ownership "
+                f'"{mounted_deps}/{DOTNET_DIRNAME}"/{name} {copied}/; }}; }}'
+            )
+            root = Build.chroot_path(f"{DEPS_BUILD_DIR}/{DOTNET_DIRNAME}")
+            return copy, exports + f"{DotnetBuild._toolchain_env(str(in_chroot), str(root))} && "
         toolchains = f"{RUSTUP_DIRNAME}/toolchains"
         copied = f'"{Build.build_path(f"{DEPS_BUILD_DIR}/{toolchains}")}"'
         copy += (
@@ -1215,17 +1335,17 @@ class SourceBuild(NamedSource):
             f'cp -a --no-preserve=ownership "{mounted_deps}/{toolchains}"/{name} {copied}/; }}; }}'
         )
         rustup = Build.chroot_path(f"{DEPS_BUILD_DIR}/{RUSTUP_DIRNAME}")
-        return copy, exports + f"{CargoBuild.toolchain_env(str(in_chroot), str(rustup))} && "
+        return copy, exports + f"{CargoBuild._toolchain_env(str(in_chroot), str(rustup))} && "
 
     def toolchain_file(self, pin: str) -> str | None:
-        """``<pin_dir>.<cache>.toolchain``: the toolchain a Go or Cargo prefetch selected.
+        """``<pin_dir>.<cache>.toolchain``: the toolchain a language build's prefetch selected.
 
         ``tundravm build`` writes it in ``.sources/deps`` once the host fetched that
         toolchain: a Go build's ``GOTOOLCHAIN`` (:func:`go_toolchain`), a Cargo build's
-        installed Rust toolchain or ``debian`` (:func:`rust_toolchain`). ``None`` for a
-        build that is neither.
+        installed Rust toolchain or ``debian`` (:func:`rust_toolchain`), a Dotnet build's
+        SDK version (:func:`dotnet_sdk`). ``None`` for a script build.
         """
-        if not isinstance(self.build, (GoBuild, CargoBuild)):
+        if not isinstance(self.build, LanguageBuild):
             return None
         return f"{self.pin_dir(pin)}.{self.build.deps}.toolchain"
 
@@ -1243,27 +1363,36 @@ class SourceBuild(NamedSource):
         """What a prefetch ran, as its marker records it: toolchain, command and environment."""
         if not isinstance(self.build, LanguageBuild):
             return {}
-        argv, env = self.build.prefetch(f"<{DEPS_DIRNAME}/{self.build.deps}>")
+        argv, env = self.build._prefetch(f"<{DEPS_DIRNAME}/{self.build.deps}>")
         return {
             "toolchain": self.build.kind,
             "command": list(argv),
             "env": dict(sorted(env.items())),
         }
 
-    def cache_fingerprint(self, pin: str, *, distribution: Mapping[str, object]) -> str:
+    def cache_fingerprint(
+        self, pin: str, *, distribution: Mapping[str, object], sdk: str | None = None
+    ) -> str:
         """The first 16 hex of the sha256 over what a mounted build produces.
 
         Canonical JSON of the source pin (with git's ``subdir`` and
         ``submodules``), the build recipe (defaults decided, see
         :func:`resolve_recipe`) and install steps, the toolchain (recipe kind and packages, and
-        that Go's go.mod or Rust's rust-toolchain.toml picks the release) and the
-        *distribution* it comes from: base, architecture, mirror, snapshot,
-        repositories, build packages and build settings
+        that Go's go.mod or Rust's rust-toolchain.toml picks the release, or the .NET SDK
+        version *sdk* the lock pins) and the *distribution* it comes from: base,
+        architecture, mirror, snapshot, repositories, build packages and build settings
         (``Lowered.build_distribution``).
         """
         source: dict[str, object] = {"kind": self.source.kind, "pin": pin}
         if isinstance(self.source, GitSource):
             source.update(subdir=self.source.subdir, submodules=self.source.submodules)
+        toolchain = {
+            "kind": self.build.kind,
+            "packages": list(self.build_packages()),
+            **_TOOLCHAIN_VERSIONS.get(self.build.kind, {}),
+        }
+        if sdk is not None and isinstance(self.build, DotnetBuild):
+            toolchain["version"] = sdk
         spec = {
             "source": source,
             "build": _recipe_payload(resolve_recipe(self.build)),
@@ -1272,11 +1401,7 @@ class SourceBuild(NamedSource):
                 for step in self.install
             ],
             "distribution": dict(distribution),
-            "toolchain": {
-                "kind": self.build.kind,
-                "packages": list(self.build_packages()),
-                **_TOOLCHAIN_VERSIONS.get(self.build.kind, {}),
-            },
+            "toolchain": toolchain,
         }
         return fingerprint(spec)
 
@@ -1296,6 +1421,7 @@ class SourceBuild(NamedSource):
 _TOOLCHAIN_VERSIONS: dict[str, dict[str, str]] = {
     "go": {"version": GO_MOD_TOOLCHAIN},
     "cargo": {"version": RUST_TOOLCHAIN_FILE},
+    "dotnet": {"version": DOTNET_GLOBAL_JSON_PIN},
 }
 """What :meth:`SourceBuild.cache_fingerprint` records picks a recipe kind's toolchain."""
 
@@ -1548,7 +1674,13 @@ NOT_PREFETCHED = "not prefetched"
 """:func:`deps_problem` of a build whose dependencies no fetch has recorded."""
 
 
-def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
+_LANGUAGES = {"go": "Go", "cargo": "Rust", "dotnet": ".NET"}
+"""The language of each recipe kind's toolchain, as the deps problems name it."""
+
+
+def deps_problem(
+    build: SourceBuild, pin: str, root: Path, *, sdk: LockedToolchain | None = None
+) -> str | None:
     """Why ``<root>/deps`` lacks *build*'s dependencies for *pin*, or ``None`` when complete.
 
     *root* is ``<out>/.sources``. Complete means the marker records this
@@ -1556,8 +1688,10 @@ def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
     each Go module directory and ``.mod`` file ``go.sum`` names, each ``.crate``
     of ``Cargo.lock`` (size and sha256), each NuGet package directory of the
     restore's ``project.assets.json``, and the toolchain record naming the recorded
-    toolchain, a Rust one with its files in ``deps/rustup``. ``None`` for a script
-    build, which has none; :data:`NOT_PREFETCHED` without a marker.
+    toolchain, a Rust one with its files in ``deps/rustup``, a .NET SDK with its files in
+    ``deps/dotnet`` and, with *sdk* (the lock's pin), the version and sha512 the lock
+    pins. ``None`` for a script build, which has none; :data:`NOT_PREFETCHED` without a
+    marker.
     """
     marker = build.deps_marker(pin)
     if marker is None or not isinstance(build.build, LanguageBuild):
@@ -1589,28 +1723,37 @@ def deps_problem(build: SourceBuild, pin: str, root: Path) -> str | None:
         written = (root / DEPS_DIRNAME / record).read_text(encoding="utf-8").strip()
     except OSError:
         written = None
-    language = "Go" if isinstance(build.build, GoBuild) else "Rust"
-    if named is None or written != named:
+    language = _LANGUAGES[build.build.kind]
+    if named is None or written != named or not isinstance(toolchain, dict):
         return f"{DEPS_DIRNAME}/{record} does not name the recorded {language} toolchain"
     files = recorded.get("toolchain_contents")
     if isinstance(build.build, CargoBuild) and named != RUST_TOOLCHAIN_DEBIAN:
-        home = root / DEPS_DIRNAME / RUSTUP_DIRNAME
-        for rel, expected in sorted(files.items() if isinstance(files, dict) else ()):
-            if _cache_entry(home / rel) != expected:
-                return f"{DEPS_DIRNAME}/{RUSTUP_DIRNAME}/{rel} is missing or changed"
-        if not files:
-            return "the marker has no content manifest of the Rust toolchain"
+        home, what = RUSTUP_DIRNAME, "Rust toolchain"
+    elif isinstance(build.build, DotnetBuild):
+        recorded_sdk = (toolchain.get("version"), toolchain.get("sha512"))
+        if sdk is not None and recorded_sdk != (sdk.version, sdk.sha512):
+            return f"prefetched with .NET SDK {named}, not the {sdk.version} the lock pins"
+        home, what = DOTNET_DIRNAME, ".NET SDK"
+    else:
+        return None
+    for rel, expected in sorted(files.items() if isinstance(files, dict) else ()):
+        if _cache_entry(root / DEPS_DIRNAME / home / rel) != expected:
+            return f"{DEPS_DIRNAME}/{home}/{rel} is missing or changed"
+    if not files:
+        return f"the marker has no content manifest of the {what}"
     return None
 
 
 def toolchain_record(build: SourceBuild, pin: str, root: Path) -> dict[str, object] | None:
-    """The Go or Rust toolchain the prefetch of *build* at *pin* recorded in ``<root>/deps``.
+    """The toolchain the prefetch of *build* at *pin* recorded in ``<root>/deps``.
 
     Go: ``{"name", "module", "sum"}``, the ``GOTOOLCHAIN`` release, its module and the
     ``h1:`` checksum the checksum database vouched for, or ``{"name": "local", "reason"}``
     for a go.mod older than toolchain modules. Rust: :meth:`RustToolchain.record` with
     what ``rustc -vV`` says, or ``{"name": "debian", "reason"}`` for a source that pins
-    none. ``None`` for another build or one that no prefetch recorded.
+    none. .NET: ``{"name", "version", "requested", "url", "sha512"}``, the SDK release the
+    source's global.json resolved to and the tarball it came from. ``None`` for a script
+    build or one that no prefetch recorded.
     """
     marker = build.deps_marker(pin)
     if marker is None or build.toolchain_file(pin) is None:
@@ -2038,6 +2181,405 @@ def _install_rust_toolchain(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DotnetSdk:
+    """The .NET SDK a source's ``global.json`` asks for: *version* under its *roll_forward*.
+
+    *file* is the ``global.json`` it comes from, relative to the source tree.
+    *allow_prerelease* is the file's ``allowPrerelease``, ``False`` unless it says so: a
+    pinned build takes no preview SDK it did not ask for.
+    """
+
+    version: str
+    roll_forward: str = DOTNET_ROLL_FORWARD_DEFAULT
+    allow_prerelease: bool = False
+    file: str = DOTNET_GLOBAL_JSON
+
+    @property
+    def channel(self) -> str:
+        """``<major>.<minor>``: the .NET release the SDK belongs to (``9.0``)."""
+        major, minor, *_ = self.version.split(".")
+        return f"{major}.{minor}"
+
+    @property
+    def requested(self) -> str:
+        """``<version> <rollForward>``: what the lock records the pin was resolved from."""
+        return f"{self.version} {self.roll_forward}"
+
+
+@dataclass(frozen=True, slots=True)
+class DotnetRelease:
+    """An SDK of the .NET release manifest: its *version*, its ``linux-x64`` tarball's *url*
+    and the tarball's *sha512*, as the manifest states them."""
+
+    version: str
+    url: str
+    sha512: str
+
+
+def dotnet_sdk(workdir: Path, tree: Path, described: str) -> DotnetSdk:
+    """The SDK the source tree *tree* names for a build in *workdir*: its ``global.json``.
+
+    The file is looked for from *workdir* up to *tree*, as ``dotnet`` looks for it. A
+    source without one, or one naming no ``sdk.version`` or a ``rollForward`` that reaches
+    past the .NET release the version names, raises ``SourceError`` saying what to write;
+    *described* names the source (``git <url> @ <ref>``).
+    """
+    for directory in _up_to(workdir, tree):
+        path = directory / DOTNET_GLOBAL_JSON
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            return _dotnet_global_json(text, path.relative_to(tree).as_posix(), described)
+    reason = f"no {DOTNET_GLOBAL_JSON}"
+    raise SourceError(
+        f"{described} has no {DOTNET_GLOBAL_JSON}, so no .NET SDK can be fetched for it "
+        "(Debian ships none).",
+        source=described,
+        reason=reason,
+        hint=(
+            f"Add {DOTNET_GLOBAL_JSON} to the source "
+            '({"sdk": {"version": "9.0.100", "rollForward": "latestPatch"}}) and build that '
+            "revision."
+        ),
+    )
+
+
+def checkout_dotnet_sdk(build: SourceBuild, checkout: Path) -> DotnetSdk:
+    """:func:`dotnet_sdk` of a Dotnet *build*'s *checkout* (its subdirectory, for a git
+    source that names one)."""
+    workdir = checkout
+    if isinstance(build.source, GitSource) and build.source.subdir:
+        workdir = checkout / build.source.subdir.strip("/")
+    return dotnet_sdk(workdir, checkout, build.source.describe())
+
+
+def _dotnet_global_json(text: str, file: str, described: str) -> DotnetSdk:
+    try:
+        table: object = json.loads(text)
+    except ValueError as exc:
+        raise _not_a_global_json(file, described, f"it is not JSON ({exc})") from None
+    sdk = table.get("sdk") if isinstance(table, dict) else None
+    if not isinstance(sdk, dict):
+        raise _not_a_global_json(file, described, "it has no sdk object")
+    version = sdk.get("version")
+    if not isinstance(version, str) or not version:
+        raise _not_a_global_json(file, described, "its sdk names no version")
+    if _dotnet_version_key(version) is None:
+        raise _not_a_global_json(
+            file, described, f"sdk.version {version!r} is not a full SDK version (x.y.znn)"
+        )
+    policy = sdk.get("rollForward", DOTNET_ROLL_FORWARD_DEFAULT)
+    channel = DotnetSdk(version).channel
+    if policy in _DOTNET_ROLL_FORWARD_REFUSED:
+        reason = f"rollForward {policy} reaches past .NET {channel}"
+        raise SourceError(
+            f"{file} of {described} asks for rollForward {policy}, which reaches past .NET "
+            f"{channel}: the SDK would move with each .NET release.",
+            source=described,
+            reason=reason,
+            hint=(
+                f'Keep the SDK within .NET {channel} in {file} ("rollForward": '
+                '"latestFeature") and build that revision.'
+            ),
+        )
+    if policy not in _DOTNET_ROLL_FORWARD:
+        raise _not_a_global_json(file, described, f"rollForward {policy!r} is not a policy")
+    prerelease = sdk.get("allowPrerelease", False)
+    if not isinstance(prerelease, bool):
+        raise _not_a_global_json(file, described, "its allowPrerelease is not true or false")
+    return DotnetSdk(version, roll_forward=str(policy), allow_prerelease=prerelease, file=file)
+
+
+def _not_a_global_json(file: str, described: str, why: str) -> SourceError:
+    return SourceError(
+        f"{file} of {described} is not a global.json tundravm can read: {why}.",
+        source=described,
+        reason=why,
+        hint=(
+            f'Name a released SDK in {file} ({{"sdk": {{"version": "9.0.100", "rollForward": '
+            '"latestPatch"}}) and build that revision.'
+        ),
+    )
+
+
+type _DotnetKey = tuple[int, int, int, int, tuple[tuple[int, int | str], ...]]
+
+
+def _dotnet_version_key(version: str) -> _DotnetKey | None:
+    """An SDK version's sort key: ``9.0.100-rc.2.24474.11`` < ``9.0.100`` < ``9.0.200``."""
+    match = _DOTNET_VERSION.fullmatch(version)
+    if match is None:
+        return None
+    major, minor, patch, pre = match.groups()
+    tail: tuple[tuple[int, int | str], ...] = ()
+    if pre is not None:
+        tail = tuple((0, int(part)) if part.isdigit() else (1, part) for part in pre.split("."))
+    return int(major), int(minor), int(patch), 0 if pre else 1, tail
+
+
+def _dotnet_sdks(releases: Mapping[str, object]) -> dict[str, DotnetRelease]:
+    """Every SDK of a release's ``releases.json`` with a ``linux-x64`` tarball, by version."""
+    found: dict[str, DotnetRelease] = {}
+    entries = releases.get("releases")
+    for release in entries if isinstance(entries, list) else []:
+        if not isinstance(release, dict):
+            continue
+        sdks = release.get("sdks")
+        for sdk in sdks if isinstance(sdks, list) else [release.get("sdk")]:
+            if not isinstance(sdk, dict):
+                continue
+            version, files = sdk.get("version"), sdk.get("files")
+            if not isinstance(version, str) or not isinstance(files, list):
+                continue
+            for file in files:
+                if not isinstance(file, dict) or file.get("rid") != DOTNET_RID:
+                    continue
+                url, digest = file.get("url"), file.get("hash")
+                if not str(file.get("name", "")).endswith(".tar.gz"):
+                    continue
+                if isinstance(url, str) and isinstance(digest, str):
+                    if SHA512_PATTERN.fullmatch(digest):
+                        found.setdefault(version, DotnetRelease(version, url, digest))
+    return found
+
+
+def select_dotnet_sdk(
+    request: DotnetSdk, releases: Mapping[str, object], described: str
+) -> DotnetRelease:
+    """The SDK of the release manifest *releases* (``releases.json``) satisfying *request*.
+
+    As ``dotnet`` selects among installed SDKs, over every SDK the release published:
+    ``disable`` the version itself; ``patch`` it, else the latest patch of its feature
+    band; ``latestPatch`` the latest patch of its band; ``feature`` the latest patch of its
+    band, else of the next band; ``latestFeature`` the latest SDK of the release. A
+    prerelease SDK counts only when the file allows prereleases or asks for one. Raises
+    ``SourceError`` naming the release's latest SDK when nothing satisfies the request.
+    """
+    available = _dotnet_sdks(releases)
+    parsed = _dotnet_version_key(request.version)
+    assert parsed is not None  # DotnetSdk holds a parsed version
+    wanted: _DotnetKey = parsed
+    prerelease = request.allow_prerelease or not wanted[3]
+    keys = {v: k for v in available if (k := _dotnet_version_key(v)) and (prerelease or k[3])}
+    major, minor, patch = wanted[:3]
+    band = patch // 100
+    in_release = {v: k for v, k in keys.items() if k[:2] == (major, minor)}
+    in_band = {v: k for v, k in in_release.items() if k[2] // 100 == band}
+
+    def latest(candidates: Mapping[str, _DotnetKey], floor: _DotnetKey = wanted) -> str | None:
+        eligible = {v: k for v, k in candidates.items() if k >= floor}
+        return max(eligible, key=lambda v: eligible[v]) if eligible else None
+
+    policy = request.roll_forward
+    exact = request.version if request.version in keys else None
+    if policy == "disable":
+        chosen = exact
+    elif policy == "patch":
+        chosen = exact or latest(in_band)
+    elif policy == "latestPatch":
+        chosen = latest(in_band)
+    elif policy == "feature":
+        chosen = latest(in_band)
+        bands = sorted({k[2] // 100 for k in in_release.values() if k[2] // 100 > band})
+        if chosen is None and bands:
+            next_band = {v: k for v, k in in_release.items() if k[2] // 100 == bands[0]}
+            chosen = latest(next_band, (major, minor, bands[0] * 100, 0, ()))
+    else:
+        chosen = latest(in_release)
+    if chosen is None:
+        reason = f"no .NET {request.channel} SDK satisfies {request.requested}"
+        raise SourceError(
+            f"{request.file} of {described} asks for .NET SDK {request.version} (rollForward "
+            f"{policy}), which no SDK of .NET {request.channel} satisfies.",
+            source=described,
+            reason=reason,
+            hint=(
+                f"Name an SDK .NET {request.channel} released in {request.file} (its latest "
+                f"is {releases.get('latest-sdk')}), or a policy that reaches one "
+                '("rollForward": "latestFeature"), and build that revision.'
+            ),
+        )
+    return available[chosen]
+
+
+def read_dotnet_manifest(url: str) -> object:
+    """The JSON at *url*, a .NET release manifest (tests replace it)."""
+    with urlopen(url, timeout=_NETWORK_TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def resolve_dotnet_sdk(request: DotnetSdk, described: str) -> DotnetRelease:
+    """*request*'s SDK release: the .NET release index names the release's ``releases.json``,
+    which :func:`select_dotnet_sdk` resolves it against. A manifest that cannot be read
+    raises ``SourceError`` naming the host to reach."""
+    try:
+        index = read_dotnet_manifest(DOTNET_RELEASES_INDEX)
+        releases = read_dotnet_manifest(_dotnet_releases_url(index, request, described))
+    except HTTPError as exc:
+        exc.close()
+        raise _manifest_unreadable(request, described, f"HTTP {exc.code}") from exc
+    except (OSError, ValueError) as exc:
+        reason = _network_reason(exc.reason if isinstance(exc, URLError) else exc)
+        raise _manifest_unreadable(request, described, reason) from exc
+    if not isinstance(releases, dict):
+        raise _manifest_unreadable(request, described, "releases.json is not a JSON object")
+    return select_dotnet_sdk(request, releases, described)
+
+
+def _dotnet_releases_url(index: object, request: DotnetSdk, described: str) -> str:
+    """The ``releases.json`` of *request*'s release, as the release *index* names it."""
+    entries = index.get("releases-index") if isinstance(index, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or entry.get("channel-version") != request.channel:
+            continue
+        url = entry.get("releases.json")
+        if isinstance(url, str):
+            return url
+    reason = f"no .NET {request.channel} in the release index"
+    raise SourceError(
+        f"{request.file} of {described} asks for .NET SDK {request.version}, and the .NET "
+        f"release index lists no .NET {request.channel}.",
+        source=described,
+        reason=reason,
+        hint=f"Name an SDK of a published .NET release in {request.file} and build that revision.",
+    )
+
+
+def _manifest_unreadable(request: DotnetSdk, described: str, reason: str) -> SourceError:
+    return SourceError(
+        f"Cannot resolve the .NET SDK {described}'s {request.file} asks for: {reason}.",
+        source=described,
+        reason=reason,
+        hint=f"Check the network path to {DOTNET_RELEASES_HOST}, then lock again.",
+    )
+
+
+def locked_dotnet_sdk(
+    name: str, pin: str, request: DotnetSdk, release: DotnetRelease
+) -> LockedToolchain:
+    """The lockfile ``toolchains`` entry pinning *release* for source build *name* at *pin*."""
+    return LockedToolchain(
+        name=name,
+        kind=DOTNET_SDK_KIND,
+        source=pin,
+        requested=request.requested,
+        version=release.version,
+        url=release.url,
+        sha512=release.sha512,
+    )
+
+
+def lock_dotnet_sdk(build: SourceBuild, pin: str, checkout: Path) -> LockedToolchain:
+    """The SDK pin of a Dotnet *build* at *pin*: its *checkout*'s ``global.json``, resolved
+    against the release manifest over the network (tests replace it)."""
+    request = checkout_dotnet_sdk(build, checkout)
+    release = resolve_dotnet_sdk(request, build.source.describe())
+    return locked_dotnet_sdk(build.key, pin, request, release)
+
+
+DOTNET_SDK_MARKER = ".tundravm-sha512"
+"""The file an unpacked SDK holds naming the sha512 of the tarball it came from."""
+
+
+def _dotnet_sdk_files(version: str) -> tuple[str, ...]:
+    """What the content manifest of SDK *version* covers, relative to ``deps/dotnet``."""
+    return (
+        f"{version}/dotnet",
+        f"{version}/sdk/{version}/dotnet.dll",
+        f"{version}/sdk/{version}/.version",
+        f"{version}/{DOTNET_SDK_MARKER}",
+    )
+
+
+def _dotnet_record(sdk: LockedToolchain) -> dict[str, object]:
+    return {
+        "name": sdk.version,
+        "version": sdk.version,
+        "requested": sdk.requested,
+        "url": sdk.url,
+        "sha512": sdk.sha512,
+    }
+
+
+def _fetch_dotnet_sdk(
+    build: SourceBuild, sdk: LockedToolchain, deps: Path
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Download *sdk*'s tarball and unpack it into ``<deps>/dotnet/<version>``, once.
+
+    The download is checked against the sha512 the lock recorded from the release
+    manifest before anything is unpacked. Returns ``(record, contents)``:
+    :func:`toolchain_record`'s record and the content manifest of the SDK's files
+    (:func:`_dotnet_sdk_files`). A failure raises ``SourceError`` naming the release and
+    the fix.
+    """
+    root = deps / DOTNET_DIRNAME
+    target = root / sdk.version
+    files = _dotnet_sdk_files(sdk.version)
+    contents = {rel: entry for rel in files if (entry := _cache_entry(root / rel))}
+    try:
+        unpacked_from = (target / DOTNET_SDK_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:
+        unpacked_from = None
+    if len(contents) == len(files) and unpacked_from == sdk.sha512:
+        return _dotnet_record(sdk), contents
+    root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix=f".{sdk.version}.", dir=root))
+    try:
+        reason = _download_dotnet_sdk(sdk, scratch)
+        if reason is None:
+            if target.exists():
+                shutil.rmtree(target)
+            (scratch / "root").rename(target)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if reason is None:
+        contents = {rel: entry for rel in files if (entry := _cache_entry(root / rel))}
+        if len(contents) == len(files):
+            return _dotnet_record(sdk), contents
+        missing = next(rel for rel in files if rel not in contents).split("/", 1)[1]
+        reason = f"the tarball holds no {missing}, so it is not SDK {sdk.version}"
+    raise SourceError(
+        f"Cannot fetch .NET SDK {sdk.version}, the one source build {build.key!r}'s global.json "
+        f"resolves to: {reason}.",
+        source=build.source.describe(),
+        reason=reason,
+        hint=(
+            f"tundravm downloads it on the host from {sdk.url}, checks its sha512 against the "
+            f"lock and builds offline with it. Give the host access to {DOTNET_RELEASES_HOST}, "
+            "or lock again if the release was republished."
+        ),
+        context={"toolchain": sdk.version, "url": sdk.url},
+    )
+
+
+def _download_dotnet_sdk(sdk: LockedToolchain, scratch: Path) -> str | None:
+    """Download and unpack *sdk* under *scratch* (``root/``); the reason when that fails."""
+    archive = scratch / "sdk.tar.gz"
+    digest = hashlib.sha512()
+    try:
+        with urlopen(sdk.url, timeout=_NETWORK_TIMEOUT) as response, archive.open("wb") as out:
+            while chunk := response.read(1 << 20):
+                digest.update(chunk)
+                out.write(chunk)
+    except HTTPError as exc:
+        exc.close()
+        return f"HTTP {exc.code}"
+    except OSError as exc:
+        return _network_reason(exc.reason if isinstance(exc, URLError) else exc)
+    if digest.hexdigest() != sdk.sha512:
+        return f"sha512 {digest.hexdigest()[:12]} does not match the lock's {sdk.sha512[:12]}"
+    unpacked = scratch / "root"
+    unpacked.mkdir()
+    unpack = ["tar", "-xzf", str(archive), "-C", str(unpacked)]
+    completed = subprocess.run(unpack, check=False, text=True, capture_output=True)
+    if completed.returncode != 0:
+        lines = completed.stderr.strip().splitlines()
+        return f"cannot unpack the tarball: {lines[-1] if lines else 'tar failed'}"
+    archive.unlink()
+    (unpacked / DOTNET_SDK_MARKER).write_text(f"{sdk.sha512}\n", encoding="utf-8")
+    return None
+
+
 def _cache_entry(path: Path) -> str | None:
     """A content-manifest value: ``dir`` (non-empty directory) or ``<size> <sha256>``."""
     if path.is_dir():
@@ -2137,6 +2679,7 @@ def prefetch_deps(
     root: Path,
     *,
     offline: bool = False,
+    sdk: LockedToolchain | None = None,
 ) -> str | None:
     """Fill ``<root>/deps/<cache>`` with *build*'s dependencies; the outcome, for the notice.
 
@@ -2144,28 +2687,31 @@ def prefetch_deps(
     restore --packages``) runs as the invoking user in a scratch copy of
     *checkout* (subdirectory included), so the checkout stays clean, after the host's
     ``rustup`` installed the toolchain a Cargo source pins into ``<root>/deps/rustup``
-    (:func:`rust_toolchain`; its own ``cargo`` fetches), and a marker
-    (:meth:`SourceBuild.deps_marker`) records the success with a content manifest
-    (:func:`deps_problem`). Returns ``None`` for a script build, ``"<cache>: kept"``
-    when the marker and its manifest still match, ``"<cache>: prefetched"`` (with
-    ``(was incomplete: ...)`` when it repaired a cache), ``"<cache>: incomplete
-    (...)"`` when an incomplete cache cannot be prefetched again, ``"skipped (no
-    host <tool>)"`` when the toolchain is not on ``PATH``, ``"skipped (offline)"``
-    under an offline policy, or ``"failed (<reason>)"``; the build then fetches
-    its dependencies online.
+    (:func:`rust_toolchain`; its own ``cargo`` fetches) or the .NET SDK the lock pins as
+    *sdk* (else the one the checkout's ``global.json`` resolves to now,
+    :func:`lock_dotnet_sdk`) was unpacked into ``<root>/deps/dotnet`` (its own
+    ``dotnet`` restores), and a marker (:meth:`SourceBuild.deps_marker`) records the
+    success with a content manifest (:func:`deps_problem`). Returns ``None`` for a script
+    build, ``"<cache>: kept"`` when the marker and its manifest still match,
+    ``"<cache>: prefetched"`` (with ``(was incomplete: ...)`` when it repaired a cache),
+    ``"<cache>: incomplete (...)"`` when an incomplete cache cannot be prefetched again,
+    ``"skipped (no host <tool>)"`` when the toolchain is not on ``PATH``, ``"skipped
+    (offline)"`` under an offline policy, or ``"failed (<reason>)"``; the build then
+    fetches its dependencies online.
     """
     marker = build.deps_marker(pin)
     if marker is None or not isinstance(build.build, LanguageBuild):
         return None
     recipe = build.build
     deps = root / DEPS_DIRNAME
-    problem = deps_problem(build, pin, root)
+    problem = deps_problem(build, pin, root, sdk=sdk)
     if problem is None:
         return f"{recipe.deps}: kept"
     incomplete = problem not in (None, NOT_PREFETCHED)
     rust = None if offline else checkout_rust_toolchain(build, checkout)
     tool = recipe.tool if rust is None else "rustup"
-    if offline or shutil.which(tool) is None:
+    fetched_tool = isinstance(recipe, DotnetBuild)
+    if offline or (not fetched_tool and shutil.which(tool) is None):
         if incomplete:
             return f"{recipe.deps}: incomplete ({problem})"
         return "skipped (offline)" if offline else f"skipped (no host {tool})"
@@ -2186,7 +2732,7 @@ def prefetch_deps(
         if isinstance(recipe, GoBuild):
             found = _go_mod_file(workdir, tree)
             name = go_toolchain(found.read_text(encoding="utf-8") if found else "")
-            argv, env = recipe.prefetch(str(cache.resolve()), name)
+            argv, env = recipe._prefetch(str(cache.resolve()), name)
             if name == GO_TOOLCHAIN_LOCAL:
                 toolchain, _ = _go_toolchain_entries(name, cache)
             else:
@@ -2199,7 +2745,7 @@ def prefetch_deps(
             else:
                 name = rust.name
                 toolchain, files = _install_rust_toolchain(build, rust, deps)
-            argv, env = recipe.prefetch(str(cache.resolve()), name)
+            argv, env = recipe._prefetch(str(cache.resolve()), name)
             if rust is not None:
                 home = (deps / RUSTUP_DIRNAME).resolve()
                 bin_dir = home / "toolchains" / name / "bin"
@@ -2207,7 +2753,14 @@ def prefetch_deps(
                 env["PATH"] = os.pathsep.join((str(bin_dir), os.environ.get("PATH", "")))
             (deps / str(build.toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
         else:
-            argv, env = recipe.prefetch(str(cache.resolve()))
+            if sdk is None:
+                sdk = lock_dotnet_sdk(build, pin, checkout)
+            toolchain, files = _fetch_dotnet_sdk(build, sdk, deps)
+            argv, env = recipe._prefetch(str(cache.resolve()))
+            sdk_root = (deps / DOTNET_DIRNAME / sdk.version).resolve()
+            env.update(DotnetBuild._host_env(sdk_root, scratch / "home"))
+            name = sdk.version
+            (deps / str(build.toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
         try:
             completed = run_tool(argv, cwd=workdir, env={**os.environ, **env})
         except OSError as exc:
@@ -2589,6 +3142,8 @@ __all__ = [
     "CargoBuild",
     "DebFile",
     "DotnetBuild",
+    "DotnetRelease",
+    "DotnetSdk",
     "GitSource",
     "GoBuild",
     "HttpSource",
@@ -2606,11 +3161,13 @@ __all__ = [
     "ScriptBuild",
     "Source",
     "SourceBuild",
+    "checkout_dotnet_sdk",
     "checkout_identity",
     "checkout_rust_toolchain",
     "copy_local",
     "default_resolver",
     "deps_problem",
+    "dotnet_sdk",
     "fetch_source",
     "fingerprint",
     "go_toolchain",
@@ -2620,12 +3177,17 @@ __all__ = [
     "local_digest",
     "local_files",
     "local_manifest",
+    "lock_dotnet_sdk",
+    "locked_dotnet_sdk",
     "manifest_digest",
     "prefetch_deps",
+    "read_dotnet_manifest",
     "require_host_go",
     "require_host_rustup",
+    "resolve_dotnet_sdk",
     "resolve_pins",
     "rust_toolchain",
+    "select_dotnet_sdk",
     "source_drift",
     "source_section",
     "toolchain_record",

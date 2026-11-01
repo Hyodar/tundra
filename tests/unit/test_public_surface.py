@@ -74,7 +74,18 @@ COMPONENTS = [
 ]
 STORAGE = ["BrokerKey", "OperatorKey", "TpmSeal", "Volume", "VolumeDirectory"]
 SECRETS = ["Credential", "Generated", "InstanceKey", "Secret"]
-SOURCES = ["Build", "CargoBinary", "Git", "GoBinary", "Http", "Install", "Local"]
+SOURCES = [
+    "Build",
+    "Cargo",
+    "CargoBinary",
+    "Dotnet",
+    "Git",
+    "Go",
+    "GoBinary",
+    "Http",
+    "Install",
+    "Local",
+]
 ERRORS = [
     "ArtifactError",
     "AttestationError",
@@ -142,11 +153,14 @@ NAMESPACES = {
 REUSED_FROM_DECLARATIVE = [
     "Build",
     "Calendar",
+    "Cargo",
     "CargoBinary",
     "Diagnostic",
+    "Dotnet",
     "DropIn",
     "Every",
     "Git",
+    "Go",
     "GoBinary",
     "Group",
     "Hardening",

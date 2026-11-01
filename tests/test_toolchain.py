@@ -134,7 +134,7 @@ def test_lock_records_the_toolchain_and_check_reports_drift(
     ) in text
     assert f"tundravm-measure {MEASURE_VERSION}" in text
     recorded = json.loads(lock.read_text(encoding="utf-8"))
-    assert recorded["version"] == 7
+    assert recorded["version"] == 8
     assert recorded["toolchain"]["mkosi"] == {"version": "27.1", "rev": MKOSI_PIN.commit}
     assert recorded["toolchain"]["tools_tree"] == {
         "distribution": "debian",

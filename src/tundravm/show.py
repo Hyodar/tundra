@@ -421,9 +421,10 @@ def _mapping(value: object) -> dict[str, Any]:
 
 
 def _toolchain(source: Mapping[str, Any]) -> str | None:
-    """The Go or Rust toolchain a source's prefetch recorded: the release (``go1.25.0``,
-    ``1.91.0``), ``local``/``debian`` when its source pins none, ``missing`` without one."""
-    for key in ("go_toolchain", "rust_toolchain"):
+    """The Go, Rust or .NET toolchain a source's prefetch recorded: the release
+    (``go1.25.0``, ``1.91.0``, ``9.0.320``), ``local``/``debian`` when its source pins
+    none, ``missing`` without one."""
+    for key in ("go_toolchain", "rust_toolchain", "dotnet_sdk"):
         record = source.get(key)
         if isinstance(record, dict):
             if record.get("state") == "missing":

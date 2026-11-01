@@ -119,11 +119,17 @@ def test_dotnet_build_restore_args_and_properties() -> None:
         restore_args=("--force",),
         properties={"PublishSingleFile": "true", "Label": "a b"},
     )
+    fixed = (
+        "-p:Deterministic=true -p:ContinuousIntegrationBuild=true -p:NuGetAudit=false "
+        '-p:UseSharedCompilation=false -p:PublishSingleFile=true -p:Label="a b" -nodeReuse:false'
+    )
     assert build.command("/build/app") == (
-        "cd /build/app && dotnet restore src/App --runtime linux-x64 --force && "
+        "export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 "
+        "DOTNET_CLI_USE_MSBUILD_SERVER=0 MSBUILDDISABLENODEREUSE=1 && cd /build/app && "
+        "dotnet restore src/App --runtime linux-x64 -p:SelfContained=true "
+        f"-p:Configuration=Release {fixed} --force && "
         "dotnet publish src/App --configuration Release --runtime linux-x64 "
-        "--self-contained true --output /build/app/publish -p:Deterministic=true "
-        '-p:ContinuousIntegrationBuild=true -p:PublishSingleFile=true -p:Label="a b"'
+        f"--self-contained true --no-restore --output /build/app/publish {fixed}"
     )
     assert build.artifact == "publish/app"
 

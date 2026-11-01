@@ -1,0 +1,275 @@
+{
+  "channel-version": "9.0",
+  "latest-release": "9.0.22",
+  "latest-release-date": "2026-10-25",
+  "latest-runtime": "9.0.22",
+  "latest-sdk": "9.0.320",
+  "support-phase": "maintenance",
+  "release-type": "sts",
+  "eol-date": "2026-11-10",
+  "releases": [
+    {
+      "release-date": "2026-10-25",
+      "release-version": "9.0.22",
+      "security": true,
+      "sdk": {
+        "version": "9.0.320",
+        "version-display": "9.0.320",
+        "runtime-version": "9.0.22",
+        "files": [
+          {
+            "name": "dotnet-sdk-linux-x64.tar.gz",
+            "rid": "linux-x64",
+            "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.320/dotnet-sdk-9.0.320-linux-x64.tar.gz",
+            "hash": "eb371100b5c40641a812b3683bfda1772f0b69e5232091293c715d49eb837f52174b9b9a93375d692bddbfd1d57005f1a9aa774b4b30276665b0c0b1a9b66427"
+          }
+        ]
+      },
+      "sdks": [
+        {
+          "version": "9.0.320",
+          "version-display": "9.0.320",
+          "runtime-version": "9.0.22",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.320/dotnet-sdk-9.0.320-linux-x64.tar.gz",
+              "hash": "eb371100b5c40641a812b3683bfda1772f0b69e5232091293c715d49eb837f52174b9b9a93375d692bddbfd1d57005f1a9aa774b4b30276665b0c0b1a9b66427"
+            }
+          ]
+        },
+        {
+          "version": "9.0.123",
+          "version-display": "9.0.123",
+          "runtime-version": "9.0.22",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.123/dotnet-sdk-9.0.123-linux-x64.tar.gz",
+              "hash": "8f2bf74733d8824db9059356268dbf73c74c38757c116eca2ed06ef8fd0101ad048c99fa921e7374ec1b90787cabdfa1288e003deb8beb8a96906efccd61ca4f"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "release-date": "2026-01-20",
+      "release-version": "9.0.12",
+      "security": false,
+      "sdk": {
+        "version": "9.0.310",
+        "version-display": "9.0.310",
+        "runtime-version": "9.0.12",
+        "files": [
+          {
+            "name": "dotnet-sdk-linux-x64.tar.gz",
+            "rid": "linux-x64",
+            "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.310/dotnet-sdk-9.0.310-linux-x64.tar.gz",
+            "hash": "8203f566a23e09142381b2730ba2efed79a93240c096b02c9a8341e95d550a26d9c31496d9b11ce24ede61bbd7fb72131d4cf85880d101c90ae84d2442d0a596"
+          }
+        ]
+      },
+      "sdks": [
+        {
+          "version": "9.0.310",
+          "version-display": "9.0.310",
+          "runtime-version": "9.0.12",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.310/dotnet-sdk-9.0.310-linux-x64.tar.gz",
+              "hash": "8203f566a23e09142381b2730ba2efed79a93240c096b02c9a8341e95d550a26d9c31496d9b11ce24ede61bbd7fb72131d4cf85880d101c90ae84d2442d0a596"
+            }
+          ]
+        },
+        {
+          "version": "9.0.309",
+          "version-display": "9.0.309",
+          "runtime-version": "9.0.12",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.309/dotnet-sdk-9.0.309-linux-x64.tar.gz",
+              "hash": "c00280165072e80fa1f6f84761c245228d3edc880bb9992fc5b4b5c3a317eda56bf01fe15f7844fe176b57a16660d21cd2635a20793569c22ebae27fd5cd2966"
+            }
+          ]
+        },
+        {
+          "version": "9.0.113",
+          "version-display": "9.0.113",
+          "runtime-version": "9.0.12",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.113/dotnet-sdk-9.0.113-linux-x64.tar.gz",
+              "hash": "15dad92350826ce541415ef35221cb31cc478d4a9c78539f077a9bc398f353ff73ef0e540f9ace952cad26a32d1576c403fcfbc7e2eebb84579499b430a38abf"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "release-date": "2025-02-11",
+      "release-version": "9.0.2",
+      "security": false,
+      "sdk": {
+        "version": "9.0.200",
+        "version-display": "9.0.200",
+        "runtime-version": "9.0.2",
+        "files": [
+          {
+            "name": "dotnet-sdk-linux-x64.tar.gz",
+            "rid": "linux-x64",
+            "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.200/dotnet-sdk-9.0.200-linux-x64.tar.gz",
+            "hash": "1af5f3a444419b3f5cf99cb03ee740722722478226d0aff27ad41b1d11e69d73497e25c07ef06a6df9e73fb0fbdc4b9baca9accec95654d9ee7be4d5a5c3ac23"
+          }
+        ]
+      },
+      "sdks": [
+        {
+          "version": "9.0.200",
+          "version-display": "9.0.200",
+          "runtime-version": "9.0.2",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.200/dotnet-sdk-9.0.200-linux-x64.tar.gz",
+              "hash": "1af5f3a444419b3f5cf99cb03ee740722722478226d0aff27ad41b1d11e69d73497e25c07ef06a6df9e73fb0fbdc4b9baca9accec95654d9ee7be4d5a5c3ac23"
+            }
+          ]
+        },
+        {
+          "version": "9.0.103",
+          "version-display": "9.0.103",
+          "runtime-version": "9.0.2",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.103/dotnet-sdk-9.0.103-linux-x64.tar.gz",
+              "hash": "afda487365cf2d082f1dc462ff01607eae10657de8281c53c4e8775df72f5ed5b31b427ea8afd0917886e73b104a25db4c607e0510f8be3a761de9445d797b75"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "release-date": "2025-01-14",
+      "release-version": "9.0.1",
+      "security": true,
+      "sdk": {
+        "version": "9.0.102",
+        "version-display": "9.0.102",
+        "runtime-version": "9.0.1",
+        "files": [
+          {
+            "name": "dotnet-sdk-linux-x64.tar.gz",
+            "rid": "linux-x64",
+            "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.102/dotnet-sdk-9.0.102-linux-x64.tar.gz",
+            "hash": "f093507ef635c3f8e572bf7b6ea7e144b85ccf6b7c6f914d3f182f782200a6088728663df5c9abe0638c9bd273fde3769ec824a6516f5fce734c4a4664ce3099"
+          }
+        ]
+      },
+      "sdks": [
+        {
+          "version": "9.0.102",
+          "version-display": "9.0.102",
+          "runtime-version": "9.0.1",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.102/dotnet-sdk-9.0.102-linux-x64.tar.gz",
+              "hash": "f093507ef635c3f8e572bf7b6ea7e144b85ccf6b7c6f914d3f182f782200a6088728663df5c9abe0638c9bd273fde3769ec824a6516f5fce734c4a4664ce3099"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "release-date": "2024-12-03",
+      "release-version": "9.0.0",
+      "security": true,
+      "sdk": {
+        "version": "9.0.101",
+        "version-display": "9.0.101",
+        "runtime-version": "9.0.0",
+        "files": [
+          {
+            "name": "dotnet-sdk-linux-x64.tar.gz",
+            "rid": "linux-x64",
+            "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.101/dotnet-sdk-9.0.101-linux-x64.tar.gz",
+            "hash": "91b37efd64242e5f1f3c2025d183eb34e17f3a9271c5602f29ddf794845eee103723ef955ed869788ebf5a731e8ddc69328799c92c64cb118e1328d259a6ad01"
+          }
+        ]
+      },
+      "sdks": [
+        {
+          "version": "9.0.101",
+          "version-display": "9.0.101",
+          "runtime-version": "9.0.0",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.101/dotnet-sdk-9.0.101-linux-x64.tar.gz",
+              "hash": "91b37efd64242e5f1f3c2025d183eb34e17f3a9271c5602f29ddf794845eee103723ef955ed869788ebf5a731e8ddc69328799c92c64cb118e1328d259a6ad01"
+            }
+          ]
+        },
+        {
+          "version": "9.0.100",
+          "version-display": "9.0.100",
+          "runtime-version": "9.0.0",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.100/dotnet-sdk-9.0.100-linux-x64.tar.gz",
+              "hash": "7f69bda047de1f952286be330a5e858171ded952d1aa24169e62212f90a27149e63b636c88ad313a6e3ec860da31f8c547ff4ab6808103a070f7fb26ba99c1c7"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "release-date": "2024-10-08",
+      "release-version": "9.0.0-rc.2",
+      "security": true,
+      "sdk": {
+        "version": "9.0.100-rc.2.24474.11",
+        "version-display": "9.0.100-rc.2",
+        "runtime-version": "9.0.0-rc.2.24473.5",
+        "files": [
+          {
+            "name": "dotnet-sdk-linux-x64.tar.gz",
+            "rid": "linux-x64",
+            "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.100-rc.2.24474.11/dotnet-sdk-9.0.100-rc.2.24474.11-linux-x64.tar.gz",
+            "hash": "126a92bfa9ef4e70609f8b27cde0fae1b144a91af8a46de949d803d2aa1bad0285b1b9b8fc60d40206d346aac49e48709bec4e76cdf6e549f8905086003e8098"
+          }
+        ]
+      },
+      "sdks": [
+        {
+          "version": "9.0.100-rc.2.24474.11",
+          "version-display": "9.0.100-rc.2",
+          "runtime-version": "9.0.0-rc.2.24473.5",
+          "files": [
+            {
+              "name": "dotnet-sdk-linux-x64.tar.gz",
+              "rid": "linux-x64",
+              "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.100-rc.2.24474.11/dotnet-sdk-9.0.100-rc.2.24474.11-linux-x64.tar.gz",
+              "hash": "126a92bfa9ef4e70609f8b27cde0fae1b144a91af8a46de949d803d2aa1bad0285b1b9b8fc60d40206d346aac49e48709bec4e76cdf6e549f8905086003e8098"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
