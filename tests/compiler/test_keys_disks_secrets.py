@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import conf_list
+from tundravm._modules.secret_delivery import CLOSE_DELIVERY_PORT
 from tundravm._source import GitSource
 from tundravm.declarative import (
     BootStep,
@@ -306,6 +307,8 @@ def test_secret_delivery_registers_init_script(tmp_path: Path) -> None:
     script = _step(tree, "secrets")
     expected = "/usr/bin/secret-delivery setup /etc/tdx/secrets.yaml"
     assert script.count(expected) == 1
+    # one key, once: the port is dropped as soon as the key is taken
+    assert script.endswith(expected + "\n" + CLOSE_DELIVERY_PORT.format(port=9090))
     _assert_runs_between_probes(tree, "secrets")
     assert 'server_url: "0.0.0.0:9090"' in tree.read(SECRET_CONFIG)
 

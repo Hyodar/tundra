@@ -138,8 +138,8 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "54bd2cd3dd8f3d2a75e6f3264e028adf6b611a69c181152f7706b3c3ba794621"
-EQUIVALENCE_RECIPE = "e2eaf17c42fe9a9c6335a4f3aaf2c6f809efe55e10754aa2ead1bba2d685f98c"
+EQUIVALENCE_TREE = "1b389a6b18c8d98e750abaa3eeb5e423bdb092886b5da405ae42264f1cc68e03"
+EQUIVALENCE_RECIPE = "9e5ae6db01710237da044283b07fd70a6b21eb7fd72306496254d1ce7a612479"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
 overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned

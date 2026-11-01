@@ -79,8 +79,9 @@ def _post(url: str, body: bytes) -> int:
     except OSError as exc:
         raise AttestationError(
             f"Cannot reach the management port at {url}: {exc}.",
-            hint="Check the instance runs (`tundravm run status` / `deploy status`) and its "
-            f"control plane listens on :{MANAGEMENT_PORT}.",
+            hint="Check the instance runs (`tundravm run status` / `deploy status`). "
+            f":{MANAGEMENT_PORT} takes one key per boot and then closes: restart the instance, "
+            "or use the key it took (--identity).",
         ) from exc
 
 

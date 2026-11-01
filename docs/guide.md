@@ -602,10 +602,10 @@ is a lint warning: it carries the logs in the clear.
 ### The control plane today
 
 An image with a volume or a secret runs tundra-tools' `secret-delivery` on the management
-port 8745: it accepts one SSH public key per boot, and `attest`, `secrets deliver` and
-`secrets unlock` use that SSH session, which nothing binds to the quote yet
-([trust](trust.md#the-channel-is-not-attested-yet)). The image records every volume,
-secret and ingress it needs in `/etc/tundravm/runtime.json`.
+port 8745: it takes one SSH public key once per boot, then the firewall drops the port.
+`attest`, `secrets deliver` and `secrets unlock` use that SSH session, which nothing binds to
+the quote yet ([trust](trust.md#the-channel-is-not-attested-yet)).
+`/etc/tundravm/runtime.json` records every volume, secret and ingress.
 
 ## Sources and toolchains
 

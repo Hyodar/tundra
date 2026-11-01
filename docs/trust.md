@@ -107,7 +107,8 @@ in place of a value.
 This is the largest gap, and it is gate 3 work in tundra-tools.
 
 An image with a volume or a secret runs `secret-delivery` on port 8745. It accepts one SSH
-public key per boot, from whoever POSTs first, and root SSH then accepts only that key.
+public key per boot, from whoever POSTs first, and root SSH then accepts only that key; the
+firewall then drops the port until the next boot.
 `attest`, `secrets deliver` and `secrets unlock` all run over that SSH session. The quote
 binds a nonce, but not the session, the SSH host key or the operator's key. So today:
 

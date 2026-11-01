@@ -47,6 +47,17 @@ BUILTIN_SECRET_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
 """
 
 _TARGET_NOUNS = {"file": "file", "env": "environment variable"}
+_LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+CLOSE_DELIVERY_PORT = """\
+# One key, once: the delivery port stays closed until the next boot.
+if /usr/sbin/nft list chain inet filter input >/dev/null 2>&1; then
+    /usr/sbin/nft insert rule inet filter input tcp dport {port} drop \\
+        'comment "tundravm: the SSH key was taken"'
+fi
+"""
+"""What the ``secrets`` step runs after ``secret-delivery setup``: a drop rule ahead of the
+firewall's accept for the port (an image without the firewall has no rule to override)."""
 
 
 @dataclass(slots=True)
@@ -262,9 +273,17 @@ class SecretDelivery(Module):
         """The ``secrets`` runtime-init step: ``secret-delivery setup`` on the config.
 
         It receives the SSH key and writes the configuration; an external
-        provider's targets are waited for by its own ``delivery-<name>`` step.
+        provider's targets are waited for by its own ``delivery-<name>`` step. The key
+        delivery is one-shot: ``secret-delivery`` takes the first valid key and stops
+        listening (or never listens, when ``store_at``'s LUKS token already holds one),
+        and the step then drops the port in the firewall until the next boot
+        (:data:`CLOSE_DELIVERY_PORT`), so nothing reopens it. The attested endpoint of
+        plan section 6.3, which replaces it, is not one-shot.
         """
-        return f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
+        setup = f"/usr/bin/secret-delivery setup {shlex.quote(self.config_path)}\n"
+        if self.host in _LOOPBACK:
+            return setup
+        return setup + CLOSE_DELIVERY_PORT.format(port=self.port)
 
     def source_spec(self) -> SourceBuild:
         """The ``secret-delivery`` source build from ``source``."""
