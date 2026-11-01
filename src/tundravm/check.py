@@ -447,7 +447,7 @@ def _rule_service_program_missing(
             hint=(
                 f"List {add}, or build it: a GoBinary, CargoBinary or Build as the argv's "
                 "first element puts its program in the image. A file of your own is "
-                f"File({program!r}, Path(...), mode=0o755)."
+                f"File.copy(Path(...), {program!r}, mode=0o755)."
             ),
             profile=profile_name,
             subject=svc.name,
@@ -1075,9 +1075,9 @@ def _rule_unit_written_at_runtime(
                 "that unit runs"
             ),
             hint=(
-                "Declare the unit in the image (Service(...), or Unit(name, dropin=...) for "
-                "a packaged one), so the measurement covers it; a value it needs at boot "
-                "comes from a Secret through credentials=, never from writing the unit."
+                "Declare the unit in the image as a Service(...), so the measurement "
+                "covers it; a value it needs at boot comes from a Secret through "
+                "credentials=, never from writing the unit."
             ),
             profile=profile_name,
             subject=subject,
@@ -1143,7 +1143,8 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             subject=name,
             profile=variant,
             hint="Drop user= to run as a system user named after the unit (declared for you); "
-            "grant one capability with Hardening.strict(capabilities=(...)) if it needs one.",
+            'grant one capability with Hardening.preset("static", capabilities=(...)) if it '
+            "needs one.",
         )
     sandbox = item.sandbox if isinstance(item, TypedService) else item.hardening
     entries = STRICT_HARDENING if sandbox is None else sandbox.entries()
@@ -1154,8 +1155,9 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             message=f"unit {name!r} runs without a sandbox (Hardening.none())",
             subject=name,
             profile=variant,
-            hint="Use hardening=Hardening.relaxed() or relax one knob of Hardening.strict(...) "
-            "(jit=True, devices=(...), capabilities=(...)) instead of dropping them all.",
+            hint="Pick the preset for its runtime (Hardening.preset(NAME)), relax one knob "
+            'of it (Hardening.preset("static", devices=(...), capabilities=(...))) or use '
+            "Hardening.relaxed(), instead of dropping them all.",
         )
         return
     keys = {key for key, _ in entries}
@@ -1355,8 +1357,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "port-unreachable",
         "warning",
         "A service listens on a port the firewall drops, so nothing outside reaches it.",
-        "Open it with Firewall(allow=(PORT,)), or Firewall(collect=True) to open every port "
-        "a service declares.",
+        "Open it with the service's expose=[TCP(PORT)], or Firewall(allow=[TCP(PORT)]) for a "
+        "program no Service runs.",
     ),
     Rule(
         "network-missing",
@@ -1557,7 +1559,7 @@ _REGISTRY: tuple[Rule, ...] = (
         "A service's program (its argv's first element) is nothing the image ships: no "
         "declared file, tree or build installs it, and no listed package is known to.",
         "Add the Debian package that ships it to packages=, or run a GoBinary, CargoBinary "
-        "or Build as the argv's first element, or ship it with File(PATH, Path(...), "
+        "or Build as the argv's first element, or ship it with File.copy(Path(...), PATH, "
         "mode=0o755).",
         (_rule_service_program_missing,),
     ),
@@ -1661,8 +1663,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "A service, boot task or boot step writes a unit under /etc/systemd/system, "
         "/run/systemd/system or /usr/lib/systemd/system at boot (cp, tee, install, ln, a "
         "shell redirection, a tmpfiles.d line), so the attested image does not pin what runs.",
-        "Declare the unit in the image (Service(...), or Unit(name, dropin=...) for a "
-        "packaged one); a value it needs at boot comes from a Secret through credentials=.",
+        "Declare the unit in the image as a Service(...); a value it needs at boot comes "
+        "from a Secret through credentials=.",
         (_rule_unit_written_at_runtime,),
     ),
     # ── systemd unit text: every unit a profile ships, raw or generated ──
@@ -1770,14 +1772,16 @@ _REGISTRY: tuple[Rule, ...] = (
         "info",
         "A Service or Task runs as root, so a compromise owns the whole guest.",
         "Drop user= to run as a system user named after the unit (declared for you); "
-        "grant one capability with Hardening.strict(capabilities=(...)) if it needs one.",
+        'grant one capability with Hardening.preset("static", capabilities=(...)) if it '
+        "needs one.",
     ),
     Rule(
         "hardening-disabled",
         "warning",
         "A unit runs without a sandbox (Hardening.none()).",
-        "Use Hardening.relaxed(), or relax one knob of Hardening.strict(...) (jit=True, "
-        "devices=(...), capabilities=(...)) instead of dropping them all.",
+        "Pick the preset for its runtime (Hardening.preset(NAME)), relax one knob of it "
+        '(Hardening.preset("static", devices=(...), capabilities=(...))) or use '
+        "Hardening.relaxed(), instead of dropping them all.",
     ),
     Rule(
         "hardening-relaxed",
