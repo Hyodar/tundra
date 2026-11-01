@@ -269,9 +269,9 @@ def test_the_issuer_and_the_verdict_follow_the_build_and_where_it_boots(
     verdict: str,
     code: int,
 ) -> None:
-    """A dev build under QEMU attests as ``simulated`` and says what that does not prove; a
-    production build there is fail-closed (no issuer, never passes); on TDX both answer with
-    the tdx issuer."""
+    """A dev build under QEMU attests against its own ``measurements.json`` as ``simulated``
+    and says what that does not prove; a production build there is fail-closed (no issuer,
+    never passes); on TDX both answer with the tdx issuer."""
     found = booted(prover, cli, mode=mode, kind=kind)  # type: ignore[arg-type]
     simulated = mode == "simulated"
     endpoint = (
@@ -279,8 +279,10 @@ def test_the_issuer_and_the_verdict_follow_the_build_and_where_it_boots(
         if simulated
         else FakeEndpoint(platform="tdx", mode="tdx", registers=REGISTERS)
     )
-    policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps(SIMULATED if simulated else PEER))
+    policy = found.build.path / "measurements.json"  # its qemu disk prediction, no flag
+    if not simulated:
+        policy = tmp_path / "peer.json"
+        policy.write_text(json.dumps(PEER))
     monkeypatch.setattr(bootstrap, "_tls", endpoint.connect)
     assert json.loads(cli("run", "mode", found.id, "--json").out)["issuer"] == issuer
     assert json.loads(cli("run", "status", found.id, "--json").out)["issuer"] == issuer
