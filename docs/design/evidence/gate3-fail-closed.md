@@ -237,6 +237,9 @@ Not yet booted, compiled and asserted only (`tests/compiler/test_probe.py`):
   channel binding, tundra-tools' gate 3 Go protocol, which does not exist yet. A replayed
   nonce already fails `attest` (`tests/cli/test_attest.py::test_a_replayed_quote_fails_the_nonce_check`),
   but nothing binds a quote to a session.
+- The instance key (`/run/tundravm/instance-key.pem`, made every boot) is not in the
+  quote's `report_data`; `attest` prints its public key beside the quote as "not yet bound
+  to the quote" until gate 3 binds it.
 - The gate's `tdx` branch has run only against stand-in paths. No TDX guest has booted a
   gated image (gate 2).
 - A dev profile on QEMU records `simulated`, but its `tdxs` still issues as `tdx` and has no

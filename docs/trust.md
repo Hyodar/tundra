@@ -119,11 +119,14 @@ binds a nonce, but not the session, the SSH host key or the operator's key. So t
 - `AttestedTLS` serves a certificate generated per boot that no quote vouches for. A client
   pins it on first contact.
 
-Every one of these commands prints `unverified first contact`. The design that closes them
+Each command prints `unverified first contact`. The design that closes them
 (plan 6.3): the guest generates a key pair at boot; the quote's `report_data` binds
 `sha512(purpose ‖ nonce ‖ public key ‖ SSH host keys)`; the client speaks TLS to a
 certificate carrying that key, so a relayed quote cannot authenticate another connection.
 Until it lands, treat delivery to a cloud instance as trusting the network path.
+
+Each image makes that key pair (`InstanceKey()`); until the quote binds it, a signature
+under it proves this boot, not what signed.
 
 ## Platform limits
 

@@ -229,6 +229,12 @@ What a bare `Service(name, argv)` gets: `Type=exec`, `Restart=on-failure` with
 visible exception for a shell is `["/bin/sh", "-eu", "-c", script]`. A built binary is a
 valid argv element too: see [Sources and toolchains](#sources-and-toolchains).
 
+Every image generates an instance key at boot: a fresh ECDSA secp256k1 key in
+`/run/tundravm/instance-key.pem`, on tmpfs and readable by root only. A service that signs
+with it says `credentials=[InstanceKey()]` (from `tundravm.secrets`) or passes
+`InstanceKey()` in argv, and reads `$CREDENTIALS_DIRECTORY/instance-key`; nothing else may
+name the path. `run status`, `attest` and `show` print the public key and who takes it.
+
 ### Reaching a service
 
 `expose=[TCP(8080)]` (or `UDP(53)`) opens that port in the firewall, and nothing else opens
