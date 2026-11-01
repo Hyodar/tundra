@@ -1,7 +1,7 @@
 """The boot probe (plan 5.2 item 7): the checklist a development profile compiles in.
 
 One image declaring a service that exposes a TCP and a UDP port under a preset sandbox, a
-scheduled one, a volume, an egress filter, an ``Observability``, a built kernel and
+scheduled one, a packaged one, a volume, an egress filter, an ``Observability``, a built kernel and
 ``dev=DevAccess(...)``: its dev profile's ``/usr/lib/tundravm/probe`` is compared with
 ``probe-dev.sh`` beside this file (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it), and its
 production profile carries none.
@@ -48,6 +48,7 @@ def test_a_dev_profile_compiles_the_checks_its_declarations_imply(tmp_path: Path
                 state=data.directory("app"),
             ),
             Service("tick", ["/usr/bin/tick"], timer=Every("15m")),
+            Service.packaged("nginx.service"),
         ],
         observability=Observability(
             logs=JournalExport("https://logs.example:19532"),

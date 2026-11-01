@@ -343,6 +343,8 @@ check=service:app.service
 probe_service app.service
 check=timer:tick.timer
 probe_active tick.timer 'the timer must be enabled; systemctl status names why it is not'
+check=service:nginx.service
+probe_service nginx.service
 check=port:8080/tcp
 probe_port tcp 8080
 check=port:5353/udp

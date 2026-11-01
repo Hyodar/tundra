@@ -15,8 +15,9 @@ The checks, each only when its declaration exists (:func:`derive`):
 - ``rtmr``: always ``skip``, with the reason: the guest reads its registers only from a
   quote, which ``tdxs`` (tools/) makes; ``tundravm attest`` compares them with
   ``measurements.json``;
-- ``service:UNIT``: each ``Service`` is active (or exited 0), ``socket:UNIT`` its socket
-  when socket-activated, ``timer:UNIT`` the timer of a scheduled one;
+- ``service:UNIT``: each ``Service`` (a ``Service.packaged`` too) is active (or exited 0),
+  ``socket:UNIT`` its socket when socket-activated, ``timer:UNIT`` the timer of a
+  scheduled one;
 - ``port:N/PROTO``: each port a service exposes has a listener in ``/proc/net`` (what
   ``ss -lnt``/``-lnu`` reads; ``iproute2`` is not in a minimal image);
 - ``volume:PATH``: each ``Disk`` (a ``Volume``) is mounted there, ext4, and on a dm-crypt
@@ -193,7 +194,7 @@ def derive(
     image keeps every module); *kernel_off* the options a built kernel turns off (empty for
     a distribution kernel)."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
-    from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task
+    from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task, Unit
     from tundravm.declarative.systemd import ceiling
     from tundravm.declarative.utils import SSH_HOST_KEY
 
@@ -222,6 +223,8 @@ def derive(
                         (unit,),
                     )
                 )
+        elif isinstance(item, Unit) and _packaged(item):
+            checks.append(_running(item.name))
         elif isinstance(item, Task) and item.schedule is not None:
             timer = item.unit.removesuffix(".service") + ".timer"
             checks.append(
@@ -376,15 +379,34 @@ def _service(item: object) -> list[Check]:
         ]
     if item.name.endswith("@"):
         return []
-    return [
-        Check(
-            f"service:{unit}",
-            f"{unit} is active, or exited 0",
-            f"probe_service {unit}",
-            "service",
-            (unit, f"{stem}-ready.service"),
-        )
-    ]
+    return [_running(unit)]
+
+
+def _running(unit: str) -> Check:
+    """The ``service:UNIT`` check: *unit* active or exited 0, else why not."""
+    stem = unit.removesuffix(".service")
+    return Check(
+        f"service:{unit}",
+        f"{unit} is active, or exited 0",
+        f"probe_service {unit}",
+        "service",
+        (unit, f"{stem}-ready.service"),
+    )
+
+
+def _packaged(item: Declaration) -> bool:
+    """Whether *item* is a ``Service.packaged``: a package's enabled ``.service``, held to
+    the execution gate by its drop-in as a generated service is."""
+    from tundravm.declarative.model import Unit
+
+    assert isinstance(item, Unit)
+    return (
+        bool(item.enabled)
+        and item.content is None
+        and item.name.endswith(".service")
+        and item.dropin is not None
+        and execution.GATE_UNIT in item.dropin.requires
+    )
 
 
 def _observability(
