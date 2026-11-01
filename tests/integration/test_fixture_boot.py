@@ -1,15 +1,17 @@
 """Boot the gate 1 fixture (``initramfs`` layout) both ways: ``-kernel`` and ``qemu.raw``.
 
-``tests/fixtures/native-tree/recipe.py``'s ``recipe`` is a plain ``Recipe`` whose one source
-build is a public Go program asking for a newer Go than Debian's, so it bakes where the
-Linux backend does with ``go`` and the network on the host. Its ``default`` variant, a
+``tests/fixtures/native-tree/recipe.py``'s ``recipe`` is a plain ``Recipe`` whose source
+builds are a public Go program asking for a newer Go than Debian's and a Rust program
+pinning a newer Rust, so it bakes where the Linux backend does with ``go``, ``rustup`` and
+the network on the host. Its ``default`` variant, a
 production profile, is booted under QEMU with OVMF from pflash twice: the payload's UKI
 (``payload.efi``) through ``-kernel``, and ``qemu.raw`` attached as a virtio disk on a
 snapshot with no ``-kernel``, which OVMF boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI``
 on the ESP (the way ``run --mode simulated`` boots it). There is no TDX here, so each boot
 must be fail-closed (plan 6.1): ``minimal.target`` reached, ``tdx-evidence.service`` failed
 with the gate's console line, the ``web`` and ``greeter`` services never started on that
-dependency, and the ungated ``boot-probe`` task run, the Go program among what it prints.
+dependency, and the ungated ``boot-probe`` task run, the Go and the Rust program among
+what it prints.
 The kernel's command line (and ``/proc/cmdline``, which the probe prints) must be the UKI's
 own with the harness's SMBIOS console words appended.
 
@@ -136,6 +138,12 @@ def test_the_go_program_built_with_its_go_mod_toolchain_runs(kernel_boot: BootRe
     """``git-codereview``, whose go.mod says ``go 1.26.0`` (trixie's Go is 1.24), built in the
     offline sandbox with the toolchain the host fetched, runs and prints its usage line."""
     assert probe_lines(kernel_boot.console, "go") == ["Usage: git-codereview <command> [-n] [-v]"]
+
+
+def test_the_rust_program_built_with_its_pinned_toolchain_runs(kernel_boot: BootResult) -> None:
+    """``rust-probe``, whose rust-toolchain.toml pins 1.91.0 (trixie's Rust is 1.85), built
+    in the offline sandbox with the toolchain the host's rustup installed, says so."""
+    assert probe_lines(kernel_boot.console, "rust") == ["built by rustc 1.91.0"]
 
 
 @pytest.mark.parametrize("via", ["kernel", "disk"])

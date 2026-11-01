@@ -1,17 +1,17 @@
 """Gate 1 fixture: the smallest recipe that exercises every node of the mkosi-native tree.
 
-One service, one component, a Go program built from source, a ``dev`` variant that adds
-content (a profile overlay with SSH access by public key only) and two variants that only
-add outputs (the ``azure`` and ``gcp`` wrapper subimages). ``recipe_with(root=...)``
-builds it with either root layout; ``tests/compiler/test_native_tree.py`` compiles both
-into ``tree-initramfs/`` and ``tree-verity/`` beside this file and asserts every file and
-the resolved mkosi summary.
+One service, one component, a Go and a Rust program built from source, a ``dev`` variant
+that adds content (a profile overlay with SSH access by public key only) and two variants
+that only add outputs (the ``azure`` and ``gcp`` wrapper subimages).
+``recipe_with(root=...)`` builds it with either root layout;
+``tests/compiler/test_native_tree.py`` compiles both into ``tree-initramfs/`` and
+``tree-verity/`` beside this file and asserts every file and the resolved mkosi summary.
 
 ``recipe`` is the ``initramfs`` layout and ``verity_recipe`` the ``verity`` one, which
 ``tundravm build ... --attr verity_recipe`` selects. Both boot in CI from ``qemu.raw``
 through the ESP (``tests/integration/test_fixture_boot.py``, ``test_verity_boot.py``):
 ``Web`` serves a page the host fetches, and ``BootProbe`` prints the command line, what
-the root is and the usage line of the Go program on the console.
+the root is and the first line each built program prints on the console.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from tundravm.declarative import (
     Variant,
     component,
 )
-from tundravm.declarative.utils import Composite, GoBinary, Network, SshAccess
+from tundravm.declarative.utils import CargoBinary, Composite, GoBinary, Network, SshAccess
 
 SNAPSHOT = "20251113T083151Z"
 SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
@@ -63,13 +63,26 @@ REVIEW = GoBinary(
 commit that says ``go 1.26.0`` and requires no module. The build fetches go1.26.0 on the
 host and builds offline with it."""
 
+RUST_PROBE = CargoBinary(
+    "rust-probe",
+    Git(
+        "https://github.com/Hyodar/tundra",
+        "7fdfe4315f7b3a698712232af6926b74d538fd3d",
+        subdir="tests/fixtures/rust-probe",
+    ),
+)
+"""A Rust program whose rust-toolchain.toml pins 1.91.0 (trixie's Rust is 1.85) and which
+needs 1.88: this repository's ``tests/fixtures/rust-probe`` at the commit that adds it. The
+build installs 1.91.0 on the host with rustup and builds offline with it; the program prints
+the release of the rustc that built it."""
+
 
 PROBE = "/usr/lib/tundravm/boot-probe"
 PROBE_SCRIPT = f"""\
 #!/bin/sh
 # What the boot tests assert, one "boot-probe:" line each: the command line, the mounts
 # stacked on / (fstype, source, options), each device-mapper device, where a write to
-# /usr/bin lands, and the first line the Go program prints.
+# /usr/bin lands, and the first line the Go and the Rust program print.
 say() {{ echo "boot-probe: $*"; }}
 say "cmdline $(cat /proc/cmdline)"
 while read -r line; do
@@ -87,9 +100,11 @@ else
     say "usr-bin write=refused"
 fi
 say "go $({REVIEW.executable} help | head -n 1)"
+say "rust $({RUST_PROBE.executable})"
 say done
 """
-"""The probe ``BootProbe`` installs; ``/bin/sh``, coreutils and :data:`REVIEW`."""
+"""The probe ``BootProbe`` installs; ``/bin/sh``, coreutils, :data:`REVIEW` and
+:data:`RUST_PROBE`."""
 
 WWW = "/srv/www"
 WEB_PORT = 8080
@@ -139,6 +154,7 @@ def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
             Network(ipv6=False),
             Web(),
             REVIEW,
+            RUST_PROBE,
             BootProbe(),
         ),
         variants=(

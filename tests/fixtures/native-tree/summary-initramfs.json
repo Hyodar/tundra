@@ -6,6 +6,8 @@
         "Bootable": "auto",
         "Bootloader": "systemd-boot",
         "BuildPackages": [
+          "cargo",
+          "cargo-auditable",
           "golang"
         ],
         "BuildScripts": [
@@ -184,6 +186,8 @@
         "Bootable": "auto",
         "Bootloader": "systemd-boot",
         "BuildPackages": [
+          "cargo",
+          "cargo-auditable",
           "golang"
         ],
         "BuildScripts": [
