@@ -70,12 +70,10 @@ def test_the_starter_runs_the_service_as_its_own_hardened_user(planned: PlannedI
     assert unit.get("Service", "MemoryDenyWriteExecute") == "yes"
 
 
-def test_the_firewall_opens_the_exposed_port_and_the_management_ingress(
-    planned: PlannedImage,
-) -> None:
+def test_the_firewall_opens_the_exposed_port_alone(planned: PlannedImage) -> None:
     rules = planned.file("/etc/nftables.conf").text
     assert "tcp dport 8080 accept" in rules
-    assert f"tcp dport {MANAGEMENT_PORT} accept" in rules
+    assert f"dport {MANAGEMENT_PORT}" not in rules  # no secret or volume: nothing listens
     assert "policy drop" in rules
     assert "hook output priority filter; policy drop" in rules  # Egress() filters outbound
 

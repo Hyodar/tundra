@@ -115,11 +115,11 @@ class Image(Located):
       or console getty. Escape: ``network=Network(...)`` for the network; every other piece
       is an ordinary declaration, so a ``Profile`` change removes or edits it by reference.
     - *A firewall that drops inbound traffic* except the ports services declare with
-      ``expose=`` and the management port
-      :data:`~tundravm._image._values.MANAGEMENT_PORT` (8745), which every image reserves;
-      ``secret-delivery`` listens on it in an image with an operator- or broker-unlocked
-      volume, or with secrets. Escape: ``expose=`` to open a port,
-      ``network=Network(egress=Egress(...))`` to filter outbound too.
+      ``expose=``, and the management port
+      :data:`~tundravm._image._values.MANAGEMENT_PORT` (8745) in an image with an operator-
+      or broker-unlocked volume, or with secrets, where ``secret-delivery`` listens on it.
+      Escape: ``expose=`` to open a port, ``network=Network(egress=Egress(...))`` to filter
+      outbound too.
     - *One generated system user per service*, the preset sandbox and ``Restart=on-failure``.
       Escape: ``Service(user=...)``, ``hardening=``, ``unit=DropIn(...)``.
     - *The evidence service* (``tdxs`` from tundra-tools, socket-activated on

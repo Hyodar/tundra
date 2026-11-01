@@ -17,7 +17,6 @@ from typing import Any, Literal
 
 from tundravm._image._component import Component, Readied, ServiceReady
 from tundravm._image._values import (
-    MANAGEMENT_PORT,
     TCP,
     UDP,
     Egress,
@@ -213,8 +212,9 @@ class Firewall(Component):
     """The inbound (and optionally outbound) packet filter, nftables in the image.
 
     Inbound it drops everything except the ports services ``expose=``, an ingress's port,
-    the management ingress on :data:`~tundravm._image._values.MANAGEMENT_PORT` and *allow*
-    (ports something other than a ``Service`` listens on: a packaged daemon). Outbound it
+    :data:`~tundravm._image._values.MANAGEMENT_PORT` where ``secret-delivery`` takes the
+    operator's SSH key, and *allow* (ports something other than a ``Service`` listens on: a
+    packaged daemon); each rule's comment names what listens. Outbound it
     filters only with *egress*, and then accepts what the baseline and every component's
     ``outbound()`` send as well, each rule commented with who asked for it; a component a
     ``Profile`` adds joins that profile's rules only. The image holds ``Firewall()`` by
@@ -246,7 +246,7 @@ class Firewall(Component):
             )
 
     def compose(self) -> Iterator[object]:
-        allow = (dm.Port(MANAGEMENT_PORT), *(dm.Port(p.port, p.protocol) for p in self.allow))
+        allow = tuple(dm.Port(p.port, p.protocol) for p in self.allow)
         if self.egress is None:
             yield dm.Firewall(allow=allow)
             return

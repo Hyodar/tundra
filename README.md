@@ -54,7 +54,7 @@ $ uv run tundravm verify latest-development     # every artifact against the man
 That file is the whole image. Everything else is implied: Debian trixie from a locked
 snapshot; the TEE baseline (NTS time, a volatile journal, hardened sysctls, no apt timers);
 a measured UKI with the TDX, virtio, NVMe, Hyper-V and gVNIC drivers; an nftables firewall
-that opens only `8080` and the management port `8745`; `app.service` as its own system user
+that opens only `8080`; `app.service` as its own system user
 under a tested sandbox, restarted on failure; and the `tdxs` evidence service, whose quote
 `attest` checks. Each default has a typed escape hatch.
 

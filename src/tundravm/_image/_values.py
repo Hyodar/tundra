@@ -53,12 +53,11 @@ LOCKED_SNAPSHOT = "20261018T082309Z"
 image see the same packages. The lockfile records it; ``Debian(snapshot=...)`` moves it."""
 
 MANAGEMENT_PORT = 8745
-"""The attested management endpoint every image reserves inbound (plan section 6.3).
+"""The management endpoint's port, which no ingress may take (plan section 6.3).
 
-The port is declared and opened in the firewall from the start, so an image's inbound
-surface never changes when the attested endpoint lands (gate 3). Until then an image
-with volumes or secrets runs today's bootstrap on it: ``secret-delivery`` takes the
-operator's SSH public key there, once per boot.
+An image with volumes or secrets runs today's bootstrap on it: ``secret-delivery`` takes the
+operator's SSH public key there, once per boot, and the firewall opens it for that step
+alone. An image without them has nothing listening there and no rule for it.
 """
 
 _OWNER = re.compile(r"[a-z_][a-z0-9_-]{0,31}(:[a-z_][a-z0-9_-]{0,31})?")

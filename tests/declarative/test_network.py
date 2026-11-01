@@ -110,7 +110,7 @@ def test_firewall_opens_the_ports_the_variant_declares() -> None:
     assert opened == [
         'tcp dport 22 accept comment "ssh"',
         'tcp dport 443 accept comment "web.service"',
-        'tcp dport 8080 accept comment "app.service, secrets SSH key"',
+        'tcp dport 8080 accept comment "app.service, secret-delivery"',
         'udp dport 9000 accept comment "app.service"',
         'udp dport 51820 accept comment "allow"',
     ]

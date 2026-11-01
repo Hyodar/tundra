@@ -150,7 +150,7 @@ image = Image(
 | a measured UKI with a curated module set: `tdx_guest`, virtio, NVMe, Hyper-V, gVNIC | `kernel=Kernel.default(modules=[...])` to keep more, `kernel=Kernel.build(...)` to compile one |
 | NTS time from two authenticated servers, a volatile journal, sysctl hardening, a static resolver, no apt timers, no console getty (`TeeBase`) | pass `TeeBase(...)` in `components=`, or remove a piece in a profile |
 | DHCP on `en*` and `eth*` (`Network`) | `network=Network(dhcp=False, static=StaticAddress(...))` |
-| an nftables firewall that drops inbound traffic except exposed ports and the management port 8745 (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
+| an nftables firewall that drops inbound traffic except exposed ports, and 8745 when a volume or secret needs the SSH key delivery (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
 | one generated system user per service, the `static` sandbox, `Restart=on-failure` | `Service(user=, hardening=, unit=DropIn(...))` |
 | the evidence service `tdxs` from tundra-tools, socket-activated on `/var/tdxs.sock` (`Tdxs`) | `components=[Tdxs(source=Git(url, ref))]` for a mirror |
 | `tdx-evidence.service`, which every service requires: without TDX a production profile starts none, a development one runs simulated ([trust](trust.md#threat-model)) | none: a dev profile is the way to run without TDX |
