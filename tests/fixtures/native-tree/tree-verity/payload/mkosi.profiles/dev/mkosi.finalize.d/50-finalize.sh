@@ -56,3 +56,6 @@ for kdir in "${kdirs[@]}"; do
         mkosi-chroot depmod -a "$(basename "$kdir")"
     fi
 done
+
+# User-defined finalize commands
+rm -rf "$BUILDROOT/usr/lib/udev/hwdb.bin" "$BUILDROOT/usr/lib/udev/hwdb.d" "$BUILDROOT/usr/share/doc" "$BUILDROOT/usr/share/fonts" "$BUILDROOT/usr/share/info" "$BUILDROOT/usr/share/javascript" "$BUILDROOT/usr/share/locale" "$BUILDROOT/usr/share/man"

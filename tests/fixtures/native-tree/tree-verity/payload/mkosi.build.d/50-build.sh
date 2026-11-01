@@ -6,3 +6,6 @@ if ! ([ -d "${BUILDDIR:-$BUILDROOT/build}/git-codereview-6c5bc6a94bb5c4d0" ] && 
 # tundravm build: {"build":{"bin":null,"env":{},"features":[],"kind":"cargo","output":"rust-probe","package":null,"packages":["cargo"],"profile":"release"},"install":[{"dest":"/usr/bin/rust-probe","kind":"file","mode":"0755","path":"target/release/rust-probe"}],"name":"rust-probe","source":{"kind":"local","path":"../rust-probe"}}
 # unpinned: ../rust-probe
 echo 'tundravm: source build rust-probe is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"sink","package":".","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/sink","kind":"file","mode":"0755","path":"build/sink"}],"name":"sink","source":{"kind":"local","path":"../sink"}}
+# unpinned: ../sink
+echo 'tundravm: source build sink is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

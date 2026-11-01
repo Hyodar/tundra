@@ -1,0 +1,13 @@
+[Unit]
+Description=Receive the observability export
+After=tdx-evidence.service
+Requires=tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/sink 127.0.0.2:19580 127.0.0.2:19581 127.0.0.1:19582
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=minimal.target

@@ -68,6 +68,123 @@ probe_egress() {
         *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
     esac
 }
+probe_upload() {
+    hex=$(printf '%04X' "$4")
+    waited=0
+    while :; do
+        state=$(systemctl show -P ActiveState "$1")
+        if [ "$state" = active ] && grep -q '^LAST_CURSOR=' "$3" 2>/dev/null; then
+            ok "active, uploaded to $2 (its cursor is in $3)"
+            return
+        fi
+        sockets=" "
+        for fd in /proc/"$(systemctl show -P MainPID "$1")"/fd/*; do
+            link=$(readlink "$fd" 2>/dev/null) || continue
+            case $link in socket:\[*\]) link=${link#socket:[} sockets="$sockets${link%]} " ;; esac
+        done
+        for table in /proc/net/tcp /proc/net/tcp6; do
+            [ "$state" = active ] && [ -r "$table" ] || continue
+            while read -r _ _ remote st _ _ _ _ _ inode _; do
+                case $sockets in *" $inode "*) ;; *) continue ;; esac
+                if [ "$st" = 01 ] && [ "${remote##*:}" = "$hex" ]; then
+                    ok "active, streaming to $2 (its connection to port $4 is open)"
+                    return
+                fi
+            done <"$table"
+        done
+        [ "$waited" -ge 30 ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    sub=$(systemctl show -P SubState "$1")
+    said=$(journalctl -b -q -o cat -u "$1" 2>/dev/null | grep -F "Upload to $2" | tail -n 1)
+    case $state/$sub in
+        active/*) fail "active, but not connected to port $4 after 30s and nothing uploaded: systemd-journal-upload reads no journal${said:+ ($said)}; journalctl -u $1 says why" ;;
+        */auto-restart*)
+            if [ -n "$said" ]; then
+                ok "retrying every 5s: $said"
+            else
+                fail "restarting without trying $2: systemd-journal-upload refuses its arguments; journalctl -u $1 says why"
+            fi
+            ;;
+        *) fail "$state ($sub): an exporter retries an unreachable sink, it does not stop; journalctl -u $1 says why" ;;
+    esac
+}
+probe_agent() {
+    if command -v promtool >/dev/null 2>&1; then
+        if ! said=$(promtool check config --agent --syntax-only "$2" 2>&1); then
+            fail "promtool check config --agent $2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
+            return
+        fi
+        parsed="promtool check config --agent accepts $2"
+    else
+        waited=0
+        while :; do
+            said=$(journalctl -b -q -o cat -u "$1" 2>/dev/null |
+                grep -E 'Completed loading of configuration file|Error loading config' | tail -n 1)
+            [ -n "$said" ] || [ "$waited" -ge 30 ] && break
+            sleep 1
+            waited=$((waited + 1))
+        done
+        case $said in
+            *"Error loading config"*)
+                fail "Prometheus refuses $2: $said"
+                return
+                ;;
+            "")
+                fail "Prometheus logged no 'Completed loading of configuration file' in 30s: journalctl -u $1 says why"
+                return
+                ;;
+        esac
+        parsed="Prometheus loaded $2"
+    fi
+    state=$(systemctl show -P ActiveState "$1")
+    retry=$(journalctl -b -q -o cat -u "$1" 2>/dev/null | grep -F 'retrying' | tail -n 1)
+    if [ "$state" = active ]; then
+        ok "active, $parsed${retry:+; retrying the sink: $retry}"
+    else
+        fail "$state ($(systemctl show -P SubState "$1")): $parsed, but the agent does not run; journalctl -u $1 says why"
+    fi
+}
+probe_nowait() {
+    exporters=
+    while [ "$1" != -- ]; do
+        exporters="$exporters $1"
+        shift
+    done
+    shift
+    waiting=
+    for exporter in $exporters; do
+        after=" $(systemctl show --value -p RequiredBy,RequisiteOf,BoundBy,Before "$exporter" | tr '\n' ' ') "
+        for unit in "$@"; do
+            case $after in *" $unit "*) waiting="$waiting $unit ($exporter)" ;; esac
+        done
+    done
+    if [ -z "$waiting" ]; then
+        ok "$# services start without waiting on them"
+    else
+        fail "waiting:$waiting: nothing may wait on an exporter, whose sink can be away; drop it from that service's requires="
+    fi
+}
+probe_rules() {
+    if ! command -v nft >/dev/null 2>&1; then
+        skip "no nft in the image"
+        return
+    fi
+    if ! chain=$(nft list chain inet filter output 2>&1); then
+        fail "nft list chain inet filter output: $(echo "$chain" | tail -n 1); systemctl status nftables.service"
+        return
+    fi
+    missing=
+    for rule in "$@"; do
+        case $chain in *"$rule accept"*) ;; *) missing="$missing, $rule" ;; esac
+    done
+    if [ -z "$missing" ]; then
+        ok "$# rules loaded"
+    else
+        fail "the output chain lacks ${missing#, }: nftables.service did not load /etc/nftables.conf; systemctl status nftables.service"
+    fi
+}
 probe_hardening() {
     if ! command -v systemd-analyze >/dev/null 2>&1; then
         skip "no systemd-analyze in the image"
@@ -151,14 +268,28 @@ check=service:web.service
 probe_service web.service
 check=timer:tick.timer
 probe_active tick.timer 'the timer must be enabled; systemctl status names why it is not'
+check=service:sink.service
+probe_service sink.service
 check=port:8080/tcp
 probe_port tcp 8080
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
+check=observability:journal-export.service
+probe_upload journal-export.service 'http://127.0.0.2:19580' /var/lib/journal-export/state 19582
+check=observability:metrics-export.service
+probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
+check=observability:no-wait
+probe_nowait journal-export.service metrics-export.service -- greeter.service web.service sink.service
+check=observability:egress
+probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:greeter.service
 probe_hardening greeter.service 2.5 static
 check=hardening:web.service
 probe_hardening web.service 2.5 static
+check=hardening:journal-export.service
+probe_hardening journal-export.service 2.5 static
+check=hardening:metrics-export.service
+probe_hardening metrics-export.service 2.5 static
 check=kernel:modules
 probe_modules crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys

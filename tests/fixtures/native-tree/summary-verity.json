@@ -314,8 +314,11 @@
           "nvme-cli",
           "openssh-server",
           "passwd",
+          "prometheus",
+          "prometheus-node-exporter",
           "systemd",
           "systemd-boot-efi",
+          "systemd-journal-remote",
           "systemd-sysv",
           "udev"
         ],

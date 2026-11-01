@@ -1,9 +1,9 @@
 """Gate 1 fixture: the smallest recipe that exercises every node of the mkosi-native tree.
 
-One service, one component, a Go program built from a git source and a Rust one from a
-local directory, a ``dev`` variant that adds content (a profile overlay with SSH access by
-public key only) and two variants that only add outputs (the ``azure`` and ``gcp`` wrapper
-subimages).
+One service, one component, a Go program built from a git source and a Go and a Rust one
+from local directories, a ``dev`` variant that adds content (a profile overlay with SSH
+access by public key only and an ``Observability`` export to an in-guest sink) and two
+variants that only add outputs (the ``azure`` and ``gcp`` wrapper subimages).
 ``recipe_with(root=...)`` builds it with either root layout;
 ``tests/compiler/test_native_tree.py`` compiles both into ``tree-initramfs/`` and
 ``tree-verity/`` beside this file and asserts every file and the resolved mkosi summary.
@@ -17,8 +17,9 @@ the half the derived boot probe cannot be: it runs in the production profile, wh
 no ``tundravm-probe.service``, and it reads what no declaration states (the root's layers,
 the built programs). The ``dev`` profile's derived probe checks the rest (``web`` and
 ``greeter`` active and sandboxed, :data:`WEB_PORT` bound, the curated modules, the SSH host
-key, a refused egress datagram, the ``tick`` timer) and CI's ``fixture-boot`` job runs it
-with ``tundravm run --probe``.
+key, a refused egress datagram, the ``tick`` timer, the exporters running on the
+configuration they took, nothing waiting on them and their sinks' egress loaded) and CI's
+``fixture-boot`` job runs it with ``tundravm run --probe``.
 """
 
 from __future__ import annotations
@@ -26,6 +27,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Literal
 
+from tundravm import Image
+from tundravm._image import recipe_of
+from tundravm.components import JournalExport, Observability, PrometheusRemoteWrite
+from tundravm.components._base import egress_rules
 from tundravm.declarative import (
     Debian,
     Declaration,
@@ -35,6 +40,7 @@ from tundravm.declarative import (
     Fragment,
     Git,
     Hardening,
+    Hook,
     Local,
     Mkosi,
     Package,
@@ -79,6 +85,48 @@ RUST_PROBE = CargoBinary("rust-probe", Local("../rust-probe"))
 needs 1.88: ``tests/fixtures/rust-probe`` beside this directory, a local source pinned by
 its content digest. The build installs 1.91.0 on the host with rustup and builds offline
 with it; the program prints the release of the rustc that built it."""
+
+SINK = GoBinary("sink", Local("../sink"))
+"""A Go program from a local directory, ``tests/fixtures/sink``: the proxy and the receiver
+the ``dev`` profile's :data:`OBSERVABILITY` delivers through and to, on the loopback,
+printing ``sink:`` console lines for what it carries and receives. Every profile shares the
+payload's builds, so the production image carries the binary and never runs it."""
+
+LOGS_SINK = "127.0.0.2:19580"
+METRICS_SINK = "127.0.0.2:19581"
+PROXY = "127.0.0.1:19582"
+OBSERVABILITY = Observability(
+    logs=JournalExport(f"http://{LOGS_SINK}"),
+    metrics=PrometheusRemoteWrite(f"http://{METRICS_SINK}/api/v1/write", interval="10s"),
+    proxy=PROXY,
+)
+"""The ``dev`` profile's export path, to :data:`SINK` inside the guest through :data:`SINK`
+as its proxy too: QEMU's user network reaches nothing that would receive it. The sinks are
+on 127.0.0.2, which no client treats as the local host and sends around its proxy. Plain
+http on the loopback, which ``observability-plaintext`` reports."""
+
+
+DEV_SLIM = (
+    "/usr/lib/udev/hwdb.bin",
+    "/usr/lib/udev/hwdb.d",
+    "/usr/share/doc",
+    "/usr/share/fonts",
+    "/usr/share/info",
+    "/usr/share/javascript",
+    "/usr/share/locale",
+    "/usr/share/man",
+)
+"""What the ``dev`` profile removes so its UKI, the whole OS in the initramfs layout, still
+fits the 126 MiB the ESP holds with Prometheus, promtool and the node exporter in it: the
+hardware database, documentation, translations and the web assets the loopback-only agent
+never serves."""
+
+
+def lowered(observability: Observability) -> Fragment:
+    """*observability* as the fragment an ``Image`` lowers it to: the units, configuration
+    and packages its exporters run with."""
+    items = recipe_of(Image("fixture", observability=observability)).items
+    return next(i for i in items if isinstance(i, Fragment) and i.name == observability.name)
 
 
 PROBE = "/usr/lib/tundravm/boot-probe"
@@ -150,17 +198,31 @@ DEV = Fragment(
     "dev",
     items=(
         SshAccess(authorized_keys=(DEV_KEY,)),
-        Firewall(egress="filter"),
+        Firewall(
+            egress="filter",
+            egress_rules=egress_rules(((OBSERVABILITY.name, OBSERVABILITY.outbound()),)),
+        ),
         Task(
             "tick", "/usr/bin/true", description="A trivial scheduled job", schedule=Every("1min")
+        ),
+        lowered(OBSERVABILITY),
+        Hook("dev-slim", "finalize", " ".join(["rm -rf", *(f'"$BUILDROOT{p}"' for p in DEV_SLIM)])),
+        Service(
+            "sink",
+            (SINK.executable, LOGS_SINK, METRICS_SINK, PROXY),
+            description="Receive the observability export",
+            user=Root(),
+            hardening=Hardening.none(),
         ),
     ),
 )
 """What the ``dev`` variant adds: SSH by public key, a firewall whose output chain allows
-nothing beyond DHCP (the fixture fetches nothing once built), and a scheduled job, so the
-derived probe boots its ``egress:`` and ``timer:`` checks. No ``Volume``: ``run`` attaches
-disks only for an ``Image``'s runtime manifest, and ``disk-setup`` builds from tundra-tools,
-which this fixture's CI job cannot read."""
+nothing beyond DHCP and what :data:`OBSERVABILITY`'s proxy asks for (the fixture fetches
+nothing once built), a scheduled job, and the export path with its proxy and receivers, so
+the derived probe boots its ``egress:``, ``timer:`` and ``observability:`` checks, and the
+console shows the ``sink:`` lines of what arrived. :data:`SINK` runs as root, unsandboxed,
+to write to ``/dev/console``. No ``Volume``: ``run`` attaches disks only for an ``Image``'s
+runtime manifest, which this plain ``Recipe`` has none of."""
 
 
 def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
@@ -177,6 +239,7 @@ def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:
             Web(),
             REVIEW,
             RUST_PROBE,
+            SINK,
             BootProbe(),
         ),
         variants=(
