@@ -7,7 +7,8 @@ parser prints it at a fixed width. ``api.md`` has one section per public namespa
 dataclass's is its fields with their defaults), the first paragraph of its docstring, and
 a class's public methods and properties. A name has one home, so an object exported by
 two namespaces is an error, not a cross-reference. ``lint.md`` is every code of the
-registry ``tundravm check`` explains (``tundravm.check.RULES``). All are pure functions of
+registry ``tundravm check`` explains (``tundravm.check.RULES``), then the rules each shipped
+component declares. All are pure functions of
 the installed tundravm
 and the Python minor version (argparse's layout changes between them), so a committed copy
 is compared with a fresh one the way ``check --tree`` compares an mkosi tree.
@@ -26,6 +27,10 @@ import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tundravm.diagnostics import Rule
 
 __all__ = [
     "FILES",
@@ -382,25 +387,46 @@ def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
 
 
 def lint_markdown() -> str:
-    """``lint.md``: every code ``tundravm check`` reports, sorted, with what it checks and
-    how to fix it."""
+    """``lint.md``: every code tundravm reports, sorted, with what it checks and how to fix
+    it, then the codes each shipped component declares, by component."""
+    from tundravm import components
     from tundravm.check import RULES
 
     lines = _header("Lint reference", "the `tundravm check` rule registry")
     lines += [
-        "Every code `tundravm check` reports. `tundravm check --explain CODE` prints one "
-        "row. The severity is the default; the row says when it differs. A component an "
-        "image file writes reports its own codes, which are not listed here.",
+        "Every code tundravm itself reports. `tundravm check --explain CODE` prints one "
+        "row. The severity is the default; the row says when it differs.",
         "",
         "| Code | Severity | What it checks | How to fix |",
         "|---|---|---|---|",
+        *(f"| {_rule_row(rule)} |" for rule in sorted(RULES.values(), key=_code)),
+        "",
+        "## Shipped components",
+        "",
+        "The codes each component of `tundravm.components` reports, as its class declares "
+        "them (`rules`). A project's own components declare theirs the same way and are "
+        "not listed here: `tundravm check IMAGE --explain CODE` prints one.",
+        "",
+        "| Component | Code | Severity | What it checks | How to fix |",
+        "|---|---|---|---|---|",
     ]
-    lines += [
-        f"| `{rule.code}` | {rule.severity} | {_cell(_markup(rule.summary))} "
-        f"| {_cell(_markup(rule.fix))} |"
-        for rule in sorted(RULES.values(), key=lambda rule: rule.code)
-    ]
+    for name in sorted(components.__all__):
+        cls = getattr(components, name)
+        if isinstance(cls, type) and issubclass(cls, components.Component):
+            lines += [f"| `{name}` | {_rule_row(rule)} |" for rule in sorted(cls.rules, key=_code)]
     return "\n".join(lines)
+
+
+def _code(rule: Rule) -> str:
+    return rule.code
+
+
+def _rule_row(rule: Rule) -> str:
+    """*rule*'s code, severity, summary and fix, as the cells of a table row."""
+    return (
+        f"`{rule.code}` | {rule.severity} | {_cell(_markup(rule.summary))} "
+        f"| {_cell(_markup(rule.fix))}"
+    )
 
 
 # ── writing ──────────────────────────────────────────────────────────────

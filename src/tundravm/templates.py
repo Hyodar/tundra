@@ -75,7 +75,7 @@ image = Image(
 
 _CLOUD_IMPORTS = (
     "from tundravm import Debian, File, Image, Package, Service\n"
-    "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
+    "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved, Rule\n"
     "from tundravm.ports import TCP\n"
     "from tundravm.systemd import TcpProbe\n"
 )
@@ -83,7 +83,8 @@ _CLOUD_IMPORTS = (
 _APP_IMPORTS = {
     "service": (
         "from tundravm import Debian, Image, Package, Service\n"
-        "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
+        "from tundravm.components import "
+        "Component, DevAccess, Diagnostic, Endpoint, Resolved, Rule\n"
         "from tundravm.ports import TCP\n"
         "from tundravm.sources import GoBinary, Local\n"
         "from tundravm.systemd import TcpProbe\n"
@@ -91,7 +92,8 @@ _APP_IMPORTS = {
     "cloud": _CLOUD_IMPORTS,
     "prover": (
         "from tundravm import Debian, File, Image, Package, Service\n"
-        "from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved\n"
+        "from tundravm.components import "
+        "Component, DevAccess, Diagnostic, Endpoint, Resolved, Rule\n"
         "from tundravm.ports import AttestedTLS\n"
         "from tundravm.secrets import Secret\n"
         "from tundravm.storage import OperatorKey, Volume, VolumeDirectory\n"
@@ -138,6 +140,15 @@ class App(Component):
         """The index page: ``curl http://VM:PORT/`` answers with it."""
         return f"<!doctype html>\n<title>$title</title>\n<h1>$title {self.version}</h1>\n"
 
+    rules = (
+        Rule(
+            "app-privileged-port",
+            "error",
+            "The app runs as a regular user, so it cannot bind a port below 1024.",
+            "Pass App(port=) 1024 or above.",
+        ),
+    )
+
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
         if self.port >= 1024:
@@ -178,6 +189,15 @@ class App(Component):
             expose=[TCP(self.port)],
             readiness=TcpProbe(self.port),
         )
+
+    rules = (
+        Rule(
+            "app-privileged-port",
+            "error",
+            "The app runs as a regular user, so it cannot bind a port below 1024.",
+            "Pass App(port=) 1024 or above.",
+        ),
+    )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""
@@ -300,6 +320,15 @@ class App(Component):
     def page(self) -> str:
         """The index page the ingress serves."""
         return f"<!doctype html>\n<title>$title</title>\n<h1>$title {self.version}</h1>\n"
+
+    rules = (
+        Rule(
+            "app-privileged-port",
+            "error",
+            "The app runs as a regular user, so it cannot bind a port below 1024.",
+            "Pass App(port=) 1024 or above.",
+        ),
+    )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: the app runs as a regular user, so it cannot bind a port below 1024."""

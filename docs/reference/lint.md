@@ -2,7 +2,7 @@
 
 Generated from the `tundravm check` rule registry by `uv run python -m tundravm._reference docs/reference` (Python 3.12). Do not edit it by hand: `tests/docs/test_reference.py` fails when it is stale.
 
-Every code `tundravm check` reports. `tundravm check --explain CODE` prints one row. The severity is the default; the row says when it differs. A component an image file writes reports its own codes, which are not listed here.
+Every code tundravm itself reports. `tundravm check --explain CODE` prints one row. The severity is the default; the row says when it differs.
 
 | Code | Severity | What it checks | How to fix |
 |---|---|---|---|
@@ -10,7 +10,6 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `debloat-removes-declared-file` | warning | The debloat deletes a path at finalize, after a declared file was placed there, so the file never reaches the image. | Keep the path with Debloat(keep_paths=(...)), or move the file outside it. |
 | `debloat-removes-modules` | error | The debloat removes /usr/lib/modules while the kernel loads its drivers (virtio, tdx_guest, cloud NICs) from there, so they never load. | Debloat(keep_modules=True) keeps them; Debloat(keep_modules=False) removes them on purpose; or build a Kernel with everything the image needs built in. |
 | `debloat-removes-needed-unit` | warning | The systemd debloat masks a unit a service is, or depends on, so the service stops or never starts. | Keep it with Debloat(keep_units_extra=(UNIT,)), or drop the dependency. |
-| `dev-access-rsa-key` | info | A development profile accepts an RSA SSH key where every current client makes ed25519. | Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead. |
 | `disk-device-guessed` | error | A disk that is formatted names no device, and automatic selection can pick the boot disk and format it (a warning under Policy(storage_safety='warn')). | Name a stable device (device='/dev/disk/by-id/virtio-SERIAL'), or format='never' for a disk prepared beforehand. |
 | `disk-device-unstable` | warning | A disk is formatted through a kernel name (/dev/sdb), which follows probe order and can point at another disk on the next boot. | Name the disk by a stable link: /dev/disk/by-id/ (a virtio serial, a SCSI WWN) or /dev/disk/by-path/. |
 | `disk-key-path-mismatch` | warning | A disk reads its key from a path other than the one its Key writes, so the unlock finds no key. | Set Key(NAME, output=PATH) to the path the Disk reads, or point the Disk at the key's output. |
@@ -22,7 +21,6 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `external-delivery-unwired` | warning | Nothing in the image can tell when an ExternalDelivery has written the secrets, so services start without them. | Give the delivery unit= (the unit that writes them) or ready_path= (a file it writes when done), and wait for it with needs=[delivery.ready]. |
 | `file-path-duplicate` | error | One path is declared several times with different content, and only the last one ends up in the image. | Keep a single declaration; if two components write the path, drop one or merge their content into one File. |
 | `file-path-relative` | error | A file path contains '..' and may escape the image root. | Write the normalized absolute path instead. |
-| `firewall-ssh-open` | warning | The firewall opens port 22 by hand, outside the SSH access that accepts only a key. | Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which open it only with a key to accept. |
 | `fragment-conflict` | error | Two different component configurations share one name, so their declarations and exports would mix. | Use one configuration of the component, or give the second one its own name. |
 | `fragment-requires-missing` | error | A component needs another component that the profile does not include. | Add the required component to components= (or to the profile's add=). |
 | `hardening-disabled` | warning | A unit runs without a sandbox (Hardening.none()). | Use Hardening.relaxed(), or relax one knob of Hardening.strict(...) (jit=True, devices=(...), capabilities=(...)) instead of dropping them all. |
@@ -44,17 +42,14 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `mkosi-environment-passthrough` | error | A Setting passes the host's environment into the build, so the build depends on the machine it runs on. | Give each variable its value: Setting('Build', 'Environment', ('NAME=value',)). |
 | `needs-undefined` | error | A unit needs a boot step or boot task the profile does not declare, so it would wait forever. | Declare the step or the Task in the profile, or drop it from needs=. |
 | `needs-without-init` | warning | A unit waits for runtime-init, but the profile declares no runtime-init step, so it waits for nothing. | Declare the boot step the unit waits for, or drop needs= so it starts without waiting. |
-| `nethermind-volatile-state` | warning | Nethermind keeps its database on the volatile root, so it resyncs from genesis at every boot. | Pass state=volume.directory('nethermind') on a Volume. |
 | `network-missing` | warning | The profile serves ports or syncs time but brings up no network interface. | Add Network() (TeeBase(network=True) does), or ship a .network file. |
-| `network-no-route` | warning | A static address without a gateway reaches its own subnet only, so NTS time and every remote endpoint fail. | Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")). |
-| `observability-plaintext` | warning | An Observability sink is http://, so the host and every hop read what the guest logs. | Point the sink at an https:// URL. |
 | `port-unreachable` | warning | A service listens on a port the firewall drops, so nothing outside reaches it. | Open it with Firewall(allow=(PORT,)), or Firewall(collect=True) to open every port a service declares. |
 | `profile-empty` | info | A profile declares nothing of its own, so it builds the same image as the one it extends. | Declare what it adds in its add= or changes=, or remove it. |
-| `raiko-listens-publicly` | warning | Raiko listens beyond the loopback, so requests reach the prover without going through its AttestedTLS ingress. | Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress. |
 | `recipe-arch-unsupported` | error | An aarch64 image uses what only boots x86-64: EfiStub's amd64 stub or the qemu target. TDX guests are x86-64. | Build for x86_64 (Debian(..., arch='x86_64')), or drop EfiStub and the qemu target from the aarch64 image. |
 | `relation-conflict` | error | A unit's relations contradict each other: it pulls in and conflicts with a unit, is ordered both before and after one, or names itself. | Drop one of the relations. |
 | `remove-missing` | error | A profile removes a declaration it does not inherit, so the removal does nothing. | Remove only what the profile inherits from the profile it extends (or the image), or drop the removal from its changes=. |
 | `requires-without-after` | info | A unit Requires= another without After=, so both start in parallel. | Add After= for the same unit, so this one starts once it is up. |
+| `rule-undeclared` | error | A component reports a code its class does not declare, so --explain cannot say what it checks or how to fix it. | Declare the code on the component class: rules = (Rule(CODE, SEVERITY, SUMMARY, FIX),), with Rule from tundravm.components. |
 | `secret-env-service-unknown` | error | A SecretEnv delivers to a service the profile neither generates, ships nor enables. | Declare the Service or Unit in the same profile, enable a packaged unit with Unit(NAME, enabled=True), or fix the SecretEnv's service=. |
 | `secret-in-env` | error | A unit's environment or command line holds what looks like a secret, baked into every copy of the image. | Deliver it at boot: a Secret with a SecretEnv target, written by the profile's ExternalDelivery. If it is not a secret, pass allow_secret=True to the declaration. |
 | `secret-in-file` | error | A shipped file holds what looks like a secret, baked into every copy of the image and every registry that holds it. | Deliver it at boot: a Secret with a SecretFile target, written by the profile's ExternalDelivery. If it is not a secret, pass allow_secret=True to the declaration. |
@@ -67,13 +62,10 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `socket-service-started` | info | A service a socket starts on demand is also enabled at boot. | Leave it out of [Install] and do not enable it; enable the socket alone. |
 | `socket-service-unpaired` | error | A socket activates a service the profile neither ships nor enables (a warning when the profile installs packages, which may ship it). | Ship the service next to the socket, or name the one it starts with Service=. |
 | `source-unpinned` | warning | A source build, built kernel or downloaded package has no pin in the lockfile, so a moving ref builds different bytes (the image's policy can make it an error or an info). | Run `tundravm lock IMAGE` to pin every source at once (`tundravm build` then fetches each on the host), or declare an immutable source: Git(url, ref) with a 40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, with every other source it cannot resolve, before anything is written. |
-| `ssh-keys-baked` | warning | SSH keys are baked into a cloud image, so every instance of it lets their holders in as root. | Use SshAccess(from_delivery=True) so the control plane delivers the key at boot, or keep baked keys in a non-production profile with dev=DevAccess(...). |
 | `state-dir-mkdir` | info | ExecStartPre= creates a state directory that systemd can create and own for the service user. | Use StateDirectory=, LogsDirectory=, RuntimeDirectory= or CacheDirectory= instead. |
 | `step-cycle` | error | The boot steps' after= and before= form a cycle, so runtime-init has no order to run them in. | Drop one after=/before= edge of the cycle the message names. |
 | `step-undefined` | error | A boot step orders itself after or before a step the profile does not declare. | Declare that step in the profile, or drop it from after=/before=. |
 | `target-inconsistent` | error | A profile targets outputs that drop the cloud platform integration it inherits, so its UKI carries glue for a cloud it never boots on. | Keep every inherited cloud target in the profile's outputs, or extend a profile that has no cloud integration. |
-| `tdxs-validator-unchecked` | warning | Tdxs validates peers' quotes with no expected measurements, so it accepts any genuine TD whatever it runs. | Pass Tdxs(expected_measurements=...), or build it with Tdxs.from_policy(POLICY). |
-| `tee-base-clock` | warning | TeeBase(time=False) leaves the guest on the host's clock, so the host decides certificate expiry and attestation freshness. | Keep TeeBase(time=True), the default: authenticated NTS time. |
 | `timer-service-enabled` | warning | A service a timer starts is also enabled at boot, so it runs off schedule. | Leave it out of [Install] and do not enable it; enable the timer alone. |
 | `timer-unit-missing` | error | A timer activates a unit the profile neither ships nor enables (a warning when the profile installs packages, which may ship it). | Ship the unit next to the timer, or name the one it starts with Unit=. |
 | `tool-missing` | error | A host tool the build backend needs is missing (a warning when it is optional). | Install the tool the message names; `tundravm doctor` lists what this host can do. |
@@ -89,3 +81,19 @@ Every code `tundravm check` reports. `tundravm check --explain CODE` prints one 
 | `unit-section-invalid` | error | A unit has a section its type does not allow, which systemd ignores. | Move its directives to [Unit], [Install] or the unit type's own section. |
 | `unit-value-invalid` | error | A unit gives a directive a value it does not accept, so systemd keeps the default. | Use a value the directive accepts; the message names what is wrong with it. |
 | `user-group-undefined` | error | A user joins a group that nothing creates, so useradd fails during the build. | Declare the Group in the same profile, or drop it from the user's groups=. |
+
+## Shipped components
+
+The codes each component of `tundravm.components` reports, as its class declares them (`rules`). A project's own components declare theirs the same way and are not listed here: `tundravm check IMAGE --explain CODE` prints one.
+
+| Component | Code | Severity | What it checks | How to fix |
+|---|---|---|---|---|
+| `DevAccess` | `dev-access-rsa-key` | info | A development profile accepts an RSA SSH key where every current client makes ed25519. | Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead. |
+| `Firewall` | `firewall-ssh-open` | warning | The firewall opens port 22 by hand, outside the SSH access that accepts only a key. | Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which open it only with a key to accept. |
+| `Nethermind` | `nethermind-volatile-state` | warning | Nethermind keeps its database on the volatile root, so it resyncs from genesis at every boot. | Pass state=volume.directory('nethermind') on a Volume. |
+| `Network` | `network-no-route` | warning | A static address without a gateway reaches its own subnet only, so NTS time and every remote endpoint fail. | Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")). |
+| `Observability` | `observability-plaintext` | warning | An Observability sink is http://, so the host and every hop read what the guest logs. | Point the sink at an https:// URL. |
+| `Raiko` | `raiko-listens-publicly` | warning | Raiko listens beyond the loopback, so requests reach the prover without going through its AttestedTLS ingress. | Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress. |
+| `SshAccess` | `ssh-keys-baked` | warning | SSH keys are baked into a cloud image, so every instance of it lets their holders in as root. | Use SshAccess(from_delivery=True) so the control plane delivers the key at boot, or keep baked keys in a non-production profile with dev=DevAccess(...). |
+| `Tdxs` | `tdxs-validator-unchecked` | warning | Tdxs validates peers' quotes with no expected measurements, so it accepts any genuine TD whatever it runs. | Pass Tdxs(expected_measurements=...), or build it with Tdxs.from_policy(POLICY). |
+| `TeeBase` | `tee-base-clock` | warning | TeeBase(time=False) leaves the guest on the host's clock, so the host decides certificate expiry and attestation freshness. | Keep TeeBase(time=True), the default: authenticated NTS time. |

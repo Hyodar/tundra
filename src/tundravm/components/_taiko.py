@@ -11,6 +11,7 @@ from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import TcpProbe
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
+from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 from ._base import EVIDENCE
@@ -170,6 +171,16 @@ class Raiko(Component, build_network=True):
             groups=["tdx"],
             hardening=Hardening.preset("static", devices=["/dev/tdx_guest"]),
         )
+
+    rules = (
+        Rule(
+            "raiko-listens-publicly",
+            "warning",
+            "Raiko listens beyond the loopback, so requests reach the prover without going "
+            "through its AttestedTLS ingress.",
+            "Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress.",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``raiko-listens-publicly``: a prover reachable around its attested ingress."""

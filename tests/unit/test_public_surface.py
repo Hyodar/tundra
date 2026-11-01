@@ -64,6 +64,7 @@ COMPONENTS = [
     "PrometheusRemoteWrite",
     "Raiko",
     "Resolved",
+    "Rule",
     "ServiceReady",
     "ServiceRef",
     "SshAccess",

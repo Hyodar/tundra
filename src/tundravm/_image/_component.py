@@ -3,10 +3,11 @@
 A :class:`Component` subclass is a frozen keyword-only dataclass. Its fields are
 configuration, :meth:`Component.compose` returns the declarations (and nested
 components) it stands for, and an optional ``check(self, resolved)`` returns
-diagnostics. Its **exports** are the typed values a caller references without
-knowing any of that: :class:`ServiceReady` ("it is up"), :class:`Endpoint` ("it
-answers here, and here is its readiness") and :class:`ServiceRef` (the service a
-caller may depend on or edit from a :class:`~tundravm.Profile`).
+diagnostics, each of a code the class declares in ``rules``. Its **exports** are the
+typed values a caller references without knowing any of that: :class:`ServiceReady`
+("it is up"), :class:`Endpoint` ("it answers here, and here is its readiness") and
+:class:`ServiceRef` (the service a caller may depend on or edit from a
+:class:`~tundravm.Profile`).
 """
 
 from __future__ import annotations
@@ -14,11 +15,12 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import TYPE_CHECKING, Any, dataclass_transform
+from typing import TYPE_CHECKING, Any, ClassVar, dataclass_transform
 
 from tundravm._location import Located
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
+from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 from ._change import Ref
@@ -247,6 +249,8 @@ class _ComponentMeta(type):
         namespace["__fragment_name__"] = fragment
         namespace["__fragment_requires__"] = tuple(requires)
         namespace["__build_network__"] = bool(build_network)
+        if "rules" in namespace:
+            namespace["rules"] = _declared_rules(name, namespace["rules"])
         for attribute in namespace.get("__annotations__", {}):
             default = namespace.get(attribute)
             if isinstance(default, list):
@@ -266,7 +270,8 @@ class Component(Located, metaclass=_ComponentMeta):
     its ``repr`` is what it was called with. :meth:`compose` returns the declarations and
     nested components it stands for; they are resolved before validation, so a component
     cannot be smuggled into ``services=``. An optional ``check(self, resolved)`` returning
-    diagnostics becomes the component's lint rule.
+    diagnostics becomes the component's lint rule; each code it reports is declared in
+    the class's :attr:`rules`, which ``tundravm check --explain`` prints.
 
     Its name, which ``show`` and every diagnostic about it print, comes from the class
     (``TaikoClient`` is ``taiko-client``), from an ``id`` or ``name`` field when it has
@@ -294,6 +299,10 @@ class Component(Located, metaclass=_ComponentMeta):
     __fragment_name__: str | None = None
     __fragment_requires__: tuple[str, ...] = ()
     __build_network__: bool = False
+    rules: ClassVar[tuple[Rule, ...]] = ()
+    """The codes :meth:`check` reports, one :class:`~tundravm.components.Rule` each:
+    ``rules = (Rule("app-privileged-port", "error", summary, fix),)``. A finding of a code
+    the class does not declare is a ``rule-undeclared`` error."""
 
     def compose(self) -> Iterable[object]:
         """The declarations and nested components this component stands for."""
@@ -342,6 +351,29 @@ class Component(Located, metaclass=_ComponentMeta):
             elif isinstance(item, Component):
                 found.extend(item.services())
         return tuple(found)
+
+
+def _declared_rules(name: str, rules: object) -> tuple[Rule, ...]:
+    """A component class's ``rules``, as a tuple of distinct :class:`Rule` codes."""
+    items = rules if isinstance(rules, (list, tuple)) else None
+    if items is None or not all(isinstance(rule, Rule) for rule in items):
+        raise ValidationError(
+            f"Component {name}: rules must be a tuple of Rule, got {rules!r}.",
+            hint='Write rules = (Rule("code", "error", "What it checks.", "How to fix it."),).',
+        )
+    codes = [rule.code for rule in items]
+    twice = sorted({code for code in codes if codes.count(code) > 1})
+    if twice:
+        raise ValidationError(
+            f"Component {name} declares {', '.join(twice)} more than once.",
+            hint="Declare each code once in rules.",
+        )
+    if any(rule.checks for rule in items):
+        raise ValidationError(
+            f"Component {name}: a component's Rule takes no checks=.",
+            hint="Report the code from the component's check(resolved) method.",
+        )
+    return tuple(items)
 
 
 def composed(owner: Component) -> tuple[object, ...]:

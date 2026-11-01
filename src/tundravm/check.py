@@ -1,9 +1,10 @@
 """Compiler diagnostics on a lowered recipe, reported by ``lint()`` and ``tundravm check``.
 
-``RULES`` registers every code ``tundravm check`` reports, wherever it comes from
-(resolution, a component, a module, the compiler, unit text, the lock, the host,
-``--tree``), as a :class:`Rule`: its severity, what it checks and how to fix it.
-``tundravm check --explain CODE`` prints one, and ``docs/reference/lint.md`` lists them.
+``RULES`` registers every code tundravm itself reports, wherever it comes from
+(resolution, a module, the compiler, unit text, the lock, the host, ``--tree``), as a
+:class:`Rule`: its severity, what it checks and how to fix it. A component's codes are
+the rules its class declares (``Component.rules``). ``tundravm check --explain CODE``
+prints one, and ``docs/reference/lint.md`` lists them.
 A compiler rule's ``checks`` are small functions
 ``(image, profile_name, state) -> Iterator[Diagnostic]``; ``_rule_module_checks`` adds
 each applied module's own ``Module.check()`` findings. They read each profile's effective
@@ -18,7 +19,7 @@ import fnmatch
 import posixpath
 import re
 import textwrap
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,7 +29,7 @@ from ._modules.secret_delivery import SecretDelivery
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
-from .diagnostics import Diagnostic, Severity
+from .diagnostics import Diagnostic, Rule, RuleCheck, Severity
 from .errors import ValidationError
 from .formats import annotation_path, workflow_command
 from .kernel_modules import (
@@ -46,27 +47,6 @@ if TYPE_CHECKING:
     from .declarative.model import Recipe, Service, Task
 
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
-
-
-RuleCheck = Callable[["Lowered", str, ProfileState], Iterator[Diagnostic]]
-"""A compiler pass: the findings of one profile of the lowered image."""
-
-
-@dataclass(frozen=True, slots=True)
-class Rule:
-    """One code ``tundravm check`` reports: what it checks, and how to fix it.
-
-    *severity* is the level it reports at by default (the *summary* names when it
-    differs). *summary* is one line: what it checks and why it matters; *fix* is what
-    clears it. *checks* are the compiler passes that report it; a code resolution, a
-    component, the lock, the host or ``--tree`` reports has none.
-    """
-
-    code: str
-    severity: Severity
-    summary: str
-    fix: str
-    checks: tuple[RuleCheck, ...] = ()
 
 
 _INIT_FILE_PATHS = frozenset(
@@ -1213,66 +1193,12 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     # ── components ──
     Rule(
-        "tee-base-clock",
-        "warning",
-        "TeeBase(time=False) leaves the guest on the host's clock, so the host decides "
-        "certificate expiry and attestation freshness.",
-        "Keep TeeBase(time=True), the default: authenticated NTS time.",
-    ),
-    Rule(
-        "network-no-route",
-        "warning",
-        "A static address without a gateway reaches its own subnet only, so NTS time and "
-        "every remote endpoint fail.",
-        'Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")).',
-    ),
-    Rule(
-        "firewall-ssh-open",
-        "warning",
-        "The firewall opens port 22 by hand, outside the SSH access that accepts only a key.",
-        "Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which "
-        "open it only with a key to accept.",
-    ),
-    Rule(
-        "ssh-keys-baked",
-        "warning",
-        "SSH keys are baked into a cloud image, so every instance of it lets their holders "
-        "in as root.",
-        "Use SshAccess(from_delivery=True) so the control plane delivers the key at boot, "
-        "or keep baked keys in a non-production profile with dev=DevAccess(...).",
-    ),
-    Rule(
-        "dev-access-rsa-key",
-        "info",
-        "A development profile accepts an RSA SSH key where every current client makes ed25519.",
-        "Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead.",
-    ),
-    Rule(
-        "tdxs-validator-unchecked",
-        "warning",
-        "Tdxs validates peers' quotes with no expected measurements, so it accepts any "
-        "genuine TD whatever it runs.",
-        "Pass Tdxs(expected_measurements=...), or build it with Tdxs.from_policy(POLICY).",
-    ),
-    Rule(
-        "observability-plaintext",
-        "warning",
-        "An Observability sink is http://, so the host and every hop read what the guest logs.",
-        "Point the sink at an https:// URL.",
-    ),
-    Rule(
-        "nethermind-volatile-state",
-        "warning",
-        "Nethermind keeps its database on the volatile root, so it resyncs from genesis at "
-        "every boot.",
-        "Pass state=volume.directory('nethermind') on a Volume.",
-    ),
-    Rule(
-        "raiko-listens-publicly",
-        "warning",
-        "Raiko listens beyond the loopback, so requests reach the prover without going "
-        "through its AttestedTLS ingress.",
-        "Keep Raiko(listen='127.0.0.1:PORT'), the default, and reach it through the ingress.",
+        "rule-undeclared",
+        "error",
+        "A component reports a code its class does not declare, so --explain cannot say "
+        "what it checks or how to fix it.",
+        "Declare the code on the component class: rules = (Rule(CODE, SEVERITY, SUMMARY, "
+        "FIX),), with Rule from tundravm.components.",
     ),
     # ── modules ──
     Rule(
@@ -1771,31 +1697,83 @@ def _merged(diagnostics: Sequence[Diagnostic]) -> list[tuple[Diagnostic, str]]:
     return [(d, ", ".join(dict.fromkeys(where))) for d, where in groups.items()]
 
 
-def explain(codes: Sequence[str]) -> str:
+@dataclass(frozen=True, slots=True)
+class Declared:
+    """A rule a component class declares, and which class declares it where."""
+
+    rule: Rule
+    origin: str
+    """``App in demo.py``; ``TeeBase in tundravm.components`` for a shipped component."""
+
+
+def component_rules(classes: Iterable[type]) -> dict[str, Declared]:
+    """The rules each of *classes* declares (``Component.rules``), by code: the first class
+    to declare a code is the one that explains it."""
+    found: dict[str, Declared] = {}
+    for cls in classes:
+        origin = f"{cls.__name__} in {_declared_in(cls)}"
+        for rule in getattr(cls, "rules", ()):
+            found.setdefault(rule.code, Declared(rule, origin))
+    return found
+
+
+def _declared_in(cls: type) -> str:
+    """Where *cls* is written: ``tundravm.components`` for a shipped component, else its
+    file, relative to the working directory."""
+    import inspect
+
+    from ._location import display_location
+
+    if cls.__module__.startswith("tundravm.components."):
+        return "tundravm.components"
+    try:
+        file = inspect.getsourcefile(cls)
+    except TypeError:
+        file = None
+    return display_location(f"{file}:0").rpartition(":")[0] if file else cls.__module__
+
+
+def shipped_rules() -> dict[str, Declared]:
+    """The rules the shipped components of :mod:`tundravm.components` declare, by code."""
+    from . import components
+
+    shipped = (getattr(components, name) for name in components.__all__)
+    return component_rules(
+        cls for cls in shipped if isinstance(cls, type) and issubclass(cls, components.Component)
+    )
+
+
+def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None) -> str:
     """What each of *codes* checks and how to fix it, as ``tundravm check --explain`` prints it.
 
-    A code :data:`RULES` does not register is a :class:`~tundravm.errors.ValidationError`
-    whose hint names the closest code and the lint reference.
+    A code is looked up in :data:`RULES`, then in *declared* (default: the shipped
+    components' rules), and a component's rule says which class declares it. An unknown
+    code is a :class:`~tundravm.errors.ValidationError` whose hint names the closest code
+    and the lint reference.
     """
-    unknown = [code for code in codes if code not in RULES]
+    components = shipped_rules() if declared is None else declared
+    known = [*RULES, *components]
+    unknown = [code for code in codes if code not in known]
     if unknown:
-        close = difflib.get_close_matches(unknown[0], list(RULES), n=1)
+        close = difflib.get_close_matches(unknown[0], known, n=1)
         guess = f"Did you mean {close[0]!r}? " if close else ""
         raise ValidationError(
             f"Unknown check code(s): {', '.join(unknown)}.",
-            hint=f"{guess}docs/reference/lint.md lists every code tundravm checks; a code "
-            "a Component's check() returns is explained by that component.",
+            hint=f"{guess}docs/reference/lint.md lists every code tundravm and its shipped "
+            "components check; a code your own Component reports is declared in its rules.",
         )
     blocks = []
     for code in dict.fromkeys(codes):
-        rule = RULES[code]
+        origin = None if code in RULES else components[code].origin
+        rule = RULES[code] if origin is None else components[code].rule
         summary, fix = (
             textwrap.fill(
                 text, 88, initial_indent="    ", subsequent_indent="    ", break_on_hyphens=False
             )
             for text in (rule.summary, f"fix: {rule.fix}")
         )
-        blocks.append(f"{rule.code} ({rule.severity})\n{summary}\n{fix}")
+        by = "" if origin is None else f"\n    declared by {origin}"
+        blocks.append(f"{rule.code} ({rule.severity}){by}\n{summary}\n{fix}")
     return "\n\n".join(blocks)
 
 
@@ -2035,10 +2013,12 @@ def _located(diagnostic: Diagnostic, item: object) -> Diagnostic:
 __all__ = [
     "RULES",
     "TYPED_SETTINGS",
+    "Declared",
     "Diagnostic",
     "Rule",
     "RuleCheck",
     "check",
+    "component_rules",
     "declaration_check",
     "explain",
     "explain_command",
@@ -2047,5 +2027,6 @@ __all__ = [
     "render",
     "render_github",
     "render_summary",
+    "shipped_rules",
     "summarize",
 ]

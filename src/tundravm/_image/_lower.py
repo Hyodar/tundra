@@ -17,7 +17,7 @@ from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import cast
 
-from tundravm._location import anchored, declared_at
+from tundravm._location import anchored, declared_at, display_location
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
@@ -646,9 +646,26 @@ def _at(item: object) -> Iterator[None]:
 
 
 def _collected(component: Component) -> dm.Check:
-    """A component's ``check`` method as the fragment check the resolver runs."""
+    """A component's ``check`` method as the fragment check the resolver runs, with a
+    ``rule-undeclared`` error for each code it reports that its class does not declare."""
+    cls = type(component)
+    declared = {rule.code for rule in cls.rules}
 
     def run(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
-        return tuple(component.check(resolved))  # type: ignore[attr-defined]
+        found = tuple(component.check(resolved))  # type: ignore[attr-defined]
+        undeclared = dict.fromkeys(d.code for d in found if d.code not in declared)
+        location = display_location(declared_at(component))
+        return found + tuple(
+            dm.Diagnostic(
+                "rule-undeclared",
+                "error",
+                f"{cls.__name__} reports {code!r}, which its class does not declare",
+                subject=component.name,
+                location=location,
+                hint=f"Declare it on {cls.__name__}: rules = (Rule({code!r}, SEVERITY, "
+                "SUMMARY, FIX),), with Rule from tundravm.components.",
+            )
+            for code in undeclared
+        )
 
     return run

@@ -20,6 +20,7 @@ from tundravm._image._service import Service
 from tundravm._image._values import Package
 from tundravm.declarative import model as dm
 from tundravm.declarative.config import ConfigFile
+from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 __all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite"]
@@ -192,6 +193,15 @@ class Observability(Component):
             )
             yield dm.Unit("prometheus-node-exporter.service", enabled=True)
             yield self.metrics.service()
+
+    rules = (
+        Rule(
+            "observability-plaintext",
+            "warning",
+            "An Observability sink is http://, so the host and every hop read what the guest logs.",
+            "Point the sink at an https:// URL.",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``observability-plaintext``: an http:// sink sees what the TD logs in the clear."""

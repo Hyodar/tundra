@@ -891,6 +891,22 @@ One profile of the image after expansion, profile changes and reference checks.
 |---|---|
 | `Resolved.bind(ref: Ref) -> Declaration` | The profile's final declaration *ref* names; `ValidationError` when absent. |
 
+### `Rule`
+
+*dataclass*
+
+```python
+Rule(
+    code: str,
+    severity: Severity,
+    summary: str,
+    fix: str,
+    checks: tuple[RuleCheck, ...] = (),
+)
+```
+
+One code `tundravm check` reports: its severity, what it checks and how to fix it.
+
 ### `ServiceReady`
 
 *dataclass*

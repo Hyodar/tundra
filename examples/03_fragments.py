@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from tundravm import File, Image, Package
-from tundravm.components import Component, Diagnostic, Endpoint, Resolved
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
 from tundravm.declarative import Repository, Task, Unit
 from tundravm.declarative.utils import ConfigFile, Run
 from tundravm.systemd import Every
@@ -83,6 +83,15 @@ class Metrics(Component, requires=("node-exporter",)):
             "/etc/default/prometheus", {"ARGS": f"--web.listen-address={self.health.address}"}
         )
         yield Unit("prometheus.service", enabled=True)
+
+    rules = (
+        Rule(
+            "metrics-exposed",
+            "warning",
+            "Prometheus serves metrics beyond the loopback in a cloud image.",
+            "Keep Prometheus(listen='127.0.0.1'), the default.",
+        ),
+    )
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
         """Lint rule: a cloud image must not serve metrics on a public address."""

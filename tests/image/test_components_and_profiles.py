@@ -17,6 +17,7 @@ from tundravm.components import (
     Endpoint,
     Network,
     Resolved,
+    Rule,
 )
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
@@ -49,8 +50,8 @@ class Api(Component):
         yield Service("api", ["/usr/bin/api", "--db", self.database], requires=[self.database])
 
 
-class Picky(Component):
-    """A component with a lint rule."""
+class Sloppy(Component):
+    """A component with a lint rule whose code it does not declare."""
 
     port: int = 80
 
@@ -61,6 +62,12 @@ class Picky(Component):
         if self.port >= 1024:
             return ()
         return (Diagnostic("picky-privileged-port", "error", f"port {self.port} needs root"),)
+
+
+class Picky(Sloppy):
+    """The same lint rule, declared."""
+
+    rules = (Rule("picky-privileged-port", "error", "Below 1024 needs root.", "Use 8080."),)
 
 
 # ── components ──────────────────────────────────────────────────────────
@@ -133,13 +140,25 @@ def test_a_component_with_no_readiness_cannot_be_waited_for() -> None:
     assert "declares no readiness" in str(caught.value)
 
 
-def test_a_components_check_is_its_lint_rule() -> None:
+@pytest.mark.parametrize(
+    ("component", "errors"),
+    [
+        (Picky(port=8080), []),
+        (Picky(port=80), ["picky-privileged-port"]),
+        (Sloppy(port=80), ["picky-privileged-port", "rule-undeclared"]),
+    ],
+)
+def test_a_components_check_is_its_lint_rule_of_the_codes_it_declares(
+    component: Component, errors: list[str]
+) -> None:
     from tundravm.declarative import lint
 
-    clean = lint(recipe_of(Image("x", components=[Picky(port=8080)])))
-    assert [d.code for d in clean if d.severity == "error"] == []
-    found = lint(recipe_of(Image("x", components=[Picky(port=80)])))
-    assert [d.code for d in found if d.severity == "error"] == ["picky-privileged-port"]
+    found = [
+        d for d in lint(recipe_of(Image("x", components=[component]))) if d.severity == "error"
+    ]
+    assert sorted(d.code for d in found) == errors
+    undeclared = "Sloppy reports 'picky-privileged-port', which its class does not declare"
+    assert (undeclared in {d.message for d in found}) == ("rule-undeclared" in errors)
 
 
 def test_a_nested_component_is_composed_too() -> None:

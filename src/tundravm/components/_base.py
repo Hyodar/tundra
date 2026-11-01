@@ -29,6 +29,7 @@ from tundravm._modules import tdxs as _tdxs
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
+from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 __all__ = [
@@ -88,6 +89,16 @@ class TeeBase(Component):
             firewall=False,
         )
         yield from base.items
+
+    rules = (
+        Rule(
+            "tee-base-clock",
+            "warning",
+            "TeeBase(time=False) leaves the guest on the host's clock, so the host decides "
+            "certificate expiry and attestation freshness.",
+            "Keep TeeBase(time=True), the default: authenticated NTS time.",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``tee-base-clock``: an image without authenticated time trusts the host's clock."""
@@ -159,6 +170,16 @@ class Network(Component):
     def readiness(self) -> tuple[Readied, ...]:
         return (self.online,)
 
+    rules = (
+        Rule(
+            "network-no-route",
+            "warning",
+            "A static address without a gateway reaches its own subnet only, so NTS time and "
+            "every remote endpoint fail.",
+            'Give it a gateway: Network(static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1")).',
+        ),
+    )
+
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``network-no-route``: a static address without a gateway reaches its subnet only."""
         if self.static is None or self.static.gateway is not None:
@@ -217,6 +238,16 @@ class Firewall(Component):
             egress_ports=tuple(dm.Port(p.port, p.protocol) for p in self.egress.ports),
             egress_hosts=tuple(self.egress.hosts),
         )
+
+    rules = (
+        Rule(
+            "firewall-ssh-open",
+            "warning",
+            "The firewall opens port 22 by hand, outside the SSH access that accepts only a key.",
+            "Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which "
+            "open it only with a key to accept.",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``firewall-ssh-open``: port 22 opened by hand instead of by ``SshAccess``."""
@@ -277,6 +308,17 @@ class SshAccess(Component):
             from_secrets=self.from_delivery,
         )
         yield from access.items
+
+    rules = (
+        Rule(
+            "ssh-keys-baked",
+            "warning",
+            "SSH keys are baked into a cloud image, so every instance of it lets their holders "
+            "in as root.",
+            "Use SshAccess(from_delivery=True) so the control plane delivers the key at boot, "
+            "or keep baked keys in a non-production profile with dev=DevAccess(...).",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them."""
@@ -364,6 +406,16 @@ class DevAccess(Component):
         if keys:
             yield du.SshAccess(authorized_keys=keys)
         yield from self.tools()
+
+    rules = (
+        Rule(
+            "dev-access-rsa-key",
+            "info",
+            "A development profile accepts an RSA SSH key where every current client makes "
+            "ed25519.",
+            "Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead.",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``dev-access-rsa-key``: an RSA key where every current client makes ed25519."""
@@ -466,6 +518,16 @@ class Tdxs(Component):
             verify_identity_token=self.verify_identity_token,
         )
         yield from service.items
+
+    rules = (
+        Rule(
+            "tdxs-validator-unchecked",
+            "warning",
+            "Tdxs validates peers' quotes with no expected measurements, so it accepts any "
+            "genuine TD whatever it runs.",
+            "Pass Tdxs(expected_measurements=...), or build it with Tdxs.from_policy(POLICY).",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``tdxs-validator-unchecked``: a validator with nothing to compare a quote to."""

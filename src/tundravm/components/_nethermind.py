@@ -11,6 +11,7 @@ from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import Resources, TcpProbe
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
+from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 __all__ = ["NETHERMIND_SOURCE", "Nethermind"]
@@ -141,6 +142,16 @@ class Nethermind(Component, build_network=True):
             resources=self.resources,
             hardening=Hardening.preset("dotnet"),
         )
+
+    rules = (
+        Rule(
+            "nethermind-volatile-state",
+            "warning",
+            "Nethermind keeps its database on the volatile root, so it resyncs from genesis at "
+            "every boot.",
+            "Pass state=volume.directory('nethermind') on a Volume.",
+        ),
+    )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``nethermind-volatile-state``: a database on the volatile root resyncs every boot."""
