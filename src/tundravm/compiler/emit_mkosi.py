@@ -658,26 +658,27 @@ def _kernel_source_identity(kernel: Kernel) -> str:
     )
 
 
+_KMAKE = """\
+# make runs in the image through mkosi-chroot, where the build packages are, and the cache
+# is $KERNEL_CHROOT; the build stamps are fixed, so two builds give the same bytes
+kmake() {
+    mkosi-chroot env KBUILD_BUILD_TIMESTAMP=1970-01-01 KBUILD_BUILD_USER=tundravm \\
+        KBUILD_BUILD_HOST=tundravm make -C "$KERNEL_CHROOT/src" ARCH=x86_64 "$@"
+}"""
+
 _CONFIG_FILE_CONFIGURE = """\
 cp payload/kernel/kernel.config "$KERNEL_CACHE/src/.config"
 cd "$KERNEL_CACHE/src"
-
-# Reproducibility environment
-export KBUILD_BUILD_TIMESTAMP="1970-01-01"
-export KBUILD_BUILD_USER="tundravm"
-export KBUILD_BUILD_HOST="tundravm"
-
-make olddefconfig
-make -j"$(nproc)" bzImage ARCH=x86_64"""
+kmake olddefconfig
+kmake -j"$(nproc)" bzImage"""
 
 _MODULES_INSTALL = """\
-RELEASE=$(make -s -C "$KERNEL_CACHE/src" kernelrelease)
+RELEASE=$(kmake -s kernelrelease)
 if [ "$RELEASE" != "$KERNEL_VERSION" ]; then
     echo "tundravm: the kernel builds release $RELEASE, not $KERNEL_VERSION" >&2
     exit 1
 fi
-make -C "$KERNEL_CACHE/src" modules_install INSTALL_MOD_PATH="${DESTDIR}/usr" \\
-    INSTALL_MOD_STRIP=1 ARCH=x86_64"""
+kmake modules_install INSTALL_MOD_PATH="${DESTDIR}/usr" INSTALL_MOD_STRIP=1"""
 
 _KCONFIG_CHECK = """\
 # Kconfig drops a requested option whose dependencies are unmet: check each survived
@@ -816,19 +817,13 @@ def _composed_configure(kernel: Kernel, files: Sequence[tuple[str, str, tuple[st
             path = f'"$KERNEL_TREE/patches/{kernel_patch_file(index, patch.name)}"'
         failed = shlex.quote(f"tundravm: kernel patch {patch.name} does not apply")
         lines += [
-            f'patch -d "$KERNEL_CACHE/src" -p1 --batch --forward < {path} \\',
+            f'mkosi-chroot patch -d "$KERNEL_CHROOT/src" -p1 --batch --forward < {path} \\',
             f"    || {{ echo {failed} >&2; exit 1; }}",
         ]
     lines += [
         'cd "$KERNEL_CACHE/src"',
-        "",
-        "# Reproducibility environment",
-        'export KBUILD_BUILD_TIMESTAMP="1970-01-01"',
-        'export KBUILD_BUILD_USER="tundravm"',
-        'export KBUILD_BUILD_HOST="tundravm"',
-        "",
         './scripts/kconfig/merge_config.sh -m .config "$KERNEL_TREE/fragment.config"',
-        "make olddefconfig",
+        "kmake olddefconfig",
         'cp .config "$KERNEL_CACHE/kernel-config.after"',
         _KCONFIG_CHECK,
         *(
@@ -840,7 +835,7 @@ def _composed_configure(kernel: Kernel, files: Sequence[tuple[str, str, tuple[st
         lines.append('[ "$dropped" -eq 0 ] || exit 1')
     else:
         lines += [_built_kernel_check(kernel), '[ "$dropped$missing" = 00 ] || exit 1']
-    lines.append(f'make -j"$(nproc)" bzImage{" modules" if kernel.modules else ""} ARCH=x86_64')
+    lines.append(f'kmake -j"$(nproc)" bzImage{" modules" if kernel.modules else ""}')
     return "\n".join(lines)
 
 
@@ -929,6 +924,7 @@ def _render_kernel_build_script(
         _composed_configure(kernel, files) if kernel.composed else _CONFIG_FILE_CONFIGURE
     )
     configure = ("\n" + " " * 12).join(configure_text.split("\n"))
+    kmake = ("\n" + " " * 8).join(_KMAKE.split("\n"))
     modules_install = ""
     if kernel.composed and kernel.modules:
         modules_install = ("\n" + " " * 8).join(("", *_MODULES_INSTALL.split("\n")))
@@ -950,7 +946,9 @@ def _render_kernel_build_script(
         set -euo pipefail
 
         KERNEL_CACHE="{cache_root}/{cache_key}"
+        KERNEL_CHROOT="${{BUILDDIR:-/build}}/{cache_key}"
         KERNEL_VERSION="{version}"
+        {kmake}
 
         if [ -d "$KERNEL_CACHE/done" ]; then
             echo "Using cached kernel build: {cache_key}"

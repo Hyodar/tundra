@@ -359,8 +359,8 @@ def test_compile_kernel_with_config_emits_build_script(tmp_path: Path) -> None:
     assert "git clone" not in script_text
     assert 'cp payload/kernel/kernel.config "$KERNEL_CACHE/src/.config"' in script_text
     assert "make olddefconfig" in script_text
-    assert "make -j" in script_text
-    assert "bzImage ARCH=x86_64" in script_text
+    assert 'kmake -j"$(nproc)" bzImage' in script_text
+    assert "mkosi-chroot env KBUILD_BUILD_TIMESTAMP=1970-01-01" in script_text
     assert "KBUILD_BUILD_TIMESTAMP" in script_text
     assert "KBUILD_BUILD_USER" in script_text
     assert "KBUILD_BUILD_HOST" in script_text

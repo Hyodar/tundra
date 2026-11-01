@@ -2227,9 +2227,11 @@ KERNEL_BUILD_PACKAGES = (
     "libelf-dev",
     "libssl-dev",
     "xz-utils",
+    "zstd",
     "patch",
 )
-"""What every composed :class:`Kernel` build runs: compiler, Kconfig, objtool, sign-file."""
+"""What every composed :class:`Kernel` build runs: compiler, Kconfig, objtool, sign-file, and
+the compressors (Debian's configs compress the kernel with zstd)."""
 
 
 @dataclass(frozen=True, slots=True)

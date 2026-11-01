@@ -142,7 +142,7 @@ def test_the_script_patches_in_order_merges_and_checks(base: Path, tmp_path: Pat
     assert "sha256sum -c --quiet -" in script
     assert (
         '    ./scripts/kconfig/merge_config.sh -m .config "$KERNEL_TREE/fragment.config"\n'
-        "    make olddefconfig\n"
+        "    kmake olddefconfig\n"
         '    cp .config "$KERNEL_CACHE/kernel-config.after"\n'
         "    # Kconfig drops a requested option whose dependencies are unmet: "
         "check each survived\n"
@@ -162,7 +162,7 @@ def test_the_script_patches_in_order_merges_and_checks(base: Path, tmp_path: Pat
         + textwrap.indent(drivers_check(CloudDrivers(("qemu", "azure", "gcp"))), "    ")
         + "\n"
         '    [ "$dropped$missing" = 00 ] || exit 1\n'
-        '    make -j"$(nproc)" bzImage ARCH=x86_64\n'
+        '    kmake -j"$(nproc)" bzImage\n'
     ) in script
     assert "modules_install" not in script
     records = (out / "payload/mkosi.postinst.d/90-kernel-records.sh").read_text()
@@ -184,7 +184,7 @@ def test_a_debian_base_is_locked_fetched_and_extracted(tmp_path: Path) -> None:
         f'dpkg-deb --fsys-tarfile "$SRCDIR/tundravm-sources/kernel-config-{"d" * 12}-'
     ) in script
     assert '| xz -dc > "$KERNEL_CACHE/src/.config"' in script
-    assert 'make -j"$(nproc)" bzImage modules ARCH=x86_64' in script
+    assert 'kmake -j"$(nproc)" bzImage modules' in script
     assert 'modules_install INSTALL_MOD_PATH="${DESTDIR}/usr"' in script
     payload = kernel_payload(lower(recipe).kernel)
     assert payload is not None

@@ -66,6 +66,7 @@ Breaking changes are marked **Breaking**.
 - Every build carries `measurements.json` with a `tundravm.policy/2` policy per record, an SPDX SBOM, and `observations.json`.
 - `build --reproduce`, `--sign KEY`, `--offline` and `verify [--rebuild]` check the bytes anywhere.
 - The ESP is a fixed 128 MiB FAT32; a UKI over 126 MiB fails with both sizes and `RootFS.verity()` as the fix.
+- A `Kernel.build` kernel compiles: `make` runs in the image, where its build packages are, not in mkosi's tools tree.
 - A `Kernel.build` kernel fails after `olddefconfig` when a driver the qemu, azure or gcp target needs is not `=y`, naming the option and the line to add; `kernel/` of the build directory keeps its config before and after, named in the manifest.
 
 ### Sources and toolchains
