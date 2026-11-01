@@ -209,3 +209,4 @@ __marimo__/
 # Golden mkosi trees must keep their usr/lib contents
 !examples/attested-node/mkosi/**/lib/
 !tests/fixtures/native-tree/**/lib/
+!tests/fixtures/mkosi-trees/**/lib/

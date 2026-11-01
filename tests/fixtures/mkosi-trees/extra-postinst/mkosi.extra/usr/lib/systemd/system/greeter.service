@@ -1,0 +1,11 @@
+[Unit]
+Description=Greeter
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/busybox httpd -f -p 8080 -h /srv/www
+User=greeter
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target
