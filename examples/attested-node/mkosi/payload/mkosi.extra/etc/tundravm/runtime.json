@@ -1,0 +1,32 @@
+{
+  "control_plane": "attested endpoint: TLS bound to the quote",
+  "ingress": [
+    {
+      "binding": "self-signed per boot; quote binding is gate 3",
+      "kind": "attested-tls",
+      "port": 8546,
+      "unit": "attested-tls-8546.service",
+      "upstream": "http://127.0.0.1:8547/"
+    }
+  ],
+  "management_port": 8745,
+  "rootfs": "verity",
+  "schema": 1,
+  "secrets": [],
+  "volumes": [
+    {
+      "device": "/dev/disk/by-id/*-tundravm-data",
+      "directories": [
+        "/persistent/data/nethermind"
+      ],
+      "filesystem": "ext4",
+      "mount": "/persistent/data",
+      "name": "data",
+      "pipe": "/run/tundravm/unlock/data",
+      "serial": "tundravm-data",
+      "unlock": {
+        "kind": "operator-key"
+      }
+    }
+  ]
+}

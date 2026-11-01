@@ -1,0 +1,13 @@
+[Unit]
+Description=Check what this profile's declarations promise
+After=tdx-evidence.service tdxs.socket nethermind.service nethermind-ready.service signer.service signer-ready.service attested-tls-8546.service attested-tls-8546-ready.service runtime-init.service nftables.service tundravm-endpoint.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service tundravm-instance-key.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/tundravm/probe
+TimeoutStartSec=10min
+StandardOutput=journal+console
+
+[Install]
+WantedBy=minimal.target

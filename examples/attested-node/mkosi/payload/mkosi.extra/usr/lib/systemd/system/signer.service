@@ -1,0 +1,39 @@
+[Unit]
+Description=signer.service
+After=tundravm-instance-key.service nethermind-ready.service tdx-evidence.service
+Requires=tundravm-instance-key.service nethermind-ready.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/signer -listen 127.0.0.1:8547 -upstream http://127.0.0.1:8545/
+User=signer
+LoadCredential=instance-key:/run/tundravm/instance-key.pem
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target

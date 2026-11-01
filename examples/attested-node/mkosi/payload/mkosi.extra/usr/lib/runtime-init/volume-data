@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+# tundravm: the directories services keep on volume data
+/usr/bin/install -d -o nethermind -g nethermind -m 0750 /persistent/data/nethermind

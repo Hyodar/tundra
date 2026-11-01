@@ -1,0 +1,68 @@
+#!/bin/bash
+# azure.raw as Azure takes it: a fixed VHD of a whole number of MiB, its footer's timestamp
+# pinned to SOURCE_DATE_EPOCH and its unique id derived from the disk, so it reproduces.
+# It converts a sparse copy: mkosi still reads azure.raw after the postoutput scripts.
+set -euo pipefail
+TMP="$OUTPUTDIR/azure-tmp"
+DISK="$TMP/disk.raw"
+VHD="$OUTPUTDIR/azure.vhd"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+cp --sparse=always --reflink=auto "$OUTPUTDIR/azure.raw" "$DISK"
+python3 - "$DISK" 1048576 <<'PY'
+import struct, sys, zlib
+# Grow a GPT disk to a multiple of UNIT bytes: move the backup table and header to the new
+# end, update both headers and the protective MBR (repart sized the disk to its partitions).
+path, unit, sector = sys.argv[1], int(sys.argv[2]), 512
+with open(path, "r+b") as disk:
+    size = disk.seek(0, 2)
+    target = -(-size // unit) * unit
+    disk.seek(sector)
+    primary = bytearray(disk.read(sector))
+    assert primary[:8] == b"EFI PART", "no GPT header"
+    header_size = struct.unpack_from("<I", primary, 12)[0]
+    entries_lba = struct.unpack_from("<Q", primary, 72)[0]
+    count, entry_size = struct.unpack_from("<II", primary, 80)
+    span = -(-(count * entry_size) // sector)
+    disk.seek(entries_lba * sector)
+    table = disk.read(span * sector)
+    old_last = size // sector - 1
+    disk.seek((old_last - span) * sector)
+    disk.write(bytes((span + 1) * sector))
+    disk.truncate(target)
+    last = target // sector - 1
+
+    def header(mine, other, entries):
+        out = bytearray(primary[:header_size])
+        struct.pack_into("<QQ", out, 24, mine, other)
+        struct.pack_into("<Q", out, 48, last - span - 1)
+        struct.pack_into("<Q", out, 72, entries)
+        struct.pack_into("<I", out, 16, 0)
+        struct.pack_into("<I", out, 16, zlib.crc32(out))
+        return bytes(out)
+
+    disk.seek(sector)
+    disk.write(header(1, last, entries_lba))
+    disk.seek((last - span) * sector)
+    disk.write(table)
+    disk.seek(last * sector)
+    disk.write(header(last, 1, last - span))
+    disk.seek(458)
+    disk.write(struct.pack("<I", min(last, 0xFFFFFFFF)))
+PY
+qemu-img convert -O vpc -o subformat=fixed,force_size "$DISK" "$VHD"
+python3 - "$VHD" "${SOURCE_DATE_EPOCH:-0}" "$(sha256sum "$DISK" | cut -c1-32)" <<'PY'
+import struct, sys
+path, epoch, unique = sys.argv[1], int(sys.argv[2]), bytes.fromhex(sys.argv[3])
+with open(path, "r+b") as vhd:
+    vhd.seek(-512, 2)
+    footer = bytearray(vhd.read(512))
+    assert footer[:8] == b"conectix", "not a fixed VHD footer"
+    footer[24:28] = struct.pack(">I", max(epoch - 946684800, 0))  # seconds since 2000
+    footer[68:84] = unique
+    footer[64:68] = bytes(4)
+    footer[64:68] = struct.pack(">I", ~sum(footer) & 0xFFFFFFFF)
+    vhd.seek(-512, 2)
+    vhd.write(footer)
+PY
+rm -rf "$TMP"

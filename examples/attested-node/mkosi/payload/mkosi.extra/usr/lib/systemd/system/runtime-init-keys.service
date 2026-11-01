@@ -1,0 +1,9 @@
+[Unit]
+Description=Runtime Init: keys
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/runtime-init/keys

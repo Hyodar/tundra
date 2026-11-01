@@ -1,0 +1,35 @@
+[Unit]
+Description=Generate this boot's secret jwt
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c "mkdir -p -m 0711 /run/tundravm && mkdir -p -m 0700 /run/tundravm/secrets && if [ ! -s /run/tundravm/secrets/jwt ]; then od -An -v -N32 -tx1 /dev/urandom | tr -d ' \\n' > /run/tundravm/secrets/jwt.tmp && [ -s /run/tundravm/secrets/jwt.tmp ] && mv /run/tundravm/secrets/jwt.tmp /run/tundravm/secrets/jwt; fi"
+TimeoutStartSec=60s
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=none
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
