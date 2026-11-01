@@ -53,6 +53,7 @@ CLEAN: tuple[Declaration, ...] = (
     Package("curl"),
     User("app", system=True),
     Service("app", "/usr/bin/app", user="app"),
+    File("/usr/bin/app", "#!/bin/sh\n", mode=0o755),
     File("/etc/motd", "hi\n"),
 )
 
@@ -76,7 +77,7 @@ def codes(subject: Recipe, *variants: str) -> list[str]:
 
 
 def test_service_user_missing() -> None:
-    [diag] = report(recipe(Service("worker", "/usr/bin/worker", user="svc")))
+    [diag] = report(recipe(Service("worker", "/usr/bin/app", user="svc")))
     assert (diag.severity, diag.code, diag.subject) == ("error", "service-user-missing", "worker")
     assert "'svc'" in (diag.hint or "")
 
@@ -100,10 +101,10 @@ def test_a_standalone_variant_is_checked_as_its_own_image() -> None:
 
 def test_service_user_root_base_or_hook_created_is_fine() -> None:
     subject = recipe(
-        Service("a", "/usr/bin/a", user="root"),
-        Service("b", "/usr/bin/b", user="nobody"),
+        Service("a", "/usr/bin/app", user="root"),
+        Service("b", "/usr/bin/app", user="nobody"),
         Hook("hookuser", "postinst", "mkosi-chroot useradd --system hookuser"),
-        Service("c", "/usr/bin/c", user="hookuser"),
+        Service("c", "/usr/bin/app", user="hookuser"),
     )
     # User("hookuser") says it without the hook; root is fine but reported as info.
     assert codes(subject) == ["hook-covered", "service-runs-as-root"]
@@ -142,30 +143,46 @@ def test_file_path_relative() -> None:
     assert all(d.severity == "error" for d in diags)
 
 
-# d. service-command-not-shipped
+# d. service-program-missing
 
 
-def test_service_command_not_shipped() -> None:
-    [diag] = report(recipe(Service("tool", "/usr/local/bin/tool --serve"), clean=False))
-    assert (diag.severity, diag.code, diag.subject) == (
-        "warning",
-        "service-command-not-shipped",
-        "tool",
+@pytest.mark.parametrize(
+    ("items", "missing"),
+    [
+        ((Service("tool", "/usr/local/bin/tool --serve"),), "/usr/local/bin/tool"),
+        ((Service("web", "/usr/bin/python3 app.py"), Package("curl")), "/usr/bin/python3"),
+        ((Service("web", "node app.js"),), "/usr/bin/node"),
+        (
+            (
+                File("/usr/local/bin/tool", "#!/bin/sh\n", mode=0o755),
+                Service("tool", "/usr/local/bin/tool"),
+                Hook("builder", "build", "cp out/builder $DESTDIR/opt/builder"),
+                Service("builder", "/opt/builder"),
+                Service("shell", "/usr/bin/bash -c true"),
+                Service("perl", "/usr/bin/perl -e 1"),
+                Service("py", "/usr/bin/python3 app.py"),
+                Package("python3"),
+                Service("keys", "/usr/bin/ssh-keygen -A"),
+                Package("openssh-server"),
+                Service("other", "/usr/sbin/other"),
+                Package("other"),
+                Service("resolved", "-/usr/lib/systemd/systemd-resolved"),
+                Package("systemd"),
+                Service("env", "${APP}"),
+            ),
+            None,
+        ),
+    ],
+    ids=["unshipped", "interpreter", "bare-name", "shipped"],
+)
+def test_service_program_missing(items: tuple[Declaration, ...], missing: str | None) -> None:
+    found = [d for d in report(recipe(*items, clean=False)) if d.code == "service-program-missing"]
+    assert [d.message.split(" runs ")[1].split(",")[0] for d in found] == (
+        [missing] if missing else []
     )
-    assert "no packages" in (diag.hint or "")
-
-
-def test_service_command_shipped_by_file_hook_package_or_essential() -> None:
-    shipped = (
-        File("/usr/local/bin/tool", "#!/bin/sh\n", mode=0o755),
-        Service("tool", "/usr/local/bin/tool"),
-        Hook("builder", "build", "cp out/builder $DESTDIR/opt/builder"),
-        Service("builder", "/opt/builder"),
-        Service("shell", "/usr/bin/bash -c true"),
-    )
-    assert report(recipe(*shipped, clean=False)) == []
-    packaged = recipe(*shipped, Service("other", "/usr/bin/other"), Package("other"), clean=False)
-    assert report(packaged) == []
+    assert all(d.severity == "error" for d in found)
+    if missing == "/usr/bin/python3":
+        assert "packages=['python3']" in (found[0].hint or "")
 
 
 # e. cloud targets
@@ -205,7 +222,7 @@ def test_variant_with_content_or_default_is_not_empty() -> None:
 
 # i. debloat-removes-needed-unit / debloat-removes-declared-file
 
-NEEDS_NETWORKD = Service("net", "/usr/bin/net", requires=("systemd-networkd.service",))
+NEEDS_NETWORKD = Service("net", "/usr/bin/app", requires=("systemd-networkd.service",))
 
 
 def test_debloat_masks_needed_units() -> None:
@@ -220,7 +237,7 @@ def test_debloat_masks_needed_units() -> None:
 
 def test_debloat_keeps_the_targets_an_enabled_service_pulls_in() -> None:
     """The current dialect's masking keeps the targets enabled units reference."""
-    online = Service("web", "/usr/bin/web", wants=("network-online.target", "time-set.target"))
+    online = Service("web", "/usr/bin/app", wants=("network-online.target", "time-set.target"))
     assert report(recipe(online)) == []
 
 
@@ -440,11 +457,11 @@ def test_ordering_is_deterministic() -> None:
     diags = check(img, profiles=["b", "a", "default"])
     keys = [(d.profile, d.severity, d.code) for d in diags]
     assert keys == [
-        ("a", "warning", "service-command-not-shipped"),
+        ("a", "error", "service-program-missing"),
         ("a", "info", "profile-empty"),
         ("b", "error", "file-path-relative"),
-        ("b", "warning", "service-command-not-shipped"),
-        ("default", "warning", "service-command-not-shipped"),
+        ("b", "error", "service-program-missing"),
+        ("default", "error", "service-program-missing"),
     ]
     assert diags == check(img, profiles=["default", "a", "b"])
     assert [(d.profile, d.code) for d in lint(subject)] == [
@@ -519,6 +536,7 @@ def test_a_source_location_is_rendered_where_it_is_known() -> None:
 
 RECIPE = """
 from tundravm.declarative import (
+    File,
     Fragment,
     Package,
     RUNTIME_INIT,
@@ -536,6 +554,7 @@ items = [
     Package("curl"),
     User("app", system=True),
     Service("app", "/usr/bin/app", user="app"),
+    File("/usr/bin/app", "#!/bin/sh\\n", mode=0o755),
 ]
 variants = [Variant("default", outputs=("qemu",))]
 """

@@ -26,7 +26,11 @@ Teaches:
 
 from tundravm import Image, Package, Service
 from tundravm.secrets import Secret
+from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, TpmSeal, Volume
+
+# The Go program in app/, beside this file: the argv's first element pulls its build in.
+APP = GoBinary("app", Local("app"), package=".")
 
 # The data an operator protects: it opens only once they have attested this instance.
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
@@ -45,16 +49,15 @@ image = Image(
     "storage-and-secrets",
     packages=[Package("ca-certificates")],
     services=[
-        # Ship /usr/bin/app with a GoBinary (see 05_source_builds.py) or a Package.
         Service(
             "app",
-            ["/usr/bin/app", "--token-file", token.path, "--flags-file", flags.path],
+            [APP, "--token-file", token.path, "--flags-file", flags.path],
             state=data.directory("app"),
             credentials=[token, flags],
         ),
         Service(
             "indexer",
-            ["/usr/bin/app", "index", "--cache", cache.directory("index").path],
+            [APP, "index", "--cache", cache.directory("index").path],
             state=cache.directory("index", mode=0o700),
         ),
     ],

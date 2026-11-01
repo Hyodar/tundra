@@ -1034,8 +1034,9 @@ skip on the reason.
 $ tundravm convert ./units --from systemd > image.py
 ```
 
-reads a unit file or a directory of them and prints an `Image` file that `tundravm check`
-accepts. Each service unit becomes one `Service`, with its `x.service.d/*.conf` drop-ins
+reads a unit file or a directory of them and prints an `Image` file. `tundravm check`
+accepts it once the image ships each program a unit runs (`service-program-missing` names
+the missing ones: `packages=["python3"]` for a Python unit). Each service unit becomes one `Service`, with its `x.service.d/*.conf` drop-ins
 and the `x.timer` or `x.socket` that starts it folded in: `ExecStart=` as the argv,
 `Type=notify` as `readiness=Notify()`, the cgroup limits as `resources=`, the stop as
 `shutdown=`, the schedule as `timer=`, the socket as `socket=`, and every other directive

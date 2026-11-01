@@ -7,6 +7,7 @@ from tundravm.declarative import (
     Calendar,
     Debian,
     Every,
+    File,
     Fragment,
     Listen,
     Mount,
@@ -151,6 +152,7 @@ def test_generated_units_lint_clean() -> None:
                 Task("tick", "/usr/bin/true", schedule=Every("1h"), needs=[hello.ready]),
                 User("app"),
                 Service("app", "/usr/bin/app", socket=Listen("/run/app.sock", user="app")),
+                File("/usr/bin/app", "#!/bin/sh\n", mode=0o755),
                 Mount("/var/cache/app", "tmpfs", type="tmpfs"),
             )
         )

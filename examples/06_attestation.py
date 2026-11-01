@@ -27,15 +27,23 @@ from tundravm import Image, Package, Service
 from tundravm.components import EVIDENCE, Endpoint, Tdxs
 from tundravm.declarative import Resources
 from tundravm.ports import AttestedTLS
+from tundravm.sources import GoBinary, Local
 from tundravm.systemd import TcpProbe
 
 # What a trusted peer measures to: a verifier policy (a measurements.json record's `policy`).
 PEER_POLICY = Resources.from_module(__name__).file("peer.policy.json")
 
-# The app asks tdxs for quotes over its socket and answers on the loopback only.
+# The app (the Go program in app/, beside this file) asks tdxs for quotes over its socket
+# and answers on the loopback only.
 app = Service(
     "app",
-    ["/usr/bin/app", "--tdxs-socket", "/var/tdxs.sock", "--listen", "127.0.0.1:8080"],
+    [
+        GoBinary("app", Local("app"), package="."),
+        "--tdxs-socket",
+        "/var/tdxs.sock",
+        "--listen",
+        "127.0.0.1:8080",
+    ],
     requires=[EVIDENCE],
     readiness=TcpProbe(8080),
     groups=["tdx"],

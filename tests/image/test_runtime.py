@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import Image, Kernel, RootFS, Service
+from tundravm import File, Image, Kernel, RootFS, Service
 from tundravm._image import lower, recipe_of
 from tundravm._image._values import MANAGEMENT_PORT
 from tundravm.components import Endpoint
@@ -364,7 +364,8 @@ def test_tls_reads_its_certificate_as_a_credential() -> None:
 
 
 def test_the_prover_shape_lints_clean_apart_from_unpinned_sources(planned: PlannedImage) -> None:
-    assert_clean(prover(), allow=("source-unpinned",))
+    shipped = File.text("/usr/bin/app", "#!/bin/sh\n", mode=0o755)
+    assert_clean(prover(files=[shipped]), allow=("source-unpinned",))
 
 
 # ── The root layout ─────────────────────────────────────────────────────

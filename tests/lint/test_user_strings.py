@@ -127,6 +127,9 @@ RENAMED = {
         r"\b(?:fragment_plan|fake_fragment|recipe_file|compile_tree|assert_tree_matches)\b"
     ),
     "Component fragment= (name=)": re.compile(r"\(Component, fragment="),
+    "service-command-not-shipped (service-program-missing)": re.compile(
+        r"\bservice-command-not-shipped\b"
+    ),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {

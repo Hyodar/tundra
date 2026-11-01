@@ -56,6 +56,7 @@ class Sloppy(Component):
     port: int = 80
 
     def compose(self) -> Iterator[object]:
+        yield File.text("/usr/bin/picky", "#!/bin/sh\n", mode=0o755)
         yield Service("picky", ["/usr/bin/picky"], expose=[TCP(self.port)])
 
     def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:

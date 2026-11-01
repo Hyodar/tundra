@@ -40,7 +40,7 @@ Breaking changes are marked **Breaking**.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` run the one replacement workflow on GCP.
 - `attest` verifies fresh evidence and delivers nothing; `secrets` attests again before it delivers or unlocks.
 - `doctor` prints one row per capability with its fix; `build:go` and `build:rustup` block only when the image needs them.
-- **Breaking:** `convert --from systemd` prints an `Image` file that passes `check`, and `--mode` is gone.
+- **Breaking:** `convert --from systemd` prints an `Image` file that loads, and `--mode` is gone; `check` names each program it runs that the image does not ship.
 - `convert --from mkosi` writes Python that parses, converts a tundravm tree's payload, and turns its cloud wrappers into `targets=`.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".
 
@@ -68,6 +68,7 @@ Breaking changes are marked **Breaking**.
 - `check --explain CODE` prints a rule, an image's own component's included, and a text report ends with the `--explain` line for its codes.
 - **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
+- **Breaking:** `service-program-missing` (error) replaces the `service-command-not-shipped` warning: a service's program must be a file, tree or build the image ships, or a program a listed package provides.
 - A finding several profiles share prints once (`[dev, production]`), `[image]` marks an image-wide one, and a shared hint prints once.
 
 ### Docs

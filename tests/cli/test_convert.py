@@ -11,7 +11,7 @@ import pytest
 import tundravm
 from tests.cli.conftest import Cli
 from tests.helpers import REPO_ROOT
-from tundravm.cli import EXIT_OK, EXIT_SDK_ERROR
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, EXIT_SDK_ERROR
 from tundravm.systemd import Calendar
 
 pytestmark = pytest.mark.boundary  # convert reads the tree through mkosi's own parser
@@ -136,7 +136,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/worker --queue jobs
+ExecStart=/usr/bin/python3 -m worker --queue jobs
 Environment=MODE=batch
 StateDirectory=worker
 MemoryMax=1G
@@ -174,7 +174,23 @@ def test_units_become_an_image_file_that_loads_and_checks(cli: Cli, tmp_path: Pa
     assert dict(services["worker"].environment) == {"MODE": "batch", "TRACE": "1"}
     assert services["backup"].timer == Calendar("daily")
     checked = cli("check", image_file)
-    assert checked.code == EXIT_OK, checked.out + checked.err
+    assert checked.code == EXIT_FAILURE
+    assert [line.split(" runs ")[1].split(",")[0] for line in _missing(checked.out)] == [
+        "/usr/bin/backup",
+        "/usr/bin/web",
+        "/usr/bin/python3",
+    ]
+    assert "packages=['python3']" in checked.out
+    image_file.write_text(
+        result.out.replace("    services=[", '    packages=["python3"],\n    services=[', 1)
+    )
+    assert len(_missing(cli("check", image_file).out)) == 2
+
+
+def _missing(report: str) -> list[str]:
+    return [
+        line for line in report.splitlines() if line.startswith("error service-program-missing")
+    ]
 
 
 def test_a_directory_without_units_is_refused(cli: Cli, tmp_path: Path) -> None:

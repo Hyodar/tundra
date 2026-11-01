@@ -127,37 +127,131 @@ _BASE_GROUPS = frozenset(
     }
 )
 
-# Binaries from Essential: yes packages that every base image ships in /usr/bin.
 _ESSENTIAL_BINARIES = frozenset(
     {
+        "basename",
         "bash",
         "cat",
+        "chgrp",
         "chmod",
         "chown",
+        "cmp",
         "cp",
+        "cut",
         "dash",
+        "date",
+        "dd",
+        "df",
+        "diff",
+        "dirname",
+        "du",
         "echo",
         "env",
+        "expr",
         "false",
         "find",
+        "findmnt",
+        "flock",
         "grep",
+        "gzip",
+        "head",
+        "hostname",
+        "id",
+        "install",
+        "kill",
         "ln",
+        "logger",
         "ls",
         "mkdir",
+        "mktemp",
+        "mount",
+        "mountpoint",
         "mv",
+        "nice",
+        "nohup",
+        "nsenter",
+        "perl",
         "printf",
+        "readlink",
+        "realpath",
         "rm",
+        "rmdir",
+        "run-parts",
+        "runuser",
         "sed",
+        "setpriv",
         "sh",
+        "sha256sum",
         "sleep",
+        "sort",
+        "stat",
+        "sync",
+        "tail",
+        "tar",
         "tee",
         "test",
+        "timeout",
+        "touch",
+        "tr",
         "true",
+        "umount",
+        "uname",
+        "unshare",
+        "wc",
         "xargs",
+        "yes",
     }
 )
+"""What Debian's Essential packages (coreutils, util-linux, bash, dash, perl-base, ...) put
+in ``/usr/bin`` and ``/usr/sbin``: every image has them, whatever it lists."""
 
-_SHIPPED_PREFIXES = ("/usr/local/bin/", "/opt/", "/usr/bin/")
+_PACKAGE_BINARIES: Mapping[str, frozenset[str]] = {
+    "bind9-dnsutils": frozenset({"dig", "nslookup"}),
+    "dnsutils": frozenset({"dig", "nslookup"}),
+    "e2fsprogs": frozenset({"e2fsck", "mkfs.ext4", "resize2fs"}),
+    "iproute2": frozenset({"bridge", "ip", "ss", "tc"}),
+    "iputils-ping": frozenset({"ping"}),
+    "kmod": frozenset({"insmod", "lsmod", "modprobe", "rmmod"}),
+    "net-tools": frozenset({"ifconfig", "netstat", "route"}),
+    "netcat-openbsd": frozenset({"nc"}),
+    "nodejs": frozenset({"node", "nodejs"}),
+    "openssh-client": frozenset({"scp", "ssh", "ssh-keygen"}),
+    "openssh-server": frozenset({"scp", "ssh", "ssh-keygen", "sshd"}),
+    "procps": frozenset({"free", "pgrep", "pkill", "ps", "sysctl", "top"}),
+    "python3": frozenset({"python3"}),
+    "python3-minimal": frozenset({"python3"}),
+    "ruby": frozenset({"ruby"}),
+    "systemd": frozenset(
+        {
+            "busctl",
+            "journalctl",
+            "systemctl",
+            "systemd-cat",
+            "systemd-creds",
+            "systemd-escape",
+            "systemd-notify",
+            "systemd-run",
+            "systemd-socket-activate",
+            "systemd-tmpfiles",
+        }
+    ),
+    "udev": frozenset({"udevadm"}),
+}
+"""The programs a package ships under a name other than its own, beside the interpreters
+a converted unit runs (``python3``, ``node``, ``ruby``; ``perl``, ``bash`` and ``sh`` are
+essential)."""
+
+_PROGRAM_PACKAGE = {
+    "node": "nodejs",
+    "python3": "python3",
+    "ruby": "ruby",
+    "sshd": "openssh-server",
+}
+"""The package a ``service-program-missing`` finding names for a program it knows."""
+
+_BIN_DIRS = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/")
+_EXEC_PREFIXES = "@-:+!|"
+"""systemd's ``ExecStart=`` prefixes, which come before the program."""
 
 
 def _norm(path: str) -> str:
@@ -285,35 +379,72 @@ def _rule_file_path_relative(
             )
 
 
-def _rule_service_command_not_shipped(
+def _program(command: tuple[str, ...]) -> str | None:
+    """The program *command* runs (systemd's lookup for a bare name), ``None`` when it
+    is a variable only the running unit expands."""
+    program = command[0].lstrip(_EXEC_PREFIXES)
+    if not program or "$" in program:
+        return None
+    return _norm(program) if "/" in program else f"/usr/bin/{program}"
+
+
+def _packaged(program: str, packages: Iterable[str]) -> bool:
+    """Whether a listed package (or an essential one) plausibly ships *program*.
+
+    Without the packages' file lists: a program in a ``bin`` directory named after a
+    package, one the table knows a package for, or an essential one; anywhere else, a
+    directory named after a listed package. ``systemd`` is in every image.
+    """
+    name = posixpath.basename(program)
+    listed = {*packages, "systemd"}
+    if program.startswith(_BIN_DIRS):
+        if name in _ESSENTIAL_BINARIES or name in listed:
+            return True
+        return any(name in _PACKAGE_BINARIES.get(package, ()) for package in listed)
+    parts = posixpath.dirname(program).split("/")
+    return any(
+        part in listed or any(p.startswith(f"{part}-") for p in listed) for part in parts if part
+    )
+
+
+def _shipped(state: ProfileState) -> tuple[set[str], tuple[str, ...]]:
+    """The paths a profile ships itself, and the directories it ships whole."""
+    paths = _declared_paths(state)
+    if state.init_scripts:
+        paths.update(_INIT_FILE_PATHS)
+    trees: list[str] = []
+    for build in state.source_builds.values():
+        for step in build.install:
+            if step.kind == "tree":
+                trees.append(_norm(step.dest).rstrip("/") + "/")
+            else:
+                paths.add(_norm(step.dest))
+    return paths, tuple(trees)
+
+
+def _rule_service_program_missing(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    if state.packages:
-        return
-    provided = _declared_paths(state)
-    if state.init_scripts:
-        provided.update(_INIT_FILE_PATHS)
+    paths, trees = _shipped(state)
     mentions = _command_text(state) + "\n" + "\n".join(t for _, t in state.build_sources)
     for svc in state.services:
-        if not svc.command:
+        program = _program(svc.command) if svc.command else None
+        if program is None or program in paths or program.startswith(trees):
             continue
-        binary = svc.command[0]
-        if not binary.startswith(_SHIPPED_PREFIXES) or _norm(binary) in provided:
+        if program in mentions or _packaged(program, state.packages):
             continue
-        name = posixpath.basename(binary)
-        if binary.startswith("/usr/bin/") and name in _ESSENTIAL_BINARIES:
-            continue
-        if name and name in mentions:
-            continue
+        package = _PROGRAM_PACKAGE.get(posixpath.basename(program))
+        add = (
+            f"its package: packages=[{package!r}]" if package else "its Debian package in packages="
+        )
         yield Diagnostic(
-            severity="warning",
-            code="service-command-not-shipped",
-            message=f"service {svc.name!r} runs {binary}, which nothing in this profile ships",
+            severity="error",
+            code="service-program-missing",
+            message=f"service {svc.name!r} runs {program}, which nothing in the image ships",
             hint=(
-                f"Ship it with File({binary!r}, Path(...), mode=0o755), a Build that "
-                "installs it, or the package that provides it. This heuristic only "
-                f"fires when the profile installs no packages and no file or hook mentions "
-                f"{name!r}; ignore it if the base image already has the binary."
+                f"List {add}, or build it: a GoBinary, CargoBinary or Build as the argv's "
+                "first element puts its program in the image. A file of your own is "
+                f"File({program!r}, Path(...), mode=0o755)."
             ),
             profile=profile_name,
             subject=svc.name,
@@ -1288,13 +1419,14 @@ _REGISTRY: tuple[Rule, ...] = (
         (_rule_file_path_relative,),
     ),
     Rule(
-        "service-command-not-shipped",
-        "warning",
-        "A service runs a binary that nothing in a package-free profile ships (a "
-        "heuristic: no file, build or hook mentions it).",
-        "Ship it with File(PATH, Path(...), mode=0o755), a Build that installs it, or the "
-        "package that provides it; ignore it when the base image already has it.",
-        (_rule_service_command_not_shipped,),
+        "service-program-missing",
+        "error",
+        "A service's program (its argv's first element) is nothing the image ships: no "
+        "declared file, tree or build installs it, and no listed package is known to.",
+        "Add the Debian package that ships it to packages=, or run a GoBinary, CargoBinary "
+        "or Build as the argv's first element, or ship it with File(PATH, Path(...), "
+        "mode=0o755).",
+        (_rule_service_program_missing,),
     ),
     Rule(
         "profile-empty",
