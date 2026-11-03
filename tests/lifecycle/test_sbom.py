@@ -29,7 +29,7 @@ from tundravm.declarative import (
     read_lock,
     sbom,
 )
-from tundravm.declarative.bom import manifest_path, purl, read_manifest
+from tundravm.declarative.bom import container, manifest_path, purl, read_manifest
 from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ArtifactError
 
@@ -255,6 +255,42 @@ def test_spdx_document_structure(tmp_path: Path, locked: Lock) -> None:
     assert kinds.count(("SPDXRef-Image", "GENERATED_FROM")) == 2
     related = {r["relatedSpdxElement"] for r in document["relationships"]}
     assert related == set(ids)
+
+
+ROOT_SHA = hashlib.sha256(b"root").hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("name", "packages"),
+    [("web", [{"type": "deb", "name": "systemd", "version": "257.13-1~deb13u1",
+               "architecture": "amd64"},
+              {"type": "deb", "name": "busybox", "version": "1:1.37.0-6+b3",
+               "architecture": "amd64"}])],
+)  # fmt: skip
+def test_a_container_root_is_a_component_holding_its_own_packages(
+    tmp_path: Path, locked: Lock, name: str, packages: list[dict[str, str]]
+) -> None:
+    listed = tmp_path / f"{name}.manifest"
+    listed.write_text(json.dumps({**MANIFEST, "packages": packages}), encoding="utf-8")
+    root = container(name, ROOT_SHA, listed, path=f"containers/{name}.raw")
+    document = sbom(_artifact(tmp_path, lock=locked), lock=locked, containers=[root])
+    assert document.containers == (root,) and len(document.sources) == 2
+    spdx = document.to_spdx()
+    entry = next(p for p in spdx["packages"] if p.get("primaryPackagePurpose") == "CONTAINER")
+    assert (entry["name"], entry["versionInfo"], entry["packageFileName"]) == (
+        name,
+        ROOT_SHA,
+        f"containers/{name}.raw",
+    )
+    inner = [r["relatedSpdxElement"] for r in spdx["relationships"]
+             if r["spdxElementId"] == entry["SPDXID"]]  # fmt: skip
+    assert len(inner) == len(packages)
+    ids = [p["SPDXID"] for p in spdx["packages"]]
+    assert len(ids) == len(set(ids)) == 1 + len(PACKAGES) + 2 + 1 + len(packages)
+    assert ("SPDXRef-Image", "CONTAINS", entry["SPDXID"]) in {
+        (r["spdxElementId"], r["relationshipType"], r["relatedSpdxElement"])
+        for r in spdx["relationships"]
+    }
 
 
 def test_documents_are_deterministic(

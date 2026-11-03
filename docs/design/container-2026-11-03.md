@@ -43,7 +43,9 @@ working directory, `$STATE_DIRECTORY` and the volume's ordering are unchanged.
   firewall, and `systemd-socket-proxyd` with `JoinsNamespaceOf=<name>.service` and
   `PrivateNetwork=yes` relaying it into the container's network namespace.
 - The curated modules gain `loop` and `erofs`; the manifest records
-  `containers.<name>`: `containers/<name>.raw` with its sha256 and size.
+  `containers.<name>`: `containers/<name>.raw` with its sha256 and size, and the SBOM
+  lists the root as a `CONTAINER` package of that sha256 containing the packages of
+  `containers/<name>.manifest`.
 
 Not `systemd-nspawn@.service`: it boots an init (`--boot`) and its veth needs a DHCP client
 in the root. A unit with `RootImage=` is one the probe, the hardening ceiling and the

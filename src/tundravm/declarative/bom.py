@@ -9,6 +9,9 @@
 3. Recipe metadata: base, arch, snapshot, mirror, variant, the recipe, tree and
    artifact digests and the tundravm version.
 
+Each container's root (:func:`container`) is one more component: its root image's sha256
+and the packages of its own mkosi manifest, nested under it.
+
 :meth:`Sbom.render` writes SPDX 2.3 JSON; every list is sorted, so the same inputs give
 the same document (apart from the creation time, which ``SOURCE_DATE_EPOCH`` fixes).
 """
@@ -34,7 +37,7 @@ from tundravm.lockfile import LockedFetch
 from ._bake import package_manifest
 from .lifecycle import Artifact, Lock, verify_artifact
 
-ComponentKind = Literal["package", "build", "kernel", "efi-stub"]
+ComponentKind = Literal["package", "build", "kernel", "efi-stub", "container"]
 MANIFEST_VERSION = 1
 """The mkosi manifest version this parser reads (mkosi 26 writes ``manifest_version: 1``)."""
 
@@ -43,20 +46,25 @@ _KIND_ORDER: dict[str, int] = {
     "build": 1,
     "kernel": 2,
     "efi-stub": 3,
+    "container": 4,
 }
 _DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 _FROM_MKOSI_ARCH = {"x86-64": "x86_64", "arm64": "aarch64"}
 _PURL_TYPES = {"deb": "deb", "rpm": "rpm", "pkg": "alpm"}
 _SPDX_ID = re.compile(r"[^A-Za-z0-9.-]+")
+_SOURCE_KINDS = frozenset({"build", "kernel", "efi-stub"})
+_SPDX_PREFIX = {"package": "Package", "container": "Container"}
 _NAMESPACE = uuid.UUID("6f1e0c52-2f6b-5b1c-9a57-7475e6472a76")
 
 
 @dataclass(frozen=True, slots=True)
 class Component:
-    """One thing in the image: a distribution ``package`` or a pinned source.
+    """One thing in the image: a distribution ``package``, a pinned source or a container.
 
     Sources are a ``build`` (a source build), the ``kernel`` built from source
-    (``kernel-<variant>`` when the variant's differs) or the ``efi-stub`` package.
+    (``kernel-<variant>`` when the variant's differs) or the ``efi-stub`` package. A
+    ``container`` is a container's root image: its sha256 is the root's, and *contains*
+    the packages of its manifest.
     """
 
     kind: ComponentKind
@@ -80,6 +88,8 @@ class Component:
     """The image paths a source build installs (its ``Install`` destinations)."""
     declared: bool = False
     """A package the recipe declares, listed because no manifest says what was installed."""
+    contains: tuple[Component, ...] = ()
+    """A container's packages, from its own manifest; empty for anything else."""
 
     @property
     def git(self) -> bool:
@@ -135,7 +145,11 @@ class Sbom:
 
     @property
     def sources(self) -> tuple[Component, ...]:
-        return tuple(c for c in self.components if c.kind != "package")
+        return tuple(c for c in self.components if c.kind not in ("package", "container"))
+
+    @property
+    def containers(self) -> tuple[Component, ...]:
+        return tuple(c for c in self.components if c.kind == "container")
 
     def render(self) -> str:
         """The document as SPDX 2.3 JSON."""
@@ -153,8 +167,12 @@ class Sbom:
         for component in self.components:
             ref = _spdx_id(component)
             packages.append(_spdx_package(component, ref, self._distro()))
-            kind = "CONTAINS" if component.kind == "package" else "GENERATED_FROM"
+            kind = "GENERATED_FROM" if component.kind in _SOURCE_KINDS else "CONTAINS"
             relationships.append(_relation(image, kind, ref))
+            for inner in component.contains:
+                inner_ref = _spdx_id(inner, within=component.name)
+                packages.append(_spdx_package(inner, inner_ref, self._distro()))
+                relationships.append(_relation(ref, "CONTAINS", inner_ref))
         creation: dict[str, Any] = {
             "created": self.created,
             "creators": [f"Tool: tundravm-{self.tundravm_version}"],
@@ -220,7 +238,11 @@ class Sbom:
     def _uuid(self) -> uuid.UUID:
         """A name-based UUID over everything but the creation time: same inputs, same id."""
         payload = json.dumps(
-            [list(self.metadata()), [_key(c) for c in self.components]], sort_keys=True
+            [
+                list(self.metadata()),
+                [[_key(c), [_key(inner) for inner in c.contains]] for c in self.components],
+            ],
+            sort_keys=True,
         )
         return uuid.uuid5(_NAMESPACE, payload)
 
@@ -285,12 +307,28 @@ def parse_manifest(
     return {str(k): str(v) for k, v in config.items()}, tuple(found)
 
 
+def container(name: str, sha256: str, manifest: Path, *, path: str) -> Component:
+    """The ``container`` component of the container *name*: its root image at *path* (in
+    the build directory), whose sha256 is *sha256*, holding the packages of *manifest*,
+    mkosi's manifest of its subimage."""
+    _, packages = read_manifest(manifest)
+    return Component(
+        kind="container",
+        name=name,
+        version=sha256,
+        sha256=sha256,
+        local=path,
+        contains=_sorted(packages),
+    )
+
+
 def sbom(
     artifact: Artifact,
     *,
     lock: Lock | None = None,
     manifest: Path | None = None,
     allow_unbound: bool = False,
+    containers: Iterable[Component] = (),
 ) -> Sbom:
     """The bill of materials of a baked *artifact*.
 
@@ -306,6 +344,7 @@ def sbom(
     (``E_ARTIFACT_CHANGED``). *allow_unbound* accepts them instead, with a note,
     and marks the document incomplete (``bound`` is false). Paths in the document
     are relative to the bake output directory, so moving it changes nothing.
+    *containers* are the image's container roots (:func:`container`), listed as they are.
     """
     verify_artifact(artifact)
     path = manifest_path(artifact) if manifest is None else Path(manifest)
@@ -342,7 +381,7 @@ def sbom(
     sources = () if lock is None else _locked_sources(lock, artifact.profile, profile)
     return Sbom(
         variant=artifact.profile,
-        components=_sorted(packages + sources),
+        components=_sorted((*packages, *sources, *containers)),
         base=base,
         arch=arch,
         snapshot=_opt(distribution.get("snapshot")),
@@ -557,10 +596,14 @@ def _spdx_safe(text: str) -> str:
     return _SPDX_ID.sub("-", text).strip("-") or "x"
 
 
-def _spdx_id(component: Component) -> str:
-    digest = hashlib.sha256(json.dumps(_key(component)).encode()).hexdigest()[:8]
-    prefix = "Package" if component.kind == "package" else "Source"
-    return f"SPDXRef-{prefix}-{_spdx_safe(component.name)}-{digest}"
+def _spdx_id(component: Component, *, within: str = "") -> str:
+    """The component's SPDX id; *within* names the container a package is in, so the same
+    package in the image and in a container are two elements."""
+    keyed: list[object] = [within, *_key(component)] if within else list(_key(component))
+    digest = hashlib.sha256(json.dumps(keyed).encode()).hexdigest()[:8]
+    prefix = _SPDX_PREFIX.get(component.kind, "Source")
+    name = f"{within}-{component.name}" if within else component.name
+    return f"SPDXRef-{prefix}-{_spdx_safe(name)}-{digest}"
 
 
 def _relation(element: str, kind: str, related: str) -> dict[str, str]:
@@ -595,7 +638,14 @@ def _spdx_package(component: Component, ref: str, distro: tuple[str, str]) -> di
     }
     if component.sha256:
         entry["checksums"] = [{"algorithm": "SHA256", "checksumValue": component.sha256}]
-    if component.kind != "package":
+    if component.kind == "container":
+        entry["primaryPackagePurpose"] = "CONTAINER"
+        entry["packageFileName"] = component.local
+        entry["sourceInfo"] = (
+            f"container root image {component.local}, {len(component.contains)} packages "
+            "from its own mkosi manifest"
+        )
+    elif component.kind != "package":
         entry["primaryPackagePurpose"] = "SOURCE" if component.git or component.local else "ARCHIVE"
         if component.local:
             entry["sourceInfo"] = f"{component.kind} from the project directory {component.local}"

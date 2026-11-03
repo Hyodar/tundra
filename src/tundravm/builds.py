@@ -699,7 +699,9 @@ def _assemble(
             context={"workspace": str(work)},
         )
     qemu = _with_package_manifest(by_target["qemu"])
-    sbom_record = _sbom(qemu, locked, img, out)
+    moved: set[Path] = set()
+    containers = _container_roots(img, profile, artifacts, out, moved)
+    sbom_record = _sbom(qemu, locked, img, out, containers)
     packages = _packages(qemu, out)
     tree_src = work / "mkosi"
 
@@ -735,7 +737,6 @@ def _assemble(
         else locked.lockfile.toolchain.payload(),
     }
     mf.write_canonical(inputs / "toolchain.json", toolchain)
-    moved: set[Path] = set()
     for artifact in artifacts:
         _move(artifact.path, out / ARTIFACT_NAMES[artifact.target], moved)
         if artifact.boot_payload is not None:
@@ -743,7 +744,6 @@ def _assemble(
         for split in sorted(Path(artifact.path).parent.glob("payload.*.raw")):
             _move(split, out / split.name, moved)
     kernel = _kernel_records(artifacts, out, moved)
-    containers = _container_roots(img, profile, artifacts, out, moved)
     mf.write_canonical(out / mf.MEASUREMENTS, measurements)
     uki = out / mf.UKI
     root_hash = mf.uki_root_hash(uki) if uki.is_file() else None
@@ -996,13 +996,28 @@ def _with_package_manifest(artifact: Artifact) -> Artifact:
     return replace(artifact, manifest_sha256=mf.sha256_file(found))
 
 
-def _sbom(artifact: Artifact, locked: Lock, img: Lowered, out: Path) -> dict[str, Any]:
-    from .declarative.bom import sbom
+def _sbom(
+    artifact: Artifact,
+    locked: Lock,
+    img: Lowered,
+    out: Path,
+    containers: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Write the SBOM into *out*; each of *containers* (``_container_roots``'s records) with
+    a package manifest is a nested component with its root's sha256."""
+    from .declarative.bom import container, sbom
 
     previous = os.environ.get("SOURCE_DATE_EPOCH")
     os.environ["SOURCE_DATE_EPOCH"] = str(img.epoch or 0)
     try:
-        document = sbom(artifact, lock=locked, manifest=_package_manifest(artifact))
+        roots = [
+            container(name, record["sha256"], out / record["packages"], path=record["path"])
+            for name, record in sorted(containers.items())
+            if "packages" in record
+        ]
+        document = sbom(
+            artifact, lock=locked, manifest=_package_manifest(artifact), containers=roots
+        )
     except TdxError as exc:
         return mf.missing(str(exc).splitlines()[0])
     finally:
