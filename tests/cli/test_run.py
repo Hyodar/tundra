@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 from pathlib import Path
 
@@ -229,7 +230,8 @@ def test_a_deeply_nested_project_runs_with_its_monitor_outside_it(
     root = tmp_path.joinpath(*["a-nested-directory"] * 6, ".tundravm", "instances")
     instance = instances.launch(root, dev_built, mode="simulated", detach=True, out=io.StringIO())
     monitor = Path(str(instance.data["monitor"]))
-    assert len(str(root)) > 108 and monitor.parent == tmp_path / "run" / "tundravm"
+    runtime = Path(os.environ["XDG_RUNTIME_DIR"], "tundravm")
+    assert len(str(root)) > 108 and monitor.parent == runtime
     assert instances.stop(instance) and not monitor.exists()
 
 

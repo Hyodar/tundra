@@ -75,13 +75,6 @@ and a token delivered after attestation."""
 PYPROJECT = '[project]\nname = "demo"\nversion = "0"\n\n[tool.tundravm]\nimage = "demo.py"\n'
 
 
-@pytest.fixture
-def tmp_path(short_tmp_path: Path) -> Path:
-    """A CLI test's project may run an instance whose QEMU monitor socket lives under it:
-    keep the path within AF_UNIX's 108 bytes under ``-n auto`` too."""
-    return short_tmp_path
-
-
 @pytest.fixture(autouse=True)
 def _short_instance_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     """The fake QEMU starts, prints and stops at once, and nothing listens on a deployment's
@@ -181,16 +174,16 @@ monitor's ``quit``."""
 
 
 @pytest.fixture
-def qemu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """The fake ``qemu-system-x86_64`` first on PATH, and fake OVMF images."""
+def qemu(tmp_path: Path, short_tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The fake ``qemu-system-x86_64`` first on PATH, fake OVMF images, and a runtime
+    directory short enough for a monitor socket's 108 bytes under ``-n auto``."""
     bin_dir = tmp_path / "fake-bin"
     bin_dir.mkdir()
     script = bin_dir / "qemu-system-x86_64"
     script.write_text(FAKE_QEMU.format(python=sys.executable))
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    (tmp_path / "run").mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(short_tmp_path))
     fake_ovmf(tmp_path, monkeypatch)
     started: list[int] = []
     real = instances.launch

@@ -48,10 +48,8 @@ def recipe_paths() -> dict[str, Path]:
 
 
 @cache
-def emitted_units(scratch: Path | None = None) -> tuple[tuple[str, str], ...]:
-    """``(recipe:path, text)`` for every unit file of every recipe's emitted tree; every
-    recipe is a file of the example, so *scratch* (the ``emitted_unit_corpus`` fixture's)
-    stays empty."""
+def emitted_units() -> tuple[tuple[str, str], ...]:
+    """``(recipe:path, text)`` for every unit file of every recipe's emitted tree."""
     from tundravm.declarative import compile, load
 
     found: list[tuple[str, str]] = []
