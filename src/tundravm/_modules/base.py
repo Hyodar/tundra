@@ -24,6 +24,7 @@ TOOL_PROGRAMS: Mapping[str, Mapping[str, str]] = {
     },
     "image-metrics": {"systemctl": "systemd"},
     "key-gen": {},
+    "login-menu": {},
     "mode-switch": {"nft": "nftables"},
     "tdxs": {},
 }
