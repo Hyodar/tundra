@@ -23,6 +23,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 | Service sandbox | a compromised service reaching the rest of the guest | kernel exploits; the service's own data and credentials | implemented; each preset's directives are asserted |
 | LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlocked over the attested endpoint |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that binds the secret | implemented |
+| Metrics keep-list | series `export=` does not name leaving the TD, a side channel | the journal, which leaves whole | implemented; the dev probe reads the sink |
 | NTS time | the host setting the guest clock, which certificates and freshness depend on | the host delaying or blocking time traffic | implemented |
 | Fail-closed production profile | a production build starting its services where no TDX quote path exists | a host that offers TDX to a TD you did not approve: that is the verifier's call | proven: CI boots the production fixture without TDX and its services never start |
 
@@ -31,11 +32,10 @@ How the last row works (plan 6.1):
 - Every tree ships `tdx-evidence.service`, a root oneshot. It looks for the `tdx_guest`
   CPU flag, then for `/dev/tdx_guest` or configfs-tsm's report directory, and records
   `tdx` in `/run/tundravm/mode`. Every unit made from a `Service` (a timer's too, and
-  `tdxs.service`) has `Requires=` and `After=` on it. `ConditionSecurity=` is not used: it
-  knows `cvm`, not `tdx`, and a skipped condition does not stop a dependent unit.
+  `tdxs.service`) has `Requires=` and `After=` on it.
 - In a production profile, no quote path fails the gate with
   `tdx-evidence: refused: no TDX quote path` on the console, and systemd starts none of the
-  gated services. There is no fallback.
+  gated services.
 - In a development profile (`dev=`, `Profile(production=False)`), no quote path records
   `simulated`, the services run, and `tdxs` takes the `simulator` issuer the profile ships
   beside the real one, so a dev build attests `simulated` under QEMU. A production profile
@@ -45,15 +45,15 @@ How the last row works (plan 6.1):
   disks, secret delivery: the control plane) and the cloud glue. The console stays readable
   and the management port still answers on a refused boot.
 - The gate checks that a quote path exists, not that a quote verifies: it stops a
-  production build serving where TDX is missing by mistake. What keeps production secrets
+  production build serving where TDX is missing. What keeps production secrets
   from a host you do not trust is the release rule under
   [Delivering secrets](manual.md#delivering-secrets).
 
 The boot probe a development profile carries (`run --probe`) checks from inside the guest
 that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress
 refused, sandboxes under their ceilings, modules, symbols and host keys as declared,
-attested TLS certificates bound. It catches a broken image, not an attacker: it runs inside
-the guest it checks, so a compromised guest can print `ok` for anything. Evidence is the
+attested TLS certificates bound. It catches a broken image, not an attacker: a compromised
+guest can print `ok` for anything. Evidence is the
 quote `attest` verifies. A production profile carries no probe.
 
 ### What the quote covers

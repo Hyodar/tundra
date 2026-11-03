@@ -326,6 +326,9 @@ warns `egress-unfiltered`.
 credential=))` ships the journal and node metrics. Without `url=` each goes to a receiver
 in the guest (`journal-sink`, `metrics-sink`). Once `url=` is set, the delivered credential
 authenticates the export. An `http://` sink warns: it carries the logs in the clear.
+Only the series `export=` names leave (`"health"` is a preset), with the image's
+identity, `tundravm_image_digest`; without it a production profile writing to a `url=`
+is refused.
 `Observability(proxy="IP:PORT")` reaches every sink through that one address.
 
 ### The control plane

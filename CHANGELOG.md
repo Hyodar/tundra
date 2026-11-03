@@ -42,6 +42,8 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Volume` (at `/persistent/<name>`; `unlock=` has no default) with `OperatorKey`, `TpmSeal` or `BrokerKey`; `Secret` as a systemd credential, bound by naming it in argv or `environment=`; `AttestedTLS` and `TLS`; `RootFS.verity()` and `RootFS.initramfs(max_size=)`; `Kernel(cmdline=)`; `Mkosi(settings=, scripts=)`, refusing what the compiler writes.
 - Every image generates a fresh secp256k1 instance key at boot (tmpfs, root-only); `InstanceKey()` (`tundravm.secrets`) hands it to a service as a credential, `instance-key-exposed` refuses anything else naming it, and `run status` and `attest` print its public key while `show` says who takes it.
 - `Generated(name)` (`tundravm.secrets`) is a secret the image writes at boot for the services that bind it, such as the Engine API JWT an execution client and its consensus client share.
+- **Breaking:** `PrometheusRemoteWrite(export=)` is the keep-list of series that leave the TEE: series names and the `health` preset, dropped otherwise by `write_relabel_configs`; without it the agent keeps `health`, and `observability-export-unset` refuses a production profile that writes to a `url=`.
+- The metrics export always carries the image's identity, which `image-metrics` (`tools/cmd/image-metrics`) writes for the node exporter: `tundravm_image_digest` (the UKI's Authenticode SHA-384 RTMR1's event log records, and the image's name), `tundravm_image_rtmr`, `tundravm_mode`; `health` also keeps `tundravm_system_state` and `tundravm_units_failed`.
 - `JournalExport()` and `PrometheusRemoteWrite()` without `url=` ship to a receiver in the guest (`journal-sink`, Debian's `systemd-journal-remote`; `metrics-sink`, Prometheus's remote-write receiver), both on the loopback, so a dev boot shows each export working; the credential binds once `url=` names the deployment's receiver, and a production profile reports `observability-sink-unset` until then.
 - **Breaking:** a relative host path in an image file (`File.copy(src, ...)`, `Tree(src, ...)`, `Kernel.build(config=, patches=)`, `AptRepository(key=Path(...))`) is beside the file that declares it, as `Local` is, not the working directory, so a build reads the same files from any directory.
 - An image file imports modules from its own directory and its project's (the nearest `pyproject.toml`), from any working directory: a project carries its own components.
@@ -67,7 +69,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `show --diff OLD NEW` compares two image files too, and prints only the lines that differ, section by section; with a build, `show` prints its report and boot probe checks.
 - `dev [IMAGE]` is the inner loop as one verb: `build --dev` when the image, the lock or a `Local` source's content changed since the latest development build (it says which, else reuses that build), then `run --mode simulated --probe` on it and the console until Ctrl-C stops the instance; `--no-follow` returns after the probe; `new`, the quickstart and the README print it.
 - `run --mode simulated|tdx` is explicit, and a production build boots fail-closed without TDX; `run --probe` and `run probe INSTANCE` read the boot probe every development profile carries, write `probe.json` and exit 1 on a failed check.
-- With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded.
+- With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded, and that a loopback metrics sink holds `tundravm_image_digest` and no series the keep-list drops (`observability:series`).
 - `run` forwards, and `deploy`'s firewall line names, 8745 only where the image's firewall opens it.
 - A local instance's QEMU monitor listens in `$XDG_RUNTIME_DIR/tundravm` (else `/tmp/tundravm-<uid>`, refused unless only you can enter it), named in the receipt, not under the project, so a deeply nested project can start one.
 - `deploy azure|gcp --build BUILD` never guesses the build; `upgrade` and `rollback` replace a GCP instance and move its volumes.
@@ -119,7 +121,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces `service-command-not-shipped`: a service's program must be something the image ships.
 - **Breaking:** `source-unpinned` is image-wide, subject `sources.NAME`.
-- New: `egress-unfiltered`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`.
+- New: `egress-unfiltered`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.
 
 ### Docs
