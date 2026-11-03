@@ -73,13 +73,14 @@ replays them, and a policy's `"modes": ["production"]` refuses an instance that 
 another mode; without `Firewall(modes=)` it is outside the policy. MRTD and RTMR0 values
 carry the firmware they belong to, and values from different firmware never match.
 
-Every UKI package comes from one pinned Debian snapshot; a moved snapshot is a new image.
+Every UKI package, `Container` roots included, comes from one pinned Debian snapshot;
+a moved snapshot is a new image.
 
 `attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
 quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
 value. For a production build, a TD with the `DEBUG` attribute is `untrusted` and simulated
 evidence never passes. Without a validator the best verdict is `measurements-match`: the registers match,
-but nobody checked that a TDX module signed them. With a register missing it is `partial`,
+but nobody checked that a TDX module signed them. A missing register makes it `partial`,
 which never releases a secret. For `qemu`, approve MRTD and RTMR0 in the policy's
 `platform_approval` from a quote of a host you trust.
 

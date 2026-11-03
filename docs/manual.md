@@ -235,6 +235,7 @@ project's.
 | `SshAccess` | root SSH by public key, keys baked or delivered; `login=` for others | `port` |
 | `DevAccess` | debug access, only in the `dev` profile | none |
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
+| `Container` | a program in a Debian root of its own, with no network | `unit`, `image` |
 
 `SshAccess(login=Login("tenant", keys=[...], command="/usr/bin/app-status", sudo=[Sudo("/usr/bin/systemctl restart app")]))`
 lets an account other than root in with its own keys, baked or a delivered `Secret`, into its forced
@@ -247,6 +248,13 @@ them. `Tdxs` and the volume and delivery tools build from `tools/` of tundravm's
 at the installed commit. `Tdxs(source=Git(mirror, commit, subdir="tools"))` points every
 one of them at a mirror. `Tdxs.from_policy(policy)` also validates quotes against the
 registers of an image you trust.
+
+`Container("web", argv, packages=[...], files=[...], state=, expose=[TCP(8081)])` builds
+its root as the subimage `mkosi.images/web/` from the image's snapshot. The payload ships
+it as `/usr/lib/tundravm/containers/web.raw`, and the manifest records its sha256. The
+program runs from that root as its own user, in a network namespace holding only `lo`.
+Each exposed port is relayed in from the host. Nothing is pulled at boot. An OCI reference,
+a non-empty `egress=` and a shell in production (`container-shell`) are refused.
 
 ## Profiles
 

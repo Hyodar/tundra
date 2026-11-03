@@ -64,6 +64,9 @@ client can tell that a signature came from this TD.
 **Ingress.** A port that takes outside requests and relays them to a service on the
 loopback.
 
+**Container.** A program in a Debian root of its own, built with the image from the same
+snapshot, with no network beyond the ports relayed into it.
+
 ## After the stages
 
 **Lock.** `build/tundravm.lock` pins every input: the Debian snapshot, each source's commit
