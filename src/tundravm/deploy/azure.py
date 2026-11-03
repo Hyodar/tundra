@@ -4,6 +4,12 @@ Uploads a VHD artifact to Azure, publishes it as a confidential-VM-capable
 Compute Gallery image version and creates a confidential VM from it.
 Requires the `az` CLI to be installed and authenticated.
 
+Each volume's disk is attached at the LUN its image recorded (``NAME@LUN=create:SIZE`` or
+``NAME@LUN=existing:ID`` in ``volumes``): a ``create`` disk is made first with ``az disk
+create``, then ``az vm create --attach-data-disks`` takes every disk in LUN order, which
+azure-cli attaches at LUN 0, 1, ... (``normalize_disk_info``, azure-cli ``18663606``), so
+the disks are there at first boot. Each is detached, never deleted, with the VM.
+
 The VM gets no network security group rule (``--nsg-rule NONE``): the image's firewall
 decides what is open, and Azure's default SSH rule would contradict it. The receipt records
 the public address ``az vm create`` prints.
@@ -17,6 +23,7 @@ firmware trusts; without it the deploy fails before anything is uploaded.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 
@@ -56,6 +63,7 @@ class AzureDeployAdapter:
         gallery = params.pop("gallery", DEFAULT_GALLERY)
         secure_boot = params.pop("secure_boot", "false").lower() == "true"
         signed = params.pop("signed", "false").lower() == "true"
+        volumes = attachments(params.pop("volumes", ""))
         if secure_boot and not signed:
             raise DeploymentError(
                 "Secure Boot needs a signed image; this one is not declared signed.",
@@ -211,6 +219,35 @@ class AzureDeployAdapter:
             "Check the uploaded blob is a fixed-size VHD and the gallery is in its region.",
         )
 
+        disks: dict[str, str] = {}
+        for _, name, how, value in volumes:
+            if how == "existing":
+                disks[name] = value
+                continue
+            disks[name] = self._az(
+                [
+                    "disk",
+                    "create",
+                    "--resource-group",
+                    resource_group,
+                    "--name",
+                    f"{request.profile}-{name}-{self.fresh.hex(6)}",
+                    "--location",
+                    location,
+                    "--size-gb",
+                    value,
+                    "--query",
+                    "id",
+                ],
+                f"Azure disk creation for volume {name} failed.",
+                "Check the resource group and the region's disk quota.",
+            )
+        attach = (
+            ["--attach-data-disks", *disks.values(), "--data-disk-delete-option", "Detach"]
+            if disks
+            else []
+        )
+
         # Create VM from the gallery image version
         vm_name = f"tdx-{request.profile}-{self.fresh.hex(6)}"
         created = self._az(
@@ -240,6 +277,7 @@ class AzureDeployAdapter:
                 "Standard",
                 "--nsg-rule",
                 "NONE",
+                *attach,
                 "--output",
                 "json",
             ],
@@ -257,6 +295,7 @@ class AzureDeployAdapter:
             "blob": f"{CONTAINER}/{blob_name}",
             "image": image_id,
             "public_ip": _public_ip(created),
+            **({"disks": disks, "luns": {n: lun for lun, n, _, _ in volumes}} if disks else {}),
             **params,
         }
 
@@ -298,6 +337,42 @@ class AzureDeployAdapter:
                 context={"command": " ".join(cmd), "stdout": text[:2000]},
             )
         return value
+
+
+_SIZE = re.compile(r"([1-9][0-9]*)(G|GB|GiB|T|TB|TiB)?")
+
+
+def attachments(text: str) -> list[tuple[int, str, str, str]]:
+    """``NAME@LUN=create:SIZE;NAME@LUN=existing:ID`` as ``(lun, name, how, value)`` in LUN
+    order, a size in whole GiB (Azure's GB): ``100``, ``100GiB``, ``2TiB``. The LUNs are
+    0, 1, ...: what ``--attach-data-disks`` gives the disks in that order."""
+    found: list[tuple[int, str, str, str]] = []
+    for item in filter(None, (part.strip() for part in text.split(";"))):
+        head, _, spec = item.partition("=")
+        name, _, lun = head.partition("@")
+        how, _, value = spec.partition(":")
+        if how not in ("create", "existing") or not lun.isdigit() or not value:
+            raise DeploymentError(
+                f"Invalid volume {item!r}.",
+                hint="Write NAME@LUN=create:SIZE or NAME@LUN=existing:ID.",
+            )
+        if how == "create":
+            size = _SIZE.fullmatch(value)
+            if size is None:
+                raise DeploymentError(
+                    f"Volume {name}: {value!r} is not a size Azure takes.",
+                    hint="Give whole GiB or TiB: --volume data=create:100GiB.",
+                )
+            value = str(int(size[1]) * (1024 if (size[2] or "G").startswith("T") else 1))
+        found.append((int(lun), name, how, value))
+    found.sort()
+    luns = [lun for lun, *_ in found]
+    if luns != list(range(len(found))):
+        raise DeploymentError(
+            f"The volumes' LUNs are {luns}, not 0 to {len(found) - 1}.",
+            hint="Attach every volume the image declares: each one's LUN is its position.",
+        )
+    return found
 
 
 def _public_ip(text: str) -> str:

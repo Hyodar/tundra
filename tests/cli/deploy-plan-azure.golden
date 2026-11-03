@@ -1,24 +1,26 @@
-plan: deploy demo {build} (production) to azure; nothing runs
+plan: deploy prover {build} (production) to azure; nothing runs
   XXXXXXXX, EPOCH and <the id call N prints> stand for what the deploy draws or reads
-1. upload    {root}/build/demo/production/{build}/azure.vhd, {size} bytes, sha256 {sha256}
+1. upload    {root}/build/prover/production/{build}/azure.vhd, {size} bytes, sha256 {sha256}
       to https://acct.blob.core.windows.net/tdx-images/azure-XXXXXXXX.vhd
-2. image     tdx-demo 1.0.EPOCH in gallery tdx_images (tdx-vms), SecurityType=ConfidentialVMSupported
-3. instance  tdx-demo-XXXXXX, Standard_DC2es_v5 in eastus: --security-type=ConfidentialVM --os-disk-security-encryption-type=VMGuestStateOnly --enable-vtpm=true --enable-secure-boot=false
-4. volumes   none
-5. firewall  allow tcp:8080 to the VM (not managed by tundravm)
-6. policy    none written; attest --policy takes {root}/build/demo/production/{build}/measurements.json (azure/disk) or an approved copy:
+2. image     tdx-prover 1.0.EPOCH in gallery tdx_images (tdx-vms), SecurityType=ConfidentialVMSupported
+3. instance  tdx-prover-XXXXXX, Standard_DC2es_v5 in eastus: --security-type=ConfidentialVM --os-disk-security-encryption-type=VMGuestStateOnly --enable-vtpm=true --enable-secure-boot=false
+4. volumes   data: new 100GiB at LUN 0
+5. firewall  allow tcp:22,443,8745 to the VM (not managed by tundravm)
+6. policy    none written; attest --policy takes {root}/build/prover/production/{build}/measurements.json (azure/disk) or an approved copy:
       MRTD, RTMR0, RTMR1, RTMR2 unverifiable: Azure: the paravisor owns the TD, so the TDX quote measures Azure's firmware, not this image; the image is measured into the vTPM (vtpm_pcrs)
       vTPM PCR4 {PCR4}
       vTPM PCR9 {PCR9}
       vTPM PCR11 {PCR11}
-7. receipt   {root}/.tundravm/instances/demo-N/instance.json
-8. status    `az vm get-instance-view --name tdx-demo-XXXXXX --resource-group tdx-vms --output json`,
-      then tcp none (control plane) and 8080 (application)
+7. receipt   {root}/.tundravm/instances/prover-N/instance.json
+8. status    `az vm get-instance-view --name tdx-prover-XXXXXX --resource-group tdx-vms --output json`,
+      then tcp 8745 (control plane) and 443 (application)
 calls:
 1. az storage container create --account-name acct --name tdx-images --output json
-2. az storage blob upload --account-name acct --container-name tdx-images --name azure-XXXXXXXX.vhd --file {root}/build/demo/production/{build}/azure.vhd --type page --output json
+2. az storage blob upload --account-name acct --container-name tdx-images --name azure-XXXXXXXX.vhd --file {root}/build/prover/production/{build}/azure.vhd --type page --output json
 3. az storage account show --name acct --query id --output json
 4. az sig create --resource-group tdx-vms --gallery-name tdx_images --location eastus --output json
-5. az sig image-definition create --resource-group tdx-vms --gallery-name tdx_images --gallery-image-definition tdx-demo --location eastus --publisher tundravm --offer demo --sku demo --os-type Linux --os-state specialized --hyper-v-generation V2 --features SecurityType=ConfidentialVMSupported --output json
-6. az sig image-version create --resource-group tdx-vms --gallery-name tdx_images --gallery-image-definition tdx-demo --gallery-image-version 1.0.EPOCH --location eastus --os-vhd-storage-account '<the id call 3 prints>' --os-vhd-uri https://acct.blob.core.windows.net/tdx-images/azure-XXXXXXXX.vhd --query id --output json
-7. az vm create --resource-group tdx-vms --name tdx-demo-XXXXXX --location eastus --size Standard_DC2es_v5 --image '<the id call 6 prints>' --specialized --security-type ConfidentialVM --os-disk-security-encryption-type VMGuestStateOnly --enable-vtpm true --enable-secure-boot false --public-ip-sku Standard --nsg-rule NONE --output json
+5. az sig image-definition create --resource-group tdx-vms --gallery-name tdx_images --gallery-image-definition tdx-prover --location eastus --publisher tundravm --offer prover --sku prover --os-type Linux --os-state specialized --hyper-v-generation V2 --features SecurityType=ConfidentialVMSupported --output json
+6. az sig image-version create --resource-group tdx-vms --gallery-name tdx_images --gallery-image-definition tdx-prover --gallery-image-version 1.0.EPOCH --location eastus --os-vhd-storage-account '<the id call 3 prints>' --os-vhd-uri https://acct.blob.core.windows.net/tdx-images/azure-XXXXXXXX.vhd --query id --output json
+7. az disk create --resource-group tdx-vms --name prover-data-XXXXXX --location eastus --size-gb 100 --query id --output json
+8. az vm create --resource-group tdx-vms --name tdx-prover-XXXXXX --location eastus --size Standard_DC2es_v5 --image '<the id call 6 prints>' --specialized --security-type ConfidentialVM --os-disk-security-encryption-type VMGuestStateOnly --enable-vtpm true --enable-secure-boot false --public-ip-sku Standard --nsg-rule NONE --attach-data-disks '<the id call 7 prints>' --data-disk-delete-option Detach --output json
+9. az vm show --name tdx-prover-XXXXXX --resource-group tdx-vms --output json

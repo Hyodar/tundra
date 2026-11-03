@@ -75,6 +75,7 @@
         "Output": "payload",
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
+          "azure-vm-utils",
           "busybox",
           "ca-certificates",
           "chrony",
@@ -298,6 +299,7 @@
         "Output": "payload",
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
+          "azure-vm-utils",
           "busybox",
           "ca-certificates",
           "chrony",

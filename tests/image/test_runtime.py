@@ -163,6 +163,40 @@ def test_a_tpm_sealed_volume_is_a_vtpm_key_and_no_operator_bootstrap() -> None:
     assert manifest["control_plane"] is None
 
 
+AZURE_VOLUME_RULES = """\
+# tundravm: each volume is the Azure data disk at its LUN (deploy azure attaches it
+# there); azure-vm-utils' 80-azure-disk.rules names that disk by-lun.
+ACTION!="add|change", GOTO="tundravm_azure_volumes_end"
+SUBSYSTEM!="block", GOTO="tundravm_azure_volumes_end"
+ENV{DEVTYPE}!="disk", GOTO="tundravm_azure_volumes_end"
+SYMLINK=="disk/azure/data/by-lun/0", SYMLINK+="disk/by-id/azure-tundravm-data"
+SYMLINK=="disk/azure/data/by-lun/1", SYMLINK+="disk/by-id/azure-tundravm-logs"
+LABEL="tundravm_azure_volumes_end"
+"""
+
+
+@pytest.mark.parametrize("targets", [("qemu", "azure"), ("qemu", "gcp")])
+def test_on_azure_each_volume_is_the_data_disk_at_its_position(targets: tuple[str, ...]) -> None:
+    logs = Volume("logs", mount="/var/log/b", unlock=OperatorKey())
+    image = Image(
+        "x",
+        services=[
+            Service("a", ["/usr/bin/a"], state=data.directory("a")),
+            Service("b", ["/usr/bin/b"], state=logs.directory("b")),
+        ],
+        targets=targets,  # type: ignore[arg-type]
+    )
+    planned = plan(image, "production")
+    volumes = json.loads(planned.file("/etc/tundravm/runtime.json").text)["volumes"]
+    rules = "/usr/lib/udev/rules.d/81-tundravm-azure-volumes.rules"
+    if "azure" in targets:
+        assert planned.file(rules).text == AZURE_VOLUME_RULES
+        assert [(v["name"], v["lun"]) for v in volumes] == [("data", 0), ("logs", 1)]
+        assert planned.packages["azure-vm-utils"] == "runtime"
+    else:
+        assert rules not in planned.files and all("lun" not in v for v in volumes)
+
+
 @pytest.mark.parametrize(
     ("platform", "targets", "message"),
     [

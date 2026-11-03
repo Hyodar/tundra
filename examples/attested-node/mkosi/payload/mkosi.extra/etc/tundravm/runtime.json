@@ -21,6 +21,7 @@
         "/persistent/data/nethermind"
       ],
       "filesystem": "ext4",
+      "lun": 0,
       "mount": "/persistent/data",
       "name": "data",
       "pipe": "/run/tundravm/unlock/data",

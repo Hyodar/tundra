@@ -3,10 +3,12 @@
 ``tundravm.declarative.state`` installs :data:`AZURE_PACKAGES`, ships the provisioning
 script and its unit and enables the unit in every payload of a recipe that targets
 ``azure`` (the unit is inert elsewhere); the ``azure`` wrapper image converts the disk.
+An image with volumes also ships :func:`volume_rules`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -16,9 +18,40 @@ WIRESERVER = "168.63.129.16"
 """Azure's wire server, which the provisioning script reports health to. Only that unit
 reaches it (``egress=``)."""
 
-AZURE_PACKAGES = ("curl", "dmidecode")
+AZURE_PACKAGES = ("azure-vm-utils", "curl", "dmidecode")
 """What the provisioning script runs: ``dmidecode`` to tell Azure from elsewhere, ``curl``
-for the wireserver. Without ``curl`` the VM never reports ready and Azure fails it."""
+for the wireserver. Without ``curl`` the VM never reports ready and Azure fails it.
+``azure-vm-utils`` names Azure's disks (:data:`BY_LUN`); it ships no unit."""
+
+# ---------------------------------------------------------------------------
+# Data disks: a volume is the disk attached at its LUN
+# ---------------------------------------------------------------------------
+
+BY_LUN = "/dev/disk/azure/data/by-lun/"
+"""Where ``azure-vm-utils``' ``80-azure-disk.rules`` names each data disk by its LUN, for
+SCSI and NVMe disks alike. They match Microsoft's disk models only."""
+
+VOLUME_RULES_PATH = "/usr/lib/udev/rules.d/81-tundravm-azure-volumes.rules"
+
+
+def volume_rules(serials: Sequence[str]) -> str:
+    """The udev rules that give the data disk at LUN *i* the name the volume whose
+    attachment name is ``serials[i]`` waits for, ``/dev/disk/by-id/azure-<serial>``. They
+    run after ``80-azure-disk.rules``, whose ``by-lun`` link they match."""
+    lines = [
+        "# tundravm: each volume is the Azure data disk at its LUN (deploy azure attaches it",
+        "# there); azure-vm-utils' 80-azure-disk.rules names that disk by-lun.",
+        'ACTION!="add|change", GOTO="tundravm_azure_volumes_end"',
+        'SUBSYSTEM!="block", GOTO="tundravm_azure_volumes_end"',
+        'ENV{DEVTYPE}!="disk", GOTO="tundravm_azure_volumes_end"',
+    ]
+    lines += [
+        f'SYMLINK=="{BY_LUN.removeprefix("/dev/")}{lun}", SYMLINK+="disk/by-id/azure-{serial}"'
+        for lun, serial in enumerate(serials)
+    ]
+    lines.append('LABEL="tundravm_azure_volumes_end"')
+    return "\n".join(lines) + "\n"
+
 
 # ---------------------------------------------------------------------------
 # Azure provisioning completion script

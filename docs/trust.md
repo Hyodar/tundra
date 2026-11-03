@@ -139,7 +139,7 @@ the client or the upstream. No TDX host has run it yet (gate 2).
 | Local QEMU, `--mode simulated` | boots `qemu.raw` through OVMF, KVM or TCG; a development build's services run, and CI fetches a page through one | no TDX; evidence is `simulated`; a production build boots fail-closed |
 | Local TDX host, `--mode tdx` | boots TDVF with a `tdx-guest` object where `doctor --for tdx` is ready | no real quote recorded; MRTD and RTMR0 need operator approval |
 | GCP | `deploy`, volumes as device `tundravm-NAME`, `deploy upgrade` and `rollback`, full register predictions | tested against a fake `gcloud` only; no GCP deployment or quote recorded; tundravm creates no firewall rules |
-| Azure | `deploy` of an image without volumes | volumes (data disks are named by LUN); `attest`, which is TDX-only and refuses Azure; `upgrade` |
+| Azure | `deploy`, volumes as data disks at their LUNs | tested against a fake `az` only; the by-lun names are unproven on a real VM; `attest`, which is TDX-only and refuses Azure; `upgrade` |
 | Apple Silicon | builds in an emulated x86-64 Lima guest, same bytes | speed: several times slower than x86-64 |
 
 More limits that are not platform-specific:

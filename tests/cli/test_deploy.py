@@ -133,11 +133,65 @@ def test_every_declared_volume_needs_a_disk(
     assert not any("create" in call and "instances" in call for call in cloud.calls)
 
 
-def test_azure_cannot_attach_a_volume(prover_build: Build, cli: Cli, cloud: RecordedCloud) -> None:
-    result = cli("deploy", "azure", "--build", "latest", "--volume", "data=existing:disk-1")
-    assert result.code == EXIT_ERROR
-    assert "identified by LUN" in result.err
-    assert cloud.calls == []
+DISK = (
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms"
+    "/providers/Microsoft.Compute/disks/prover-data-000003"
+)
+AZURE_VOLUMES = [
+    (
+        "data=create:100GiB",
+        EXIT_OK,
+        [
+            "az disk create --resource-group tdx-vms --name prover-data-000003 --location eastus "
+            "--size-gb 100 --query id --output json",
+            f"--attach-data-disks {DISK} --data-disk-delete-option Detach --output json",
+            "az vm show --name tdx-prover-000004 --resource-group tdx-vms --output json",
+        ],
+        "deployed",
+    ),
+    (
+        "data=existing:prover-data-000003",
+        EXIT_OK,
+        [
+            "--attach-data-disks prover-data-000003 --data-disk-delete-option Detach --output json",
+            "az vm show --name tdx-prover-000003 --resource-group tdx-vms --output json",
+        ],
+        "deployed",
+    ),
+    ("logs=create:1G", EXIT_ERROR, [], "declares no volume logs"),
+    (
+        "data=existing:other-disk",
+        EXIT_ERROR,
+        [
+            "--attach-data-disks other-disk --data-disk-delete-option Detach --output json",
+            "az vm show --name tdx-prover-000003 --resource-group tdx-vms --output json",
+        ],
+        "Azure reports the data disks {0: 'prover-data-000003'} by LUN, not {0: 'other-disk'}",
+    ),
+]
+
+
+@pytest.mark.parametrize(("volume", "code", "calls", "shown"), AZURE_VOLUMES)
+def test_azure_attaches_each_volume_at_its_lun(
+    prover_build: Build,
+    prover: Path,
+    cli: Cli,
+    cloud: RecordedCloud,
+    volume: str,
+    code: int,
+    calls: list[str],
+    shown: str,
+) -> None:
+    """The disk calls of ``deploy azure``: a new disk, then every disk attached at create in
+    LUN order and the LUNs read back; an undeclared volume or another disk at the LUN is
+    refused."""
+    result = cli("deploy", "azure", "--build", "latest", "--volume", volume)
+    assert result.code == code and shown in result.out + result.err, result.err
+    made = [c for c in cloud.take() if c.startswith(("az disk", "az vm"))]
+    assert [c if "vm create" not in c else c.split("NONE ", 1)[1] for c in made] == calls
+    if code == EXIT_OK:
+        receipt = json.loads((prover / ".tundravm/instances/prover-1/instance.json").read_text())
+        assert receipt["volumes"]["data"]["lun"] == 0
 
 
 def test_a_build_without_the_target_is_refused(built: Build, cli: Cli) -> None:
@@ -237,24 +291,17 @@ PLAN_SETTINGS = {
 def test_plan_prints_every_step_and_call_and_runs_none(
     target: str, request: pytest.FixtureRequest, cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The plan of the prover on GCP (its volume a new disk) and of the starter on Azure,
-    compared with ``deploy-plan-TARGET.golden`` beside this file once the build's own values
-    are named (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it); ``--json`` holds the same calls."""
+    """The plan of the prover, its volume a new disk, on GCP and on Azure, compared with
+    ``deploy-plan-TARGET.golden`` beside this file once the build's own values are named
+    (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites it); ``--json`` holds the same calls."""
 
     def refuse(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         raise AssertionError(f"--plan ran {list(argv)}")
 
     for module in ("deployments", "deploy.gcp", "deploy.azure"):
         monkeypatch.setattr(f"tundravm.{module}.run_captured", refuse)
-    if target == "gcp":
-        root: Path = request.getfixturevalue("prover")
-        volumes: tuple[str, ...] = ("--volume", "data=create:100GiB")
-    else:
-        root = request.getfixturevalue("project")
-        (root / "demo.py").write_text(
-            STARTER.replace("    dev=DevAccess", '    targets=("azure",),\n    dev=DevAccess')
-        )
-        volumes = ()
+    root: Path = request.getfixturevalue("prover")
+    volumes = ("--volume", "data=create:100GiB")
     with (root / "pyproject.toml").open("a") as handle:
         handle.write(PLAN_SETTINGS[target])
     assert cli("lock").code == EXIT_OK

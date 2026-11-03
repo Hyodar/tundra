@@ -1262,7 +1262,7 @@ A persistent, encrypted volume: `Volume("data", unlock=...)`.
 | `Volume.manifest() -> dict[str, object]` | The volume as the runtime manifest records it. |
 | `Volume.pipe` | The FIFO an operator (or a broker client) writes the passphrase into. |
 | `Volume.ready` | "It is open, mounted, and its directories exist". |
-| `Volume.serial` | The attachment name: QEMU's `serial=`, GCP's device name. |
+| `Volume.serial` | The attachment name: QEMU's `serial=`, GCP's device name, Azure's LUN link. |
 | `Volume.step` | The runtime-init step that prepares the volume's directories once it is open. |
 
 ### `VolumeDirectory`

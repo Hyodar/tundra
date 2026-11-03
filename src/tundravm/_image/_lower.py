@@ -177,6 +177,7 @@ class _Lowering:
             ssh=self.explicit(SshAccess),
             rootfs=image.rootfs.layout,
             switchable=bool(getattr(self.explicit(Firewall), "modes", None)),
+            azure="azure" in image.targets,
         )
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
         self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev))

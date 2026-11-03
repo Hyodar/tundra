@@ -6,7 +6,8 @@ values become the declarations the tools and systemd already understand:
 - a volume is a ``Key`` (``key-gen``: a FIFO for ``OperatorKey``/``BrokerKey``, a
   vTPM-persisted random key for ``TpmSeal``) and a LUKS2 ``Disk`` (``disk-setup``, found
   by its ``/dev/disk/by-id/`` name, formatted only while uninitialised), plus a boot step
-  that creates the directories services bind, owned by them;
+  that creates the directories services bind, owned by them; on Azure a udev rule gives
+  that name to the data disk at the volume's LUN, its position in the image's volumes;
 - the secrets are entries of one ``Secrets`` block whose targets are files under
   ``/run/tundravm/credentials``, written by the attested endpoint on a session whose TLS
   key a fresh quote bound, plus one boot unit per secret that finishes once it has arrived;
@@ -36,6 +37,7 @@ from dataclasses import dataclass
 
 from tundravm._location import declared_at, display_location
 from tundravm._modules import attested_tls
+from tundravm._platforms import azure
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
 from tundravm.declarative.systemd import Dynamic, Hardening, Root
@@ -231,6 +233,8 @@ class Runtime:
     on instead of a second one."""
     switchable: bool = False
     """The firewall has modes, which an operator switches over the attested endpoint."""
+    azure: bool = False
+    """The image targets Azure: each volume is the data disk at its LUN, its position."""
 
     @property
     def control_plane(self) -> bool:
@@ -320,6 +324,9 @@ class Runtime:
             found.append(dm.RuntimeTools(self.tools))
         for volume in self.volumes:
             found.extend(self.volume(volume))
+        if self.azure and self.volumes:
+            rules = azure.volume_rules([volume.serial for volume in self.volumes])
+            found.append(dm.File(azure.VOLUME_RULES_PATH, rules))
         found.extend(_generate(item) for item in self.generated())
         if self.control_plane:
             found.extend(self.delivery())
@@ -490,9 +497,11 @@ class Runtime:
             for secret in self.secrets
         ]
         volumes = []
-        for volume in self.volumes:
+        for lun, volume in enumerate(self.volumes):
             entry = volume.manifest()
             entry["device"] = volume.device
+            if self.azure:
+                entry["lun"] = lun
             if not isinstance(volume.unlock, TpmSeal):
                 entry["pipe"] = volume.pipe
             entry["directories"] = sorted(self.directories(volume))

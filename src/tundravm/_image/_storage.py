@@ -34,7 +34,8 @@ __all__ = [
 ]
 
 SERIAL_PREFIX = "tundravm-"
-"""Every volume's attachment name starts with it: a QEMU ``serial=``, a GCP device name."""
+"""Every volume's attachment name starts with it: a QEMU ``serial=``, a GCP device name, the
+name an Azure image gives the data disk at the volume's LUN."""
 
 TPM_PLATFORMS: dict[str, str] = {
     "azure": "Azure's paravisor vTPM, inside the TD's trust boundary on Azure TDX VMs",
@@ -161,7 +162,9 @@ class Volume(Located):
     size and the disk itself are deployment configuration (``deploy --volume
     data=create:100GiB``). The attachment is found by name: QEMU's ``serial=`` or GCP's
     device name ``tundravm-<name>`` (:attr:`serial`), through ``/dev/disk/by-id/``, never
-    by probe order. It is LUKS2 with an *filesystem* inside (ext4, the one ``disk-setup``
+    by probe order. On Azure the disk at the volume's LUN, its position among the image's
+    volumes, gets that name; a disk whose header names another volume is not opened. It
+    is LUKS2 with an *filesystem* inside (ext4, the one ``disk-setup``
     formats), formatted only while it carries no initialisation token: an unlock failure
     is never permission to format. Backup, resize and rollback protection are not
     provided.
@@ -217,7 +220,7 @@ class Volume(Located):
 
     @property
     def serial(self) -> str:
-        """The attachment name: QEMU's ``serial=``, GCP's device name."""
+        """The attachment name: QEMU's ``serial=``, GCP's device name, Azure's LUN link."""
         return f"{SERIAL_PREFIX}{self.name}"
 
     @property

@@ -6,9 +6,10 @@ volumes it attached and the firewall rule the management port needs (tundravm do
 create cloud firewall rules). Settings come from ``[tool.tundravm.gcp]`` /
 ``[tool.tundravm.azure]`` or ``TUNDRAVM_GCP_*`` / ``TUNDRAVM_AZURE_*``
 (:func:`tundravm.project.deployment_table`). Every volume the image declares must be
-given: ``NAME=create:SIZE`` or ``NAME=existing:ID``; GCP attaches each as device
-``tundravm-NAME``; Azure is refused (its data disks are identified by LUN, which no
-``/dev/disk/by-id/*-tundravm-NAME`` the image waits for can match).
+given: ``NAME=create:SIZE`` or ``NAME=existing:ID``. GCP attaches each as device
+``tundravm-NAME``. Azure attaches each at the LUN the image recorded, its position in the
+image's volumes, which the image names ``/dev/disk/by-id/azure-tundravm-NAME``; the deploy
+reads the LUNs back from ``az vm show`` and fails when Azure put another disk there.
 
 :func:`upgrade` and :func:`rollback` run plan 6.8's one replacement workflow on GCP, in
 order, each step a receipt: launch the candidate without volumes, attest it and deliver
@@ -103,22 +104,60 @@ def _request(
     artifact = build.artifact(target)
     if not volumes_later:
         _check_volumes(build, volumes)
-    if target == "azure" and volumes:
-        raise DeploymentError(
-            "Azure cannot attach a volume the image can find.",
-            hint="Azure data disks are identified by LUN; the image waits for "
-            "/dev/disk/by-id/*-tundravm-NAME, which only GCP's device names and QEMU serials "
-            "give. Deploy this image to GCP, or drop its volumes.",
-        )
     params = deployment_table(target)
+    luns = _luns(build) if target == "azure" else {}
     if volumes:
-        params["volumes"] = ";".join(f"{n}={how}:{v}" for n, (how, v) in sorted(volumes.items()))
+        params["volumes"] = ";".join(
+            f"{n}{f'@{luns[n]}' if luns else ''}={how}:{v}"
+            for n, (how, v) in sorted(volumes.items())
+        )
     return DeployRequest(
         profile=build.image,
         target=target,  # type: ignore[arg-type]
         artifact_path=artifact,
         parameters=params,
     )
+
+
+def _luns(build: Build) -> dict[str, int]:
+    """Each volume's Azure LUN, as the build's runtime manifest records it."""
+    luns: dict[str, int] = {}
+    for volume in build.runtime().get("volumes", ()):
+        if not isinstance(volume.get("lun"), int):
+            raise DeploymentError(
+                f"Build {build.id} records no Azure LUN for volume {volume['name']}.",
+                hint="Rebuild it: an image that targets azure records each volume's LUN.",
+            )
+        luns[str(volume["name"])] = volume["lun"]
+    return luns
+
+
+def _attached(cloud: Mapping[str, Any], runner: CommandRunner | None) -> dict[int, str]:
+    """The data disks the Azure VM reports, by LUN, each by its lowercase disk name (empty
+    when the answer is not one)."""
+    try:
+        text = _call(runner, [*_az(cloud, "show"), "--output", "json"], "Describing the VM")
+        disks = json.loads(text)["storageProfile"]["dataDisks"]
+        return {int(d["lun"]): str(d["name"]).lower() for d in disks}
+    except (DeploymentError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def _check_luns(instance: Instance, runner: CommandRunner | None) -> None:
+    cloud = _cloud(instance)
+    wanted = {
+        int(lun): str(cloud["disks"][name]).rsplit("/", 1)[-1].lower()
+        for name, lun in cloud["luns"].items()
+    }
+    reported = _attached(cloud, runner)
+    if reported != wanted:
+        instance.event("luns-refused", wanted=wanted, reported=reported)
+        raise DeploymentError(
+            f"Azure reports the data disks {reported or 'none'} by LUN, not {wanted}: the "
+            "image would open another disk than the volume's.",
+            hint=f"Delete the VM (az vm delete --name {cloud['vm_name']} --resource-group "
+            f"{cloud['resource_group']}; its disks are kept) and deploy again.",
+        )
 
 
 def _adapter(
@@ -163,7 +202,8 @@ def deploy(
             "endpoint": result.endpoint,
             "cloud": metadata,
             "volumes": {
-                name: {"how": how, "value": v} for name, (how, v) in sorted(volumes.items())
+                name: {"how": how, "value": v, **_lun(metadata, name)}
+                for name, (how, v) in sorted(volumes.items())
             },
             "ports": {str(p): p for p in ports},
             "firewall": _firewall(ports),
@@ -172,7 +212,15 @@ def deploy(
     instance.data["address"] = _address(target, metadata, runner)
     instance.save()
     instance.event("deployed", target=target, build=build.id, deployment=result.deployment_id)
+    if metadata.get("luns"):
+        _check_luns(instance, runner)
     return instance
+
+
+def _lun(cloud: Mapping[str, Any], name: str) -> dict[str, int]:
+    """``{"lun": N}`` for a volume Azure attached at LUN N, else nothing."""
+    luns = cloud.get("luns") or {}
+    return {"lun": int(luns[name])} if name in luns else {}
 
 
 def _cloud(instance: Instance | Mapping[str, Any]) -> Mapping[str, Any]:
@@ -358,8 +406,8 @@ def upgrade(
     if instance.platform != "gcp":
         raise DeploymentError(
             f"deploy upgrade replaces GCP instances; {instance.id} runs on {instance.platform}.",
-            hint="Azure data disks cannot be moved to a VM the image finds them on (they are "
-            "identified by LUN); deploy the new build next to it and move the data yourself.",
+            hint="On Azure, stop the VM, detach its disks (az vm disk detach), then deploy the "
+            "new build with --volume NAME=existing:DISK for each.",
         )
     old_shape = _volume_shape(instance.build)
     new_shape = _volume_shape(candidate_build)
@@ -600,6 +648,13 @@ def _azure_steps(cloud: Mapping[str, Any], calls: Sequence[list[str]]) -> list[d
     ]
 
 
+def _attachment(target: str, cloud: Mapping[str, Any], name: str) -> dict[str, object]:
+    """How the plan attaches volume *name*: GCP's device name, or Azure's LUN."""
+    if target == "azure":
+        return dict(_lun(cloud, name))
+    return {"device": f"tundravm-{name}"}
+
+
 def _policy_step(build: Build, target: str) -> dict[str, object]:
     path = build.path / mf.MEASUREMENTS
     records = [
@@ -632,9 +687,15 @@ def plan(
     result = _adapter(target, recorded, PLANNED).deploy(request)
     cloud = dict(result.metadata)
     _address(target, cloud, recorded)
+    if cloud.get("luns"):
+        _attached(cloud, recorded)
     artifact = request.artifact_path
     digest = build.manifest.get("artifacts", {}).get(artifact.name, {})
-    upload = recorded.calls[0][-1] if target == "gcp" else _flag(recorded.calls[-2], "--os-vhd-uri")
+    upload = (
+        recorded.calls[0][-1]
+        if target == "gcp"
+        else _flag(next(c for c in recorded.calls if "--os-vhd-uri" in c), "--os-vhd-uri")
+    )
     ports = build.tcp_ports()
     steps: list[dict[str, object]] = [
         {
@@ -648,7 +709,7 @@ def plan(
         {
             "step": "volumes",
             "volumes": [
-                {"name": name, "how": how, "value": value, "device": f"tundravm-{name}"}
+                {"name": name, "how": how, "value": value, **_attachment(target, cloud, name)}
                 for name, (how, value) in sorted(volumes.items())
             ],
         },
@@ -734,7 +795,7 @@ def render_plan(found: Mapping[str, Any]) -> str:
             text = (
                 "; ".join(
                     f"{v['name']}: {'new' if v['how'] == 'create' else 'existing'} {v['value']} "
-                    f"as device {v['device']}"
+                    + (f"as device {v['device']}" if "device" in v else f"at LUN {v['lun']}")
                     for v in step["volumes"]
                 )
                 or "none"

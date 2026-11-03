@@ -1,0 +1,7 @@
+# tundravm: each volume is the Azure data disk at its LUN (deploy azure attaches it
+# there); azure-vm-utils' 80-azure-disk.rules names that disk by-lun.
+ACTION!="add|change", GOTO="tundravm_azure_volumes_end"
+SUBSYSTEM!="block", GOTO="tundravm_azure_volumes_end"
+ENV{DEVTYPE}!="disk", GOTO="tundravm_azure_volumes_end"
+SYMLINK=="disk/azure/data/by-lun/0", SYMLINK+="disk/by-id/azure-tundravm-data"
+LABEL="tundravm_azure_volumes_end"

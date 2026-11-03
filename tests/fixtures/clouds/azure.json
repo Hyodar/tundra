@@ -79,6 +79,18 @@
       }
     },
     {
+      "request": ["az", "disk", "create"],
+      "SOURCE": "https://learn.microsoft.com/en-us/rest/api/compute/disks/create-or-update",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/disks/prover-data-000003",
+        "name": "prover-data-000003",
+        "type": "Microsoft.Compute/disks",
+        "location": "eastus",
+        "sku": {"name": "Premium_LRS", "tier": "Premium"},
+        "properties": {"creationData": {"createOption": "Empty"}, "diskSizeGB": 100, "diskState": "Unattached", "provisioningState": "Succeeded"}
+      }
+    },
+    {
       "request": ["az", "vm", "create"],
       "SOURCE": "https://learn.microsoft.com/en-us/cli/azure/vm#az-vm-create",
       "json": {
@@ -91,6 +103,26 @@
         "publicIpAddress": "203.0.113.9",
         "resourceGroup": "tdx-vms",
         "zones": ""
+      }
+    },
+    {
+      "request": ["az", "vm", "show"],
+      "SOURCE": "https://learn.microsoft.com/en-us/rest/api/compute/virtual-machines/get",
+      "json": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/virtualMachines/tdx-prover-000004",
+        "name": "tdx-prover-000004",
+        "storageProfile": {
+          "dataDisks": [
+            {
+              "lun": 0,
+              "name": "prover-data-000003",
+              "createOption": "Attach",
+              "deleteOption": "Detach",
+              "diskSizeGB": 100,
+              "managedDisk": {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/tdx-vms/providers/Microsoft.Compute/disks/prover-data-000003"}
+            }
+          ]
+        }
       }
     },
     {

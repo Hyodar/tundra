@@ -627,9 +627,12 @@ exits 1 on a failure. `run probe INSTANCE` reads a running instance's.
 
 The [command reference](reference/cli.md#tundravm-deploy) lists `deploy`'s settings
 tables, `[tool.tundravm.gcp]` and `[tool.tundravm.azure]`. GCP attaches each volume as
-device `tundravm-NAME`. Azure with a volume is refused: its data disks are named by LUN,
-which the image cannot match. The receipt records the VM, its address and the firewall
-rule the management port needs, which tundravm does not create.
+device `tundravm-NAME`. Azure attaches each volume's disk at a LUN: its position in the
+image's volumes, which `runtime.json` records. The image names the disk at that LUN
+`/dev/disk/by-id/azure-tundravm-NAME`, from `azure-vm-utils`' by-lun link. `deploy`
+reads the LUNs back and fails when Azure put another disk there. The receipt records the
+VM, its address, each volume's disk and the firewall rule the management port needs,
+which tundravm does not create.
 
 `attest`'s quote binds a fresh nonce, the TLS session's key, the SSH host keys, the
 instance public key and each `AttestedTLS` certificate key. A `tundravm.policy/2` record in
