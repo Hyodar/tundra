@@ -985,7 +985,7 @@ The export path for logs and metrics: `image.observability` takes it.
 ```python
 PrometheusRemoteWrite(
     url: str | None = None,
-    credential: Secret | None = None,
+    credential: Secret | SigV4 | None = None,
     interval: str = '30s',
     buffer: str = '1h',
     export: str | Sequence[str] | None = None,
@@ -1009,15 +1009,23 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 *dataclass*
 
 ```python
-Proxy(address: str, port: int, *, tls_name: str | None = None)
+Proxy(
+    address: str,
+    port: int,
+    *,
+    tls_name: str | None = None,
+    passthrough: bool = False,
+)
 ```
 
 The fixed-address proxy both exporters reach their sinks through: `Proxy("10.0.0.9", 3128)`, which `proxy="10.0.0.9:3128"` also spells.
 
 | Member | Does |
 |---|---|
+| `Proxy.check_sink(url: str) -> None` | Refuse a sink *url* a passthrough cannot carry: not `https://`, an address for a host, or another port than *port*. |
 | `Proxy.endpoint` | `IP:PORT` (`[IPv6]:PORT`), what the firewall allows. |
-| `Proxy.url` | The URL the exporters reach the proxy at: `https://<tls_name>:<port>` or `http://<endpoint>`. |
+| `Proxy.hosts(urls: Sequence[str]) -> str \| None` | `PROXY_HOSTS`: *address* for the TLS name, or for each of the sinks' *urls*' names through a passthrough; `None` when no name maps to it. |
+| `Proxy.url` | The URL the exporters reach the proxy at: `https://<tls_name>:<port>` or `http://<endpoint>`; `None` for a passthrough, which the exporters do not know of. |
 
 ### `RecordingRule`
 
@@ -1096,6 +1104,16 @@ A service a component composed, named from outside: `node.service("node")`.
 | `ServiceRef.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where that service answers on the loopback, with its readiness, as `Service.endpoint` gives it: what a component exports (`self.service("app").endpoint(8080)`). It opens no port. |
 | `ServiceRef.ready` | The readiness handle of that service. |
 | `ServiceRef.ref` | The reference a profile change targets. |
+
+### `SigV4`
+
+*dataclass*
+
+```python
+SigV4(region: str, secret: Secret)
+```
+
+AWS Signature V4 for a remote-write sink such as Amazon Managed Prometheus: `credential=SigV4("us-east-2", Secret("metrics-aws"))`.
 
 ### `SshAccess`
 

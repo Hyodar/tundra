@@ -45,6 +45,7 @@ __all__ = [
     "PrometheusRemoteWrite",
     "Proxy",
     "RecordingRule",
+    "SigV4",
 ]
 
 LOGS_SERVICE = "journal-export"
@@ -166,16 +167,17 @@ def _destination(url: str) -> str:
 
 
 PROXY_HOSTS = "/etc/tundravm/hosts.d/observability-proxy"
-"""The TLS proxy's ``ADDRESS NAME`` line: this component's own fragment of ``/etc/hosts``,
-apart from the file the GCP glue's ``gcp-hostname`` appends the host's name to."""
+"""The proxy's ``ADDRESS NAME`` lines (its TLS name, or each sink's name for a passthrough):
+this component's own fragment of ``/etc/hosts``, apart from the file the GCP glue's
+``gcp-hostname`` appends the host's name to."""
 
 PROXY_HOSTS_SCRIPT = "/usr/lib/tundravm/observability-hosts"
-"""What each exporter runs as root before it starts when its proxy speaks TLS: appends
-:data:`PROXY_HOSTS`'s lines ``/etc/hosts`` does not have yet."""
+"""What each exporter runs as root before it starts when its proxy speaks TLS or passes it
+through: appends :data:`PROXY_HOSTS`'s lines ``/etc/hosts`` does not have yet."""
 
 _PROXY_HOSTS_STEP = f"""\
 #!/bin/sh
-# tundravm Observability: the TLS proxy's name, which no resolver answers, in /etc/hosts.
+# tundravm Observability: names no resolver answers, mapped to the proxy, in /etc/hosts.
 while read -r line; do
     grep -qxF "$line" /etc/hosts 2>/dev/null || echo "$line" >> /etc/hosts
 done < {PROXY_HOSTS}
@@ -196,12 +198,19 @@ class Proxy(Keywords):
     the address alone. Not verified without a boot: that ``systemd-journal-upload``'s
     libcurl and Prometheus negotiate TLS with a given proxy, and that its certificate
     chains to a CA the image trusts (a private CA needs its certificate in the image).
+
+    With *passthrough* it is no proxy protocol at all but a TCP relay to the sink, as
+    flashbox's ``10.88.0.100:443``: the exporters reach each sink's own ``https://`` URL,
+    whose name the image maps to *address* in ``/etc/hosts``, so the SNI, the certificate
+    check and the ``Host`` header are the sink's, the connection goes to the proxy, and no
+    resolver is asked. Each sink's URL then names a host, not an address, on *port*.
     """
 
     address: str
     port: int
     _: KW_ONLY
     tls_name: str | None = None
+    passthrough: bool = False
 
     def __post_init__(self) -> None:
         hint = "Pass Proxy('10.0.0.9', 3128), the proxy's address and port."
@@ -229,6 +238,33 @@ class Proxy(Keywords):
                     "proxy's certificate is for.",
                     hint="Pass tls_name='proxy.example'.",
                 )
+        if not isinstance(self.passthrough, bool):
+            raise ValidationError(
+                f"Proxy: passthrough {self.passthrough!r} is not True or False.",
+                hint="Pass passthrough=True for a TCP relay to the sinks.",
+            )
+        if self.passthrough and self.tls_name is not None:
+            raise ValidationError(
+                "Proxy: a passthrough relays the sinks' own TLS, so it has no tls_name.",
+                hint="Drop tls_name=: the sinks' names are the TLS names.",
+            )
+
+    def check_sink(self, url: str) -> None:
+        """Refuse a sink *url* a passthrough cannot carry: not ``https://``, an address for
+        a host, or another port than *port*."""
+        if not self.passthrough:
+            return
+        parts = urlsplit(url)
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        _, _, named = egress_host(self, f"{parts.hostname}:{port}")
+        if parts.scheme != "https" or not named or port != self.port:
+            raise ValidationError(
+                f"Observability: sink {url!r} cannot go through the passthrough at "
+                f"{self.endpoint}: it needs an https:// URL whose host is a name, on port "
+                f"{self.port}.",
+                hint="Pass the sink's own URL, 'https://metrics.example/api/v1/write': the "
+                "image maps its name to the passthrough's address.",
+            )
 
     @property
     def endpoint(self) -> str:
@@ -237,12 +273,23 @@ class Proxy(Keywords):
         return f"{host}:{self.port}"
 
     @property
-    def url(self) -> str:
+    def url(self) -> str | None:
         """The URL the exporters reach the proxy at: ``https://<tls_name>:<port>`` or
-        ``http://<endpoint>``."""
+        ``http://<endpoint>``; ``None`` for a passthrough, which the exporters do not know of."""
+        if self.passthrough:
+            return None
         if self.tls_name is None:
             return f"http://{self.endpoint}"
         return f"https://{self.tls_name}:{self.port}"
+
+    def hosts(self, urls: Sequence[str]) -> str | None:
+        """:data:`PROXY_HOSTS`: *address* for the TLS name, or for each of the sinks' *urls*'
+        names through a passthrough; ``None`` when no name maps to it."""
+        names = [self.tls_name] if self.tls_name is not None else []
+        if self.passthrough:
+            names = [urlsplit(url).hostname or "" for url in urls]
+        lines = dict.fromkeys(f"{self.address} {name}\n" for name in names)
+        return "".join(lines) or None
 
 
 def _as_proxy(owner: object, proxy: object) -> Proxy | None:
@@ -264,8 +311,11 @@ def _as_proxy(owner: object, proxy: object) -> Proxy | None:
 
 
 def _start_steps(proxy: Proxy | None) -> tuple[str, ...]:
-    """The root steps an exporter runs before it starts: the TLS proxy's name, if any."""
-    return () if proxy is None or proxy.tls_name is None else (f"+/bin/sh {PROXY_HOSTS_SCRIPT}",)
+    """The root steps an exporter runs before it starts: the names mapped to the proxy, for
+    one that speaks TLS or passes it through."""
+    if proxy is None or (proxy.tls_name is None and not proxy.passthrough):
+        return ()
+    return (f"+/bin/sh {PROXY_HOSTS_SCRIPT}",)
 
 
 def _check_credential(owner: object, credential: object) -> None:
@@ -338,6 +388,39 @@ class JournalExport(Keywords):
         )
 
 
+_AWS_REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-[0-9]+")
+
+METRICS_CREDENTIALS = "/run/credentials/metrics-export.service"
+"""Where ``metrics-export`` reads its delivered credential."""
+
+
+@dataclass(frozen=True, slots=True)
+class SigV4(Keywords):
+    """AWS Signature V4 for a remote-write sink such as Amazon Managed Prometheus:
+    ``credential=SigV4("us-east-2", Secret("metrics-aws"))``.
+
+    *secret* holds an AWS shared credentials file (``[default]`` with
+    ``aws_access_key_id`` and ``aws_secret_access_key``), which Prometheus reads through
+    ``AWS_SHARED_CREDENTIALS_FILE`` from the delivered credential, so no key is in the
+    image or its configuration. The instance metadata server is never asked for one.
+    """
+
+    region: str
+    secret: Secret
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.region, str) or not _AWS_REGION.fullmatch(self.region):
+            raise ValidationError(
+                f"SigV4: region {self.region!r} is not an AWS region.",
+                hint="Pass the sink's region: SigV4('us-east-2', Secret('metrics-aws')).",
+            )
+        if not isinstance(self.secret, Secret):
+            raise ValidationError(
+                f"SigV4: secret {self.secret!r} is not a Secret.",
+                hint="Pass SigV4('us-east-2', Secret('metrics-aws')): it is delivered.",
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class RecordingRule(Keywords):
     """A series the guest computes from others: ``RecordingRule("node:up", "min(up)")``.
@@ -373,7 +456,9 @@ class RecordingRule(Keywords):
 class PrometheusRemoteWrite(Keywords):
     """Send node metrics to *url*, a Prometheus remote-write receiver.
 
-    *credential* is a :class:`~tundravm.secrets.Secret` holding a bearer token. The agent
+    *credential* is a :class:`~tundravm.secrets.Secret` holding a bearer token, or a
+    :class:`SigV4` that signs each write with an AWS key, as Amazon Managed Prometheus
+    requires. The agent
     scrapes the node exporter on the loopback every *interval* and keeps at most *buffer*
     of samples it could not send; in memory, at most four shards of 10000 samples wait,
     retried from one second to one minute apart, a 429 included.
@@ -401,7 +486,7 @@ class PrometheusRemoteWrite(Keywords):
     """
 
     url: str | None = None
-    credential: Secret | None = None
+    credential: Secret | SigV4 | None = None
     interval: str = "30s"
     buffer: str = "1h"
     export: str | Sequence[str] | None = None
@@ -410,7 +495,8 @@ class PrometheusRemoteWrite(Keywords):
     def __post_init__(self) -> None:
         if self.url is not None:
             _check_url(self, self.url)
-        _check_credential(self, self.credential)
+        if not isinstance(self.credential, SigV4):
+            _check_credential(self, self.credential)
         for what in ("interval", "buffer"):
             value = getattr(self, what)
             if not isinstance(value, str) or not value[:-1].isdigit() or value[-1] not in "smh":
@@ -477,13 +563,15 @@ class PrometheusRemoteWrite(Keywords):
         *url*, through *proxy* when given; without *url*, to the in-guest :meth:`sink`."""
         local = self.url is None
         remote: dict[str, object] = {"url": METRICS_SINK_URL if local else self.url}
-        if proxy is not None and not local:
+        if proxy is not None and proxy.url is not None and not local:
             remote["proxy_url"] = proxy.url
-        if self.credential is not None and not local:
+        credential = None if local else self.credential
+        if isinstance(credential, SigV4):
+            remote["sigv4"] = {"region": credential.region}
+        elif credential is not None:
             remote["authorization"] = {
                 "type": "Bearer",
-                "credentials_file": f"/run/credentials/metrics-export.service/"
-                f"{self.credential.name}",
+                "credentials_file": f"{METRICS_CREDENTIALS}/{credential.name}",
             }
         kept = self.kept()
         remote["write_relabel_configs"] = [
@@ -524,6 +612,13 @@ class PrometheusRemoteWrite(Keywords):
         local = self.url is None
         steps = () if local else _start_steps(proxy)
         credential = None if local else self.credential
+        environment = {}
+        if isinstance(credential, SigV4):
+            environment = {
+                "AWS_SHARED_CREDENTIALS_FILE": f"{METRICS_CREDENTIALS}/{credential.secret.name}",
+                "AWS_EC2_METADATA_DISABLED": "true",
+            }
+            credential = credential.secret
         mode, store = ([], "tsdb") if self.rules else (["--enable-feature=agent"], "agent")
         retention = "retention.time" if self.rules else "retention.max-time"
         return Service(
@@ -539,6 +634,7 @@ class PrometheusRemoteWrite(Keywords):
             requires=[self.sink().endpoint(METRICS_SINK_PORT)] if local else [],
             credentials=[] if credential is None else [credential],
             state="metrics-export",
+            environment=environment,
             unit=dm.DropIn(exec_start_pre=steps) if steps else None,
         )
 
@@ -597,7 +693,9 @@ class Observability(Component):
     reads it from ``https_proxy``, Prometheus from ``proxy_url``. A proxy that speaks TLS
     itself is ``Proxy(address, port, tls_name=...)``: neither exporter takes the proxy's
     TLS name apart from its URL, so the component writes the name's address to its own
-    ``/etc/hosts`` fragment.
+    ``/etc/hosts`` fragment. ``Proxy(address, port, passthrough=True)`` is a TCP relay
+    instead: the fragment maps each sink's name to *address*, and the exporters know of no
+    proxy.
 
     Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Component name:
     ``observability``.
@@ -608,7 +706,7 @@ class Observability(Component):
     proxy: str | Proxy | None = None
 
     def __post_init__(self) -> None:
-        _as_proxy(self, self.proxy)
+        proxy = _as_proxy(self, self.proxy)
         if self.logs is not None and not isinstance(self.logs, JournalExport):
             raise ValidationError(
                 f"Observability: logs= holds {self.logs!r}, not JournalExport.",
@@ -624,6 +722,13 @@ class Observability(Component):
                 "Observability exports nothing.",
                 hint="Pass logs=JournalExport() and/or metrics=PrometheusRemoteWrite().",
             )
+        if proxy is not None:
+            for url in self._urls():
+                proxy.check_sink(url)
+
+    def _urls(self) -> list[str]:
+        """The sinks' URLs, the in-guest receivers' left out."""
+        return [s.url for s in (self.logs, self.metrics) if s is not None and s.url is not None]
 
     def outbound(self) -> Egress:
         """*proxy*, or each sink's ``HOST:PORT`` without one."""
@@ -635,8 +740,9 @@ class Observability(Component):
 
     def compose(self) -> Iterator[object]:
         proxy = _as_proxy(self, self.proxy)
-        if proxy is not None and proxy.tls_name is not None:
-            yield File(PROXY_HOSTS, f"{proxy.address} {proxy.tls_name}\n")
+        hosts = None if proxy is None else proxy.hosts(self._urls())
+        if hosts is not None:
+            yield File(PROXY_HOSTS, hosts)
             yield File(PROXY_HOSTS_SCRIPT, _PROXY_HOSTS_STEP, mode=0o755)
         if self.logs is not None:
             yield Package("systemd-journal-remote")

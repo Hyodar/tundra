@@ -366,6 +366,10 @@ series ([a task](howto.md#ship-booleans-not-raw-series)). A record name has a co
 server mode, its query API on the loopback. `image-metrics` logs the digest and RTMR0-3 at
 boot.
 `Observability(proxy="IP:PORT")` reaches every sink through that one address.
+`proxy=Proxy("10.88.0.100", 443, passthrough=True)` is a TCP relay: each sink's name maps to
+the address in `/etc/hosts`, so its TLS, SNI and `Host` stay the sink's.
+`credential=SigV4("us-east-2", Secret("metrics-aws"))` signs each write with the AWS key
+file the secret holds, as Amazon Managed Prometheus requires.
 
 ### The firewall and its modes
 

@@ -68,6 +68,24 @@ writes `tundravm_unit_active{unit=}` and `tundravm_unit_cpu_seconds_total{unit=}
 loaded service (`systemctl show -p Id,LoadState,ActiveState,CPUUsageNSec`). No package, no
 port, no name matching. Raw, so only rules over them leave.
 
+## Flashbots' metrics path
+
+flashbox writes to `https://10.88.0.100/workspaces/<ws>/api/v1/remote_write` with
+`tls_config.server_name` set to the AMP host and SigV4 keys in the rendered config. The
+proxy there is a TCP passthrough, not HTTP CONNECT, so `Observability(proxy=)` could not
+reach it. `Proxy("10.88.0.100", 443, passthrough=True)` keeps the sink's real URL and maps
+its name to the address in the component's `/etc/hosts` fragment: SNI, certificate check
+and `Host` are the sink's (SigV4 signs `Host`), the firewall allows the address alone, and
+no resolver is asked. Refused: a passthrough with `tls_name=`, a sink by address, a sink
+not `https://`, or on another port than the relay's.
+
+SigV4, which the gaps note refused because "a proxy can sign", is needed after all: the
+passthrough cannot. `credential=SigV4("us-east-2", Secret("metrics-aws"))` renders
+`sigv4: {region:}` and points `AWS_SHARED_CREDENTIALS_FILE` at the delivered credential, an
+AWS shared credentials file, with `AWS_EC2_METADATA_DISABLED=true`. The key never sits in
+the image or the configuration. Debian's Prometheus signs, as flashbox's use of it shows.
+Not verified without a boot against AMP.
+
 ## Proof
 
 - Goldens: the fixture tree's dev profile carries the rules file, the server-mode argv and

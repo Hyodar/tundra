@@ -74,6 +74,7 @@ COMPONENTS = [
     "Rule",
     "ServiceReady",
     "ServiceRef",
+    "SigV4",
     "SshAccess",
     "StaticAddress",
     "Sudo",

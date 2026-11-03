@@ -22,6 +22,7 @@ from tundravm.components import (
     PrometheusRemoteWrite,
     Proxy,
     RecordingRule,
+    SigV4,
     SshAccess,
     Tdxs,
     TeeBase,
@@ -347,6 +348,57 @@ def test_a_sink_without_a_url_ships_to_the_in_guest_receiver(
     codes = {d.code for d in planned.lint()}
     assert ("observability-sink-unset" in codes) == reported
     assert "observability-plaintext" not in codes
+
+
+AMP = "https://aps-workspaces.us-east-2.amazonaws.com/workspaces/ws-1/api/v1/remote_write"
+
+
+def test_a_passthrough_maps_each_sink_name_to_its_address_and_sigv4_signs_the_write() -> None:
+    """The exporters reach the sinks' own URLs, whose names resolve to the passthrough in
+    /etc/hosts, with no proxy setting; Prometheus signs with the delivered AWS key file."""
+    observability = Observability(
+        logs=JournalExport("https://logs.example"),
+        metrics=PrometheusRemoteWrite(
+            AMP, credential=SigV4("us-east-2", Secret("metrics-aws")), export=[]
+        ),
+        proxy=Proxy("10.88.0.100", 443, passthrough=True),
+    )
+    planned = plan(Image("x", observability=observability), "production")
+    assert planned.service("journal-export").values("Service", "Environment") == ()
+    config = planned.file("/etc/tundravm/metrics-export.yml").text
+    assert "proxy_url" not in config and "region: us-east-2" in config
+    environment = planned.service("metrics-export").values("Service", "Environment")
+    assert (
+        "AWS_SHARED_CREDENTIALS_FILE=/run/credentials/metrics-export.service/metrics-aws"
+        in environment
+    )
+    assert planned.file(PROXY_HOSTS).text == (
+        "10.88.0.100 logs.example\n10.88.0.100 aps-workspaces.us-east-2.amazonaws.com\n"
+    )
+    assert observability.outbound().hosts == ("10.88.0.100:443",)
+
+
+PASSTHROUGH = Proxy("10.0.0.9", 443, passthrough=True)
+
+
+@pytest.mark.parametrize(
+    ("build", "refusal"),
+    [
+        (lambda: Proxy("10.0.0.9", 443, passthrough=True, tls_name="p.example"), "no tls_name"),
+        (lambda: SigV4("mars-1", Secret("k")), "not an AWS region"),
+        (lambda: Observability(logs=JournalExport("http://l.example"), proxy=PASSTHROUGH), "443"),
+        (lambda: Observability(logs=JournalExport("https://10.0.0.8"), proxy=PASSTHROUGH), "443"),
+        (
+            lambda: Observability(logs=JournalExport("https://l.example:9"), proxy=PASSTHROUGH),
+            "443",
+        ),
+    ],
+)
+def test_a_passthrough_carries_only_named_https_sinks_on_its_port(
+    build: Callable[[], object], refusal: str
+) -> None:
+    with pytest.raises(ValidationError, match=refusal):
+        build()
 
 
 IDENTITY = "|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"

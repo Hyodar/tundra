@@ -17,7 +17,8 @@ findings, a lint rule ``tundravm check`` runs, of the codes the class declares a
   :class:`Sudo` rules), :class:`DevAccess` (``image.dev``).
 - :class:`Container`: a program in a Debian root of its own, built with the image.
 - :class:`Observability` with :class:`JournalExport`, :class:`PrometheusRemoteWrite` (its
-  :class:`RecordingRule` values) and :class:`Proxy` (``image.observability``).
+  :class:`RecordingRule` values, a :class:`SigV4` credential) and :class:`Proxy`
+  (``image.observability``).
 
 Application components are the project's own, written against this module: the
 example's Nethermind and Lighthouse live in ``examples/attested-node/components/``.
@@ -55,6 +56,7 @@ from ._observability import (
     PrometheusRemoteWrite,
     Proxy,
     RecordingRule,
+    SigV4,
 )
 
 __all__ = [
@@ -79,6 +81,7 @@ __all__ = [
     "Rule",
     "ServiceReady",
     "ServiceRef",
+    "SigV4",
     "SshAccess",
     "StaticAddress",
     "Sudo",
