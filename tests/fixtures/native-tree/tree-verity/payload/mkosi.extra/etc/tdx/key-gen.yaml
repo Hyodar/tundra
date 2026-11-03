@@ -1,0 +1,6 @@
+keys:
+  vault-key:
+    strategy: "pipe"
+    tpm: false
+    pipe_path: "/run/tundravm/unlock/vault"
+    output_path: "/run/tundravm/keys/vault"

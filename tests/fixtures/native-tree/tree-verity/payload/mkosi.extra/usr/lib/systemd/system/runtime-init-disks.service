@@ -1,0 +1,10 @@
+[Unit]
+Description=Runtime Init: disks
+After=network-online.target runtime-init-keys.service
+Requires=runtime-init-keys.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/runtime-init/disks

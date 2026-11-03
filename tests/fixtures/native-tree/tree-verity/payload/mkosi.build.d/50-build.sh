@@ -12,6 +12,12 @@ echo 'tundravm: source build rust-probe is not pinned: run tundravm lock, then t
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"sink","package":".","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/sink","kind":"file","mode":"0755","path":"build/sink"}],"name":"sink","source":{"kind":"local","path":"../sink"}}
 # unpinned: ../sink
 echo 'tundravm: source build sink is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"key-gen","package":"./cmd/key-gen","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/key-gen","kind":"artifact","mode":"0755"}],"name":"key-generation","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build key-generation is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"disk-setup","package":"./cmd/disk-setup","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/disk-setup","kind":"artifact","mode":"0755"}],"name":"disk-encryption","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build disk-encryption is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"attested-endpoint","package":"./cmd/attested-endpoint","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/attested-endpoint","kind":"artifact","mode":"0755"}],"name":"attested-endpoint","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
 echo 'tundravm: source build attested-endpoint is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

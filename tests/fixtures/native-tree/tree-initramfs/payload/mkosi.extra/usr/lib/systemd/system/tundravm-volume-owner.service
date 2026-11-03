@@ -1,0 +1,22 @@
+[Unit]
+Description=tundravm volume owners
+Before=tundravm-endpoint.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/disk-setup owner /etc/tdx/disk-setup.yaml
+Restart=on-failure
+RestartSec=5
+ProtectHome=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+PrivateNetwork=yes
+
+[Install]
+WantedBy=minimal.target

@@ -50,6 +50,7 @@ from tundravm.components import (
 from tundravm.ports import TCP, UDP, AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.sources import CargoBinary, Git, GoBinary, Local
+from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import DropIn, Every, TcpProbe
 
 SNAPSHOT = "20261018T082309Z"
@@ -242,6 +243,17 @@ TOKEN = Secret("greeting-token", required=False)
 """The secret CI delivers to the dev boot over the attested endpoint; optional, so nothing
 waits for it and ``run --probe`` finishes before it arrives."""
 
+VAULT = Volume("vault", unlock=OperatorKey())
+"""The ``dev`` profile's volume, owned by the operator: CI's first signed write (``attest
+--identity`` handing root's key) pins that key, and ``secrets unlock`` formats the volume
+with the key's token in its header and its copy inside. The probe, which never waits for
+an operator, says ``skip locked ... owner none`` for it and ``ledger``; ``secrets unlock``
+and ``run status`` then name the owner. Its units are the whole image's, as every volume's
+are: the runtime contracts lower once for all profiles."""
+
+VAULT_STATE = VAULT.directory("ledger")
+"""What :data:`VAULT` holds: the ``ledger`` service's state directory."""
+
 TENANT = Login(
     "tenant",
     owner=True,
@@ -298,6 +310,7 @@ DEV = Profile(
         Service("token", ["/usr/bin/cat", TOKEN]),
         Service("go-probe", [REVIEW, "help"], unit=CONSOLE),
         Service("rust-probe", [RUST_PROBE], unit=CONSOLE),
+        Service("ledger", ["/usr/bin/sleep", "infinity"], state=VAULT_STATE),
     ],
     production=False,
 )
@@ -307,7 +320,8 @@ its proxy and receivers, so the derived probe boots its ``egress:``, ``timer:`` 
 service bound to :data:`TOKEN`, so the attested endpoint on the management port gives the
 probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``, through
 the tdxs issuer a development profile picks at boot (the simulator without TDX); and the two
-built programs as services, whose first line reaches the console. :data:`SINK` runs as root
+built programs as services, whose first line reaches the console; and ``ledger`` on
+:data:`VAULT`, which starts once CI unlocks it. :data:`SINK` runs as root
 under the relaxed sandbox: it writes to ``/dev/console``, not to the journal its upload
 would feed itself from."""
 

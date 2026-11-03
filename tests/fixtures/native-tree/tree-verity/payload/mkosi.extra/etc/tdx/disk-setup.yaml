@@ -1,0 +1,10 @@
+disks:
+  vault:
+    strategy: "pathglob"
+    strategy_config:
+      pattern: "/dev/disk/by-id/*-tundravm-vault"
+    format: "on_initialize"
+    mount_at: "/persistent/vault"
+    dirs: []
+    encryption_key_path: "/run/tundravm/keys/vault"
+    owner: "/run/tundravm/owner/vault"

@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+# tundravm: the directories services keep on volume vault
+/usr/bin/install -d -o ledger -g ledger -m 0750 /persistent/vault/ledger

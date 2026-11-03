@@ -1,0 +1,10 @@
+[Unit]
+Description=Runtime Init: volume-vault
+After=network-online.target runtime-init-disks.service
+Requires=runtime-init-disks.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/runtime-init/volume-vault

@@ -233,6 +233,60 @@ probe_port() {
     done
     fail "nothing listens on $2/$1 after 30s: the service must bind every port expose= names, or drop it from expose="
 }
+probe_volume() {
+    if ! command -v findmnt >/dev/null 2>&1; then
+        skip "no findmnt in the image (util-linux)"
+        return
+    fi
+    mount=$1
+    encrypted=$2
+    held=$3
+    owned=${4:-}
+    owner=
+    if [ -n "$owned" ]; then
+        owner=", owner none"
+        waited=0
+        until findmnt -n --mountpoint "$mount" >/dev/null 2>&1 || [ "$waited" -ge 30 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if [ -r "$owned" ]; then
+            read -r _ _ fingerprint _ <"$owned" || true
+            owner=", owner ${fingerprint:-none}"
+        fi
+        if [ -r "$owned.mismatch" ]; then
+            fail "$(cat "$owned.mismatch"): the host rewrote its header, so it stays closed; keep the disk and attach it to an instance you attested"
+            return
+        fi
+    fi
+    set -- $(findmnt -n -o FSTYPE,SOURCE --mountpoint "$mount" 2>/dev/null)
+    if [ $# -lt 2 ] && [ "$held" = operator ]; then
+        skip "locked until \`tundravm secrets unlock INSTANCE ${owned##*/}\`$owner"
+    elif [ $# -lt 2 ] && [ "$held" = broker ]; then
+        skip "locked until its broker releases the key"
+    elif [ $# -lt 2 ]; then
+        fail "nothing is mounted at $mount: unlock it (tundravm secrets unlock INSTANCE VOLUME) or read journalctl -u runtime-init.service"
+    elif [ "$1" != ext4 ]; then
+        fail "$mount is $1 on $2, not ext4: disk-setup formats ext4, so this is not the volume"
+    elif [ "$encrypted" = no ]; then
+        ok "ext4 on $2"
+    else
+        device=$(readlink -f "$2")
+        uuid=$(cat "/sys/class/block/${device##*/}/dm/uuid" 2>/dev/null || true)
+        case $uuid in
+            CRYPT-*) ok "ext4 on $2, dm-crypt$owner" ;;
+            *) fail "$mount is on $2, not a dm-crypt device: an encrypted volume mounts from its LUKS mapping; journalctl -u runtime-init.service" ;;
+        esac
+    fi
+}
+probe_locked() {
+    command -v findmnt >/dev/null 2>&1 || return 1
+    findmnt -n --mountpoint "$1" >/dev/null 2>&1 && return 1
+    case $3 in
+        operator) skip "locked: it starts once \`tundravm secrets unlock INSTANCE $2\` opens $1" ;;
+        *) skip "locked: it starts once the broker releases the key of $2" ;;
+    esac
+}
 container_connect() {
     if said=$(timeout 10 nsenter -t "$1" -n bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$2" "$3" 2>&1); then
         return 0
@@ -883,10 +937,14 @@ check=service:go-probe.service
 probe_service go-probe.service
 check=service:rust-probe.service
 probe_service rust-probe.service
+check=service:ledger.service
+probe_locked /persistent/vault vault operator || probe_service ledger.service
 check=port:8080/tcp
 probe_port tcp 8080
 check=port:8443/tcp
 probe_port tcp 8443
+check=volume:/persistent/vault
+probe_volume /persistent/vault yes operator /run/tundravm/owner/vault
 check=container:box
 probe_container box.service /usr/lib/tundravm/containers/box.raw veth 169.254.136.254
 check=container:box:egress
@@ -929,6 +987,8 @@ check=egress:metadata:go-probe
 probe_metadata go-probe - 169.254.169.254 no
 check=egress:metadata:rust-probe
 probe_metadata rust-probe - 169.254.169.254 no
+check=egress:metadata:ledger
+probe_metadata ledger - 169.254.169.254 no
 check=egress:metadata:azure-complete-provisioning
 probe_metadata root azure-complete-provisioning 168.63.129.16 yes
 check=egress:metadata:gcp-hostname
@@ -952,7 +1012,7 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|fixture:box_alive|fixture:box_cpu_under_80_percent|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up' 'fixture:box_alive' 'fixture:box_cpu_under_80_percent'
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-ssh.service box-endpoint-8090.service sink.service token.service go-probe.service rust-probe.service
+probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-ssh.service box-endpoint-8090.service sink.service token.service go-probe.service rust-probe.service ledger.service
 check=observability:egress
 probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:web.service
@@ -979,8 +1039,10 @@ check=hardening:go-probe.service
 probe_hardening go-probe.service 2.5 static
 check=hardening:rust-probe.service
 probe_hardening rust-probe.service 2.5 static
+check=hardening:ledger.service
+probe_hardening ledger.service 2.5 static
 check=kernel:modules
-probe_modules button configfs crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_chain_nat nft_ct nft_masq nft_nat nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest veth virtio_blk virtio_net virtio_scsi
+probe_modules aesni_intel algif_skcipher button configfs crc32c_generic crc32c_intel dm_crypt dm_verity efivarfs erofs ext4 gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_chain_nat nft_ct nft_masq nft_nat nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest veth virtio_blk virtio_net virtio_scsi xts
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root

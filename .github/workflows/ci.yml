@@ -344,6 +344,23 @@ jobs:
           cat "$RUNNER_TEMP/box-password.txt"
           grep -F 'Permission denied (publickey)' "$RUNNER_TEMP/box-password.txt"
 
+      - name: Unlock the dev instance's operator volume and read its owner
+        # The dev profile's Volume("vault", unlock=OperatorKey()): the boot probe, which never
+        # waits for an operator, found it locked with no owner; `attest --identity` pinned the
+        # operator's key, `secrets unlock` signs with it and the volume is formatted with that
+        # key's token, which the unlock and `run status` name.
+        run: |
+          probe=.tundravm/instances/fixture-1/probe.json
+          jq -r '.results[] | select(.check == "volume:/persistent/vault" or .check == "service:ledger.service")
+            | "\(.check) \(.verdict) \(.detail)"' "$probe" | tee "$RUNNER_TEMP/vault-rows.txt"
+          grep -Fx 'volume:/persistent/vault skip locked until `tundravm secrets unlock INSTANCE vault`, owner none' \
+            "$RUNNER_TEMP/vault-rows.txt"
+          fingerprint=$(ssh-keygen -lf "$RUNNER_TEMP/operator.pub" | awk '{print $2}')
+          printf 'fixture-vault\n' | uv run tundravm secrets unlock fixture-1 vault | tee "$RUNNER_TEMP/unlock.txt"
+          grep -Fx "owner: $fingerprint (pinned in the OperatorKey() volume's header)" "$RUNNER_TEMP/unlock.txt"
+          uv run tundravm run status fixture-1 | tee "$RUNNER_TEMP/status.txt"
+          test "$(awk '$1 == "owner" {print $2}' "$RUNNER_TEMP/status.txt")" = "$fingerprint"
+
       - name: Open a maintenance window on the dev instance
         # Firewall(modes=): the dev profile's SSH answers only in maintenance. `run switch`
         # rides the attested endpoint's bound session and mode-switch extends RTMR3 before

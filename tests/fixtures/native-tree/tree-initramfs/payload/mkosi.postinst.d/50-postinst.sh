@@ -25,6 +25,7 @@ mkosi-chroot systemctl enable web.service
 mkosi-chroot systemctl enable web-loopback.service
 mkosi-chroot systemctl enable web-loopback-ready.service
 mkosi-chroot systemctl enable greeter.service
+mkosi-chroot systemctl enable tundravm-volume-owner.service
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
@@ -52,6 +53,7 @@ ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.
 ln -sf "/etc/systemd/system/web-loopback.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web-loopback-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/greeter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-volume-owner.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

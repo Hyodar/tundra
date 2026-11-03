@@ -30,5 +30,21 @@
       "units": []
     }
   ],
-  "volumes": []
+  "volumes": [
+    {
+      "device": "/dev/disk/by-id/*-tundravm-vault",
+      "directories": [
+        "/persistent/vault/ledger"
+      ],
+      "filesystem": "ext4",
+      "lun": 0,
+      "mount": "/persistent/vault",
+      "name": "vault",
+      "pipe": "/run/tundravm/unlock/vault",
+      "serial": "tundravm-vault",
+      "unlock": {
+        "kind": "operator-key"
+      }
+    }
+  ]
 }
