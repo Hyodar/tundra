@@ -43,6 +43,7 @@ from tundravm.declarative import (
     Every,
     File,
     Firewall,
+    FirewallMode,
     Fragment,
     Git,
     Hardening,
@@ -50,6 +51,7 @@ from tundravm.declarative import (
     Local,
     Mkosi,
     Package,
+    Port,
     Recipe,
     Root,
     Secret,
@@ -280,6 +282,12 @@ def relayed(way: AttestedTLS) -> tuple[Declaration, ...]:
     return (File(attested_tls.SCRIPT_PATH, attested_tls.SCRIPT, mode=0o755), *runtime.relay(way))
 
 
+MODES = (FirewallMode("production"), FirewallMode("maintenance", ingress=(Port(22),), lasts=1800))
+"""The dev firewall's modes: SSH answers only in ``maintenance``, which CI's ``fixture-boot``
+switches to with ``run switch``, logs in, and switches back from, the quote's RTMR3 holding
+both switches."""
+
+
 DEV = Fragment(
     "dev",
     items=(
@@ -287,6 +295,7 @@ DEV = Fragment(
         Firewall(
             egress="filter",
             egress_rules=egress_rules(((OBSERVABILITY.name, OBSERVABILITY.outbound()),)),
+            modes=MODES,
         ),
         Task(
             "tick", "/usr/bin/true", description="A trivial scheduled job", schedule=Every("1min")
@@ -309,19 +318,19 @@ DEV = Fragment(
         *relayed(ATTESTED),
     ),
 )
-"""What the ``dev`` variant adds: SSH by public key for root and :data:`TENANT`, a
-firewall whose output chain allows nothing beyond DHCP and what :data:`OBSERVABILITY`'s
-proxy asks for (the fixture fetches nothing once built), a scheduled job, and the export
-path with its proxy and receivers, so the derived probe boots its ``egress:``, ``timer:``
-and ``observability:`` checks, and the
-console shows the ``sink:`` lines of what arrived. The evidence service with the simulator
-issuer and the attested endpoint on :data:`MANAGEMENT_PORT` taking :data:`DEV_SECRET` give
-the probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``
-(:data:`TENANT_KEYS` among them, then an SSH login as :data:`TENANT`);
-:data:`ATTESTED` in front of the page gives it the ``attested-tls:`` check and CI its
-``attest --tls``. :data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No
-``Volume``: ``run`` attaches disks only for an ``Image``'s runtime manifest, which this
-plain ``Recipe`` has none of."""
+"""What the ``dev`` variant adds: SSH by public key for root and :data:`TENANT` in the
+:data:`MODES` maintenance window, a firewall whose output chain allows nothing beyond DHCP
+and what :data:`OBSERVABILITY`'s proxy asks for (the fixture fetches nothing once built), a
+scheduled job, and the export path with its proxy and receivers, so the derived probe boots
+its ``egress:``, ``timer:`` and ``observability:`` checks, and the console shows the
+``sink:`` lines of what arrived. The evidence service with the simulator issuer and the
+attested endpoint on :data:`MANAGEMENT_PORT` taking :data:`DEV_SECRET` give the probe its
+``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``
+(:data:`TENANT_KEYS` among them, then an SSH login as :data:`TENANT`); :data:`ATTESTED` in
+front of the page gives it the ``attested-tls:`` check and CI its ``attest --tls``.
+:data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No ``Volume``: ``run``
+attaches disks only for an ``Image``'s runtime manifest, which this plain ``Recipe`` has
+none of."""
 
 
 def recipe_with(root: Literal["initramfs", "verity"] = "initramfs") -> Recipe:

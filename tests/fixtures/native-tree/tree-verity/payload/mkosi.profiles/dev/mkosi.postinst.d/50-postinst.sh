@@ -21,6 +21,7 @@ mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable attested-tls-8443-key.service
 mkosi-chroot systemctl enable attested-tls-8443.service
 mkosi-chroot systemctl enable nftables.service
+mkosi-chroot systemctl enable mode-switch.service
 mkosi-chroot systemctl enable tundravm-probe.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -36,6 +37,7 @@ ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/s
 ln -sf "/etc/systemd/system/attested-tls-8443-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-8443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/mode-switch.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkdir -p "$BUILDROOT/etc/ssh/authorized_keys.d"
 mkosi-chroot visudo -c -f /etc/sudoers.d/tenant

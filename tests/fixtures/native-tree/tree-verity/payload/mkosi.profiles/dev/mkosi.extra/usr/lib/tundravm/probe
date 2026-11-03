@@ -409,6 +409,13 @@ probe_login() {
     [ "$2" = - ] || parsed="; $2 parses"
     ok "password locked; sshd forces $4, no forwarding$parsed"
 }
+probe_firewall_mode() {
+    if said=$(/usr/bin/mode-switch status 2>&1); then
+        ok "$said"
+    else
+        fail "${said#mode-switch: }; journalctl -u mode-switch -u tdxs"
+    fi
+}
 probe_owner() {
     if [ ! -e "$1" ]; then
         fail "no $1 in the image"
@@ -475,6 +482,8 @@ check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=attested-tls:8443
 probe_attested_tls 8443 8745 attested-tls-8443.service tundravm-endpoint.service
+check=mode:firewall
+probe_firewall_mode
 check=observability:journal-export.service
 probe_upload journal-export.service 'http://127.0.0.2:19580' /var/lib/journal-export/state 19582
 check=observability:metrics-export.service

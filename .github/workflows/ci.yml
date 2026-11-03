@@ -274,6 +274,24 @@ jobs:
           done
           grep -F 'name=greeting-token' .tundravm/instances/fixture-1/console.log
 
+      - name: Open a maintenance window on the dev instance
+        # Firewall(modes=): the dev profile's SSH answers only in maintenance. `run switch`
+        # rides the attested endpoint's bound session and mode-switch extends RTMR3 before
+        # the ruleset changes (the simulator replays its log). sshd's banner says whether 22
+        # answers without a login attempt, which OpenSSH 10 would count against the source.
+        run: |
+          probe=.tundravm/instances/fixture-1/probe.json
+          port=$(jq -r '.ports["22"]' .tundravm/instances/fixture-1/instance.json)
+          jq -r '.results[] | select(.check == "mode:firewall") | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          jq -e '.results[] | select(.check == "mode:firewall") | .verdict == "ok"' "$probe"
+          if timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && head -c 4 <&3" | grep -q SSH-; then
+            echo "port 22 answered in production"; exit 1
+          fi
+          uv run tundravm run switch fixture-1 maintenance | tee "$RUNNER_TEMP/switch.txt"
+          timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && head -c 4 <&3" | grep -q SSH-
+          echo "ssh answered in maintenance"
+          sleep 2
+
       - name: Deliver the tenant login's key and log in as it, into its forced command
         # The dev profile's Login("tenant"): the endpoint writes the delivered key to its
         # authorized_keys.d file; sshd runs the forced command whatever is asked (here `sh`),
@@ -294,6 +312,25 @@ jobs:
             | "\(.check) \(.verdict) \(.detail)"' .tundravm/instances/fixture-1/probe.json
           jq -e '[.results[] | select(.check == "login:tenant" or .check == "root")
             | .verdict == "ok"] == [true, true]' .tundravm/instances/fixture-1/probe.json
+
+      - name: Close the maintenance window and read both switches in attest
+        # Back in production 22 is refused again, and attest replays both switches against
+        # the quote's RTMR3.
+        run: |
+          receipt=.tundravm/instances/fixture-1/instance.json
+          console=.tundravm/instances/fixture-1/console.log
+          policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
+          port=$(jq -r '.ports["22"]' "$receipt")
+          uv run tundravm run switch fixture-1 production | tee -a "$RUNNER_TEMP/switch.txt"
+          if timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && head -c 4 <&3" | grep -q SSH-; then
+            echo "port 22 answered after the window closed"; exit 1
+          fi
+          echo "port 22 refused after the window closed"
+          uv run tundravm attest fixture-1 --policy "$policy" | tee "$RUNNER_TEMP/attest-modes.txt"
+          grep -E '^modes  production; 2 switches since boot: maintenance at [0-9]+s, production at [0-9]+s \(RTMR3 replays them\)$' \
+            "$RUNNER_TEMP/attest-modes.txt"
+          grep -E 'mode-switch: (maintenance|production) at [0-9]+s of boot' "$console"
+          uv run tundravm run status fixture-1 | grep -E '^firewall +production \(2 switches since boot'
 
       - name: Follow a second dev instance through dev and stop it with Ctrl-C
         run: |
