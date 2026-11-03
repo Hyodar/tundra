@@ -150,6 +150,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `bake-result.json`, the evidence, release and witness bundles, and placeholder measurements.
 - **Breaking:** `check --format` and the Markdown renderers.
 - **Breaking:** `tundravm.testing.fake_bake` and `bake_in_process`; use `FakeMkosi` and `FakeSources`.
+- **Breaking:** `Secret(rotation=)`, which promised nothing: the attested endpoint delivers each secret once per boot.
 - The pre-v2 docs pages.
 - `tundravm.deploy.qemu.QemuDeployAdapter`, which no command reached: `run` launches QEMU.
 - `/usr/lib/tmpfiles.d/50-tundravm-runtime.conf`, which nothing ran: boot-time tmpfiles are masked.

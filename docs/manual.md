@@ -290,7 +290,7 @@ unit's read-only `$CREDENTIALS_DIRECTORY` at start.
 | `required=False` | the service starts without it and reads an empty credential |
 | `source=BrokerKey(...)` | a broker delivers it instead of an operator (no pull client yet) |
 
-`rotation=` promises nothing today: the endpoint delivers each secret once per boot.
+The endpoint delivers each secret once per boot.
 `Generated(name)` needs no delivery: each boot a root oneshot writes 32 random bytes as
 hex to `/run/tundravm/secrets/<name>`.
 

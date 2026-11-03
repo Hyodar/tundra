@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import KW_ONLY, dataclass
-from typing import Literal
 
 from tundravm._location import Located
 from tundravm._modules import instance_key
@@ -109,17 +108,12 @@ class Secret(Located):
 
     *required* secrets hold every bound service until they arrive (``jwt.ready``); an
     optional one starts the service without it, which then reads an empty credential.
-    *rotation* is what a re-delivery does: ``"restart"`` restarts the bound units (the
-    copy systemd made is per start, so this is the only way a new value reaches them),
-    ``"none"`` leaves them running on the old value until they restart for another
-    reason. A ``reload`` rotation would need a directory binding instead of a credential
-    and is not offered.
+    The endpoint delivers each secret once per boot.
     """
 
     name: str
     _: KW_ONLY
     required: bool = True
-    rotation: Literal["restart", "none"] = "restart"
     source: BrokerKey | None = None
 
     def __post_init__(self) -> None:
@@ -132,12 +126,6 @@ class Secret(Located):
             raise ValidationError(
                 "Secret: required= must be True or False.",
                 hint="Pass required=False for a secret the service can start without.",
-            )
-        if self.rotation not in ("restart", "none"):
-            raise ValidationError(
-                f"Secret: rotation {self.rotation!r} is not 'restart' or 'none'.",
-                hint="A credential is copied at start, so a new value reaches a unit only "
-                "when it restarts: rotation='restart'.",
             )
         if self.source is not None and not isinstance(self.source, BrokerKey):
             raise ValidationError(

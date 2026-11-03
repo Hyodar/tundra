@@ -1183,13 +1183,7 @@ This boot's instance key, for a service that signs with it: `InstanceKey()`.
 *dataclass*
 
 ```python
-Secret(
-    name: str,
-    *,
-    required: bool = True,
-    rotation: Literal['restart', 'none'] = 'restart',
-    source: BrokerKey | None = None,
-)
+Secret(name: str, *, required: bool = True, source: BrokerKey | None = None)
 ```
 
 A secret the image needs at run time and never contains: `Secret("jwt")`.

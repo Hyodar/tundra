@@ -170,6 +170,7 @@ RENAMED_KEYWORDS = {
         "secrets": "collected from Service(credentials=[...])",
     },
     "BootStep": {"priority": "after=/before= readiness handles"},
+    "Secret": {"rotation": "gone: the endpoint delivers each secret once per boot"},
     "fake_fragment": {"priority": "after="},
     **{
         helper: {"variants": "profiles="}
@@ -480,6 +481,7 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         "the init-priority-collision warning",
         'Diagnostic("app-x", "error", "m", variant=resolved.variant)',
         "the variant-empty finding",
+        'Secret("jwt", rotation="restart")',
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:

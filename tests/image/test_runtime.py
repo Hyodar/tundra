@@ -30,7 +30,7 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 token = Secret("api-token")
-flags = Secret("flags", required=False, rotation="none")
+flags = Secret("flags", required=False)
 
 
 def app(**changes: object) -> Service:
@@ -260,7 +260,7 @@ def test_an_optional_secret_starts_the_service_without_it() -> None:
     assert "credential-flags.service" not in _after(planned, "app.service")
     manifest = json.loads(planned.file("/etc/tundravm/runtime.json").text)
     entries = {entry["name"]: entry for entry in manifest["secrets"]}
-    assert entries["flags"]["rotation"] == "none" and not entries["flags"]["required"]
+    assert not entries["flags"]["required"] and "rotation" not in entries["flags"]
     assert entries["api-token"]["units"] == ["app.service"]
 
 
@@ -296,7 +296,7 @@ def test_a_secret_named_in_argv_or_environment_binds_itself(
 
 def test_secret_values_are_checked() -> None:
     with pytest.raises(ValidationError, match="rotation"):
-        Secret("x", rotation="reload")  # type: ignore[arg-type]
+        Secret("x", rotation="restart")  # type: ignore[call-arg]
     with pytest.raises(ValidationError, match="https://"):
         BrokerKey("http://kbs", audience="x")
 

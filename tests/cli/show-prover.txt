@@ -47,7 +47,7 @@ Built into production:
     /etc/tdx/secrets.json                                                                    0644  307B  sha256:452df7d4bb74
     /etc/tdx/secrets.yaml                                                                    0644  492B  sha256:f06dea230aa6
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
-    /etc/tundravm/runtime.json                                                               0644  987B  sha256:1ac2959cebb3
+    /etc/tundravm/runtime.json                                                               0644  958B  sha256:7f03d4eb5d80
     /srv/www/index.html                                                                      0644  16B  sha256:75186e1a779a
     /usr/bin/azure-complete-provisioning                                                     0755  2517B  sha256:fd3d32e3d33f
     /usr/lib/systemd/system/gcp-forwarded-ips.timer                                          0644  152B  sha256:2725564dde76
