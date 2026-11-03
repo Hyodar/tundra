@@ -93,6 +93,24 @@ def test_socket_without_service_and_eager_socket_service() -> None:
     assert found(*pair, code="socket-service-unpaired") == []
 
 
+SOCKET = "[Socket]\nListenStream=/run/a.sock\n\n[Install]\nWantedBy=sockets.target\n"
+DROPIN = File("/usr/lib/systemd/system/a.service.d/10.conf", "[Service]\nRestart=always\n")
+STARTED = Service("a", "/usr/bin/a", enabled=False)
+
+
+@pytest.mark.parametrize(
+    ("items", "unpaired"),
+    [
+        ((Unit("a.socket", SOCKET, enabled=True),), True),
+        ((Unit("a.socket", SOCKET, enabled=True), STARTED, DROPIN), False),
+    ],
+)
+def test_a_drop_in_does_not_hide_the_generated_service_a_socket_starts(
+    items: tuple[object, ...], unpaired: bool
+) -> None:
+    assert bool(found(*items, code="socket-service-unpaired")) is unpaired
+
+
 def test_timer_without_service_and_timer_service_enabled_at_boot() -> None:
     timer = "[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\n\n[Install]\nWantedBy=timers.target\n"
     [diag] = found(Unit("t.timer", timer, enabled=True), code="timer-unit-missing")

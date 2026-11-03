@@ -945,7 +945,7 @@ def _profile_units(state: ProfileState) -> list[ShippedUnit]:
         if is_unit_path(path) and not path.endswith("/"):
             subject = path if posixpath.dirname(path).endswith(".d") else posixpath.basename(path)
             units.append(ShippedUnit(subject, path, _decoded(content)))
-    shipped = {unit.name for unit in units}
+    shipped = {unit.name for unit in units if not unit.is_dropin}
     for svc in state.services:
         name = unit_name(svc.name)
         if svc.command and name not in shipped:
