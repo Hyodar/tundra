@@ -2102,13 +2102,15 @@ def _require_profile(recipe: RecipeState, name: str) -> None:
 
 def _module_selection(profile: ProfileState, config: EmitConfig) -> ModuleSelection:
     """*profile*'s kernel modules under *config* (a built kernel selects none, and keeps
-    its own when it builds loadable ones)."""
+    ``/usr/lib/modules`` when it builds loadable modules or the verity root's disk installs
+    its ``vmlinuz`` after the finalize scripts)."""
     kernel = config.kernel
     return module_selection(
         profile,
         config.kernel_modules,
         built_kernel=kernel is not None,
-        loadable=kernel is not None and kernel.composed and kernel.modules,
+        loadable=kernel is not None
+        and ((kernel.composed and kernel.modules) or config.root == "verity"),
     )
 
 
