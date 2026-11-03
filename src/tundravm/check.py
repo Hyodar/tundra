@@ -35,7 +35,7 @@ from .kernel_modules import (
     debloat_paths_remove,
     removes_path,
 )
-from .models import ProfileState, ServiceSpec, debloat_units_keep, unit_name
+from .models import ContainerSpec, ProfileState, ServiceSpec, debloat_units_keep, unit_name
 from .project import lock_command
 
 if TYPE_CHECKING:
@@ -370,10 +370,10 @@ def _packaged(program: str, packages: Iterable[str]) -> bool:
 
     Without the packages' file lists: a program in a ``bin`` directory named after a
     package, one the table knows a package for, or an essential one; anywhere else, a
-    directory named after a listed package. ``systemd`` is in every image.
+    directory named after a listed package.
     """
     name = posixpath.basename(program)
-    listed = {*packages, "systemd"}
+    listed = set(packages)
     if program.startswith(_BIN_DIRS):
         if name in _ESSENTIAL_BINARIES or name in listed:
             return True
@@ -404,11 +404,21 @@ def _rule_service_program_missing(
 ) -> Iterator[Diagnostic]:
     paths, trees = _shipped(state)
     mentions = _command_text(state) + "\n" + "\n".join(t for _, t in state.build_sources)
+    roots = {f"{c.name}.service": c for c in state.containers}
     for svc in state.services:
         program = _program(svc.command) if svc.command else None
-        if program is None or program in paths or program.startswith(trees):
+        if program is None:
             continue
-        if program in mentions or _packaged(program, state.packages):
+        root = roots.get(svc.name)
+        if root is not None:
+            if program not in {_norm(f.path) for f in root.files} and not _packaged(
+                program, root.packages
+            ):
+                yield _container_program_missing(root, program, profile_name, svc.name)
+            continue
+        if program in paths or program.startswith(trees):
+            continue
+        if program in mentions or _packaged(program, {*state.packages, "systemd"}):
             continue
         package = _PROGRAM_PACKAGE.get(posixpath.basename(program))
         add = (
@@ -426,6 +436,29 @@ def _rule_service_program_missing(
             profile=profile_name,
             subject=svc.name,
         )
+
+
+def _container_program_missing(
+    root: ContainerSpec, program: str, profile_name: str, unit: str
+) -> Diagnostic:
+    """``service-program-missing`` for a container's unit: it runs in the container's
+    root, which holds its packages, their essentials and its files, nothing of the image."""
+    package = repr(_PROGRAM_PACKAGE.get(posixpath.basename(program), "<its package>"))
+    listed = ", ".join([*map(repr, root.packages), package])
+    return Diagnostic(
+        severity="error",
+        code="service-program-missing",
+        message=(
+            f"Container({root.name!r}) runs {program}, which nothing in its root ships: the "
+            "container sees its own packages= and files=, not the image's"
+        ),
+        hint=(
+            f"Container({root.name!r}, [...], packages=[{listed}]), naming the package that "
+            f"ships {program}, or File.copy(Path(...), {program!r}, mode=0o755) in its files="
+        ),
+        profile=profile_name,
+        subject=unit,
+    )
 
 
 def _rule_profile_empty(

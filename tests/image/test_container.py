@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from tundravm import File, Image, Profile
+from tundravm import File, Image, Profile, Service
 from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
 from tundravm.components import Container, DevAccess, Egress
@@ -125,6 +125,23 @@ def test_container_shell_refuses_a_production_shell(
     image = Image("box", components=[container], dev=DevAccess(password="tdx"))
     found = {d.code: d.severity for d in plan(image, profile).lint() if d.profile == profile}
     assert (found.get("container-shell") == "error") is reported
+
+
+@pytest.mark.parametrize(
+    ("image", "reported"),
+    [
+        (Image("box", services=[Service("web", HTTPD)]), "nothing in the image ships"),
+        (Image("box", components=[web()]), ""),
+        (
+            Image("box", packages=["busybox"], components=[web(packages=["curl"])]),
+            "nothing in its root ships",
+        ),
+    ],
+    ids=["host-missing", "container-root-ships-it", "container-root-lacks-it"],
+)
+def test_a_container_s_program_is_looked_up_in_its_own_root(image: Image, reported: str) -> None:
+    found = [d for d in plan(image).lint() if d.code == "service-program-missing"]
+    assert [reported in d.message for d in found] == ([True] if reported else [])
 
 
 def test_the_probe_checks_the_container_in_a_development_profile() -> None:
