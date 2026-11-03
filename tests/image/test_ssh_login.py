@@ -1,5 +1,5 @@
 """``SshAccess(login=Login(...))``: a non-root login into a forced command or a shell, with
-fixed sudo rules, keys baked or delivered after attestation."""
+fixed sudo rules, keys baked or delivered after attestation, and its probe row."""
 
 from __future__ import annotations
 
@@ -103,6 +103,16 @@ def test_delivered_keys_land_in_the_logins_authorized_keys_file() -> None:
     assert '"/etc/ssh/authorized_keys.d/tenant"' in config
     assert "-/etc/ssh/authorized_keys.d" in planned.unit("tundravm-endpoint.service").text
     assert 'mkdir -p "$BUILDROOT/etc/ssh/authorized_keys.d"' in _postinst(planned)
+
+
+def test_the_dev_probe_checks_each_login() -> None:
+    login = Login("tenant", keys=[KEY], command=STATUS, sudo=[Sudo("/usr/bin/toggle")])
+    probe = plan(_image(login), "dev").file("/usr/lib/tundravm/probe").text
+    assert "check=login:tenant\n" in probe
+    assert (
+        f"probe_login tenant /etc/sudoers.d/tenant 'restrict,command=\"{STATUS}\"' '{STATUS}'"
+        in probe
+    )
 
 
 @pytest.mark.parametrize(

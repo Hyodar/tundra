@@ -52,6 +52,10 @@ The checks, each only when its declaration exists (:func:`derive`):
 - ``host-keys``: the SSH host key directory is ``root:root`` and writable by root only, the
   key ``root:root 0600`` (plan 5.2 item 2: root-owned, read-only to everything else; the
   root is a tmpfs or erofs, which carry no ``chattr +i``);
+- ``login:NAME``: each ``Login`` of an ``SshAccess``: the account exists with a locked
+  password, its ``sudoers.d`` file parses (``visudo -c``), sshd's effective configuration
+  for it (``sshd -T -C user=NAME``) forces its command (or none) and disables forwarding,
+  and each baked key in its ``authorized_keys.d`` file carries the declared options;
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
   ``root:root 0600`` and its public key file holds its public key;
 - ``attested-tls:PORT``: the attested TLS listener on ``PORT`` serves a certificate, and
@@ -131,6 +135,7 @@ Helper = Literal[
     "modules",
     "keys",
     "instance",
+    "login",
     "endpoint",
     "attested-tls",
     "owner",
@@ -357,6 +362,7 @@ def derive(
                 ("ssh-host-keys.service",),
             )
         )
+    checks += _logins(items)
     checks.append(
         Check(
             "key:instance",
@@ -417,6 +423,52 @@ def _metadata(items: Sequence[Declaration], glue: Sequence[Declaration]) -> list
             )
         )
     return checks
+
+
+def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
+    """``login:NAME`` for each ``Login``'s ``sshd_config.d`` file in *items*."""
+    from tundravm.declarative.model import File
+    from tundravm.declarative.utils import (
+        SSH_AUTHORIZED_KEYS_DIR,
+        SSH_LOGIN_CONFIG,
+        SUDOERS_DIRECTORY,
+    )
+
+    files = {item.path: item for item in items if isinstance(item, File)}
+    prefix, _, suffix = SSH_LOGIN_CONFIG.partition("{name}")
+    for path, item in files.items():
+        if not (path.startswith(prefix) and path.endswith(suffix)):
+            continue
+        name = path[len(prefix) : -len(suffix)]
+        config = item.content if isinstance(item.content, str) else ""
+        forced = next(
+            (line.split(None, 1)[1] for line in config.splitlines() if "ForceCommand" in line),
+            "none",
+        )
+        sudoers = f"{SUDOERS_DIRECTORY}/{name}"
+        keys = files.get(f"{SSH_AUTHORIZED_KEYS_DIR}/{name}")
+        text = keys.content if keys is not None and isinstance(keys.content, str) else ""
+        options = text.split(" ssh-", 1)[0] if text else "-"
+        what = [f"{name} exists, password locked", f"sshd forces {forced}, no forwarding"]
+        if sudoers in files:
+            what.append(f"{sudoers} parses")
+        if options != "-":
+            what.append(f"its keys carry {options}")
+        yield Check(
+            f"login:{name}",
+            "; ".join(what),
+            " ".join(
+                [
+                    "probe_login",
+                    name,
+                    sudoers if sudoers in files else "-",
+                    _quote(options),
+                    _quote(forced),
+                ]
+            ),
+            "login",
+            ("ssh-host-keys.service",),
+        )
 
 
 def _owned(items: Iterable[Declaration]) -> Iterator[tuple[str, str, str]]:
@@ -1108,6 +1160,48 @@ probe_instance_key() {{
         ok "root:root 600, pub $pub"
     fi
 }}
+""",  # noqa: E501
+    "login": """\
+probe_login() {
+    if ! entry=$(getent shadow "$1"); then
+        fail "no user $1: the image's useradd for it did not run; read the build log"
+        return
+    fi
+    hash=$(echo "$entry" | cut -d: -f2)
+    case $hash in
+        '!'* | '*'*) ;;
+        *) fail "$1 has a password: a login has none; something set one (chpasswd, usermod -p)"; return ;;
+    esac
+    if [ "$2" != - ] && ! said=$(visudo -c -f "$2" 2>&1); then
+        fail "visudo -c -f $2: $(echo "$said" | tail -n 1): sudo refuses the file, so no rule runs"
+        return
+    fi
+    if ! effective=$(sshd -T -C "user=$1,host=probe,addr=127.0.0.1" 2>&1); then
+        fail "sshd -T: $(echo "$effective" | tail -n 1)"
+        return
+    fi
+    forced=$(echo "$effective" | sed -n 's/^forcecommand //p')
+    if [ "$forced" != "$4" ]; then
+        fail "sshd forces '$forced' for $1, declared '$4': another sshd_config.d file overrides its Match block"
+        return
+    fi
+    if ! echo "$effective" | grep -qx 'disableforwarding yes'; then
+        fail "sshd lets $1 forward: another sshd_config.d file overrides its Match block"
+        return
+    fi
+    keys=/etc/ssh/authorized_keys.d/$1
+    if [ "$3" != - ] && [ -e "$keys" ]; then
+        while read -r line; do
+            case $line in
+                "$3 "*) ;;
+                *) fail "a key in $keys lacks '$3': the file is not the one the image declares"; return ;;
+            esac
+        done <"$keys"
+    fi
+    parsed=
+    [ "$2" = - ] || parsed="; $2 parses"
+    ok "password locked; sshd forces $4, no forwarding$parsed"
+}
 """,  # noqa: E501
     "owner": """\
 probe_owner() {
