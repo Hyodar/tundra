@@ -19,7 +19,8 @@ carries its notes in the tagged tree. Nothing is committed by the workflow.
 
 ## What the workflow does
 
-1. Runs `ci.yml`'s test job: lint, types, the unit suite, the Go tests of `tools/`.
+1. Runs a copy of `ci.yml`'s test job: lint, types, the unit suite, the Go tests of
+   `tools/`, and `check` of the example against its committed tree.
 2. Builds the sdist and the wheel with `uv build` and checks both carry the tag's version.
 3. Installs the wheel in a clean venv: `--version` prints the tag's version, `doctor` runs,
    and the default tools source is `Git(<repo>, <the tag's commit>, subdir="tools")`.

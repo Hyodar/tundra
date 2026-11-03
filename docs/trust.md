@@ -50,11 +50,9 @@ How the last row works (plan 6.1):
   [Delivering secrets](manual.md#delivering-secrets).
 
 The boot probe a development profile carries (`run --probe`) checks from inside the guest
-that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress
-refused, sandboxes under their ceilings, modules, symbols and host keys as declared,
-attested TLS certificates bound. It catches a broken image, not an attacker: a compromised
-guest can print `ok`. Evidence is the
-quote `attest` verifies. A production profile carries no probe.
+that what the image declares holds ([the checks](manual.md#the-boot-probe)). It catches a
+broken image, not an attacker: a compromised guest can print `ok`. Evidence is the quote
+`attest` verifies. A production profile carries no probe.
 
 ### What the quote covers
 
@@ -76,12 +74,9 @@ carry the firmware they belong to, and values from different firmware never matc
 Every UKI package, `Container` roots included, comes from one pinned Debian snapshot;
 a moved snapshot is a new image.
 
-`attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
-quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
-value. For a production build, a TD with the `DEBUG` attribute is `untrusted` and simulated
-evidence never passes. Without a validator the best verdict is `measurements-match`: the registers match,
-but nobody checked that a TDX module signed them. A missing register makes it `partial`,
-which never releases a secret. For `qemu`, approve MRTD and RTMR0 in the policy's
+The [verdicts](manual.md#deploy-and-attest) say when `attest` says `trusted`. Without a
+validator the best verdict is `measurements-match`: the registers match, but nobody
+checked that a TDX module signed them. For `qemu`, approve MRTD and RTMR0 in the policy's
 `platform_approval` from a quote of a host you trust.
 
 Predictions (the build), observations (`attest --output`) and the approved policy
@@ -106,23 +101,25 @@ record with no prediction prints its state (`unknown: ...`) in place of a value.
 
 ### What first contact proves
 
-An image with a volume, a secret or an `AttestedTLS` ingress runs the attested endpoint on
-port 8745, with a TLS key made in memory at start. Its evidence is a quote whose user data
+The [control plane](manual.md#the-control-plane) runs the attested endpoint on port 8745,
+with a TLS key made in memory at start. Its evidence is a quote whose user data
 is `sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public key ‖
 AttestedTLS certificate keys)`: length-prefixed parts (big-endian uint32), keys as
 DER SubjectPublicKeyInfo, ports ascending (`Binding` in `tools/pkg/endpoint`). `attest`
 sends a fresh nonce and refuses evidence for another nonce (a replay) or another TLS key
-than its session's (a relay) or lacking tdxs's `endpoint` tag (root's), then judges the
-quote; on success it writes the bound host keys as `known_hosts`. `secrets deliver` and `unlock`
-verify again and write only on that session, with its nonce, once per value per boot:
-the first writer wins. With an `OperatorKey` volume each write is signed, over the quote's
-user data, by the SSH key the first signed write pinned in the volume's LUKS2 header. That
-header is plaintext: a host rewriting it takes that boot's writes, not the volume, and the
-client refuses a volume without the owner its receipt names. A lost key means a new
-volume. On TDX, SSH keys need an owner the volume's encrypted copy confirmed (unlock,
-re-attest).
-A `Login` reaches only its forced command or shell and listed sudo rules; it has no
-password, forwarding or other key.
+than its session's (a relay). It also refuses evidence without tdxs's `endpoint` tag,
+which only root's quotes carry. Then it judges the quote. On success it writes the bound
+host keys as `known_hosts`. `secrets deliver` and `unlock` verify again and write only on
+that session, with its nonce, once per value per boot: the first writer wins.
+
+With an `OperatorKey` volume each write is signed over the quote's user data by the
+volume's owner. The first signed write pins that SSH key in the volume's LUKS2 header. The
+header is plaintext, so a host that rewrites it takes that boot's writes. It never takes
+the volume, whose encrypted copy of the owner then disagrees. The client refuses an owner
+other than its receipt's. A lost key means a new volume. On TDX the endpoint takes an SSH
+key, root's or a `Login`'s, only from an owner the encrypted copy confirmed this boot:
+unlock, then attest again. An image without an `OperatorKey` volume takes none there. A
+`Login` reaches only its forced command or shell and its sudo rules.
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|
@@ -147,10 +144,8 @@ the client or the upstream. No TDX host has run it yet (gate 2).
 
 More limits that are not platform-specific:
 
-- **Simulated instances and secrets.** `secrets deliver` and `secrets unlock` refuse a
-  production build in a simulated instance before they contact it. A development build in
-  a simulated instance releases on a `simulated` verdict only. tundravm cannot tell a test
-  value from a production one: never deliver production values to it.
+- **Simulated instances and secrets.** tundravm cannot tell a test value from a production
+  one: never deliver production values to a simulated instance.
 - **Volumes.** No backups, no resize, no rollback protection: a host can attach an older
   copy of a disk and the guest cannot tell. Local instances get a fresh sparse 16 GiB disk
   per volume, per instance; nothing reattaches them.
@@ -162,6 +157,9 @@ More limits that are not platform-specific:
 - **The kernel.** `Kernel.default()` is Debian's `linux-image-amd64` with a curated module
   set. A weekly CI workflow builds and boots one `Kernel.build` with every target's drivers
   built in; the tested kernel matrix of plan 6.7 is not published yet.
+- **Firewall modes on TDX.** A switch extends RTMR3 through a kernel file Linux 6.16 added.
+  Debian's 6.12 lacks it, so a TDX instance refuses every switch until the image builds a
+  newer `Kernel`.
 - **No boot-time tmpfiles.** The debloat masks them: nothing unmeasured rewrites paths.
 - **The tools.** The evidence service, the endpoint, the key and disk tools build from
   `tools/` at the SDK's commit, pinned by the lock like any source.
