@@ -1,62 +1,32 @@
-"""The built-kernel fixture: the smallest recipe whose payload boots a kernel the build compiles.
+"""The built-kernel fixture: the smallest image whose payload boots a kernel the build compiles.
 
-:data:`KERNEL` is ``Kernel.build(base=DebianConfig(...))`` as an image file writes it, and the
-recipe declares what it lowers to in an image with the qemu, azure and gcp targets
-(:func:`~tundravm._image._lower.kernel_of`): Debian's own config for the same release (the
-``cloud-amd64`` flavor, which ``tundravm lock`` pins), Tundra's hardening fragment and the
-gcp target's ACPI patch, every driver built in. So the build records what ``olddefconfig``
-does to Debian's ``=m`` drivers under ``CONFIG_MODULES=n``, checks every hardening option
-survived, and its drivers check proves every target's are built in. It is a ``Recipe``
-rather than an ``Image`` because an image also builds the evidence service and the runtime
-tools from ``tools/``, which a kernel boot needs none of.
+:data:`KERNEL` is ``Kernel.build(base=DebianConfig(...))``: Debian's own config for the same
+release (the ``cloud-amd64`` flavor, which ``tundravm lock`` pins), Tundra's hardening
+fragment and the gcp target's ACPI patch, every driver built in. So the build records what
+``olddefconfig`` does to Debian's ``=m`` drivers under ``CONFIG_MODULES=n``, checks every
+hardening option survived, and its drivers check proves every target's are built in.
 
-The ``default`` variant has the qemu, azure and gcp outputs. ``BootProbe`` prints the
-kernel release, how many module files the root carries and which drivers and file systems
-the kernel registered; CI's ``kernel`` workflow (``.github/workflows/kernel.yml``) builds
-it and boots ``qemu.raw`` through ``tests/integration/test_kernel_boot.py``.
+The image targets qemu, azure and gcp. Its ``dev`` profile adds :data:`PROBE`, a service
+printing the kernel release, how many module files the root carries and which drivers and
+file systems the kernel registered; CI's ``kernel`` workflow
+(``.github/workflows/kernel.yml``) builds that profile and boots ``qemu.raw`` through
+``tests/integration/test_kernel_boot.py``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
-from tundravm import Debian, DebianConfig, Image, Kernel
-from tundravm import declarative as dm
-from tundravm._image._lower import kernel_of
-from tundravm.declarative import (
-    Declaration,
-    File,
-    Hardening,
-    Mkosi,
-    Recipe,
-    Root,
-    Task,
-    Variant,
-    component,
-)
-from tundravm.declarative.model import Target
-from tundravm.declarative.utils import Composite
+from tundravm import Debian, DebianConfig, File, Image, Kernel, Profile, Service
+from tundravm.systemd import DropIn, Hardening
 
 SNAPSHOT = "20261018T082309Z"
-SEED = "0f6b1c2e-7a5d-4c3b-9e81-2d4a6b8c0e13"
 VERSION = "6.12.113"
 """The stable release Debian trixie's ``linux`` 6.12.113-1 packages: the newest
 ``linux-config-6.12`` at :data:`SNAPSHOT`, in its security pool only (the main pool has
 6.12.111-1)."""
 RELEASE = VERSION
 """What ``uname -r`` prints: Debian's config sets no ``CONFIG_LOCALVERSION``."""
-
 KERNEL = Kernel.build(base=DebianConfig(f"{VERSION}-1"))
 """gregkh/linux ``v6.12.113`` from Debian's config, hardened, no loadable modules."""
-TARGETS: tuple[Target, ...] = ("qemu", "azure", "gcp")
-
-
-def built_kernel(kernel: Kernel) -> dm.Kernel:
-    """What *kernel* lowers to in an image with :data:`TARGETS`."""
-    return kernel_of(
-        Image("kernel", base=Debian("trixie", snapshot=SNAPSHOT), kernel=kernel, targets=TARGETS)
-    )
-
 
 DRIVERS = (
     "/sys/bus/virtio/drivers/virtio_net",
@@ -89,29 +59,33 @@ say "filesystems$filesystems"
 say done
 """
 
-
-@component
-class BootProbe(Composite):
-    """A boot task printing what the built kernel registered."""
-
-    def compose(self) -> Iterator[Declaration]:
-        yield File(PROBE, PROBE_SCRIPT, mode=0o755)
-        yield Task(
+DEV = Profile(
+    add=[
+        File.text(PROBE, PROBE_SCRIPT, mode=0o755),
+        Service(
             "boot-probe",
-            ("/bin/sh", PROBE),
-            description="Print what the built kernel registered",
-            user=Root(),
-            hardening=Hardening.none(),
-        )
-
-
-recipe = Recipe(
-    name="kernel",
-    platform=dm.Debian("trixie", snapshot=SNAPSHOT, kernel_package=None),
-    mkosi=Mkosi(seed=SEED),
-    items=(
-        built_kernel(KERNEL),
-        BootProbe(),
-    ),
-    variants=(Variant("default", outputs=("qemu", "azure", "gcp")),),
+            ["/bin/sh", PROBE],
+            user="root",
+            hardening=Hardening.relaxed(kernel=False),
+            unit=DropIn(extra={"Service": {"StandardOutput": "journal+console"}}),
+        ),
+    ],
+    production=False,
 )
+"""The probe, a root service under the relaxed sandbox with the kernel knobs off, so it sees
+``/usr/lib/modules``; its lines reach the console. A production boot starts no service
+without TDX, so the workflow boots this profile."""
+
+
+def kernel_image(name: str, kernel: Kernel) -> Image:
+    """The fixture image *name* booting *kernel*, with the qemu, azure and gcp targets."""
+    return Image(
+        name,
+        base=Debian("trixie", snapshot=SNAPSHOT),
+        kernel=kernel,
+        targets=("qemu", "azure", "gcp"),
+        profiles={"dev": DEV},
+    )
+
+
+image = kernel_image("kernel", KERNEL)

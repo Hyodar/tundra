@@ -204,8 +204,6 @@ def test_the_cache_key_follows_fragments_and_patches(base: Path, tmp_path: Path)
     assert key() != key(KernelConfig({"CONFIG_XFS_FS": "y"}))
 
 
-
-
 def test_a_composed_kernel_brings_its_build_packages(base: Path, tmp_path: Path) -> None:
     def packages(kernel: Kernel, out: str) -> set[str]:
         compile(_recipe(kernel)).write(tmp_path / out)

@@ -124,3 +124,12 @@ def test_a_sibling_module_resolves_and_an_edit_is_never_hidden_by_stale_bytecode
     os.utime(path, ns=(stamp, stamp))  # and the same mtime
     assert list(tundravm.load(path).packages) == ["aaaaa"]
     assert not (tmp_path / "__pycache__").exists()
+
+
+@pytest.mark.parametrize("fixture", ["recipe", "example"])
+def test_the_kernel_workflow_fixtures_are_image_files(fixture: str) -> None:
+    """``kernel.yml`` builds each one's ``dev`` profile, which boots its probe service."""
+    path = Path(__file__).parents[1] / "fixtures" / "kernel" / f"{fixture}.py"
+    loaded = load_file(path, extra_paths=[Path(__file__).parents[2]])
+    assert loaded.declared.kernel.built
+    assert loaded.lowered().profile_names == ("dev", "production")
