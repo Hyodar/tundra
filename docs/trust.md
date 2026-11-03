@@ -20,7 +20,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 | Measured UKI | the host swapping the kernel, the initrd or the command line unnoticed: they are one PE file the firmware measures into RTMR1 and RTMR2 | a verifier that does not check, or approves the wrong values | implemented; predictions are offline replays, never compared with a real quote (gate 2) |
 | dm-verity root (`RootFS.verity()`) | changes to the root partition at rest: the root hash is on the measured command line | runtime writes, which land in a volatile overlay and vanish at reboot; volume data | proven: CI boots from dm-verity |
 | Firewall | inbound connections to anything not exposed | outbound traffic unless `Egress` is set; requests on exposed plaintext ports | implemented; the rendered rules are asserted |
-| Service sandbox | a compromised service reaching the rest of the guest | kernel exploits; the service's own data and credentials | implemented; each preset's directives are asserted |
+| Service sandbox | a compromised service reaching the rest of the guest | kernel exploits; the service's own data and credentials; a `tdx`-group service forging endpoint evidence | implemented; each preset's directives are asserted |
 | LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlocked over the attested endpoint |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that binds the secret | implemented |
 | Metrics keep-list | series `export=` does not name leaving the TD, a side channel | the journal, which leaves whole | implemented; the dev probe reads the sink |
@@ -99,10 +99,9 @@ measurements are checked against a quote.
 
 The Authenticode digest (SHA-384, over the UKI as a PE image) is the event OVMF extends
 RTMR1 with when it loads the UKI, so a fleet can match a running image to a build by the
-event log alone. It names the UKI. It is not a register value and attests nothing by
-itself. A row such as `MRTD/RTMR0 3/27 accepted values` is a firmware table that the
-policy pairs by firmware. A record with no prediction prints its state (`unknown: ...`)
-in place of a value.
+event log alone. It is no register value and attests nothing. A row such as
+`MRTD/RTMR0 3/27 accepted values` is a firmware table that the policy pairs by firmware. A
+record with no prediction prints its state (`unknown: ...`) in place of a value.
 
 ### What first contact proves
 
@@ -114,11 +113,13 @@ DER SubjectPublicKeyInfo, ports ascending (`Binding` in `tools/pkg/endpoint`). `
 sends a fresh nonce and refuses evidence for another nonce (a replay) or another TLS key
 than its session's (a relay), then judges the quote; on success it writes the bound host
 keys as `known_hosts`. `secrets deliver` and `unlock`
-verify again and write only on that session, with its nonce, once per value per boot.
-With an `OperatorKey` volume each write is also signed over its nonce by the SSH key the
-first signed write pinned in the volume's LUKS2 header, so after a reboot the endpoint
-refuses any other key. The header is plaintext, so the client also refuses a volume back
-without the owner its receipt names; a lost key means a new volume.
+verify again and write only on that session, with its nonce, once per value per boot:
+the first writer wins. With an `OperatorKey` volume each write is signed, over the quote's
+user data, by the SSH key the first signed write pinned in the volume's LUKS2 header. That
+header is plaintext: a host rewriting it takes that boot's writes, not the volume, and the
+client refuses a volume without the owner its receipt names. A lost key means a new
+volume. On TDX, SSH keys need an owner the volume's encrypted copy confirmed (unlock,
+re-attest).
 A `Login` reaches only its forced command or shell and listed sudo rules; it has no
 password, forwarding or other key.
 
@@ -167,7 +168,7 @@ More limits that are not platform-specific:
 ## Recovery
 
 The model is replacement, never repair: a new VM from an approved build, with the
-persistent volumes moved to it; no in-place upgrades, no A/B slots.
+persistent volumes moved to it.
 State that matters lives on a `Volume`; everything else is rebuilt from the build
 directory.
 
@@ -177,14 +178,12 @@ directory.
 
 1. Launch the candidate from `NEW`, without volumes.
 2. Attest it and deliver its credentials: its control plane is ready.
-3. Stop the old instance. tundravm cannot drain connections, so stopping is the drain and
-   the fence.
+3. Stop the old instance: the drain and the fence.
 4. Detach every volume from the old instance and attach it to the candidate.
 5. Unlock the candidate's `OperatorKey` volumes.
 6. Wait for application readiness.
 
-Downtime runs from step 3 to step 6: a stateful service is not ready before it owns its
-volume. The command refuses Azure and a build whose
+Downtime runs from step 3 to step 6. The command refuses Azure and a build whose
 volumes differ from the instance's in name or unlock kind. If the candidate fails
 attestation, the old instance keeps running with its volumes. `deploy rollback INSTANCE`
 runs the same workflow back to the instance it replaced. Retiring the old policy and
@@ -216,8 +215,8 @@ closed and its services wait: the safe state; keep it.
    including `runtime-init-keys` and `runtime-init-disks`.
 2. Check the instance runs the build you expect: `tundravm attest INSTANCE --policy FILE`.
    A different build is a deployment mistake, not a disk problem.
-3. Send the passphrase again (`tundravm secrets unlock INSTANCE VOLUME`): typos are the
-   usual cause.
+3. Restart the instance, then send the passphrase again (`tundravm secrets unlock INSTANCE
+   VOLUME`, once per boot): typos are the usual cause.
 4. If the disk is attached elsewhere, or an upgrade stopped half-way, stop the other
    instance, then reattach with `deploy --volume NAME=existing:ID`.
 5. A `TpmSeal` volume whose vTPM state is gone does not open again. Keep the disk, restore
