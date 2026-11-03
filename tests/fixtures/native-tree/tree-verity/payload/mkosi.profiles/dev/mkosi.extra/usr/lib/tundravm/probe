@@ -602,6 +602,62 @@ probe_login() {
     [ "$2" = - ] || parsed="; $2 parses"
     ok "password locked; sshd forces $4, no forwarding$parsed"
 }
+probe_menu() {
+    name=$1 file=$2 sudoers=$3 bad=$4
+    shift 4
+    said=$(stat -c '%U:%G %a' "$file" 2>&1)
+    if [ "$said" != "root:root 444" ]; then
+        fail "$file is $said, not root:root 444: the login could change its own menu"
+        return
+    fi
+    as_login() { setpriv --reuid "$name" --regid "$name" --init-groups env -i SSH_ORIGINAL_COMMAND="$1" /usr/bin/login-menu 2>&1; }
+    if ! listing=$(as_login ''); then
+        fail "login-menu as $name lists nothing: $listing"
+        return
+    fi
+    for entry in "$@"; do
+        if ! printf '%s\n' "$listing" | grep -Eq "^  $entry( |\$)"; then
+            fail "login-menu as $name does not list $entry: $listing"
+            return
+        fi
+    done
+    if said=$(as_login sh); then
+        fail "login-menu as $name ran sh: $said"
+        return
+    fi
+    if [ "$bad" != - ] && said=$(as_login "$bad"); then
+        fail "login-menu as $name ran '$bad', outside its bounds: $said"
+        return
+    fi
+    sudo=
+    if [ "$sudoers" != - ]; then
+        got=$(sudo -n -l -U "$name" 2>&1 | sed -n 's/^ *(root) //p')
+        want=$(sed -n "s/^$name ALL=(root) //p" "$sudoers")
+        if [ "$got" != "$want" ]; then
+            fail "sudo -l -U $name lists '$got', $sudoers holds '$want'"
+            return
+        fi
+        sudo="; sudo -l lists its $(printf '%s\n' "$want" | grep -c .) lines and no other"
+    fi
+    ok "$file root:root 0444; lists $*; refuses sh${bad:+ and '$bad'}$sudo"
+}
+probe_no_root() {
+    if ! effective=$(sshd -T -C "user=root,host=probe,addr=127.0.0.1" 2>&1); then
+        fail "sshd -T: $(echo "$effective" | tail -n 1)"
+        return
+    fi
+    if ! echo "$effective" | grep -qx 'permitrootlogin no'; then
+        fail "sshd lets root in ($(echo "$effective" | grep '^permitrootlogin')): another sshd_config.d file overrides SshAccess's"
+        return
+    fi
+    for keys in /root/.ssh/authorized_keys /etc/ssh/authorized_keys.d/root; do
+        if [ -e "$keys" ]; then
+            fail "$keys exists: something gave root a key the image does not declare"
+            return
+        fi
+    done
+    ok "sshd says permitrootlogin no; no authorized_keys for root"
+}
 probe_firewall_mode() {
     if said=$(/usr/bin/mode-switch status 2>&1); then
         ok "$said"
@@ -758,7 +814,11 @@ probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root
 probe_root
 check=login:tenant
-probe_login tenant /etc/sudoers.d/tenant '-' '/bin/sh -c '\''cat /etc/greeter/greeting; /usr/bin/sudo -n /usr/bin/systemctl is-active web'\'''
+probe_login tenant /etc/sudoers.d/tenant '-' '/usr/bin/login-menu'
+check=menu:tenant
+probe_menu tenant /etc/tundravm/logins/tenant.json /etc/sudoers.d/tenant 'logs 1001' greeting logs switch web
+check=ssh:root
+probe_no_root
 check=key:instance
 probe_instance_key /run/tundravm/instance-key.pem /run/tundravm/instance-key.pub
 check=owner:/home/tenant

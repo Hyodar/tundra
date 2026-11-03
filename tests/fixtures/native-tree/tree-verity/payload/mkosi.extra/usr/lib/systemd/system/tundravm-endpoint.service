@@ -6,7 +6,7 @@ Wants=network-online.target tdxs.socket
 [Service]
 Type=notify
 ExecStart=/usr/bin/attested-endpoint --config /etc/tdx/secrets.yaml
-ReadWritePaths=-/etc/ssh/authorized_keys.d -/root -/run/tundravm
+ReadWritePaths=-/etc/ssh/authorized_keys.d -/run/tundravm
 Restart=on-failure
 RestartSec=5
 ProtectSystem=strict

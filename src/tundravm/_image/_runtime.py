@@ -16,7 +16,8 @@ values become the declarations the tools and systemd already understand:
 - a volume an operator unlocks, any secret or an ``AttestedTLS`` ingress brings the
   control plane: that ``Secrets`` block is the attested endpoint on the management port
   (evidence, credentials, unlock, the operator's SSH key), and
-  ``SshAccess(from_delivery=True)`` lets only that key in;
+  ``SshAccess(from_delivery=True)`` lets only that key in, as root, or as the
+  ``Login(owner=True)`` of an ``SshAccess`` declaring logins, where root takes none;
 - an ingress is a ``socat`` TLS relay unit with its firewall port; an ``AttestedTLS`` one
   also has a root oneshot making its key pair and certificate each boot, which the relay
   reads as credentials and the endpoint's quotes bind;
@@ -64,6 +65,7 @@ __all__ = [
     "RuntimeFragment",
     "bound",
     "check_bindings",
+    "check_owner_login",
     "login_key_files",
     "services_of",
 ]
@@ -138,6 +140,21 @@ def login_key_files(image: object) -> tuple[tuple[str, str], ...]:
             if isinstance(login.keys, Secret)
         )
     )
+
+
+def check_owner_login(image: object, ssh: object) -> None:
+    """Refuse a ``Login(owner=True)`` outside the image's own ``SshAccess``: the control plane
+    hands the owner's key only to the one in ``components=``."""
+    from tundravm.components import SshAccess
+
+    own = {login.name for login in ssh.logins} if isinstance(ssh, SshAccess) else set()
+    for login in _logins(_image_items(image)):
+        if login.owner and login.name not in own:
+            raise ValidationError(
+                f"Login {login.name}: owner=True takes the key attest hands over, which only "
+                "the image's own SshAccess receives, and this one is declared elsewhere.",
+                hint="Pass its SshAccess in Image(components=[...]).",
+            )
 
 
 def _first[T: (Volume, Secret)](kind: str, found: dict[str, T], value: T) -> None:
@@ -237,6 +254,26 @@ class Runtime:
     """The image targets Azure: each volume is the data disk at its LUN, its position."""
 
     @property
+    def owner_login(self) -> str | None:
+        """The ``Login(owner=True)`` of the image's ``SshAccess``, which takes the owner's key
+        instead of root."""
+        from tundravm.components import SshAccess
+
+        if not isinstance(self.ssh, SshAccess):
+            return None
+        return next((login.name for login in self.ssh.logins if login.owner), None)
+
+    @property
+    def root_delivery(self) -> bool:
+        """Whether root takes the delivered key: unless the image's ``SshAccess`` declares a
+        login and does not ask for it with ``from_delivery=True``."""
+        from tundravm.components import SshAccess
+
+        if not isinstance(self.ssh, SshAccess) or not self.ssh.logins:
+            return True
+        return bool(self.ssh.from_delivery)
+
+    @property
     def control_plane(self) -> bool:
         """Whether the image runs the attested endpoint: a secret, a volume an operator
         unlocks, an attested TLS ingress whose certificate its quotes bind, or firewall
@@ -320,6 +357,13 @@ class Runtime:
     def declarations(self) -> tuple[dm.Declaration | Component, ...]:
         """Everything the contracts add to the image (a component is lowered as one)."""
         found: list[dm.Declaration | Component] = []
+        if self.owner_login is not None and not self.control_plane:
+            raise ValidationError(
+                f"Login {self.owner_login}: owner=True takes the key attest hands over, and "
+                "this image runs no attested endpoint to take it.",
+                hint="Give the image a Volume(..., unlock=OperatorKey()), whose owner it is, "
+                "or keys= of its own.",
+            )
         if self.volumes or self.control_plane:
             found.append(dm.RuntimeTools(self.tools))
         for volume in self.volumes:
@@ -384,8 +428,9 @@ class Runtime:
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:
-        """The control plane: the attested endpoint, root SSH, and the credential waits of
-        the required secrets; an optional secret has none, so the boot completes without it."""
+        """The control plane: the attested endpoint, SSH for the delivered key (root's, or the
+        owner login's), and the credential waits of the required secrets; an optional secret
+        has none, so the boot completes without it."""
         from tundravm.components import SshAccess
 
         entries = tuple(
@@ -403,11 +448,13 @@ class Runtime:
             CONTROL_PLANE,
             entries=entries,
             port=MANAGEMENT_PORT,
+            ssh_directory="/root/.ssh" if self.root_delivery else None,
             ssh_key_path=None,
+            ssh_login=self.owner_login,
             attested_tls=tuple(way.port for way in self.attested),
         )
         if isinstance(self.ssh, SshAccess):
-            yield dataclasses.replace(self.ssh, from_delivery=True)
+            yield dataclasses.replace(self.ssh, from_delivery=self.root_delivery)
         else:
             yield SshAccess(from_delivery=True)
         for secret in self.secrets:

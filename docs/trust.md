@@ -119,7 +119,8 @@ the volume, whose encrypted copy of the owner then disagrees. The client refuses
 other than its receipt's. A lost key means a new volume. On TDX the endpoint takes an SSH
 key, root's or a `Login`'s, only from an owner the encrypted copy confirmed this boot:
 unlock, then attest again. An image without an `OperatorKey` volume takes none there. A
-`Login` reaches only its forced command or shell and its sudo rules.
+`Login` reaches only its menu, or its shell, and one exact sudoers line per root entry.
+With a `Login(owner=True)` the owner's key logs in as that login, and root never does.
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|

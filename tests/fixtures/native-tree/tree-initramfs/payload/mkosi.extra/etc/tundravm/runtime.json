@@ -21,13 +21,6 @@
       "units": [
         "token.service"
       ]
-    },
-    {
-      "location": "/run/tundravm/credentials/tenant-keys",
-      "name": "tenant-keys",
-      "required": false,
-      "source": null,
-      "units": []
     }
   ],
   "volumes": []

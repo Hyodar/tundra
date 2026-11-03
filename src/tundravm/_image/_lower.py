@@ -49,6 +49,7 @@ from ._runtime import (
     RUNTIME_FRAGMENT,
     Runtime,
     RuntimeFragment,
+    check_owner_login,
     login_key_files,
     services_of,
 )
@@ -179,6 +180,7 @@ class _Lowering:
             switchable=bool(getattr(self.explicit(Firewall), "modes", None)),
             azure="azure" in image.targets,
         )
+        check_owner_login(image, self.runtime.ssh)
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
         self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev))
 

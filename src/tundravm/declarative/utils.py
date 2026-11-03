@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import ipaddress
+import json
 import posixpath
 import re
 import shlex
@@ -989,88 +990,243 @@ SSH_LOGIN_CONFIG = "/etc/ssh/sshd_config.d/60-tundravm-login-{name}.conf"
 """Each :class:`Login`'s ``Match User`` block, one file each: a ``Match`` in an included
 file ends with that file, so Debian's own lines after the ``Include`` stay global."""
 SUDOERS_DIRECTORY = "/etc/sudoers.d"
-"""Where a :class:`Login` with ``sudo=`` gets its rules, one file per login (``0440``)."""
+"""Where a :class:`Login` with ``Sudo`` entries gets their lines, one file per login
+(``0440``)."""
+LOGIN_MENU = "/usr/bin/login-menu"
+"""``login-menu`` (``tools/cmd/login-menu``): a menu login's shell and forced command."""
+LOGIN_MENU_FILE = "/etc/tundravm/logins/{name}.json"
+"""Each menu login's entries, typed, which ``login-menu`` reads (``root:root 0444``)."""
 NOLOGIN = "/usr/sbin/nologin"
-_FORCED_SHELL = "/bin/sh"
 _LOGIN_NAME = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+_ENTRY_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
+_PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{0,31}):(int|choice)(?::([^{}]*))?\}")
+_CHOICE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
+_INT_DEFAULT = (0, 65535)
+_INT_MAX = 999_999_999
 _SUDO_REFUSED = frozenset("*?[]\\\"'")
-_COMMAND_REFUSED = frozenset('"\\\n')
+_PATTERN_WORD = re.compile(r"[A-Za-z0-9/_.+-]+")
+_SUDO_COMBINATIONS = 32
+_SHELL_REFUSED = frozenset('"\\\n')
+
+
+@dataclass(frozen=True, slots=True)
+class Arg:
+    """A word of a :class:`Login` entry the client fills: an int within *bounds*, or one of
+    *choices*. Written ``{lines:int}``, ``{lines:int:1-1000}`` or ``{mode:choice:a|b}``."""
+
+    name: str
+    bounds: tuple[int, int] | None = None
+    choices: tuple[str, ...] = ()
+
+    def menu(self) -> dict[str, object]:
+        """The word in the menu file ``login-menu`` reads."""
+        if self.bounds is not None:
+            return {"arg": self.name, "int": list(self.bounds)}
+        return {"arg": self.name, "choice": list(self.choices)}
+
+    def pattern(self) -> str:
+        """The sudoers regular expression of an int: digits, as many as its bound has."""
+        assert self.bounds is not None
+        return "[0-9]" + "[0-9]?" * (len(str(self.bounds[1])) - 1)
+
+
+def _arg(where: str, word: str) -> Arg | None:
+    """The :class:`Arg` *word* writes, ``None`` for a literal word; refuses a placeholder
+    that is not a whole word or names no type."""
+    found = _PLACEHOLDER.fullmatch(word)
+    if found is None:
+        if "{" in word or "}" in word:
+            raise ValidationError(
+                f"{where}: {word!r} is not a literal word, and not one argument.",
+                hint='An argument is a whole word: "{lines:int}", "{lines:int:1-1000}" or '
+                '"{mode:choice:a|b}"; a literal word holds no "{" or "}".',
+            )
+        return None
+    name, kind, spec = found.groups()
+    if kind == "int":
+        bounds = _INT_DEFAULT
+        if spec is not None:
+            low, dash, high = spec.partition("-")
+            if not (dash and low.isdigit() and high.isdigit()):
+                raise ValidationError(
+                    f"{where}: {word!r} has bounds {spec!r}, not LOW-HIGH.",
+                    hint=f'Write "{{{name}:int:1-1000}}", or "{{{name}:int}}" for 0-65535.',
+                )
+            bounds = (int(low), int(high))
+        if not 0 <= bounds[0] <= bounds[1] <= _INT_MAX:
+            raise ValidationError(
+                f"{where}: {word!r} has bounds {bounds[0]}-{bounds[1]}.",
+                hint=f"The low bound comes first, and the high one is at most {_INT_MAX}.",
+            )
+        return Arg(name, bounds=bounds)
+    choices = tuple((spec or "").split("|"))
+    bad = [c for c in choices if not _CHOICE.fullmatch(c)]
+    if bad or len(set(choices)) != len(choices):
+        raise ValidationError(
+            f"{where}: {word!r} offers {', '.join(map(repr, bad)) or 'a value twice'}.",
+            hint=f'List distinct words: "{{{name}:choice:production|maintenance}}"; '
+            'none starts with "-".',
+        )
+    return Arg(name, choices=choices)
 
 
 @dataclass(frozen=True, slots=True)
 class Sudo(Keywords):
-    """One command a :class:`Login` runs as root, exactly as written:
-    ``Sudo("/usr/bin/systemctl restart app")``.
+    """A :class:`Login` entry that runs as root, exactly as written:
+    ``Sudo(["/usr/bin/systemctl", "restart", "app"])``.
 
-    The rule is one ``sudoers`` line matching these words and no others: no wildcard, no
-    quoting, and a command without arguments takes none (a bare path in ``sudoers`` takes
-    any). *nopasswd* stays ``True``: a login has no password to type.
+    ``login-menu`` runs it through ``sudo -n``, and ``/etc/sudoers.d/<login>`` admits this
+    argv and no other: one exact line (a choice gives one per value), or for an int one
+    anchored sudoers pattern that takes digits only. No wildcard, no quoting, no shell.
     """
 
-    command: str
-    nopasswd: bool = True
+    argv: Sequence[str]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.command, str) or "\n" in self.command or not self.command.split():
+        if isinstance(self.argv, str):
             raise ValidationError(
-                f"Sudo: {self.command!r} is not one command line.",
-                hint='Sudo("/usr/bin/systemctl restart app").',
+                f"Sudo: {self.argv!r} is one string, not an argv.",
+                hint=f"Sudo({self.argv.split()!r}).",
             )
-        words = self.command.split()
-        if not words[0].startswith("/"):
-            raise ValidationError(
-                f"Sudo: {words[0]!r} is not an absolute path, and sudo runs nothing by name.",
-                hint=f'Sudo("/usr/bin/{words[0]}{self.command[len(words[0]) :]}").',
-            )
-        refused = "".join(sorted(_SUDO_REFUSED & set(self.command)))
-        if refused:
-            raise ValidationError(
-                f"Sudo: {self.command!r} holds {refused!r}, which sudoers reads as a wildcard "
-                "or a quote, so the rule would allow more than it says.",
-                hint="Write each argument literally: one Sudo per exact command line.",
-            )
-        if self.nopasswd is not True:
-            raise ValidationError(
-                "Sudo: nopasswd=False asks for a password the login does not have, so the "
-                "rule could never run.",
-                hint="Drop nopasswd=False.",
-            )
-        object.__setattr__(self, "command", " ".join(words))
+        object.__setattr__(self, "argv", tuple(self.argv))
 
-    def rule(self, user: str) -> str:
-        """The ``sudoers`` line letting *user* run this command as root."""
-        words = [re.sub(r"([,:=])", r"\\\1", word) for word in self.command.split()]
-        if len(words) == 1:
-            words.append('""')
-        return f"{user} ALL=(root) NOPASSWD: {' '.join(words)}"
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+    """One command of a :class:`Login`'s menu: its words (literal or :class:`Arg`) and
+    whether it runs as root."""
+
+    name: str
+    words: tuple[str | Arg, ...]
+    root: bool
+
+    @property
+    def args(self) -> tuple[Arg, ...]:
+        return tuple(word for word in self.words if isinstance(word, Arg))
+
+    def menu(self) -> dict[str, object]:
+        """The entry in the menu file."""
+        words = [w.menu() if isinstance(w, Arg) else {"word": w} for w in self.words]
+        return {"name": self.name, "argv": words, "root": self.root}
+
+    def commands(self) -> list[str]:
+        """The sudoers commands admitting this entry: one per combination of its choices,
+        each exact, or with an int an anchored pattern taking digits only."""
+        lines: list[list[str | Arg]] = [[]]
+        for word in self.words:
+            options: tuple[str | Arg, ...] = (word,)
+            if isinstance(word, Arg) and word.bounds is None:
+                options = word.choices
+            lines = [[*line, option] for line in lines for option in options]
+        found = []
+        for line in lines:
+            path, rest = str(line[0]), line[1:]
+            if any(isinstance(word, Arg) for word in rest):
+                parts = [
+                    w.pattern() if isinstance(w, Arg) else re.sub(r"([.+])", r"[\1]", w)
+                    for w in rest
+                ]
+                found.append(f"{path} ^{' '.join(parts)}$")
+                continue
+            words = [re.sub(r"([,:=])", r"\\\1", str(word)) for word in line]
+            found.append(" ".join(words if rest else [*words, '""']))
+        return found
+
+
+def _entry(login: str, name: object, value: object) -> Entry:
+    """The :class:`Entry` ``commands={name: value}`` declares, refusing what the menu or
+    sudoers could not hold exactly."""
+    if not isinstance(name, str) or not _ENTRY_NAME.fullmatch(name):
+        raise ValidationError(
+            f"Login {login}: commands= names {name!r}, not a command word.",
+            hint='Use lower-case letters, digits and "-": commands={"status": [...]}.',
+        )
+    where = f"Login {login}: command {name}"
+    root = isinstance(value, Sudo)
+    argv = value.argv if isinstance(value, Sudo) else value
+    if isinstance(argv, str) or not isinstance(argv, Sequence) or not argv:
+        raise ValidationError(
+            f"{where} is {value!r}, not an argv.",
+            hint=f'commands={{"{name}": ["/usr/bin/{name}"]}}, or Sudo([...]) to run it as root.',
+        )
+    words: list[str | Arg] = []
+    for word in argv:
+        if not isinstance(word, str) or not word or "\n" in word or "\0" in word:
+            raise ValidationError(
+                f"{where}: {word!r} is not a word.", hint="Each word is a non-empty str."
+            )
+        words.append(_arg(where, word) or word)
+    first = words[0]
+    if not isinstance(first, str) or not first.startswith("/"):
+        raise ValidationError(
+            f"{where}: {argv[0]!r} is not an absolute path, and login-menu runs nothing by name.",
+            hint=f'Start with the program\'s path: "/usr/bin/{argv[0]}".',
+        )
+    entry = Entry(name, tuple(words), root)
+    named = [arg.name for arg in entry.args]
+    if len(set(named)) != len(named):
+        raise ValidationError(
+            f"{where} names an argument twice.", hint="Give each argument its own name."
+        )
+    if root:
+        _check_root(where, entry)
+    return entry
+
+
+def _check_root(where: str, entry: Entry) -> None:
+    """Refuse a root entry sudoers would read as more than it says."""
+    literal = [w for w in entry.words if isinstance(w, str)]
+    pattern = any(arg.bounds is not None for arg in entry.args)
+    for at, word in enumerate(literal):
+        refused = "".join(sorted(_SUDO_REFUSED & set(word)))
+        if refused or any(c.isspace() for c in word):
+            raise ValidationError(
+                f"{where}: {word!r} holds {refused or 'a space'!r}, which sudoers reads as a "
+                "wildcard, a quote or two words, so the line would allow more than it says.",
+                hint="Write each word literally, one argv word per word.",
+            )
+        if pattern and at and not _PATTERN_WORD.fullmatch(word):
+            raise ValidationError(
+                f"{where}: {word!r} beside an int becomes part of a sudoers pattern, which "
+                "takes only letters, digits and /_.+-.",
+                hint='Spell the option apart from its value: ["-n", "{lines:int}"].',
+            )
+    count = 1
+    for arg in entry.args:
+        count *= len(arg.choices) or 1
+    if count > _SUDO_COMBINATIONS:
+        raise ValidationError(
+            f"{where} offers {count} combinations, one sudoers line each.",
+            hint=f"Offer at most {_SUDO_COMBINATIONS}: split the command or narrow its choices.",
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Login(Keywords):
-    """An account other than root that logs in over SSH into exactly what the image allows:
-    ``Login("tenant", keys=[...], command="/usr/bin/app-status")``.
+    """An account other than root that logs in over SSH into a menu of commands:
+    ``Login("tenant", keys=[...], commands={"status": ["/usr/bin/app-status"]})``.
 
     The account has no password and no other way in. *keys* are public keys baked into the
     image (``/etc/ssh/authorized_keys.d/<name>``), or a ``Secret`` the attested endpoint
     writes there once ``tundravm secrets deliver`` verified a quote binding the host keys.
-    *command* is a forced command: whatever the client asks for, sshd runs this (the
-    request is in ``$SSH_ORIGINAL_COMMAND``), without a terminal, through ``/bin/sh``
-    unless *shell* is given. *shell* is the account's login shell, for a restricted shell
-    the image ships (a ``searchersh``-like menu built with ``GoBinary``); tundravm ships
-    none. One of them is required. Every key is ``restrict``-ed and sshd's ``Match User``
-    block disables forwarding and reads only those keys, so a delivered key gets the same
-    limits as a baked one. *sudo* is the fixed list of commands it runs as root
-    (``/etc/sudoers.d/<name>``, checked with ``visudo -c`` while the image is built).
-    *home* makes ``/home/<name>``, which the ``owners`` runtime-init step hands to the
-    login at boot (an initramfs root holds every file as root); without it sshd says
-    it cannot change to one.
+    *owner* makes the owner's key its only key instead: the key ``attest`` hands over, from
+    the owner an ``OperatorKey()`` volume pins (in a simulated boot, the first). Root then
+    takes no delivered key. *commands* maps each command the client may type to its argv:
+    a list runs as the login, :class:`Sudo` as root. A word ``{lines:int}``
+    (0-65535), ``{lines:int:1-1000}`` or ``{mode:choice:a|b}`` is an argument the client
+    fills. ``login-menu`` is the account's shell and sshd's forced command: no command lists
+    the menu, anything the menu does not offer is refused, and nothing reaches a shell.
+    *shell* is the escape hatch: a login shell the image ships, with a terminal and no
+    sudo. One of them is required. Every key is ``restrict``-ed and sshd's ``Match User``
+    block disables forwarding and reads only those keys. *home* makes ``/home/<name>``,
+    which the ``owners`` runtime-init step hands to the login at boot.
     """
 
     name: str
     keys: Sequence[str] | Secret = ()
-    command: str | None = None
+    commands: Mapping[str, Sequence[str] | Sudo] | None = None
     shell: str | None = None
-    sudo: Sequence[Sudo] = ()
+    owner: bool = False
     home: bool = False
 
     def __post_init__(self) -> None:
@@ -1085,51 +1241,52 @@ class Login(Keywords):
                 "root logs in.",
                 hint='Name the account the login is for: Login("tenant", ...).',
             )
+        for keyword in ("owner", "home"):
+            if not isinstance(getattr(self, keyword), bool):
+                raise ValidationError(
+                    f"Login {self.name}: {keyword}= must be True or False.",
+                    hint=f"Pass {keyword}=True.",
+                )
         self._check_keys()
-        for keyword in ("command", "shell"):
-            value = getattr(self, keyword)
-            if value is None:
-                continue
-            words = value.split() if isinstance(value, str) else []
-            if not words or not words[0].startswith("/") or _COMMAND_REFUSED & set(value):
+        if self.shell is not None:
+            words = self.shell.split() if isinstance(self.shell, str) else []
+            if len(words) != 1 or not words[0].startswith("/") or _SHELL_REFUSED & set(words[0]):
                 raise ValidationError(
-                    f"Login {self.name}: {keyword}={value!r} is not one line starting with "
-                    "an absolute path, without '\"' or '\\'.",
-                    hint=f'Login("{self.name}", {keyword}="/usr/bin/app-status").',
+                    f"Login {self.name}: shell={self.shell!r} is not one absolute path.",
+                    hint=f'Login("{self.name}", shell="/usr/bin/bash"), or commands= for a menu.',
                 )
-            if keyword == "shell" and len(words) > 1:
+            object.__setattr__(self, "shell", words[0])
+        if (self.commands is None) == (self.shell is None):
+            raise ValidationError(
+                f"Login {self.name} "
+                + (
+                    "runs nothing: it has no commands= and no shell=."
+                    if self.shell is None
+                    else "has both commands= and shell=."
+                ),
+                hint=f'Login("{self.name}", commands={{"status": ["/usr/bin/app-status"]}}), '
+                "or shell= alone for a login shell the image ships.",
+            )
+        if self.commands is not None:
+            if not isinstance(self.commands, Mapping) or not self.commands:
                 raise ValidationError(
-                    f"Login {self.name}: shell={value!r} is a command line, not a shell.",
-                    hint=f'Pass the shell alone, or the line as command="{value}".',
+                    f"Login {self.name}: commands= takes a dict of command names to argvs.",
+                    hint='commands={"status": ["/usr/bin/app-status"]}.',
                 )
-            object.__setattr__(self, keyword, " ".join(words))
-        if self.command is None and self.shell is None:
-            raise ValidationError(
-                f"Login {self.name} runs nothing: it has no command= and no shell=.",
-                hint=f'Login("{self.name}", command="/usr/bin/app-status"), or shell= for a '
-                "restricted shell the image ships.",
-            )
-        if isinstance(self.sudo, Sudo) or isinstance(self.sudo, str):
-            raise ValidationError(
-                f"Login {self.name}: sudo= takes a list of Sudo rules.",
-                hint='sudo=[Sudo("/usr/bin/systemctl restart app")].',
-            )
-        object.__setattr__(self, "sudo", tuple(self.sudo))
-        for rule in self.sudo:
-            if not isinstance(rule, Sudo):
-                raise ValidationError(
-                    f"Login {self.name}: sudo= holds {rule!r}, not a Sudo.",
-                    hint=f'sudo=[Sudo("{rule}")].' if isinstance(rule, str) else "Pass Sudo(...).",
-                )
-        if not isinstance(self.home, bool):
-            raise ValidationError(
-                f"Login {self.name}: home= must be True or False.", hint="Pass home=True."
-            )
+            for name, value in self.commands.items():
+                _entry(self.name, name, value)
+            object.__setattr__(self, "commands", FrozenMap(self.commands))
 
     def _check_keys(self) -> None:
         from tundravm._image._secrets import Secret
 
         if isinstance(self.keys, Secret):
+            if self.owner:
+                raise ValidationError(
+                    f"Login {self.name}: owner=True makes the owner's key its key, and "
+                    "keys= names another.",
+                    hint="Drop keys=, or owner=True for keys of your own.",
+                )
             return
         if isinstance(self.keys, str):
             raise ValidationError(
@@ -1143,17 +1300,30 @@ class Login(Keywords):
                     f"Login {self.name}: {key!r} is not one OpenSSH public key line.",
                     hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
                 )
-        if not self.keys:
+        if self.owner and self.keys:
+            raise ValidationError(
+                f"Login {self.name}: owner=True makes the owner's key its key, and keys= "
+                "names others.",
+                hint="Drop keys=, or owner=True for keys of your own.",
+            )
+        if not self.keys and not self.owner:
             raise ValidationError(
                 f"Login {self.name} has no key to accept, so nobody could log in.",
-                hint=f"Pass keys=['ssh-ed25519 AAAA...'], or keys=Secret('{self.name}-keys') "
-                "for keys delivered after attestation.",
+                hint=f"Pass keys=['ssh-ed25519 AAAA...'], keys=Secret('{self.name}-keys') "
+                "for keys delivered after attestation, or owner=True for the owner's.",
             )
 
     @property
+    def entries(self) -> tuple[Entry, ...]:
+        """The menu, sorted by command name."""
+        if self.commands is None:
+            return ()
+        return tuple(_entry(self.name, n, v) for n, v in sorted(self.commands.items()))
+
+    @property
     def delivered(self) -> bool:
-        """Whether the keys arrive after attestation (a ``Secret``) rather than baked in."""
-        return not isinstance(self.keys, tuple)
+        """Whether the keys arrive after attestation (a ``Secret``, or the owner's)."""
+        return self.owner or not isinstance(self.keys, tuple)
 
     @property
     def key_file(self) -> str:
@@ -1161,56 +1331,82 @@ class Login(Keywords):
         return f"{SSH_AUTHORIZED_KEYS_DIR}/{self.name}"
 
     @property
+    def menu_file(self) -> str | None:
+        """``/etc/tundravm/logins/<name>.json``, or ``None`` for a shell login."""
+        return LOGIN_MENU_FILE.format(name=self.name) if self.commands is not None else None
+
+    @property
     def options(self) -> str:
         """The ``authorized_keys`` options every baked key carries."""
-        if self.command is not None:
-            return f'restrict,command="{self.command}"'
+        if self.commands is not None:
+            return f'restrict,command="{LOGIN_MENU}"'
         return "restrict,pty"
 
     @property
     def account_shell(self) -> str:
-        """The login shell: *shell*, else ``/bin/sh`` to run *command* (sshd runs a forced
-        command through it, so ``nologin`` would refuse it)."""
-        return self.shell or _FORCED_SHELL
+        """The login shell: ``login-menu`` for a menu, else *shell*."""
+        return LOGIN_MENU if self.commands is not None else str(self.shell)
 
     @property
     def sudoers_file(self) -> str | None:
-        """``/etc/sudoers.d/<name>``, or ``None`` without *sudo*."""
-        return f"{SUDOERS_DIRECTORY}/{self.name}" if self.sudo else None
+        """``/etc/sudoers.d/<name>``, or ``None`` without a root entry."""
+        if any(entry.root for entry in self.entries):
+            return f"{SUDOERS_DIRECTORY}/{self.name}"
+        return None
 
     def config(self) -> str:
-        """The ``sshd_config.d`` file: its own keys only, no forwarding, the command if any."""
+        """The ``sshd_config.d`` file: its own keys only, no forwarding, its menu if any."""
         lines = [
             f"# tundravm Login {self.name}: its own keys, no forwarding"
-            + (", this command only" if self.command is not None else ""),
+            + (", its menu only" if self.commands is not None else ""),
             f"Match User {self.name}",
             f"    AuthorizedKeysFile {SSH_AUTHORIZED_KEYS_DIR}/%u",
             "    DisableForwarding yes",
         ]
-        if self.command is not None:
-            lines += ["    PermitTTY no", f"    ForceCommand {self.command}"]
+        if self.commands is not None:
+            lines += ["    PermitTTY no", f"    ForceCommand {LOGIN_MENU}"]
         return "\n".join(lines) + "\n"
 
+    def menu(self) -> str:
+        """The menu file ``login-menu`` reads: each entry with its words typed."""
+        payload = {"login": self.name, "entries": [entry.menu() for entry in self.entries]}
+        return json.dumps(payload, indent=2) + "\n"
+
+    def sudo_rules(self) -> tuple[str, ...]:
+        """The ``sudoers`` lines: each root entry's exact argv, or its digits-only pattern."""
+        return tuple(
+            f"{self.name} ALL=(root) NOPASSWD: {command}"
+            for entry in self.entries
+            if entry.root
+            for command in entry.commands()
+        )
+
     def sudoers(self) -> str:
-        """The ``sudoers.d`` file: exactly the *sudo* rules."""
-        rules = "".join(f"{rule.rule(self.name)}\n" for rule in self.sudo)
-        return f"# tundravm Login {self.name}: these commands as root, nothing else\n{rules}"
+        """The ``sudoers.d`` file: exactly :meth:`sudo_rules`."""
+        rules = "".join(f"{rule}\n" for rule in self.sudo_rules())
+        return f"# tundravm Login {self.name}: its root commands, nothing else\n{rules}"
 
     def declarations(self) -> Iterator[Declaration]:
-        """The account, its sshd block, its keys and its sudo rules."""
+        """The account, its sshd block, its keys, its menu and its sudo lines."""
         home = f"/home/{self.name}" if self.home else None
         yield User(self.name, system=False, home=home, shell=self.account_shell)
         if home is not None:
             chown = shlex.join(["chown", "-R", f"{self.name}:{self.name}", home])
             yield BootStep(f"{OWNERS_STEP}-login-{self.name}", f"{chown}\n")
         yield File.text(SSH_LOGIN_CONFIG.format(name=self.name), self.config())
-        if isinstance(self.keys, tuple):
+        if isinstance(self.keys, tuple) and not self.owner:
             keys = "".join(f"{self.options} {key.strip()}\n" for key in self.keys)
             yield File.text(self.key_file, keys, mode=0o644)
         else:
             # the endpoint may write only an existing directory (ReadWritePaths=-...)
             script = f'mkdir -p "$BUILDROOT{SSH_AUTHORIZED_KEYS_DIR}"'
             yield Hook(f"ssh-login-{self.name}-keys", "postinst", script)
+        if self.menu_file is not None:
+            go = Go(package="./cmd/login-menu", output="login-menu")
+            yield Build(
+                "login-menu", tools_source(), using=go, install=(Install(go.artifact, LOGIN_MENU),)
+            )
+            yield File.text(self.menu_file, self.menu(), mode=0o444)
         if self.sudoers_file is not None:
             yield Package("sudo")
             yield File.text(self.sudoers_file, self.sudoers(), mode=0o440)
@@ -1236,7 +1432,9 @@ class SshAccess(Composite):
     ``Secrets`` endpoint takes once the operator verified a quote binding these host keys
     (``/root/.ssh/authorized_keys``, read at each login, so sshd waits only for its host
     keys). *logins* are the other accounts (:class:`Login`), each with its own
-    ``sshd_config.d/60-tundravm-login-<name>.conf``. A key or a login is required.
+    ``sshd_config.d/60-tundravm-login-<name>.conf``; at most one takes the owner's key
+    (``owner=True``), and then root takes none. Without a key for root, root does not log
+    in at all (``PermitRootLogin no``). A key or a login is required.
     Component name: ``ssh-access``.
     """
 
@@ -1279,6 +1477,17 @@ class SshAccess(Composite):
                 "SshAccess has no key to accept, so nobody could log in.",
                 hint="Pass SshAccess(keys=[...]), or SshAccess(from_delivery=True).",
             )
+        owners = [login.name for login in self.logins if login.owner]
+        if len(owners) > 1 or (owners and self.from_secrets):
+            raise ValidationError(
+                "SshAccess: the owner's key logs in as one account, and "
+                + (
+                    f"{' and '.join(owners)} both say owner=True."
+                    if len(owners) > 1
+                    else f"from_delivery=True gives it to root beside {owners[0]}."
+                ),
+                hint="Keep owner=True on one Login, and drop from_delivery=True.",
+            )
         yield Package("openssh-server")
         yield File.text(SSH_CONFIG, self.config())
         if self.authorized_keys:
@@ -1299,22 +1508,36 @@ class SshAccess(Composite):
         for login in self.logins:
             yield from login.declarations()
 
+    @property
+    def takes_root(self) -> bool:
+        """Whether root has a key to log in with: baked, or the delivered one."""
+        return bool(self.authorized_keys) or self.from_secrets
+
     def config(self) -> str:
-        """The ``sshd_config.d`` drop-in: keys only, root by key only."""
+        """The ``sshd_config.d`` drop-in: keys only, root by key only or not at all, and
+        bounded unauthenticated connections per source (OpenSSH 10's ``PerSourcePenalties``
+        is on by default beside them)."""
+        said = "root logs in by key, never by password" if self.takes_root else "root never logs in"
         return (
-            "# tundravm SshAccess: public keys only; root logs in by key, never by password\n"
+            f"# tundravm SshAccess: public keys only; {said}\n"
             f"Port {self.port}\n"
             "AuthenticationMethods publickey\n"
             "PubkeyAuthentication yes\n"
             "PasswordAuthentication no\n"
             "KbdInteractiveAuthentication no\n"
             "PermitEmptyPasswords no\n"
-            "PermitRootLogin prohibit-password\n"
+            f"PermitRootLogin {'prohibit-password' if self.takes_root else 'no'}\n"
             f"AuthorizedKeysFile .ssh/authorized_keys {SSH_AUTHORIZED_KEYS_DIR}/%u\n"
             "X11Forwarding no\n"
             "PermitTunnel no\n"
             "MaxAuthTries 3\n"
             "LoginGraceTime 30\n"
+            "# a login's menu may face the network in every mode: bound what one source asks\n"
+            "MaxStartups 10:30:60\n"
+            "PerSourceMaxStartups 4\n"
+            "MaxSessions 1\n"
+            "ClientAliveInterval 15\n"
+            "ClientAliveCountMax 4\n"
         )
 
 
@@ -1493,6 +1716,8 @@ __all__ = [
     "Firewall",
     "GoBinary",
     "HttpEndpoint",
+    "LOGIN_MENU",
+    "LOGIN_MENU_FILE",
     "Login",
     "NETWORK_FILE",
     "Network",

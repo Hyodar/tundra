@@ -2,9 +2,10 @@
 
 One service, one component, a Go program built from a git source and a Go and a Rust one
 from local directories, the ``azure`` and ``gcp`` wrapper subimages beside the QEMU disk, an
-attested TLS ingress (:data:`ATTESTED`), a tenant login (:data:`TENANT`) that SSH reaches
-only in a firewall maintenance mode (:data:`FIREWALL`), and a ``dev`` profile that adds
-content: root SSH by public key, a scheduled job, an ``Observability`` export to an in-guest
+attested TLS ingress (:data:`ATTESTED`), a tenant login (:data:`TENANT`) with a command
+menu that SSH reaches only in a firewall maintenance mode (:data:`FIREWALL`) and takes the
+key ``attest`` hands over, root never logging in, and a ``dev`` profile that adds content: a
+scheduled job, an ``Observability`` export to an in-guest
 sink, a delivered secret, the two built programs run as services, and the ``box`` container
 (:data:`BOX`). ``image_with(root=...)`` builds it with either root layout;
 ``tests/compiler/test_native_tree.py`` compiles both into ``tree-initramfs/`` and
@@ -51,9 +52,6 @@ from tundravm.sources import CargoBinary, Git, GoBinary, Local
 from tundravm.systemd import DropIn, Every
 
 SNAPSHOT = "20261018T082309Z"
-DEV_KEY = (
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureFixtureFixtureFixtureFixtureFixture dev@fixture"
-)
 
 
 class Greeter(Component):
@@ -223,29 +221,44 @@ waits for it and ``run --probe`` finishes before it arrives."""
 
 TENANT = Login(
     "tenant",
-    keys=Secret("tenant-keys", required=False),
-    command="/bin/sh -c 'cat /etc/greeter/greeting; /usr/bin/sudo -n /usr/bin/systemctl "
-    "is-active web'",
-    sudo=[Sudo("/usr/bin/systemctl is-active web")],
+    owner=True,
+    commands={
+        "greeting": ["/usr/bin/cat", "/etc/greeter/greeting"],
+        "web": Sudo(["/usr/bin/systemctl", "is-active", "web"]),
+        "logs": Sudo(
+            [
+                "/usr/bin/journalctl",
+                "--unit",
+                "greeter.service",
+                "--lines",
+                "{lines:int:1-1000}",
+                "--no-pager",
+                "--output",
+                "cat",
+            ]
+        ),
+        "switch": Sudo(["/usr/bin/mode-switch", "to", "{mode:choice:production|maintenance}"]),
+    },
     home=True,
 )
-"""A non-root login whose key CI delivers after attestation: whatever the client asks, it
-prints the greeting and runs its one sudo rule. The probe's ``login:tenant`` row reads it
-back."""
+"""A non-root login that takes the key ``attest`` hands over, instead of root, into a menu:
+the greeting as itself, and as root through one exact sudoers line each ``web``'s state, the
+greeter's last lines and a local firewall switch, which RTMR3 holds like the endpoint's. The
+probe's ``login:tenant``, ``menu:tenant`` and ``ssh:root`` rows read it back; CI logs in."""
 
 FIREWALL = Firewall(
     modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(22)], lasts="30m")}
 )
 """SSH answers only in the ``maintenance`` mode, which CI's ``fixture-boot`` switches to
 with ``run switch``, logs in as :data:`TENANT`, and switches back from, the quote's RTMR3
-holding both switches; every profile boots into ``production``, port 22 closed."""
+holding both switches; every profile boots into ``production``, port 22 closed. A menu login
+that must answer in every mode leaves 22 out of the modes."""
 
 CONSOLE = DropIn(extra={"Service": {"StandardOutput": "journal+console"}})
 """What a service that prints for the boot tests says: its output on the serial console."""
 
 DEV = Profile(
     add=[
-        File.text("/etc/ssh/authorized_keys.d/root", f"{DEV_KEY}\n"),
         Service("tick", ["/usr/bin/true"], timer=Every("1min")),
         OBSERVABILITY,
         BOX,
@@ -261,7 +274,7 @@ DEV = Profile(
     ],
     production=False,
 )
-"""What the ``dev`` profile adds: SSH by public key, a scheduled job, the export path with
+"""What the ``dev`` profile adds: a scheduled job, the export path with
 its proxy and receivers, so the derived probe boots its ``egress:``, ``timer:`` and
 ``observability:`` checks and the console shows the ``sink:`` lines of what arrived; a
 service bound to :data:`TOKEN`, so the attested endpoint on the management port gives the

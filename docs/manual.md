@@ -230,8 +230,17 @@ project's.
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
 | `Container` | a program in a Debian root of its own, with no network | `unit`, `image` |
 
-`SshAccess(login=Login(name, keys=, command=, shell=, sudo=[Sudo(...)]))` lets another
-account in with its own keys ([a task](howto.md#log-in-as-a-tenant)).
+`SshAccess(login=Login(name, keys=, owner=, commands={...}, shell=))` lets another account
+in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to an argv. A list runs
+as the login, `Sudo([...])` as root. `{lines:int}` (0-65535), `{lines:int:1-1000}` and
+`{mode:choice:a|b}` are whole-word arguments. `login-menu` is the account's shell and
+forced command. It lists the menu for an empty request and refuses anything else. It runs
+no shell and no terminal. Each root entry gets exact lines in
+`/etc/sudoers.d/<name>`; an int becomes a digits-only sudoers pattern.
+`owner=True` gives the login the key `attest` hands over. A `Login` in `SshAccess` takes
+root's delivered key away unless `from_delivery=True`. Root without a key never logs in
+(`PermitRootLogin no`). A port no mode names stays open in every mode, so a menu login
+that must always answer leaves 22 out of `modes=`.
 
 A service that asks for quotes (`quotes=True`) joins the `tdx` group and requires
 `EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
@@ -376,8 +385,9 @@ file the secret holds, as Amazon Managed Prometheus requires.
 `Firewall()` opens what services expose, an ingress's port and 8745. `Firewall(modes=)`
 makes it switchable ([a task](howto.md#open-a-maintenance-window)). A port a mode names
 opens in that mode only. A mode's `egress=` adds to the image's. The image boots into
-`production`. A switch goes over the attested endpoint. `mode-switch` extends RTMR3 with
-it, then swaps the ruleset, and old flows drop on their next packet. A window closes
+`production`. A switch goes over the attested endpoint, or through a login's `mode-switch
+to`. `mode-switch` extends RTMR3 with it, then swaps the ruleset, and old flows drop on
+their next packet. A window closes
 itself after `lasts` (30 minutes by default) of boot time. The probe's `mode:firewall` row
 checks the history against RTMR3. Refused: 22 in `production`, a mode named `tdx` or
 `simulated`, and a switch on a production build without an owner. On TDX the extend
@@ -388,8 +398,9 @@ needs Linux 6.16, so a 6.12 kernel refuses every switch.
 An image with a secret, `AttestedTLS`, firewall modes or a volume an operator or broker
 unlocks runs the attested endpoint on port 8745. The endpoint needs nothing on a volume
 ([trust](trust.md#what-first-contact-proves)). The image also runs SSH on 22, for the key
-`attest` hands over. On TDX that key comes only from the [owner](terms.md#stages-2-to-6),
-so an image without an `OperatorKey()` volume has no delivered root SSH there.
+`attest` hands over: root's, or a `Login(owner=True)`'s. On TDX that key comes only from the
+[owner](terms.md#stages-2-to-6), so an image without an `OperatorKey()` volume has no
+delivered SSH there.
 `/etc/tundravm/runtime.json` records every volume, secret and ingress.
 
 ## Sources and toolchains

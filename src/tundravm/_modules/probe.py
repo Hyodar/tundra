@@ -71,6 +71,12 @@ The checks, each only when its declaration exists (:func:`derive`):
   password, its ``sudoers.d`` file parses (``visudo -c``), sshd's effective configuration
   for it (``sshd -T -C user=NAME``) forces its command (or none) and disables forwarding,
   and each baked key in its ``authorized_keys.d`` file carries the declared options;
+- ``menu:NAME``: each ``Login`` with ``commands=``: its menu file is ``root:root 0444``,
+  ``login-menu`` run as the login lists every command for an empty request and refuses
+  ``sh`` and an int above its bound, and ``sudo -l -U NAME`` lists exactly the lines its
+  ``sudoers.d`` file holds;
+- ``ssh:root``: with ``PermitRootLogin no`` (an ``SshAccess`` without a key for root),
+  sshd's effective configuration refuses root and root has no ``authorized_keys`` file;
 - ``root``: ``/`` is ``root:root 0755`` (always: the initramfs layout's own unit makes it
   so, :mod:`tundravm._modules.root_mode`; a verity root is read-only beneath);
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
@@ -175,6 +181,8 @@ Helper = Literal[
     "instance",
     "root",
     "login",
+    "menu",
+    "noroot",
     "endpoint",
     "attested-tls",
     "owner",
@@ -559,10 +567,13 @@ def _metadata(items: Sequence[Declaration], glue: Sequence[Declaration]) -> list
 
 
 def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
-    """``login:NAME`` for each ``Login``'s ``sshd_config.d`` file in *items*."""
+    """``login:NAME`` for each ``Login``'s ``sshd_config.d`` file in *items*, ``menu:NAME``
+    for each with a menu, and ``ssh:root`` where sshd lets root in by no key."""
     from tundravm.declarative.model import File
     from tundravm.declarative.utils import (
+        LOGIN_MENU_FILE,
         SSH_AUTHORIZED_KEYS_DIR,
+        SSH_CONFIG,
         SSH_LOGIN_CONFIG,
         SUDOERS_DIRECTORY,
     )
@@ -602,6 +613,50 @@ def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
             "login",
             ("ssh-host-keys.service",),
         )
+        menu_file = files.get(LOGIN_MENU_FILE.format(name=name))
+        if menu_file is not None and isinstance(menu_file.content, str):
+            yield _menu(name, menu_file.path, json.loads(menu_file.content), sudoers in files)
+    sshd = files.get(SSH_CONFIG)
+    if sshd is not None and "PermitRootLogin no\n" in str(sshd.content):
+        yield Check(
+            "ssh:root",
+            "sshd refuses root; root has no authorized keys",
+            "probe_no_root",
+            "noroot",
+            ("ssh-host-keys.service",),
+        )
+
+
+def _menu(name: str, path: str, menu: Mapping[str, object], sudo: bool) -> Check:
+    """``menu:NAME``: what ``login-menu`` lists and refuses as *name*, and the sudo lines."""
+    from tundravm.declarative.utils import SUDOERS_DIRECTORY
+
+    entries = menu["entries"]
+    assert isinstance(entries, list)
+    bad = "-"
+    for entry in entries:
+        args = [word for word in entry["argv"] if "arg" in word]
+        if any("int" in word for word in args):
+            values, over = [], False
+            for word in args:
+                if "int" in word and not over:
+                    values.append(str(word["int"][1] + 1))
+                    over = True
+                else:
+                    values.append(str(word["int"][0]) if "int" in word else word["choice"][0])
+            bad = " ".join([entry["name"], *values])
+            break
+    names = [entry["name"] for entry in entries]
+    what = [f"{path} root:root 0444", f"lists {', '.join(names)}", "refuses sh"]
+    if bad != "-":
+        what.append(f"refuses {bad!r}")
+    if sudo:
+        what.append(f"sudo -l -U {name} lists only {SUDOERS_DIRECTORY}/{name}")
+    sudoers = f"{SUDOERS_DIRECTORY}/{name}" if sudo else "-"
+    call = ["probe_menu", name, path, sudoers, _quote(bad), *names]
+    return Check(
+        f"menu:{name}", "; ".join(what), " ".join(call), "menu", ("ssh-host-keys.service",)
+    )
 
 
 def _resolver_name(file: object) -> str:
@@ -1608,6 +1663,66 @@ probe_login() {
     parsed=
     [ "$2" = - ] || parsed="; $2 parses"
     ok "password locked; sshd forces $4, no forwarding$parsed"
+}
+""",  # noqa: E501
+    "menu": """\
+probe_menu() {
+    name=$1 file=$2 sudoers=$3 bad=$4
+    shift 4
+    said=$(stat -c '%U:%G %a' "$file" 2>&1)
+    if [ "$said" != "root:root 444" ]; then
+        fail "$file is $said, not root:root 444: the login could change its own menu"
+        return
+    fi
+    as_login() { setpriv --reuid "$name" --regid "$name" --init-groups env -i SSH_ORIGINAL_COMMAND="$1" /usr/bin/login-menu 2>&1; }
+    if ! listing=$(as_login ''); then
+        fail "login-menu as $name lists nothing: $listing"
+        return
+    fi
+    for entry in "$@"; do
+        if ! printf '%s\\n' "$listing" | grep -Eq "^  $entry( |\\$)"; then
+            fail "login-menu as $name does not list $entry: $listing"
+            return
+        fi
+    done
+    if said=$(as_login sh); then
+        fail "login-menu as $name ran sh: $said"
+        return
+    fi
+    if [ "$bad" != - ] && said=$(as_login "$bad"); then
+        fail "login-menu as $name ran '$bad', outside its bounds: $said"
+        return
+    fi
+    sudo=
+    if [ "$sudoers" != - ]; then
+        got=$(sudo -n -l -U "$name" 2>&1 | sed -n 's/^ *(root) //p')
+        want=$(sed -n "s/^$name ALL=(root) //p" "$sudoers")
+        if [ "$got" != "$want" ]; then
+            fail "sudo -l -U $name lists '$got', $sudoers holds '$want'"
+            return
+        fi
+        sudo="; sudo -l lists its $(printf '%s\\n' "$want" | grep -c .) lines and no other"
+    fi
+    ok "$file root:root 0444; lists $*; refuses sh${bad:+ and '$bad'}$sudo"
+}
+""",  # noqa: E501
+    "noroot": """\
+probe_no_root() {
+    if ! effective=$(sshd -T -C "user=root,host=probe,addr=127.0.0.1" 2>&1); then
+        fail "sshd -T: $(echo "$effective" | tail -n 1)"
+        return
+    fi
+    if ! echo "$effective" | grep -qx 'permitrootlogin no'; then
+        fail "sshd lets root in ($(echo "$effective" | grep '^permitrootlogin')): another sshd_config.d file overrides SshAccess's"
+        return
+    fi
+    for keys in /root/.ssh/authorized_keys /etc/ssh/authorized_keys.d/root; do
+        if [ -e "$keys" ]; then
+            fail "$keys exists: something gave root a key the image does not declare"
+            return
+        fi
+    done
+    ok "sshd says permitrootlogin no; no authorized_keys for root"
 }
 """,  # noqa: E501
     "firewall-mode": """\

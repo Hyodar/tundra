@@ -1,0 +1,85 @@
+{
+  "login": "tenant",
+  "entries": [
+    {
+      "name": "greeting",
+      "argv": [
+        {
+          "word": "/usr/bin/cat"
+        },
+        {
+          "word": "/etc/greeter/greeting"
+        }
+      ],
+      "root": false
+    },
+    {
+      "name": "logs",
+      "argv": [
+        {
+          "word": "/usr/bin/journalctl"
+        },
+        {
+          "word": "--unit"
+        },
+        {
+          "word": "greeter.service"
+        },
+        {
+          "word": "--lines"
+        },
+        {
+          "arg": "lines",
+          "int": [
+            1,
+            1000
+          ]
+        },
+        {
+          "word": "--no-pager"
+        },
+        {
+          "word": "--output"
+        },
+        {
+          "word": "cat"
+        }
+      ],
+      "root": true
+    },
+    {
+      "name": "switch",
+      "argv": [
+        {
+          "word": "/usr/bin/mode-switch"
+        },
+        {
+          "word": "to"
+        },
+        {
+          "arg": "mode",
+          "choice": [
+            "production",
+            "maintenance"
+          ]
+        }
+      ],
+      "root": true
+    },
+    {
+      "name": "web",
+      "argv": [
+        {
+          "word": "/usr/bin/systemctl"
+        },
+        {
+          "word": "is-active"
+        },
+        {
+          "word": "web"
+        }
+      ],
+      "root": true
+    }
+  ]
+}

@@ -313,36 +313,62 @@ jobs:
           echo "ssh answered in maintenance"
           sleep 2
 
-      - name: Deliver the tenant login's key and log in as it, into its forced command
-        # The dev profile's Login("tenant"): the endpoint writes the delivered key to its
-        # authorized_keys.d file; sshd runs the forced command whatever is asked (here `sh`),
-        # against the host key the quote bound (attest's known_hosts), and it runs one sudo rule.
+      - name: Log in as the tenant into its menu, refuse root, close the window from it
+        # The dev profile's Login("tenant", owner=True): attest handed it the operator's key
+        # instead of root. Against the host key the quote bound (attest's known_hosts), an
+        # empty request lists the menu, entries run with typed arguments as the login or
+        # through one exact sudoers line, and what the menu does not offer is refused. Root
+        # has no key and PermitRootLogin no. Its `switch production` runs mode-switch locally,
+        # which drops the session's own flow, so the client sees no answer.
         run: |
-          policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
-          uv run tundravm secrets deliver fixture-1 --policy "$policy" \
-            "tenant-keys=@$RUNNER_TEMP/operator.pub"
+          probe=.tundravm/instances/fixture-1/probe.json
           port=$(jq -r '.ports["22"]' .tundravm/instances/fixture-1/instance.json)
-          # once: the endpoint wrote the key before deliver returned, and OpenSSH 10
-          # penalises a source that fails, so a retry would only be refused
-          ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o UserKnownHostsFile=.tundravm/instances/fixture-1/known_hosts \
-            -o StrictHostKeyChecking=yes tenant@127.0.0.1 sh 2>&1 | tee "$RUNNER_TEMP/tenant.txt"
+          as() {
+            user=$1
+            shift
+            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ServerAliveInterval=3 -o ServerAliveCountMax=3 \
+              -o UserKnownHostsFile=.tundravm/instances/fixture-1/known_hosts \
+              -o StrictHostKeyChecking=yes "$user@127.0.0.1" "$@"
+          }
+          as tenant | tee "$RUNNER_TEMP/menu.txt"
+          grep -Fx '  greeting' "$RUNNER_TEMP/menu.txt"
+          grep -E '^  logs <lines> +lines 1-1000, as root$' "$RUNNER_TEMP/menu.txt"
+          grep -E '^  switch <mode> +mode production\|maintenance, as root$' "$RUNNER_TEMP/menu.txt"
+          as tenant greeting | tee "$RUNNER_TEMP/tenant.txt"
           grep -Fx 'hello from the payload' "$RUNNER_TEMP/tenant.txt"
-          grep -Fx active "$RUNNER_TEMP/tenant.txt"
-          jq -r '.results[] | select(.check == "login:tenant" or .check == "root")
-            | "\(.check) \(.verdict) \(.detail)"' .tundravm/instances/fixture-1/probe.json
-          jq -e '[.results[] | select(.check == "login:tenant" or .check == "root")
-            | .verdict == "ok"] == [true, true]' .tundravm/instances/fixture-1/probe.json
+          as tenant web | grep -Fx active
+          as tenant logs 20 | tee "$RUNNER_TEMP/logs.txt"
+          grep -Fx 'hello from the payload' "$RUNNER_TEMP/logs.txt"
+          for bad in 'logs 1001' 'logs 3;id' sh 'switch tdx'; do
+            if as tenant "$bad" 2> "$RUNNER_TEMP/refused.txt"; then
+              echo "the menu ran '$bad'"; exit 1
+            fi
+            cat "$RUNNER_TEMP/refused.txt"
+            grep -E '^login-menu: ' "$RUNNER_TEMP/refused.txt"
+            grep -E '^fix: ssh tenant@HOST' "$RUNNER_TEMP/refused.txt"
+          done
+          jq -r '.results[] | select(.check == "root" or .check == "login:tenant" or .check == "menu:tenant" or .check == "ssh:root")
+            | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          jq -e '[.results[] | select(.check == "root" or .check == "login:tenant" or .check == "menu:tenant" or .check == "ssh:root")
+            | .verdict == "ok"] == [true, true, true, true]' "$probe"
+          # one failed login, under OpenSSH 10's penalty threshold
+          if as root true 2> "$RUNNER_TEMP/root.txt"; then
+            echo "root logged in"; exit 1
+          fi
+          grep -F 'Permission denied (publickey)' "$RUNNER_TEMP/root.txt"
+          sleep 6
+          # ServerAlive ends the client once the switch drops its flow
+          as tenant switch production || echo "the session ended with $? once the window closed"
 
-      - name: Close the maintenance window and read both switches in attest
-        # Back in production 22 is refused again, and attest replays both switches against
-        # the quote's RTMR3.
+      - name: Read the window the tenant closed and both switches in attest
+        # Back in production 22 is refused again, and attest replays both switches, the
+        # endpoint's and the tenant's local one, against the quote's RTMR3.
         run: |
           receipt=.tundravm/instances/fixture-1/instance.json
           console=.tundravm/instances/fixture-1/console.log
           policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
           port=$(jq -r '.ports["22"]' "$receipt")
-          uv run tundravm run switch fixture-1 production | tee -a "$RUNNER_TEMP/switch.txt"
           if timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && head -c 4 <&3" | grep -q SSH-; then
             echo "port 22 answered after the window closed"; exit 1
           fi
@@ -350,7 +376,7 @@ jobs:
           uv run tundravm attest fixture-1 --policy "$policy" | tee "$RUNNER_TEMP/attest-modes.txt"
           grep -E '^modes  production; 2 switches since boot: maintenance at [0-9]+s, production at [0-9]+s \(RTMR3 replays them\)$' \
             "$RUNNER_TEMP/attest-modes.txt"
-          grep -E 'mode-switch: (maintenance|production) at [0-9]+s of boot' "$console"
+          grep -E 'mode-switch: production at [0-9]+s of boot \(switch 2, from maintenance' "$console"
           uv run tundravm run status fixture-1 | grep -E '^firewall +production \(2 switches since boot'
 
       - name: Follow a second dev instance through dev and stop it with Ctrl-C

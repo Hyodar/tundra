@@ -377,8 +377,9 @@ def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
 
 
 def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
-    """The overlay adds the export path's packages, the dev key and the container's subimage,
-    root and modules; sshd, the firewall and its modules are the image's, in every profile."""
+    """The overlay adds the export path's packages and the container's subimage, root and
+    modules; sshd, the firewall and its modules are the image's, in every profile, and no
+    profile holds a key for root."""
     dev = FIXTURE / "tree-initramfs/payload/mkosi.profiles/dev"
     assert (dev / "mkosi.conf").read_text(encoding="utf-8") == (
         "[Config]\nDependencies=box\n\n[Output]\nImageId=%i-dev\n\n[Content]\n"
@@ -386,8 +387,7 @@ def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
         + "Packages=\n    prometheus\n    prometheus-node-exporter\n    systemd-journal-remote\n"
         + "ExtraTrees=%O/box.raw:/usr/lib/tundravm/containers/box.raw\n"
     )
-    keys = (dev / "mkosi.extra/etc/ssh/authorized_keys.d/root").read_text(encoding="utf-8")
-    assert keys.startswith("ssh-ed25519 ")
+    assert not list((FIXTURE / "tree-initramfs").rglob("authorized_keys.d/root"))
     private = re.compile(r"PRIVATE KEY")
     assert not any(
         private.search(p.read_text(encoding="utf-8", errors="replace"))

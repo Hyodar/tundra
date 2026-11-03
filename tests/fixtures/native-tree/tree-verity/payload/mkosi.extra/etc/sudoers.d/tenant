@@ -1,2 +1,5 @@
-# tundravm Login tenant: these commands as root, nothing else
+# tundravm Login tenant: its root commands, nothing else
+tenant ALL=(root) NOPASSWD: /usr/bin/journalctl ^--unit greeter[.]service --lines [0-9][0-9]?[0-9]?[0-9]? --no-pager --output cat$
+tenant ALL=(root) NOPASSWD: /usr/bin/mode-switch to production
+tenant ALL=(root) NOPASSWD: /usr/bin/mode-switch to maintenance
 tenant ALL=(root) NOPASSWD: /usr/bin/systemctl is-active web

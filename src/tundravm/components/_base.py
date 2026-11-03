@@ -470,8 +470,10 @@ class SshAccess(Component):
     *keys* are public keys baked into the image; *from_delivery* accepts the key the
     attested endpoint takes once ``tundravm attest`` verified the quote binding the host
     keys. *login* is an account other than root, or a list of them: a :class:`Login` gets
-    in with its own keys into its forced command or shell, with its fixed ``sudo`` rules
-    and nothing else. A key or a login is required. The port is
+    in with its own keys, or the owner's (``owner=True``), into its command menu, its root
+    commands through exact sudoers lines, and nothing else. An image whose ``SshAccess``
+    declares a login hands root no delivered key unless *from_delivery* says so, and root
+    without a key never logs in. A key or a login is required. The port is
     opened in the firewall; host keys are generated per instance at boot. Exports
     :attr:`port`. Component name: ``ssh-access``.
     """
@@ -498,7 +500,7 @@ class SshAccess(Component):
         if isinstance(logins, str) or not all(isinstance(item, Login) for item in logins):
             raise ValidationError(
                 f"SshAccess: login= takes a Login or a list of them, got {self.login!r}.",
-                hint='Pass login=Login("tenant", keys=[...], command="/usr/bin/app-status").',
+                hint='Pass login=Login("tenant", keys=[...], commands={"status": [...]}).',
             )
         object.__setattr__(self, "login", tuple(logins))
         if not self.keys and not self.from_delivery and not self.login:
@@ -539,26 +541,27 @@ class SshAccess(Component):
         Rule(
             "ssh-login-shell",
             "warning",
-            "A production login gets an interactive shell and no forced command, so whoever "
+            "A production login gets an interactive shell and no command menu, so whoever "
             "holds its key runs whatever that shell allows.",
-            'Pin what it runs: Login("tenant", command="/usr/bin/app-status").',
+            'Pin what it runs: Login("tenant", commands={"status": ["/usr/bin/app-status"]}).',
         ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them;
-        ``ssh-login-shell``: a production login with a shell and no forced command."""
+        ``ssh-login-shell``: a production login with a shell and no command menu."""
         found = [
             dm.Diagnostic(
                 "ssh-login-shell",
                 "warning",
-                f"login {login.name!r} gets the shell {login.shell} and no command=: whoever "
+                f"login {login.name!r} gets the shell {login.shell} and no commands=: whoever "
                 "holds its key runs whatever that shell allows",
                 subject=login.name,
-                hint=f'Login("{login.name}", command="/usr/bin/app-status") pins what it runs.',
+                hint=f'Login("{login.name}", commands={{"status": ["/usr/bin/app-status"]}}) '
+                "pins what it runs.",
             )
             for login in self.logins
-            if resolved.production and login.shell is not None and login.command is None
+            if resolved.production and login.shell is not None
         ]
         if self.keys and {"azure", "gcp"} & set(resolved.targets):
             found.append(

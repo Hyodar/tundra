@@ -2199,7 +2199,9 @@ class Secrets(Declared):
     TLS session a fresh quote bound: a ``SecretEnv`` entry needs an
     :class:`ExternalDelivery` that writes it. *attested_tls* names the attested TLS ports
     whose certificate key, made at boot under ``/run/tundravm/attested-tls/<port>``, every
-    quote binds after the instance key, in port order.
+    quote binds after the instance key, in port order. The operator's SSH key goes to
+    root's *ssh_directory*, or to the ``authorized_keys.d`` file of *ssh_login* instead;
+    with neither the endpoint takes none.
     """
 
     name: str = "secrets"
@@ -2208,8 +2210,9 @@ class Secrets(Declared):
     """The disk holding the secrets: a ``Disk`` (stored as its ref) or a Disk ref."""
     host: str = "0.0.0.0"
     port: int = 8080
-    ssh_directory: str = "/root/.ssh"
+    ssh_directory: str | None = "/root/.ssh"
     ssh_key_path: str | None = "/etc/root_key"
+    ssh_login: str | None = None
     delivery: ExternalDelivery | None = None
     attested_tls: tuple[int, ...] = ()
 
@@ -2270,7 +2273,15 @@ class Secrets(Declared):
                 f"port {self.port!r} is out of range.",
                 hint="Leave the management port at its default.",
             )
-        _require_absolute(self, self.ssh_directory, "ssh_directory")
+        if self.ssh_login is not None and self.ssh_directory is not None:
+            raise _fail(
+                self,
+                f"the operator's SSH key goes to root's {self.ssh_directory} and to login "
+                f"{self.ssh_login}.",
+                hint="Pass ssh_directory=None with ssh_login=.",
+            )
+        if self.ssh_directory is not None:
+            _require_absolute(self, self.ssh_directory, "ssh_directory")
         if self.ssh_key_path is not None:
             _require_absolute(self, self.ssh_key_path, "ssh_key_path")
 

@@ -897,25 +897,29 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 Login(
     name: str,
     keys: Sequence[str] | Secret = (),
-    command: str | None = None,
+    commands: Mapping[str, Sequence[str] | Sudo] | None = None,
     shell: str | None = None,
-    sudo: Sequence[Sudo] = (),
+    owner: bool = False,
     home: bool = False,
 )
 ```
 
-An account other than root that logs in over SSH into exactly what the image allows: `Login("tenant", keys=[...], command="/usr/bin/app-status")`.
+An account other than root that logs in over SSH into a menu of commands: `Login("tenant", keys=[...], commands={"status": ["/usr/bin/app-status"]})`.
 
 | Member | Does |
 |---|---|
-| `Login.account_shell` | The login shell: *shell*, else `/bin/sh` to run *command* (sshd runs a forced command through it, so `nologin` would refuse it). |
-| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, the command if any. |
-| `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys and its sudo rules. |
-| `Login.delivered` | Whether the keys arrive after attestation (a `Secret`) rather than baked in. |
+| `Login.account_shell` | The login shell: `login-menu` for a menu, else *shell*. |
+| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, its menu if any. |
+| `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys, its menu and its sudo lines. |
+| `Login.delivered` | Whether the keys arrive after attestation (a `Secret`, or the owner's). |
+| `Login.entries` | The menu, sorted by command name. |
 | `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
+| `Login.menu() -> str` | The menu file `login-menu` reads: each entry with its words typed. |
+| `Login.menu_file` | `/etc/tundravm/logins/<name>.json`, or `None` for a shell login. |
 | `Login.options` | The `authorized_keys` options every baked key carries. |
-| `Login.sudoers() -> str` | The `sudoers.d` file: exactly the *sudo* rules. |
-| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without *sudo*. |
+| `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: each root entry's exact argv, or its digits-only pattern. |
+| `Login.sudoers() -> str` | The `sudoers.d` file: exactly `sudo_rules`. |
+| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without a root entry. |
 
 ### `Mode`
 
@@ -1133,7 +1137,7 @@ Root logs in over SSH with a public key, and with nothing else.
 
 | Member | Does |
 |---|---|
-| `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no forced command. |
+| `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu. |
 | `SshAccess.logins` | Every `Login`, in the order given. |
 | `SshAccess.port` | The port `sshd` listens on. |
 
@@ -1156,14 +1160,10 @@ A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")
 *dataclass*
 
 ```python
-Sudo(command: str, nopasswd: bool = True)
+Sudo(argv: Sequence[str])
 ```
 
-One command a `Login` runs as root, exactly as written: `Sudo("/usr/bin/systemctl restart app")`.
-
-| Member | Does |
-|---|---|
-| `Sudo.rule(user: str) -> str` | The `sudoers` line letting *user* run this command as root. |
+A `Login` entry that runs as root, exactly as written: `Sudo(["/usr/bin/systemctl", "restart", "app"])`.
 
 ### `Tdxs`
 

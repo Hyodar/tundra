@@ -140,16 +140,19 @@ volume.
 ```python
 ssh = SshAccess(login=Login(
     "tenant",
-    keys=Secret("tenant-keys"),
-    command="/usr/bin/app-status",
-    sudo=[Sudo("/usr/bin/systemctl restart app")],
+    owner=True,
+    commands={
+        "status": ["/usr/bin/app-status"],
+        "logs": Sudo(["/usr/bin/journalctl", "-u", "app", "-n", "{lines:int:1-1000}"]),
+        "switch": Sudo(["/usr/bin/mode-switch", "to", "{mode:choice:production|maintenance}"]),
+    },
 ))
 ```
 
-Pass it in `components=`. The account logs in with its own keys into its forced command,
-with exactly those sudo rules. It has no password and no forwarding. `keys=` takes keys
-baked into the image, or a `Secret` you deliver. On TDX a delivered key needs a confirmed
-owner, as your own does.
+Pass it in `components=`. `ssh tenant@HOST` lists the menu, and `ssh tenant@HOST logs 50`
+runs one entry. The account has no password, no shell and no forwarding. `owner=True`
+takes the key `attest` hands over, and root then takes none. `keys=` takes baked keys or a
+`Secret` instead.
 
 ## Run a container
 

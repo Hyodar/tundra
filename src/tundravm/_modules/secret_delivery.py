@@ -51,6 +51,8 @@ SSH_HOST_KEYS = "/etc/ssh/ssh_host_*_key.pub"
 INSTANCE_PUBLIC_KEY = "/run/tundravm/instance-key.pub"
 """The instance public key every quote binds, in an image that generates one."""
 RUNTIME = "/run/tundravm"
+LOGIN_KEYS = "/etc/ssh/authorized_keys.d"
+"""Each login's authorized keys, where the endpoint writes the owner login's (its default)."""
 MODE_FILE = "/run/tundravm/mode"
 """What the execution gate recorded, which the evidence carries."""
 
@@ -100,15 +102,18 @@ class SecretDelivery(Module):
     hands to ``key-gen``'s FIFO. *attested_tls* are the attested TLS ports whose
     certificate (:func:`tundravm._modules.attested_tls.certificate`) the quote binds.
     *owners* name the volumes whose header pins the operator's key: with one, every write
-    must be signed by it (the first signed one pins its signer).
+    must be signed by it (the first signed one pins its signer). The operator's SSH key goes
+    to root's *ssh_dir*, or to the ``authorized_keys.d`` file of *ssh_login*; with neither
+    the endpoint takes none.
     """
 
     secrets: tuple[SecretSpec, ...] = ()
     method: Literal["http_post"] = "http_post"
     host: str = "0.0.0.0"
     port: int = 8080
-    ssh_dir: str = "/root/.ssh"
+    ssh_dir: str | None = "/root/.ssh"
     key_path: str | None = "/etc/root_key"
+    ssh_login: str | None = None
     store_at: str | DiskSpec | None = "disk_persistent"
     config_path: str = SECRET_DELIVERY_DEFAULT_CONFIG_PATH
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
@@ -240,10 +245,15 @@ class SecretDelivery(Module):
     def write_paths(self) -> tuple[str, ...]:
         """The directories the endpoint writes (``-``: perhaps not there). ``/run/tundravm``
         exists once the execution gate, which the endpoint starts after, recorded its mode;
-        the SSH directory's parent is writable so the endpoint can make it."""
-        found = {RUNTIME, posixpath.dirname(self.ssh_dir.rstrip("/")) or "/"}
-        if self.key_path:
-            found.add(posixpath.dirname(self.key_path))
+        root's SSH directory's parent is writable so the endpoint can make it, and a login's
+        ``authorized_keys.d``, which the image makes."""
+        found = {RUNTIME}
+        if self.ssh_login is not None:
+            found.add(LOGIN_KEYS)
+        elif self.ssh_dir is not None:
+            found.add(posixpath.dirname(self.ssh_dir.rstrip("/")) or "/")
+            if self.key_path:
+                found.add(posixpath.dirname(self.key_path))
         found.update(posixpath.dirname(location) for _, location, _, _ in self.files())
         found.update(posixpath.dirname(pipe) for _, pipe in self.volumes)
         outermost = [p for p in found if not any(p.startswith(f"{o}/") for o in found)]
@@ -278,11 +288,13 @@ class SecretDelivery(Module):
             f'ssh_host_keys: "{SSH_HOST_KEYS}"',
             f'instance_key: "{INSTANCE_PUBLIC_KEY}"',
             f'mode_file: "{MODE_FILE}"',
-            "ssh:",
-            f'  dir: "{self.ssh_dir}"',
         ]
-        if self.key_path:
-            lines.append(f'  key_path: "{self.key_path}"')
+        if self.ssh_login is not None:
+            lines.extend(("ssh:", f'  login: "{self.ssh_login}"'))
+        elif self.ssh_dir is not None:
+            lines.extend(("ssh:", f'  dir: "{self.ssh_dir}"'))
+            if self.key_path:
+                lines.append(f'  key_path: "{self.key_path}"')
         files = self.files()
         lines.append("credentials:" if files else "credentials: []")
         for name, location, mode, owner in files:

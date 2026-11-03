@@ -499,6 +499,7 @@ class StateBuilder:
                 port=entry.port,
                 ssh_dir=entry.ssh_directory,
                 key_path=entry.ssh_key_path,
+                ssh_login=entry.ssh_login,
                 store_at=_store_name(entry),
                 config_path=config_path,
                 manifest_path=manifest_path,
