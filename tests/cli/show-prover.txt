@@ -27,14 +27,14 @@ Profiles (2):
 Built into production:
   Targets (3): qemu azure gcp
   Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
-  Packages (19): busybox ca-certificates chrony cryptsetup curl dmidecode iproute2 kmod linux-image-amd64 nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-resolved systemd-sysv udev
+  Packages (20): azure-vm-utils busybox ca-certificates chrony cryptsetup curl dmidecode iproute2 kmod linux-image-amd64 nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-resolved systemd-sysv udev
   Build packages (3): build-essential git golang
   Sources (4):
     attested-endpoint  local tundravm:tools    pinned=-
     disk-encryption    local tundravm:tools    pinned=-
     key-generation     local tundravm:tools    pinned=-
     tdxs               local tundravm:tools    pinned=-
-  Files (35):
+  Files (36):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  69B  sha256:c94c854fc0e2
     /etc/nftables.conf                                                                       0755  2806B  sha256:cf51b09468c7
@@ -50,7 +50,7 @@ Built into production:
     /etc/tdx/secrets.yaml                                                                    0644  492B  sha256:f06dea230aa6
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
     /etc/tundravm/egress-hosts                                                               0644  34B  sha256:072f11e6c183
-    /etc/tundravm/runtime.json                                                               0644  958B  sha256:7f03d4eb5d80
+    /etc/tundravm/runtime.json                                                               0644  974B  sha256:ec9d09a9b50d
     /srv/www/index.html                                                                      0644  16B  sha256:75186e1a779a
     /usr/bin/azure-complete-provisioning                                                     0755  2517B  sha256:fd3d32e3d33f
     /usr/lib/systemd/system/chrony.service.d/50-tundravm-egress.conf                         0644  168B  sha256:96dcd0c6b5a4
@@ -70,6 +70,7 @@ Built into production:
     /usr/lib/udev/google_nvme_id                                                             0755  16576B  sha256:0c3590103e0b
     /usr/lib/udev/rules.d/65-gce-disk-naming.rules                                           0644  2638B  sha256:7f4c09e0cf36
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
+    /usr/lib/udev/rules.d/81-tundravm-azure-volumes.rules                                    0644  434B  sha256:8fc00d290c64
   Users (3): app attested-tls-443 tdxs
   Groups (4): azure-complete-provisioning gcp-forwarded-ips gcp-hostname tdx
   Enabled units (22): azure-complete-provisioning.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
