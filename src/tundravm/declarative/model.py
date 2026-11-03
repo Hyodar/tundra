@@ -2322,19 +2322,24 @@ class Git(Keywords):
     or the SSH agent for an SSH url (``git@github.com:org/repo.git``). *auth* names an
     environment variable holding a token instead (``auth="GITHUB_TOKEN"``, https only):
     ``tundravm lock`` and ``tundravm build`` read it on the host and hand it to git as an
-    ``Authorization`` header (basic for GitHub and GitLab, bearer elsewhere), which also
-    reaches the submodules and the Go and Cargo git dependencies on the same host. It is
-    never written to disk, the build sandbox, the lock or any artifact; an unset
-    variable is an error naming it. A credential in the url itself is refused.
+    ``Authorization`` header, which also reaches the submodules and the Go and Cargo git
+    dependencies on the same host. The variable alone sends github.com the
+    token as basic auth for ``x-access-token``, a ``gitlab.*`` host for ``oauth2``, and
+    any other host as a bearer token; ``auth=("VAR", "basic:USER")`` or ``("VAR",
+    "bearer")`` states the scheme (``("CI_JOB_TOKEN", "basic:gitlab-ci-token")`` for a
+    GitLab CI job token, ``basic:x-access-token`` for GitHub Enterprise). It is never
+    written to disk, the build sandbox, the lock or any artifact; an unset variable is an
+    error naming it. A credential in the url itself is refused.
     """
 
     url: str
     ref: str
     subdir: str | None = None
     submodules: bool = False
-    auth: str | None = None
+    auth: str | tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
+        _freeze(self, "auth")
         _require_name(self, self.url, "url")
         refuse_url_credential(self.url, "Git")
         refuse_auth(self.url, self.auth, "Git")

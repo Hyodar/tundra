@@ -90,43 +90,66 @@ def test_artifacts_never_hold_a_credential(
 
 
 @pytest.mark.parametrize(
-    ("url", "auth", "refused"),
+    ("make", "url", "auth", "refused"),
     [
-        ("https://github.com/org/repo", "GITHUB_TOKEN", None),
-        ("https://github.com/org/repo", SECRET + "-x", "never the token"),
-        ("git@github.com:org/repo.git", "GITHUB_TOKEN", "over https only"),
-        ("http://example.com/org/repo", "GITHUB_TOKEN", "over https only"),
+        (Git, "https://github.com/org/repo", "GITHUB_TOKEN", None),
+        (Git, "https://gitlab.com/org/repo", ("CI_JOB_TOKEN", "basic:gitlab-ci-token"), None),
+        (Git, "https://github.com/org/repo", SECRET + "-x", "never the token"),
+        (Git, "https://github.com/org/repo", (SECRET + "-x", "bearer"), "never the token"),
+        (Git, "https://git.example.com/r", ("TOKEN", "basic"), 'not "bearer" or "basic:USER"'),
+        (Git, "https://git.example.com/r", ("TOKEN",), "two strings"),
+        (Http, "https://example.com/a.tgz", ("TOKEN", "bearer"), "a bearer header"),
+        (Git, "git@github.com:org/repo.git", "GITHUB_TOKEN", "over https only"),
+        (Git, "http://example.com/org/repo", ("TOKEN", "bearer"), "over https only"),
     ],
 )
-def test_auth_names_a_variable_on_an_https_url(url: str, auth: str, refused: str | None) -> None:
+def test_auth_names_a_variable_on_an_https_url(
+    make: Callable[..., object], url: str, auth: object, refused: str | None
+) -> None:
+    args = (url, "v1") if make is Git else (url,)
     if refused is None:
-        Git(url, "v1", auth=auth)
+        make(*args, auth=auth)
         return
     with pytest.raises(ValidationError, match=refused) as caught:
-        Git(url, "v1", auth=auth)
-    assert SECRET not in str(caught.value)
+        make(*args, auth=auth)
+    assert SECRET not in str(caught.value) and "\nfix: " in str(caught.value)
+
+
+def _basic(user: str) -> str:
+    return "Basic " + base64.b64encode(f"{user}:{SECRET}".encode()).decode()
 
 
 @pytest.mark.parametrize(
-    ("url", "count", "index", "header"),
+    ("url", "scheme", "count", "index", "header"),
     [
-        (
-            "https://github.com/org/repo",
-            None,
-            0,
-            "Basic " + base64.b64encode(f"x-access-token:{SECRET}".encode()).decode(),
-        ),
+        ("https://github.com/org/repo", None, None, 0, _basic("x-access-token")),
+        ("https://gitlab.com/org/repo", None, "2", 2, _basic("oauth2")),
+        ("https://git.example.com:8443/repo", None, None, 0, f"Bearer {SECRET}"),
         (
             "https://gitlab.com/org/repo",
-            "2",
-            2,
-            "Basic " + base64.b64encode(f"oauth2:{SECRET}".encode()).decode(),
+            "basic:gitlab-ci-token",
+            None,
+            0,
+            _basic("gitlab-ci-token"),
         ),
-        ("https://git.example.com:8443/repo", None, 0, f"Bearer {SECRET}"),
+        (
+            "https://ghe.example.com/org/repo",
+            "basic:x-access-token",
+            None,
+            0,
+            _basic("x-access-token"),
+        ),
+        ("https://code.example.com/org/repo", "basic:oauth2", None, 0, _basic("oauth2")),
+        ("https://github.com/org/repo", "bearer", None, 0, f"Bearer {SECRET}"),
     ],
 )
 def test_git_auth_env_sends_the_header_by_host(
-    monkeypatch: pytest.MonkeyPatch, url: str, count: str | None, index: int, header: str
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    scheme: str | None,
+    count: str | None,
+    index: int,
+    header: str,
 ) -> None:
     monkeypatch.setenv("SRC_TOKEN", SECRET)
     if count is None:
@@ -134,7 +157,8 @@ def test_git_auth_env_sends_the_header_by_host(
     else:
         monkeypatch.setenv("GIT_CONFIG_COUNT", count)
     scope = url[: url.index("/", len("https://"))]
-    assert git_auth_env(GitSource(url, "v1", auth="SRC_TOKEN")) == {
+    auth = "SRC_TOKEN" if scheme is None else ("SRC_TOKEN", scheme)
+    assert git_auth_env(GitSource(url, "v1", auth=auth)) == {
         "GIT_CONFIG_COUNT": str(index + 1),
         f"GIT_CONFIG_KEY_{index}": f"http.{scope}/.extraHeader",
         f"GIT_CONFIG_VALUE_{index}": f"Authorization: {header}",

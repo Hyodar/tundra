@@ -357,8 +357,18 @@ A build takes one source, which `tundravm lock` pins: `Local("app")`, a director
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
 by sha256. `Git(url, ref, subdir="tools", auth="GITHUB_TOKEN")` builds a private
 repository's directory. The token is read from that host variable and never written
-anywhere. A credential pasted into a URL is refused. A `Local` path stays inside the
-project. Its digest covers the path, sha256, exec bit and
+anywhere. A credential pasted into a URL is refused. git sends it as an `Authorization`
+header in the scheme the host takes; a host other than github.com or `gitlab.*` names it:
+
+| Host | `auth=` |
+|---|---|
+| github.com | `"GITHUB_TOKEN"` (basic, user `x-access-token`) |
+| `gitlab.*` | `"GITLAB_TOKEN"` (basic, user `oauth2`) |
+| GitLab CI | `("CI_JOB_TOKEN", "basic:gitlab-ci-token")` |
+| GitHub Enterprise, self-hosted GitLab | `("TOKEN", "basic:x-access-token")`, `("TOKEN", "basic:oauth2")` |
+| any other | `"TOKEN"` (bearer), or `("TOKEN", "basic:USER")` |
+
+A `Local` path stays inside the project. Its digest covers the path, sha256, exec bit and
 symlink target of what `git ls-files --cached --others --exclude-per-directory=.gitignore`
 lists. An edit is `local-changed`.
 

@@ -1304,7 +1304,7 @@ Git(
     ref: str,
     subdir: str | None = None,
     submodules: bool = False,
-    auth: str | None = None,
+    auth: str | tuple[str, str] | None = None,
 )
 ```
 

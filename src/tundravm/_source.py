@@ -166,14 +166,46 @@ def refuse_url_credential(url: str, spelling: str) -> None:
 
 
 _AUTH_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_AUTH_SCHEME = re.compile(r"^(?:bearer|basic:[^:\s]+)$")
+Auth = str | tuple[str, str]
+"""A source's ``auth=``: the environment variable holding the token, alone or, for a
+``Git``, with the header scheme it travels in (``("CI_JOB_TOKEN", "basic:gitlab-ci-token")``)."""
 
 
-def refuse_auth(url: str, auth: str | None, spelling: str) -> None:
-    """Refuse an ``auth=`` that is not an environment variable name, or on a url that is
-    not https: a token never travels in clear text, and an SSH url reads the agent."""
+def auth_variable(auth: Auth) -> str:
+    """The environment variable an ``auth=`` names."""
+    return auth if isinstance(auth, str) else auth[0]
+
+
+def refuse_auth(url: str, auth: Auth | None, spelling: str) -> None:
+    """Refuse an ``auth=`` that is not an environment variable name (with a header scheme,
+    ``bearer`` or ``basic:USER``, for a ``Git``), or on a url that is not https: a token
+    never travels in clear text, and an SSH url reads the agent."""
     if auth is None:
         return
-    if not isinstance(auth, str) or not _AUTH_NAME.fullmatch(auth):
+    name = auth if isinstance(auth, str) else ""
+    if spelling != "Git" and isinstance(auth, tuple):
+        raise ValidationError(
+            f"{spelling}(..., auth=(...)): a download sends its token as a bearer header, "
+            "with no other scheme.",
+            hint=f'{spelling}(url, ..., auth="TOKEN"), the variable alone.',
+        )
+    if isinstance(auth, tuple):
+        if len(auth) != 2 or not all(isinstance(part, str) for part in auth):
+            raise ValidationError(
+                "Git(..., auth=(...)): auth= is the variable and the header scheme, two strings.",
+                hint='Git(url, ref, auth=("CI_JOB_TOKEN", "basic:gitlab-ci-token")), or '
+                'auth=("TOKEN", "bearer").',
+            )
+        if not _AUTH_SCHEME.fullmatch(auth[1]):
+            raise ValidationError(
+                f'Git(..., auth=("{auth[0]}", "{auth[1]}")): the scheme is not "bearer" or '
+                '"basic:USER".',
+                hint=f'Git(url, ref, auth=("{auth[0]}", "basic:<the user the host expects>")), '
+                f'or auth=("{auth[0]}", "bearer").',
+            )
+        name = auth[0]
+    if not _AUTH_NAME.fullmatch(name):
         raise ValidationError(
             f"{spelling}(..., auth=...): auth= names the environment variable holding the "
             "token, never the token.",
@@ -181,10 +213,11 @@ def refuse_auth(url: str, auth: str | None, spelling: str) -> None:
             "host that locks and builds.",
         )
     if urlsplit(url).scheme.lower() != "https":
+        shown = f'"{auth}"' if isinstance(auth, str) else f'("{auth[0]}", "{auth[1]}")'
         raise ValidationError(
-            f'{spelling}("{redact(url)}", ..., auth="{auth}"): auth= sends the token over '
+            f'{spelling}("{redact(url)}", ..., auth={shown}): auth= sends the token over '
             "https only.",
-            hint=f'{spelling}("https://...", ..., auth="{auth}"), or drop auth= for an SSH '
+            hint=f'{spelling}("https://...", ..., auth={shown}), or drop auth= for an SSH '
             "url (git@host:org/repo.git), which reads the SSH agent.",
         )
 
@@ -193,16 +226,17 @@ def refuse_auth(url: str, auth: str | None, spelling: str) -> None:
 class GitSource:
     """A git repository at *ref* (branch, tag, or full 40-hex commit sha).
 
-    *auth* names the host environment variable whose token git sends the source's host
-    (:func:`git_auth_env`); it is read at each lock, fetch and prefetch and recorded
-    nowhere, so it is no part of the payload or the checkout identity.
+    *auth* names the host environment variable whose token git sends the source's host,
+    alone or with its header scheme (:func:`git_auth_env`); it is read at each lock, fetch
+    and prefetch and recorded nowhere, so it is no part of the payload or the checkout
+    identity.
     """
 
     url: str
     ref: str
     subdir: str | None = field(default=None, kw_only=True)
     submodules: bool = field(default=False, kw_only=True)
-    auth: str | None = field(default=None, kw_only=True)
+    auth: Auth | None = field(default=None, kw_only=True)
 
     kind: Literal["git"] = field(default="git", init=False, repr=False)
 
@@ -2884,32 +2918,39 @@ def _auth_token(source: GitSource | HttpSource) -> str | None:
     """
     if source.auth is None:
         return None
-    token = os.environ.get(source.auth, "")
+    variable = auth_variable(source.auth)
+    token = os.environ.get(variable, "")
     if token:
         return token
     described = source.describe()
-    reason = f"the environment variable {source.auth} (its auth=) is not set"
+    reason = f"the environment variable {variable} (its auth=) is not set"
     raise SourceError(
         f"Cannot fetch {described}: {reason}.",
         source=described,
         reason=reason,
-        hint=f"export {source.auth}=<a token that reads the source> on this host, then run "
+        hint=f"export {variable}=<a token that reads the source> on this host, then run "
         "`tundravm lock` or `tundravm build` again.",
     )
 
 
-def _git_authorization(host: str, token: str) -> str:
+def _git_authorization(host: str, token: str, scheme: str | None) -> str:
     """The ``Authorization`` value git sends a *host* that reads *token*.
 
-    GitHub and GitLab take the token as a basic-auth password (``x-access-token`` and
-    ``oauth2`` as the user, as their CI checkouts send it); any other host a bearer token.
+    *scheme* is the one ``auth=`` states: ``bearer``, or ``basic:USER`` with *token* as
+    the password. Without one, github.com and a ``gitlab.*`` host take the token as a
+    basic-auth password (``x-access-token`` and ``oauth2`` as the user, as their CI
+    checkouts send it), and any other host a bearer token.
     """
-    if host in _GITHUB_HOSTS:
-        user = "x-access-token"
-    elif host == "gitlab.com" or host.startswith("gitlab."):
-        user = "oauth2"
-    else:
+    if scheme is None:
+        if host in _GITHUB_HOSTS:
+            scheme = "basic:x-access-token"
+        elif host == "gitlab.com" or host.startswith("gitlab."):
+            scheme = "basic:oauth2"
+        else:
+            scheme = "bearer"
+    if scheme == "bearer":
         return f"Bearer {token}"
+    user = scheme.removeprefix("basic:")
     return "Basic " + base64.b64encode(f"{user}:{token}".encode()).decode("ascii")
 
 
@@ -2926,12 +2967,13 @@ def git_auth_env(source: GitSource) -> dict[str, str]:
         return {}
     parts = urlsplit(source.url)
     host = (parts.hostname or "").lower()
+    scheme = source.auth[1] if isinstance(source.auth, tuple) else None
     count = os.environ.get("GIT_CONFIG_COUNT", "0")
     index = int(count) if count.isdigit() else 0
     return {
         "GIT_CONFIG_COUNT": str(index + 1),
         f"GIT_CONFIG_KEY_{index}": f"http.{parts.scheme}://{parts.netloc}/.extraHeader",
-        f"GIT_CONFIG_VALUE_{index}": f"Authorization: {_git_authorization(host, token)}",
+        f"GIT_CONFIG_VALUE_{index}": f"Authorization: {_git_authorization(host, token, scheme)}",
     }
 
 

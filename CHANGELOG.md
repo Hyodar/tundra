@@ -115,6 +115,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `Dotnet` builds with the SDK `global.json` names: `lock` resolves it under the file's `rollForward` policy against the .NET release manifest and pins the release with its tarball's sha512 (lockfile version 8, `toolchains`), `build` downloads it on the host and restores the packages with its own `dotnet`, and the sandbox restores and publishes offline with it; `packages=` defaults to the SDK's Debian runtime (`libicu76`, `libssl3t64`, `libstdc++6`), no SDK package, since Debian ships none, and `Dotnet`, `Go` and `Cargo` are `tundravm.sources` names.
 - **Breaking:** a credential in a `Git` or `Http` url (`https://user:token@`, `?token=`) is refused, and the lock, the manifest and the SBOM are never written holding one; an SSH url still reads the agent.
 - `Git(url, ref, auth="GITHUB_TOKEN")` and `Http(url, auth=...)` read the token from that host variable at lock, fetch and prefetch and hand it to git (`GIT_CONFIG_*`, reaching Go and Cargo git dependencies on the same host) or the download as a header, never to disk, the sandbox or an artifact.
+- `Git(auth=("VAR", "basic:USER"))` or `("VAR", "bearer")` states the header scheme for a host the variable alone guesses wrong: `("CI_JOB_TOKEN", "basic:gitlab-ci-token")` for a GitLab CI job token, `basic:x-access-token` for GitHub Enterprise; alone it is basic for github.com (`x-access-token`) and `gitlab.*` (`oauth2`), bearer elsewhere.
 
 ### Lint
 
