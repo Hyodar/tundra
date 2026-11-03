@@ -694,6 +694,13 @@ def _kernel(
             modules=kernel.modules,
         )
     source = kernel.source
+    if source.auth is not None:
+        raise ValidationError(
+            f"Kernel {kernel.version}: its source names auth={source.auth!r}, which only a "
+            "Build source reads.",
+            hint="Drop auth=: the kernel source is read with the host's git credential "
+            "helpers or, for an SSH url (git@host:org/linux.git), its SSH agent.",
+        )
     if isinstance(source, Http):
         if source.sha256 is None:
             raise ValidationError(

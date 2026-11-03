@@ -1211,7 +1211,13 @@ def _inject_one(text: str, service: str) -> str:
 
 
 def _git(source: Git) -> GitSource:
-    return GitSource(source.url, source.ref, subdir=source.subdir, submodules=source.submodules)
+    return GitSource(
+        source.url,
+        source.ref,
+        subdir=source.subdir,
+        submodules=source.submodules,
+        auth=source.auth,
+    )
 
 
 def _lowered_source(source: Git | Local) -> GitSource | LocalSource:
@@ -1223,7 +1229,9 @@ def _lowered_source(source: Git | Local) -> GitSource | LocalSource:
 def _declared(source: GitSource | LocalSource) -> Git | Local:
     if isinstance(source, LocalSource):
         return recorded_local(source.path, source.directory)
-    return Git(source.url, source.ref, subdir=source.subdir, submodules=source.submodules)
+    return Git(
+        source.url, source.ref, subdir=source.subdir, submodules=source.submodules, auth=source.auth
+    )
 
 
 def source_build(build: Build) -> SourceBuild:
@@ -1232,7 +1240,7 @@ def source_build(build: Build) -> SourceBuild:
     if isinstance(build.source, (Git, Local)):
         source = _lowered_source(build.source)
     else:
-        source = HttpSource(build.source.url, sha256=build.source.sha256)
+        source = HttpSource(build.source.url, sha256=build.source.sha256, auth=build.source.auth)
     steps = tuple(
         SourceInstall.tree(step.source, step.destination)
         if step.directory

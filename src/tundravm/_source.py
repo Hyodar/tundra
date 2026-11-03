@@ -22,6 +22,7 @@ the sandbox never fetches a source. A built kernel's source joins them as a
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -38,7 +39,8 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from ._secret_scan import redact, url_credential
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
@@ -163,19 +165,50 @@ def refuse_url_credential(url: str, spelling: str) -> None:
     )
 
 
+_AUTH_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def refuse_auth(url: str, auth: str | None, spelling: str) -> None:
+    """Refuse an ``auth=`` that is not an environment variable name, or on a url that is
+    not https: a token never travels in clear text, and an SSH url reads the agent."""
+    if auth is None:
+        return
+    if not isinstance(auth, str) or not _AUTH_NAME.fullmatch(auth):
+        raise ValidationError(
+            f"{spelling}(..., auth=...): auth= names the environment variable holding the "
+            "token, never the token.",
+            hint=f'{spelling}(url, ..., auth="GITHUB_TOKEN"), exporting GITHUB_TOKEN on the '
+            "host that locks and builds.",
+        )
+    if urlsplit(url).scheme.lower() != "https":
+        raise ValidationError(
+            f'{spelling}("{redact(url)}", ..., auth="{auth}"): auth= sends the token over '
+            "https only.",
+            hint=f'{spelling}("https://...", ..., auth="{auth}"), or drop auth= for an SSH '
+            "url (git@host:org/repo.git), which reads the SSH agent.",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class GitSource:
-    """A git repository at *ref* (branch, tag, or full 40-hex commit sha)."""
+    """A git repository at *ref* (branch, tag, or full 40-hex commit sha).
+
+    *auth* names the host environment variable whose token git sends the source's host
+    (:func:`git_auth_env`); it is read at each lock, fetch and prefetch and recorded
+    nowhere, so it is no part of the payload or the checkout identity.
+    """
 
     url: str
     ref: str
     subdir: str | None = field(default=None, kw_only=True)
     submodules: bool = field(default=False, kw_only=True)
+    auth: str | None = field(default=None, kw_only=True)
 
     kind: Literal["git"] = field(default="git", init=False, repr=False)
 
     def __post_init__(self) -> None:
         refuse_url_credential(self.url, "Git")
+        refuse_auth(self.url, self.auth, "Git")
 
     @property
     def requested(self) -> str:
@@ -203,18 +236,24 @@ class GitSource:
 
 @dataclass(frozen=True, slots=True)
 class HttpSource:
-    """A file or source archive at *url*; ``sha256`` pins it inline."""
+    """A file or source archive at *url*; ``sha256`` pins it inline.
+
+    *auth* names the host environment variable whose token the download sends *url*'s
+    host as a bearer header (never another host, never across a redirect).
+    """
 
     url: str
     sha256: str | None = field(default=None, kw_only=True)
     mirrors: tuple[str, ...] = field(default=(), kw_only=True)
     """URLs of the same file, read in order when *url* answers 404 (the sha256 pins it)."""
+    auth: str | None = field(default=None, kw_only=True)
 
     kind: Literal["http"] = field(default="http", init=False, repr=False)
 
     def __post_init__(self) -> None:
         for url in (self.url, *self.mirrors):
             refuse_url_credential(url, "Http")
+        refuse_auth(self.url, self.auth, "Http")
 
     @property
     def requested(self) -> str:
@@ -2787,6 +2826,11 @@ def prefetch_deps(
             env.update(DotnetBuild._host_env(sdk_root, scratch / "home"))
             name = sdk.version
             (deps / str(build.toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
+        if isinstance(recipe, (GoBuild, CargoBuild)) and isinstance(build.source, GitSource):
+            try:
+                env.update(_git_deps_auth_env(recipe, build.source))
+            except SourceError as exc:
+                return f"failed ({exc.reason})"
         try:
             completed = run_tool(argv, cwd=workdir, env={**os.environ, **env})
         except OSError as exc:
@@ -2815,16 +2859,93 @@ def prefetch_deps(
     return f"{recipe.deps}: prefetched"
 
 
+_GITHUB_HOSTS = frozenset({"github.com", "www.github.com"})
+
+
+def _git_deps_auth_env(recipe: GoBuild | CargoBuild, source: GitSource) -> dict[str, str]:
+    """The prefetch environment giving *source*'s ``auth`` token to the git dependencies
+    on its host: :func:`git_auth_env`, which ``go mod download`` passes to the git it runs.
+
+    Cargo fetches git dependencies with its built-in libgit2, which reads a credential
+    helper and the SSH agent but neither ``GIT_CONFIG_*`` nor ``http.extraHeader``, so
+    ``CARGO_NET_GIT_FETCH_WITH_CLI`` has it run git instead.
+    """
+    env = git_auth_env(source)
+    if env and isinstance(recipe, CargoBuild):
+        env["CARGO_NET_GIT_FETCH_WITH_CLI"] = "true"
+    return env
+
+
+def _auth_token(source: GitSource | HttpSource) -> str | None:
+    """The value of *source*'s ``auth`` variable on this host, read now; ``None`` without one.
+
+    Raises :class:`~tundravm.errors.SourceError` naming the variable when it is unset or
+    empty.
+    """
+    if source.auth is None:
+        return None
+    token = os.environ.get(source.auth, "")
+    if token:
+        return token
+    described = source.describe()
+    reason = f"the environment variable {source.auth} (its auth=) is not set"
+    raise SourceError(
+        f"Cannot fetch {described}: {reason}.",
+        source=described,
+        reason=reason,
+        hint=f"export {source.auth}=<a token that reads the source> on this host, then run "
+        "`tundravm lock` or `tundravm build` again.",
+    )
+
+
+def _git_authorization(host: str, token: str) -> str:
+    """The ``Authorization`` value git sends a *host* that reads *token*.
+
+    GitHub and GitLab take the token as a basic-auth password (``x-access-token`` and
+    ``oauth2`` as the user, as their CI checkouts send it); any other host a bearer token.
+    """
+    if host in _GITHUB_HOSTS:
+        user = "x-access-token"
+    elif host == "gitlab.com" or host.startswith("gitlab."):
+        user = "oauth2"
+    else:
+        return f"Bearer {token}"
+    return "Basic " + base64.b64encode(f"{user}:{token}".encode()).decode("ascii")
+
+
+def git_auth_env(source: GitSource) -> dict[str, str]:
+    """The environment that has git send *source*'s ``auth`` token to the source's host.
+
+    One ``http.<scheme>://<host>/.extraHeader`` entry appended to the ``GIT_CONFIG_*``
+    entries already in the environment, so the token is never in argv, a config file or a
+    credential store, and reaches the source's submodules and the Go and Cargo git
+    dependencies on the same host. Empty without ``auth``.
+    """
+    token = _auth_token(source)
+    if token is None:
+        return {}
+    parts = urlsplit(source.url)
+    host = (parts.hostname or "").lower()
+    count = os.environ.get("GIT_CONFIG_COUNT", "0")
+    index = int(count) if count.isdigit() else 0
+    return {
+        "GIT_CONFIG_COUNT": str(index + 1),
+        f"GIT_CONFIG_KEY_{index}": f"http.{parts.scheme}://{parts.netloc}/.extraHeader",
+        f"GIT_CONFIG_VALUE_{index}": f"Authorization: {_git_authorization(host, token)}",
+    }
+
+
 def _git(source: GitSource, *args: str) -> None:
     described = source.describe()
     command = ["git", *args]
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **git_auth_env(source)}
     try:
         completed = subprocess.run(
             command,
             check=False,
             text=True,
             capture_output=True,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=env,
         )
     except OSError as exc:
         reason = f"cannot run git: {exc.strerror or exc}"
@@ -2848,17 +2969,28 @@ def _git(source: GitSource, *args: str) -> None:
         )
 
 
+def _request(source: HttpSource, url: str) -> Request:
+    """The request for *url*: with *source*'s ``auth`` token as a bearer header when *url*
+    is on the source's own host, and never on a redirect (a release asset redirects to a
+    storage host that must not see it)."""
+    request = Request(url)
+    token = _auth_token(source)
+    if token is not None and urlsplit(url).netloc == urlsplit(source.url).netloc:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    return request
+
+
 def _open(source: HttpSource) -> Any:
     """The response of *source*'s url, else of the first mirror that does not answer 404."""
     *first, last = (source.url, *source.mirrors)
     for url in first:
         try:
-            return urlopen(url, timeout=_NETWORK_TIMEOUT)
+            return urlopen(_request(source, url), timeout=_NETWORK_TIMEOUT)
         except HTTPError as exc:
             exc.close()
             if exc.code != 404:
                 raise
-    return urlopen(last, timeout=_NETWORK_TIMEOUT)
+    return urlopen(_request(source, last), timeout=_NETWORK_TIMEOUT)
 
 
 def _download(source: HttpSource, pin: str, dest: Path) -> None:
@@ -2930,6 +3062,7 @@ def _ls_remote(source: GitSource) -> str:
     """The commit *source*'s ref points at, without prompting for credentials."""
     command = ["git", "ls-remote", source.url, source.ref]
     described = source.describe()
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **git_auth_env(source)}
     try:
         completed = subprocess.run(
             command,
@@ -2937,7 +3070,7 @@ def _ls_remote(source: GitSource) -> str:
             text=True,
             capture_output=True,
             timeout=_NETWORK_TIMEOUT,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=env,
         )
     except subprocess.TimeoutExpired:
         reason = f"timed out after {_NETWORK_TIMEOUT:g}s"

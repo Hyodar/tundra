@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import base64
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from tundravm import manifest
+from tundravm._source import (
+    CargoBuild,
+    GitSource,
+    GoBuild,
+    HttpSource,
+    _git_deps_auth_env,
+    _request,
+    default_resolver,
+    fetch_source,
+    git_auth_env,
+)
 from tundravm.declarative.bom import Component, Sbom
-from tundravm.errors import ValidationError
+from tundravm.errors import SourceError, ValidationError
 from tundravm.lockfile import LockedFetch, serialize_lockfile
 from tundravm.lockfile.model import LOCKFILE_VERSION, Lockfile
 from tundravm.sources import Git, Http
@@ -74,3 +87,115 @@ def test_artifacts_never_hold_a_credential(
         write(url, tmp_path)
     assert SECRET not in str(caught.value)
     assert not (tmp_path / manifest.MANIFEST).exists()
+
+
+@pytest.mark.parametrize(
+    ("url", "auth", "refused"),
+    [
+        ("https://github.com/org/repo", "GITHUB_TOKEN", None),
+        ("https://github.com/org/repo", SECRET + "-x", "never the token"),
+        ("git@github.com:org/repo.git", "GITHUB_TOKEN", "over https only"),
+        ("http://example.com/org/repo", "GITHUB_TOKEN", "over https only"),
+    ],
+)
+def test_auth_names_a_variable_on_an_https_url(url: str, auth: str, refused: str | None) -> None:
+    if refused is None:
+        Git(url, "v1", auth=auth)
+        return
+    with pytest.raises(ValidationError, match=refused) as caught:
+        Git(url, "v1", auth=auth)
+    assert SECRET not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "count", "index", "header"),
+    [
+        (
+            "https://github.com/org/repo",
+            None,
+            0,
+            "Basic " + base64.b64encode(f"x-access-token:{SECRET}".encode()).decode(),
+        ),
+        (
+            "https://gitlab.com/org/repo",
+            "2",
+            2,
+            "Basic " + base64.b64encode(f"oauth2:{SECRET}".encode()).decode(),
+        ),
+        ("https://git.example.com:8443/repo", None, 0, f"Bearer {SECRET}"),
+    ],
+)
+def test_git_auth_env_sends_the_header_by_host(
+    monkeypatch: pytest.MonkeyPatch, url: str, count: str | None, index: int, header: str
+) -> None:
+    monkeypatch.setenv("SRC_TOKEN", SECRET)
+    if count is None:
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    else:
+        monkeypatch.setenv("GIT_CONFIG_COUNT", count)
+    scope = url[: url.index("/", len("https://"))]
+    assert git_auth_env(GitSource(url, "v1", auth="SRC_TOKEN")) == {
+        "GIT_CONFIG_COUNT": str(index + 1),
+        f"GIT_CONFIG_KEY_{index}": f"http.{scope}/.extraHeader",
+        f"GIT_CONFIG_VALUE_{index}": f"Authorization: {header}",
+    }
+
+
+def test_the_host_git_gets_the_token_in_its_environment_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``lock`` and ``build`` run git with the header in ``GIT_CONFIG_*``, never in argv."""
+    log = tmp_path / "git.log"
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    commit = "a" * 40
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s|%s|%s\\n" "$*" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" >> {log}\n'
+        f'[ "$1" = ls-remote ] && printf "{commit}\\trefs/tags/v1\\n"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    monkeypatch.delenv("SRC_TOKEN", raising=False)
+    source = GitSource("https://git.example.com/org/repo", "v1", auth="SRC_TOKEN")
+    with pytest.raises(SourceError, match="SRC_TOKEN") as caught:
+        default_resolver(source)
+    assert "fix: export SRC_TOKEN=" in str(caught.value)
+    monkeypatch.setenv("SRC_TOKEN", SECRET)
+    assert default_resolver(source) == commit
+    fetch_source(source, commit, tmp_path / "checkout")
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 4
+    for line in lines:
+        argv, key, value = line.split("|")
+        assert SECRET not in argv
+        assert key == "http.https://git.example.com/.extraHeader"
+        assert value == f"Authorization: Bearer {SECRET}"
+
+
+def test_a_download_sends_the_token_to_its_own_host_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SRC_TOKEN", SECRET)
+    source = HttpSource(
+        "https://files.example.com/a.tgz",
+        mirrors=("https://mirror.example.org/a.tgz",),
+        auth="SRC_TOKEN",
+    )
+    own, mirror = (_request(source, url) for url in (source.url, *source.mirrors))
+    assert own.unredirected_hdrs == {"Authorization": f"Bearer {SECRET}"}
+    assert not own.headers and not mirror.unredirected_hdrs and not mirror.headers
+
+
+@pytest.mark.parametrize(
+    ("recipe", "cli"), [(GoBuild(output="app"), None), (CargoBuild(output="app"), "true")]
+)
+def test_prefetch_gives_the_git_dependencies_the_token(
+    monkeypatch: pytest.MonkeyPatch, recipe: GoBuild | CargoBuild, cli: str | None
+) -> None:
+    monkeypatch.setenv("SRC_TOKEN", SECRET)
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    env = _git_deps_auth_env(recipe, GitSource("https://github.com/o/r", "v1", auth="SRC_TOKEN"))
+    assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraHeader"
+    assert env.get("CARGO_NET_GIT_FETCH_WITH_CLI") == cli

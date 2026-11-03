@@ -22,7 +22,7 @@ from typing import ClassVar, Literal, get_args, overload
 from tundravm._location import Located, anchored, caller_location
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
-from tundravm._source import FrozenMap, refuse_url_credential
+from tundravm._source import FrozenMap, refuse_auth, refuse_url_credential
 from tundravm._source import GoBuild as Go
 from tundravm._units.directives import UNIT_SUFFIXES, check_value
 from tundravm.diagnostics import Diagnostic
@@ -2243,16 +2243,27 @@ class Git(Keywords):
     The whole repository is checked out; the dependency prefetch and the build run in
     *subdir*, and a Go build's toolchain is the one ``<subdir>/go.mod`` names.
     *submodules* checks them out too.
+
+    A private repository is read with the host's own access: git's credential helpers,
+    or the SSH agent for an SSH url (``git@github.com:org/repo.git``). *auth* names an
+    environment variable holding a token instead (``auth="GITHUB_TOKEN"``, https only):
+    ``tundravm lock`` and ``tundravm build`` read it on the host and hand it to git as an
+    ``Authorization`` header (basic for GitHub and GitLab, bearer elsewhere), which also
+    reaches the submodules and the Go and Cargo git dependencies on the same host. It is
+    never written to disk, the build sandbox, the lock or any artifact; an unset
+    variable is an error naming it. A credential in the url itself is refused.
     """
 
     url: str
     ref: str
     subdir: str | None = None
     submodules: bool = False
+    auth: str | None = None
 
     def __post_init__(self) -> None:
         _require_name(self, self.url, "url")
         refuse_url_credential(self.url, "Git")
+        refuse_auth(self.url, self.auth, "Git")
         _require_name(self, self.ref, "ref")
         if self.subdir is not None:
             _require_relative(self, self.subdir, "subdir")
@@ -2260,12 +2271,21 @@ class Git(Keywords):
 
 @dataclass(frozen=True, slots=True)
 class Http(Keywords):
+    """A download at *url*, pinned by *sha256* or by ``tundravm lock``.
+
+    *auth* names an environment variable whose token the host sends *url*'s host as a
+    bearer header (https only, never across a redirect), never written anywhere. A
+    credential in the url itself is refused.
+    """
+
     url: str
     sha256: str | None = None
+    auth: str | None = None
 
     def __post_init__(self) -> None:
         _require_name(self, self.url, "url")
         refuse_url_credential(self.url, "Http")
+        refuse_auth(self.url, self.auth, "Http")
         if self.sha256 is not None and not _SHA256.fullmatch(self.sha256):
             raise _fail(
                 self,

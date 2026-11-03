@@ -1297,7 +1297,13 @@ Deterministic self-contained `dotnet publish` of *project* into `publish/`.
 *dataclass*
 
 ```python
-Git(url: str, ref: str, subdir: str | None = None, submodules: bool = False)
+Git(
+    url: str,
+    ref: str,
+    subdir: str | None = None,
+    submodules: bool = False,
+    auth: str | None = None,
+)
 ```
 
 A git repository at *ref* (a tag, a branch, or a 40-hex commit `tundravm lock` pins).
@@ -1359,8 +1365,10 @@ A Go program built from *source* and installed at `executable`.
 *dataclass*
 
 ```python
-Http(url: str, sha256: str | None = None)
+Http(url: str, sha256: str | None = None, auth: str | None = None)
 ```
+
+A download at *url*, pinned by *sha256* or by `tundravm lock`.
 
 ### `Install`
 
