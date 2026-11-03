@@ -251,13 +251,15 @@ one of them at a mirror. `Tdxs.from_policy(policy)` also validates quotes agains
 registers of an image you trust.
 
 `Container("web", argv, packages=, files=, state=, user=, expose=, egress=, modes=,
-requires=, serves=, probe=, ssh=, hardening=)` ([a task](howto.md#run-a-container)) runs a program from a
+requires=, serves=, probe=, ssh=, hardening=,
+binds=)` ([a task](howto.md#run-a-container)) runs a program from a
 root built from the image's snapshot. OCI references and production shells
 (`container-shell`) are refused. A network keyword gives it the veth `ve-web`: `expose=`
 (TCP or UDP), `egress=`, `modes={"maintenance": Egress(...)}`, `requires=[nethermind.rpc]`
-(a host endpoint, same address) and `serves=` with `probe=` (`endpoint(port)`). `ssh=ContainerSsh(port=, keys=)` runs sshd as its own
-user, by key only; every quote binds its host key, which `attest` pins. A `Login` and a
-`Container` never share an account.
+(a host endpoint, same address) and `serves=` with `probe=` (`endpoint(port)`).
+`ssh=ContainerSsh(port=, keys=)` runs sshd as its own user, by key only; every quote binds
+its host key, which `attest` pins. A `Bind` is read-only unless `writable=True`. A `Login`
+and a `Container` never share an account.
 
 ## Profiles
 

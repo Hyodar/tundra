@@ -709,6 +709,21 @@ Readiness: *host* accepts a TCP connection on *port*, polled every *interval* un
 
 Components: the `Component` base class, what a component exports, and the shipped library.
 
+### `Bind`
+
+*dataclass*
+
+```python
+Bind(path: str, *, at: str | None = None, writable: bool = False, file: bool = False)
+```
+
+A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind("/run/input", writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
+
+| Member | Does |
+|---|---|
+| `Bind.directive` | `BindPaths=` for a writable bind, else `BindReadOnlyPaths=`. |
+| `Bind.target` | Where the container sees it. |
+
 ### `Component`
 
 *class*
@@ -766,6 +781,7 @@ Container(
     probe: TcpProbe | None = None,
     ssh: ContainerSsh | None = None,
     hardening: Sandbox = 'static',
+    binds: Sequence[Bind] = (),
 )
 ```
 

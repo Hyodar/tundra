@@ -50,7 +50,7 @@ from ._base import (
     Tdxs,
     TeeBase,
 )
-from ._container import Container, ContainerSsh
+from ._container import Bind, Container, ContainerSsh
 from ._observability import (
     JournalExport,
     Observability,
@@ -62,6 +62,7 @@ from ._observability import (
 
 __all__ = [
     "EVIDENCE",
+    "Bind",
     "Component",
     "ComponentReady",
     "Container",

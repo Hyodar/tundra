@@ -188,6 +188,8 @@ class ContainerSpec:
     files: tuple[FileEntry, ...] = ()
     directories: tuple[str, ...] = ()
     """Mount points the root must hold for the unit's bind mounts (it is read-only)."""
+    mount_files: tuple[str, ...] = ()
+    """Empty files the root holds for the unit's file binds."""
     passwd: tuple[str, ...] = ()
     """``/etc/passwd`` lines the root gains: its user, with the uid the host pins."""
     group: tuple[str, ...] = ()

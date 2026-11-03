@@ -24,6 +24,7 @@ mkosi user:
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 import shlex
 import shutil
@@ -1423,6 +1424,9 @@ class DeterministicMkosiEmitter:
         lines += [f'mkdir -p "$BUILDROOT"{shlex.quote(p)}' for p in CONTAINER_API_DIRECTORIES]
         lines += [f'chmod 1777 "$BUILDROOT"{p}' for p in ("/tmp", "/var/tmp")]
         lines += [f'mkdir -p "$BUILDROOT"{shlex.quote(p)}' for p in container.directories]
+        for path in container.mount_files:
+            parent = shlex.quote(posixpath.dirname(path))
+            lines += [f'mkdir -p "$BUILDROOT"{parent}', f'touch "$BUILDROOT"{shlex.quote(path)}']
         text = "\n".join(lines) + "\n"
         _write(directory / "mkosi.postinst.d" / "10-mount-points.sh", text, EXEC_MODE)
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]

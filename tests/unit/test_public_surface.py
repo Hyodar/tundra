@@ -54,6 +54,7 @@ SYSTEMD = [
 ]
 COMPONENTS = [
     "EVIDENCE",
+    "Bind",
     "Component",
     "ComponentReady",
     "Container",

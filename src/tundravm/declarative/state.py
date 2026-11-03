@@ -846,6 +846,7 @@ def _container(item: ContainerRoot) -> ContainerSpec:
         packages=tuple(sorted(set(item.packages))),
         files=tuple(shipped.files),
         directories=tuple(dict.fromkeys(item.directories)),
+        mount_files=tuple(dict.fromkeys(item.mount_files)),
         passwd=passwd,
         group=group,
     )

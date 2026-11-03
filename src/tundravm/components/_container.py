@@ -17,7 +17,7 @@ import posixpath
 import re
 import zlib
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import KW_ONLY, dataclass, field, replace
 
 from tundravm._image._component import Component, Endpoint, ServiceReady
 from tundravm._image._secrets import Secret
@@ -45,7 +45,7 @@ from tundravm.models import CONTAINERS_PATH
 
 from ._base import egress_rules
 
-__all__ = ["Container", "ContainerSsh"]
+__all__ = ["Bind", "Container", "ContainerSsh"]
 
 PROXY = "/usr/lib/systemd/systemd-socket-proxyd"
 """What relays a socket in the container's namespace to a host endpoint (the ``systemd``
@@ -89,6 +89,11 @@ def _fail(message: str, *, hint: str) -> ValidationError:
     return ValidationError(f"Container: {message}", hint=hint)
 
 
+PROTECTED = ("/run/tundravm", "/proc", "/sys", "/dev", "/boot")
+"""Host paths no ``Bind`` reaches into: the control plane (volume keys, credentials, other
+containers' keys) and the kernel's interfaces."""
+WHOLE = frozenset({"/", "/etc", "/usr", "/var", "/run", "/root", "/home"})
+"""Host directories a ``Bind`` may reach into but not bind whole."""
 _KEYS_HINT = 'keys=Secret("searcher-keys") for keys delivered after attestation.'
 
 
@@ -153,6 +158,49 @@ class ContainerSsh(Located):
         return isinstance(self.keys, Secret)
 
 
+@dataclass(frozen=True, slots=True)
+class Bind(Located):
+    """A host *path* the container sees at *at* (default: the same path), read-only unless
+    *writable*: ``Bind("/var/log/lighthouse")``, ``Bind("/run/input", writable=True)``.
+    *file* binds one file rather than a directory (a socket, a config). The path must exist
+    when the container starts; the root gains its mount point. A secret reaches a
+    container as ``credentials=`` on a ``Service`` does, not as a bind.
+    """
+
+    path: str
+    _: KW_ONLY
+    at: str | None = None
+    writable: bool = False
+    file: bool = False
+
+    def __post_init__(self) -> None:
+        for keyword in ("path", "at"):
+            value = getattr(self, keyword)
+            if value is None and keyword == "at":
+                continue
+            if not isinstance(value, str) or not value.startswith("/") or ":" in value:
+                raise ValidationError(
+                    f"Bind: {keyword}={value!r} is not an absolute path.",
+                    hint='Bind("/var/log/app"), or at="/logs" to see it elsewhere.',
+                )
+            object.__setattr__(self, keyword, posixpath.normpath(value))
+        for keyword in ("writable", "file"):
+            if not isinstance(getattr(self, keyword), bool):
+                raise ValidationError(
+                    f"Bind: {keyword}= must be True or False.", hint=f"{keyword}=True"
+                )
+
+    @property
+    def target(self) -> str:
+        """Where the container sees it."""
+        return self.at or self.path
+
+    @property
+    def directive(self) -> str:
+        """``BindPaths=`` for a writable bind, else ``BindReadOnlyPaths=``."""
+        return "BindPaths" if self.writable else "BindReadOnlyPaths"
+
+
 class Container(Component):
     """*argv* run in a Debian root of its own: *packages* from the image's snapshot and
     *files*, built with the image as a read-only root image the payload ships, so the quote
@@ -176,7 +224,8 @@ class Container(Component):
     once it is ready. Each port of *serves* is one the host reaches it on, at its veth
     address only (:meth:`endpoint`), and *probe* (a ``TcpProbe`` of one of them) is
     what a host service that requires that endpoint waits for. With none of these its
-    namespace holds ``lo`` only. *ssh* (:class:`ContainerSsh`) runs an sshd in it letting
+    namespace holds ``lo`` only. *binds* (:class:`Bind`) show host paths in it, read-only
+    unless marked writable. *ssh* (:class:`ContainerSsh`) runs an sshd in it letting
     *user* in by key: as its program without *argv*, else beside it as
     ``<name>-ssh.service`` in its network namespace; its port is exposed as *expose*'s are.
     Component name: *name*, which names its unit too.
@@ -196,6 +245,7 @@ class Container(Component):
     probe: TcpProbe | None = None
     ssh: ContainerSsh | None = None
     hardening: Sandbox = "static"
+    binds: Sequence[Bind] = ()
 
     def __init__(
         self,
@@ -214,6 +264,7 @@ class Container(Component):
         probe: TcpProbe | None = None,
         ssh: ContainerSsh | None = None,
         hardening: Sandbox = "static",
+        binds: Sequence[Bind] = (),
     ) -> None:
         given = {
             "name": name,
@@ -230,13 +281,14 @@ class Container(Component):
             "probe": probe,
             "ssh": ssh,
             "hardening": hardening,
+            "binds": binds,
         }
         for keyword, value in given.items():
             object.__setattr__(self, keyword, value)
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        for keyword in ("argv", "packages", "files", "expose", "requires", "serves"):
+        for keyword in ("argv", "packages", "files", "expose", "requires", "serves", "binds"):
             value = getattr(self, keyword)
             if isinstance(value, (str, bytes, TCP, UDP, File, Endpoint)) or not isinstance(
                 value, Sequence
@@ -272,6 +324,7 @@ class Container(Component):
                 hint='state=data.directory("web"): a container root keeps nothing across boots.',
             )
         self._check_user()
+        self._check_binds()
         _sandbox(self.hardening)
         if not self.argv and self.hardening != "static":
             raise _fail(
@@ -379,6 +432,51 @@ class Container(Component):
                 f"the container's user would be {self.name!r}, longer than a user name.",
                 hint='Pass user= a name of at most 32 characters: user="web".',
             )
+
+    def _check_binds(self) -> None:
+        for item in self.binds:
+            if not isinstance(item, Bind):
+                raise _fail(f"binds= holds {item!r}, not a Bind.", hint='binds=[Bind("/srv/a")]')
+            if item.path in WHOLE or any(
+                item.path == p or item.path.startswith(f"{p}/") for p in PROTECTED
+            ):
+                raise _fail(
+                    f"Bind({item.path!r}) shows the container a host path tundravm keeps from "
+                    "it: the control plane, the kernel's interfaces, or a whole system tree.",
+                    hint="Bind the one directory or file the program needs, such as "
+                    "/var/log/app; a secret goes to it as credentials=, not a bind.",
+                )
+        targets = [item.target for item in self._binds(sshd=True)]
+        if twice := sorted({t for t in targets if targets.count(t) > 1}):
+            raise _fail(
+                f"two binds land on {twice[0]} in the container.",
+                hint="Give each Bind its own at=; state= and ssh= keep their own paths.",
+            )
+        for target in targets:
+            if (
+                target == "/"
+                or target.startswith(("/proc/", "/sys/", "/dev/"))
+                or (target in ("/proc", "/sys", "/dev"))
+            ):
+                raise _fail(
+                    f"a bind lands on {target}, which the container's namespace mounts itself.",
+                    hint='Bind it elsewhere: at="/srv/name".',
+                )
+
+    def _binds(self, *, sshd: bool) -> tuple[Bind, ...]:
+        """Every bind of a unit running in the root: *state* writable, *binds*, and for
+        sshd (*sshd*) the host key directory and the delivered keys, read-only."""
+        found: list[Bind] = []
+        if self.state is not None:
+            found.append(Bind(self.state.path, writable=True))
+        found.extend(self.binds)
+        ssh = self.ssh
+        if sshd and ssh is not None:
+            found.append(Bind(container_ssh.host_directory(self.name), at=container_ssh.HOST_KEYS))
+            if ssh.delivered:
+                where = container_ssh.keys_directory(self.name)
+                found.append(Bind(where, at=container_ssh.AUTHORIZED_KEYS))
+        return tuple(found)
 
     def _check_packages(self) -> None:
         if not self.packages:
@@ -610,7 +708,9 @@ class Container(Component):
     def _root(self, network: dm.ContainerNetwork | None) -> dm.ContainerRoot:
         """The root image: its packages and files, sshd's with *ssh*, its network, and the
         user with the ids the host pins."""
-        mounts: tuple[str, ...] = () if self.state is None else (self.state.path,)
+        binds = self._binds(sshd=True)
+        mounts = tuple(item.target for item in binds if not item.file)
+        points = tuple(item.target for item in binds if item.file)
         files = [dm.File(item.path, item.content, item.mode) for item in self.files]
         packages = list(self.packages)
         ssh = self.ssh
@@ -618,10 +718,7 @@ class Container(Component):
             packages.append(container_ssh.PACKAGE)
             config = container_ssh.config(self.run_user, ssh.port)
             files.append(dm.File(container_ssh.CONFIG, config, 0o644))
-            mounts += (container_ssh.HOST_KEYS,)
-            if isinstance(ssh.keys, Secret):
-                mounts += (container_ssh.AUTHORIZED_KEYS,)
-            else:
+            if not isinstance(ssh.keys, Secret):
                 keys = "".join(f"{key.strip()}\n" for key in ssh.keys)
                 files.append(dm.File(f"{container_ssh.AUTHORIZED_KEYS}/authorized_keys", keys))
         ids = uid(self.run_user)
@@ -634,6 +731,7 @@ class Container(Component):
             tuple(dict.fromkeys(packages)),
             files=tuple(files),
             directories=mounts,
+            mount_files=points,
             network=network,
             endpoints=tuple(endpoint.address for endpoint in self.requires),
             account=account,
@@ -642,7 +740,7 @@ class Container(Component):
 
     def _dropin(self, unit: str, units: Sequence[str]) -> dm.DropIn:
         """The drop-in running *unit* in the root image after *units*: its namespaces, its
-        state bound, and for sshd the host key (and the delivered keys) read-only."""
+        state bound, and for sshd the host key (and the delivered keys), all as :meth:`_binds`."""
         directives: dict[str, str | tuple[str, ...]] = {
             "RootImage": self.image,
             "MountAPIVFS": "yes",
@@ -654,11 +752,12 @@ class Container(Component):
             directives["PrivateNetwork"] = "yes"
         else:
             directives["NetworkNamespacePath"] = f"{NETNS}/{self.name}"
-        if self.state is not None:
-            directives["BindPaths"] = (f"{self.state.path}:{self.state.path}",)
-        if self.ssh is not None and unit == self.sshd_unit:
-            binds = container_ssh.binds(self.name, delivered=self.ssh.delivered)
-            directives["BindReadOnlyPaths"] = binds
+        sshd = self.ssh is not None and unit == self.sshd_unit
+        for item in self._binds(sshd=sshd):
+            found = directives.setdefault(item.directive, ())
+            assert isinstance(found, tuple)
+            directives[item.directive] = (*found, f"{item.path}:{item.target}")
+        if sshd:
             needs.append(container_ssh.unit(self.name))
             if unit != self.unit:
                 needs.append(self.unit)

@@ -64,13 +64,10 @@ def script_path(name: str) -> str:
     return f"/usr/lib/tundravm/container-ssh/{name}"
 
 
-def binds(name: str, *, delivered: bool) -> tuple[str, ...]:
-    """``BindReadOnlyPaths=`` of the sshd unit: the host key directory, and the keys
-    directory when the keys are *delivered* (baked ones sit in the root)."""
-    found = [f"{directory(name)}/host:{HOST_KEYS}"]
-    if delivered:
-        found.append(f"{keys_directory(name)}:{AUTHORIZED_KEYS}")
-    return tuple(found)
+def host_directory(name: str) -> str:
+    """The host directory of container *name*'s host key, bound read-only at
+    :data:`HOST_KEYS`."""
+    return f"{directory(name)}/host"
 
 
 def script(name: str, uid: int, gid: int) -> str:
@@ -132,7 +129,7 @@ __all__ = [
     "SHELL",
     "SSHD",
     "authorized_keys",
-    "binds",
+    "host_directory",
     "config",
     "directory",
     "host_keys",

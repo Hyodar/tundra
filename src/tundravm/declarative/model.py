@@ -3333,7 +3333,8 @@ class ContainerRoot(Declared):
     *network* is its veth, which the variant's ``Firewall`` forwards (``None``: its namespace
     holds ``lo`` only); *endpoints* the host's loopback ``host:port`` its namespace relays;
     *account* the user it runs as, with the uid and gid the host pins for it, written into
-    the root's ``passwd`` and ``group``; *ssh_port* the port its sshd listens on, if any."""
+    the root's ``passwd`` and ``group``; *ssh_port* the port its sshd listens on, if any;
+    *mount_files* the empty files a file bind lands on."""
 
     name: str
     packages: tuple[str, ...]
@@ -3342,6 +3343,7 @@ class ContainerRoot(Declared):
     directories: tuple[str, ...] = ()
     network: ContainerNetwork | None = None
     endpoints: tuple[str, ...] = ()
+    mount_files: tuple[str, ...] = ()
     account: User | None = None
     ssh_port: int | None = None
 
@@ -3351,7 +3353,7 @@ class ContainerRoot(Declared):
         return () if self.network is None else self.network.expose
 
     def __post_init__(self) -> None:
-        _freeze(self, "packages", "files", "directories", "endpoints")
+        _freeze(self, "packages", "files", "directories", "endpoints", "mount_files")
         if self.network is not None and not isinstance(self.network, ContainerNetwork):
             raise _fail(
                 self,
@@ -3385,7 +3387,7 @@ class ContainerRoot(Declared):
                     f"files= holds {item!r}, not a File.",
                     hint='files=(File("/srv/www/index.html", "..."),)',
                 )
-        for path in self.directories:
+        for path in (*self.directories, *self.mount_files):
             _require_absolute(self, path, "directory")
         account = self.account
         if account is not None and (
