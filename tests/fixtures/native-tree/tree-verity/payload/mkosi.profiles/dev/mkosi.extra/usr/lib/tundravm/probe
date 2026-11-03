@@ -722,7 +722,7 @@ probe_upload journal-export.service 'http://127.0.0.2:19580' /var/lib/journal-ex
 check=observability:metrics-export.service
 probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
-probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up'
+probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|fixture:box_alive|fixture:box_cpu_under_80_percent|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up' 'fixture:box_alive' 'fixture:box_cpu_under_80_percent'
 check=observability:no-wait
 probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-forward-8081.service sink.service token.service go-probe.service rust-probe.service
 check=observability:egress

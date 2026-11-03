@@ -57,6 +57,17 @@ beyond `prometheus.service`, which already is.
 `print-measurements` journal line: `image-metrics` now logs the image, digest, mode and
 RTMR0-3 once at start.
 
+## Liveness and CPU per unit
+
+flashbox derives the container's liveness and CPU from `prometheus-process-exporter`, which
+groups processes by a command-line regex, listens on its own port and brings its own
+enabled unit. The node exporter's systemd collector has unit states but no CPU, and needs
+D-Bus. systemd already accounts each unit's cgroup, and a container's processes are all in
+its unit's cgroup: `image-metrics`, which runs `systemctl` as root every interval anyway,
+writes `tundravm_unit_active{unit=}` and `tundravm_unit_cpu_seconds_total{unit=}` for each
+loaded service (`systemctl show -p Id,LoadState,ActiveState,CPUUsageNSec`). No package, no
+port, no name matching. Raw, so only rules over them leave.
+
 ## Proof
 
 - Goldens: the fixture tree's dev profile carries the rules file, the server-mode argv and

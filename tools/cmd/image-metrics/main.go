@@ -7,8 +7,12 @@
 //	tundravm_mode{mode="tdx"} 1                                what the execution gate recorded
 //	tundravm_system_state{state="running"} 1                   systemctl is-system-running
 //	tundravm_units_failed 0                                    the units in the failed state
+//	tundravm_unit_active{unit="box.service"} 1                 each loaded service, 1 while active
+//	tundravm_unit_cpu_seconds_total{unit="box.service"} 1.5    the CPU time systemd accounts to its cgroup
 //
-// The identity is read once, the state every interval. At start it also prints the
+// The per-unit series are what recording rules derive liveness and CPU booleans from: a
+// container's processes are all in its unit's cgroup. The identity is read once, the state
+// every interval. At start it also prints the
 // identity to the journal, one line for the image and one per RTMR:
 //
 //	image fixture, digest sha384:HEX, mode tdx
@@ -28,9 +32,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -76,7 +82,7 @@ func main() {
 	}
 	for {
 		state, failed := systemState()
-		if err := write(output, render(id, state, failed)); err != nil {
+		if err := write(output, render(id, state, failed, serviceUnits())); err != nil {
 			log.Fatal(err)
 		}
 		time.Sleep(*interval)
@@ -250,7 +256,53 @@ func systemState() (string, int) {
 	return state, failed
 }
 
-func render(id identity, state string, failed int) []byte {
+// unit is one loaded service as systemctl shows it; cpu is negative when unaccounted.
+type unit struct {
+	name   string
+	active bool
+	cpu    float64
+}
+
+// serviceUnits is every loaded service with its state and CPU time.
+func serviceUnits() []unit {
+	listed, _ := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-legend", "--plain").Output()
+	args := []string{"show", "-p", "Id,LoadState,ActiveState,CPUUsageNSec", "--"}
+	for _, line := range strings.Split(string(listed), "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && strings.HasSuffix(fields[0], ".service") {
+			args = append(args, fields[0])
+		}
+	}
+	if len(args) == 5 {
+		return nil
+	}
+	shown, _ := exec.Command("systemctl", args...).Output()
+	return parseUnits(string(shown))
+}
+
+// parseUnits reads systemctl show's blocks of Id, LoadState, ActiveState and CPUUsageNSec,
+// keeping the loaded units.
+func parseUnits(shown string) []unit {
+	var found []unit
+	for _, block := range strings.Split(shown, "\n\n") {
+		props := map[string]string{}
+		for _, line := range strings.Split(block, "\n") {
+			if key, value, ok := strings.Cut(line, "="); ok {
+				props[key] = value
+			}
+		}
+		if props["Id"] == "" || props["LoadState"] != "loaded" {
+			continue
+		}
+		u := unit{name: props["Id"], active: props["ActiveState"] == "active", cpu: -1}
+		if nsec, err := strconv.ParseUint(props["CPUUsageNSec"], 10, 64); err == nil && nsec != math.MaxUint64 {
+			u.cpu = float64(nsec) / 1e9
+		}
+		found = append(found, u)
+	}
+	return found
+}
+
+func render(id identity, state string, failed int, units []unit) []byte {
 	var out strings.Builder
 	gauge := func(name, help string) {
 		fmt.Fprintf(&out, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
@@ -269,6 +321,22 @@ func render(id identity, state string, failed int) []byte {
 	fmt.Fprintf(&out, "tundravm_system_state{state=%q} 1\n", state)
 	gauge("tundravm_units_failed", "The units in the failed state.")
 	fmt.Fprintf(&out, "tundravm_units_failed %d\n", failed)
+	if len(units) > 0 {
+		gauge("tundravm_unit_active", "Each loaded service: 1 while active.")
+		for _, u := range units {
+			active := 0
+			if u.active {
+				active = 1
+			}
+			fmt.Fprintf(&out, "tundravm_unit_active{unit=%q} %d\n", u.name, active)
+		}
+		fmt.Fprintf(&out, "# HELP tundravm_unit_cpu_seconds_total The CPU time systemd accounts to each service's cgroup.\n# TYPE tundravm_unit_cpu_seconds_total counter\n")
+		for _, u := range units {
+			if u.cpu >= 0 {
+				fmt.Fprintf(&out, "tundravm_unit_cpu_seconds_total{unit=%q} %g\n", u.name, u.cpu)
+			}
+		}
+	}
 	return []byte(out.String())
 }
 

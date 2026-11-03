@@ -7,3 +7,9 @@ groups:
         expr: "local:memory_available_ratio > bool 0.1"
       - record: fixture:node_up
         expr: "min(up{job=\"node\"})"
+      - record: fixture:box_alive
+        expr: "max(tundravm_unit_active{unit=\"box.service\"})"
+      - record: local:box_cpu_ratio
+        expr: "sum(rate(tundravm_unit_cpu_seconds_total{unit=\"box.service\"}[1m])) / count(node_cpu_seconds_total{mode=\"idle\"})"
+      - record: fixture:box_cpu_under_80_percent
+        expr: "local:box_cpu_ratio < bool 0.8"

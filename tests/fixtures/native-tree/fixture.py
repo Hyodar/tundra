@@ -109,6 +109,13 @@ RULES = [
         "fixture:memory_available_over_10_percent", "local:memory_available_ratio > bool 0.1"
     ),
     RecordingRule("fixture:node_up", 'min(up{job="node"})'),
+    RecordingRule("fixture:box_alive", 'max(tundravm_unit_active{unit="box.service"})'),
+    RecordingRule(
+        "local:box_cpu_ratio",
+        'sum(rate(tundravm_unit_cpu_seconds_total{unit="box.service"}[1m]))'
+        ' / count(node_cpu_seconds_total{mode="idle"})',
+    ),
+    RecordingRule("fixture:box_cpu_under_80_percent", "local:box_cpu_ratio < bool 0.8"),
 ]
 OBSERVABILITY = Observability(
     logs=JournalExport(f"http://{LOGS_SINK}"),
@@ -116,16 +123,22 @@ OBSERVABILITY = Observability(
         f"http://{METRICS_SINK}/api/v1/write",
         interval="10s",
         rules=RULES,
-        export=["fixture:memory_available_over_10_percent", "fixture:node_up"],
+        export=[
+            "fixture:memory_available_over_10_percent",
+            "fixture:node_up",
+            "fixture:box_alive",
+            "fixture:box_cpu_under_80_percent",
+        ],
     ),
     proxy=PROXY,
 )
 """The ``dev`` profile's export path, to :data:`SINK` inside the guest through :data:`SINK`
 as its proxy too: QEMU's user network reaches nothing that would receive it. The sinks are
 on 127.0.0.2, which no client treats as the local host and sends around its proxy. Plain
-http on the loopback, which ``observability-plaintext`` reports. Two of :data:`RULES`'
-booleans and the image's identity leave, and nothing else: the probe's
-``observability:series`` row fails on a raw series or the ``local:`` ratio at the sink."""
+http on the loopback, which ``observability-plaintext`` reports. The ``fixture:`` booleans
+of :data:`RULES` (memory, the node exporter, the ``box`` container's liveness and CPU) and
+the image's identity leave, and nothing else: the probe's ``observability:series`` row
+fails on a raw series or a ``local:`` ratio at the sink."""
 
 
 DEV_SLIM = (

@@ -106,7 +106,9 @@ event log records (``digest="unmeasured"`` without TDX) with the image's name, e
 the TD reports, and the execution gate's mode."""
 
 IMAGE_METRICS = "image-metrics"
-"""The service writing the image's identity and the system's state for the node exporter."""
+"""The service writing the image's identity and the system's state for the node exporter, each
+loaded service's state and CPU time among it (``tundravm_unit_active``,
+``tundravm_unit_cpu_seconds_total``): what rules derive a container's liveness and load from."""
 
 IMAGE_METRICS_DIRECTORY = f"/run/{IMAGE_METRICS}"
 """Its runtime directory: the node exporter's textfile collector reads it."""

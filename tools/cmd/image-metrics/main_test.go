@@ -96,7 +96,7 @@ func TestRender(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		text := string(render(c.id, "running", 0))
+		text := string(render(c.id, "running", 0, nil))
 		for _, line := range c.want {
 			if !strings.Contains(text, line+"\n") {
 				t.Errorf("%s: no %q in\n%s", c.name, line, text)
@@ -136,6 +136,27 @@ func TestIdentityLines(t *testing.T) {
 	for _, c := range cases {
 		if got := c.id.lines(); strings.Join(got, "\n") != strings.Join(c.want, "\n") {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestUnits(t *testing.T) {
+	shown := "Id=box.service\nLoadState=loaded\nActiveState=active\nCPUUsageNSec=1500000000\n\n" +
+		"Id=gone.service\nLoadState=not-found\nActiveState=inactive\nCPUUsageNSec=[not set]\n\n" +
+		"Id=web.service\nLoadState=loaded\nActiveState=failed\nCPUUsageNSec=[not set]\n"
+	text := string(render(identity{image: "fixture", digest: "unmeasured", mode: "simulated"}, "running", 0, parseUnits(shown)))
+	for _, line := range []string{
+		`tundravm_unit_active{unit="box.service"} 1`,
+		`tundravm_unit_active{unit="web.service"} 0`,
+		`tundravm_unit_cpu_seconds_total{unit="box.service"} 1.5`,
+	} {
+		if !strings.Contains(text, line+"\n") {
+			t.Errorf("no %q in\n%s", line, text)
+		}
+	}
+	for _, absent := range []string{"gone.service", `tundravm_unit_cpu_seconds_total{unit="web.service"}`} {
+		if strings.Contains(text, absent) {
+			t.Errorf("%q in\n%s", absent, text)
 		}
 	}
 }

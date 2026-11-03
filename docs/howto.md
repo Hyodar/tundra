@@ -180,14 +180,16 @@ metrics = PrometheusRemoteWrite(
     rules=[
         RecordingRule("box:disk_free_over_10_percent", f"{disk} > bool 0.1"),
         RecordingRule("box:network_is_up", f"{net} > bool 0"),
-        RecordingRule("box:oom_kills_count", "node_vmstat_oom_kill"),
+        RecordingRule("box:container_alive", 'max(tundravm_unit_active{unit="box.service"})'),
     ],
-    export=["box:disk_free_over_10_percent", "box:network_is_up", "box:oom_kills_count"],
+    export=["box:disk_free_over_10_percent", "box:network_is_up", "box:container_alive"],
 )
 ```
 
 The guest evaluates the rules; only the `export=` names leave, with the image's identity
-(`tundravm_image_digest`). A rule left out of `export=` stays in. `export=` also takes raw
+(`tundravm_image_digest`). A rule left out of `export=` stays in. `tundravm_unit_active`
+and `tundravm_unit_cpu_seconds_total` are each service's state and CPU time, a container's
+included. `export=` also takes raw
 names and the `"health"` preset, its default. A production profile with a `url=` and no
 `export=` fails `observability-export-unset`.
 

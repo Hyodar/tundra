@@ -11,7 +11,7 @@ remote_write:
     proxy_url: http://127.0.0.1:19582
     write_relabel_configs:
       - source_labels: [__name__]
-        regex: "fixture:memory_available_over_10_percent|fixture:node_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
+        regex: "fixture:memory_available_over_10_percent|fixture:node_up|fixture:box_alive|fixture:box_cpu_under_80_percent|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
         action: keep
     queue_config:
       capacity: 10000
