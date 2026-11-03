@@ -34,7 +34,8 @@ working directory, `$STATE_DIRECTORY` and the volume's ordering are unchanged.
 - `<name>.service`: the `Service` under the `static` sandbox, run as `user` (resolved on the
   host), with a drop-in setting `RootImage=`, `MountAPIVFS=yes`, `PrivateUsers=yes`,
   `PrivateNetwork=yes` and `BindPaths=` of its state directory, after `<name>-loop.service`
-  loads `loop` as root (nothing else would). The read-only root ships
+  loads `loop` as root (nothing else would), skipped by
+  `ConditionPathExists=!/dev/loop-control` where it is built in, as in a built `Kernel`. The read-only root ships
   every mount point the namespace mounts over (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`,
   `/var/tmp`).
 - Per exposed port: `<name>-forward-<port>.socket` on the host, which opens the port in the

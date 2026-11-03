@@ -20,7 +20,7 @@ from tundravm._image._service import Service
 from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import TCP, UDP, Egress, File, PortValue
 from tundravm.declarative import model as dm
-from tundravm.declarative.systemd import Hardening, Root
+from tundravm.declarative.systemd import Condition, Hardening, Root
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 from tundravm.models import CONTAINERS_PATH
@@ -35,6 +35,11 @@ LOAD_LOOP = ("/usr/sbin/modprobe", "loop")
 device asks for it, the debloated image makes no static ``/dev/loop-control`` node that would
 load it on open, and nothing run by the container's unit can, since systemd attaches the
 image first for every command of it (a ``+`` one too) and fails with ``226/NAMESPACE``."""
+LOOP_PRESENT = Condition.path_exists("/dev/loop-control", negate=True)
+"""Skips the loader where ``loop`` is already there: a built ``Kernel`` has it built in and
+no ``modprobe``, and devtmpfs makes the node once the driver registers. Not
+``ConditionKernelModuleLoaded=``, which systemd 258 added and 257, Debian's, ignores with a
+warning, so the unit would still run ``modprobe``."""
 SHELLS = frozenset({"sh", "bash", "dash", "ash"})
 """The program names ``container-shell`` reads as a shell."""
 
@@ -193,7 +198,8 @@ class Container(Component):
 
     @property
     def loader(self) -> str:
-        """The root oneshot that loads ``loop`` before the unit attaches its root image."""
+        """The root oneshot that loads ``loop`` before the unit attaches its root image,
+        unless ``/dev/loop-control`` is already there."""
         return f"{self.name}-loop.service"
 
     def compose(self) -> Iterator[object]:
@@ -203,6 +209,7 @@ class Container(Component):
             description=f"Load loop for {self.unit}'s root image",
             user=Root(),
             hardening=Hardening.none(),
+            conditions=(LOOP_PRESENT,),
         )
         mounts = () if self.state is None else (self.state.path,)
         yield dm.ContainerRoot(

@@ -766,7 +766,7 @@ Container(
 |---|---|
 | `Container.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `container-shell`: a production container whose program is a shell. |
 | `Container.image` | Where the payload ships its root image. |
-| `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image. |
+| `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there. |
 | `Container.unit` | The container's `.service`. |
 
 ### `DevAccess`

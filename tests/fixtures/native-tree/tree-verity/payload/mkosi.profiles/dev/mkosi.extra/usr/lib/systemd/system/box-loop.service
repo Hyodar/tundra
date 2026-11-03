@@ -2,6 +2,7 @@
 Description=Load loop for box.service's root image
 After=runtime-init.service
 Requires=runtime-init.service
+ConditionPathExists=!/dev/loop-control
 
 [Service]
 Type=oneshot

@@ -87,6 +87,7 @@ def test_a_container_lowers_to_a_subimage_its_unit_runs_from(tmp_path: Path) -> 
     assert "WorkingDirectory=/persistent/data/web\n" in read(units, "web.service")
     loader = read(units, "web-loop.service")
     assert "ExecStart=/usr/sbin/modprobe loop\n" in loader
+    assert "ConditionPathExists=!/dev/loop-control\n" in loader
     assert "User=" not in loader
     forward = read(units, "web-forward-8081.service.d/20-container.conf")
     assert "JoinsNamespaceOf=web.service\n" in forward
