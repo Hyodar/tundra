@@ -285,6 +285,17 @@ jobs:
           done
           sleep 15
           kill -INT -- "-$pid"
+          for attempt in $(seq 1 60); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL -- "-$pid"
+            .venv/bin/tundravm run stop fixture-2 || true
+            tail -n 50 "$RUNNER_TEMP/dev-follow.txt"
+            echo "dev did not stop within 300s of SIGINT"
+            exit 1
+          fi
           wait "$pid" && status=0 || status=$?
           cat "$RUNNER_TEMP/dev-follow.txt"
           echo "dev exited $status"
