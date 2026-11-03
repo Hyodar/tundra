@@ -86,6 +86,53 @@ probe_dns() {
         ok "DNSOverTLS=yes${protocols:+ ($protocols)}: $name is $address, resolved over TLS to $peer:853"
     fi
 }
+probe_rootfs() {
+    layout=$1
+    size=${2:-}
+    mount=
+    while read -r line; do
+        set -- $line
+        [ "$5" = / ] && mount=${line#* - }
+    done </proc/self/mountinfo
+    set -- $mount
+    fstype=${1:-}
+    options=${3:-}
+    if [ "$layout" = verity ]; then
+        device=
+        for dm in /sys/block/dm-*; do
+            [ -e "$dm/dm/name" ] && [ "$(cat "$dm/dm/name")" = root ] || continue
+            device="${dm##*/} uuid=$(cat "$dm/dm/uuid") ro=$(cat "$dm/ro")"
+        done
+        case $device in
+            *" uuid=CRYPT-VERITY-"*" ro=1") ;;
+            "") fail "no device-mapper device named root: the initrd did not open the verity root; journalctl -b -u systemd-veritysetup@root.service"; return ;;
+            *) fail "the root device is $device, not a read-only dm-verity target"; return ;;
+        esac
+        case $fstype,$options, in
+            overlay,*,lowerdir=/sysroot,*) ;;
+            *) fail "/ is $fstype ($options), not the overlay systemd.volatile=overlay stacks on /sysroot"; return ;;
+        esac
+        if touch /usr/bin/.tundravm-probe 2>/dev/null; then
+            rm -f /usr/bin/.tundravm-probe
+            ok "overlay on the erofs root under dm-verity (${device%% *}, read-only); a write under /usr/bin lands in the overlay"
+        else
+            fail "a write under /usr/bin is refused: the overlay's upper layer is not writable"
+        fi
+        return
+    fi
+    case $fstype in
+        rootfs|tmpfs) ;;
+        *) fail "/ is $fstype, not the initrd's tmpfs: the OS is not in the UKI's initrd"; return ;;
+    esac
+    if [ -z "$size" ]; then
+        ok "$fstype"
+    else
+        case ,$options, in
+            *,size=${size}k,*) ok "$fstype, size=${size}k" ;;
+            *) fail "/ is $fstype ($options), not capped at size=${size}k: systemd-remount-fs did not apply /etc/fstab's RootFS.initramfs(max_size=); journalctl -u systemd-remount-fs.service" ;;
+        esac
+    fi
+}
 probe_service() {
     state=$(systemctl show -P ActiveState "$1")
     waited=0
@@ -529,6 +576,8 @@ if [ "$mode" = tdx ]; then
 else
     skip "no TDX: a simulated guest has no registers to compare with measurements.json"
 fi
+check=rootfs:verity
+probe_rootfs verity
 check=cmdline
 probe_cmdline 'mitigations=auto,nosmt' 'spec_store_bypass_disable=on'
 check=socket:tdxs.socket

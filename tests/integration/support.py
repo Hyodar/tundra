@@ -118,7 +118,7 @@ def read_fat(boot_sector: bytes) -> FatLayout:
 
 
 PROBE = "boot-probe: "
-"""What the fixture's ``BootProbe`` prefixes each console line with."""
+"""What the kernel fixture's ``boot-probe`` task prefixes each console line with."""
 PROBE_DONE = f"{PROBE}done"
 
 
@@ -134,20 +134,26 @@ def probe_lines(console: str, what: str) -> list[str]:
 
 
 GATE = execution.GATE_UNIT
-GATED = ("web.service", "greeter.service")
-"""The fixture's units made from a ``Service``: each requires the execution gate."""
-FAIL_CLOSED_MARKERS = (*DEFAULT_MARKERS, PROBE_DONE, execution.REFUSED, instance_key.CONSOLE)
+GATED = (
+    "web.service",
+    "greeter.service",
+    "web-loopback.service",
+    "attested-tls-8443.service",
+    "mode-switch.service",
+)
+"""The fixture's units made from a ``Service``, its attested TLS relay and its firewall's
+mode switch: each requires the execution gate."""
+FAIL_CLOSED_MARKERS = (*DEFAULT_MARKERS, execution.REFUSED, instance_key.CONSOLE)
 """What a production boot of the fixture without TDX prints: the target is reached, the
-probe (a boot task, not gated) finished, the gate refused, and the instance key (made before
-the gate) printed its public key."""
-FAIL_CLOSED_UNITS = ("boot-probe", GATE, *GATED)
+gate refused, and the instance key (made before the gate) printed its public key."""
+FAIL_CLOSED_UNITS = (GATE, *GATED)
 """The units such a boot waits for, started or failed."""
 
 
 def assert_fail_closed(result: BootResult) -> None:
     """*result* is a production boot with no TDX: it booted to its target with nothing
     fatal, ``tdx-evidence.service`` failed with the gate's line, every gated service failed
-    on that dependency and never started, and the ungated probe ran."""
+    on that dependency and never started, and the instance key was made."""
     summary = result.summary(tail=200)
     assert not result.timed_out and result.fatal == (), summary
     assert result.returncode in (None, 0), summary
@@ -157,9 +163,7 @@ def assert_fail_closed(result: BootResult) -> None:
     for unit in GATED:
         assert unit in result.failed and unit not in result.started, f"{unit}\n{summary}"
     assert on_console(result.console, f"Dependency failed for {GATED[0]}"), summary
-    assert {"minimal.target", "boot-probe.service", instance_key.UNIT} <= set(result.started), (
-        summary
-    )
+    assert {"minimal.target", instance_key.UNIT} <= set(result.started), summary
     assert set(result.failed) == {GATE, *GATED}, summary
 
 

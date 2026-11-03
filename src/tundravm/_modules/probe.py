@@ -17,6 +17,10 @@ The checks, each only when its declaration exists (:func:`derive`):
 - ``rtmr``: always ``skip``, with the reason: the guest reads its registers only from a
   quote, which ``tdxs`` (tools/) makes; ``tundravm attest`` compares them with
   ``measurements.json``;
+- ``rootfs:LAYOUT``: ``/`` is what ``rootfs=`` declared (always): the initrd's tmpfs, with
+  the ``size=`` ``RootFS.initramfs(max_size=)`` set, or the volatile overlay
+  ``systemd.volatile=overlay`` stacks on the erofs root the initrd opened as a read-only
+  dm-verity target, which takes a write under ``/usr/bin``;
 - ``service:UNIT``: each ``Service`` (a ``Service.packaged`` too) is active (or exited 0),
   ``socket:UNIT`` its socket when socket-activated, ``timer:UNIT`` the timer of a
   scheduled one;
@@ -134,6 +138,7 @@ Verdict = Literal["ok", "fail", "skip"]
 Helper = Literal[
     "cmdline",
     "dns",
+    "rootfs",
     "service",
     "active",
     "port",
@@ -229,6 +234,8 @@ def derive(
     kernel_off: Iterable[str] = (),
     glue: Sequence[Declaration] = (),
     cmdline: Sequence[str] = (),
+    rootfs: str = "initramfs",
+    root_size: str | None = None,
 ) -> Probe:
     """The probe *items* (a variant's resolved declarations) imply.
 
@@ -236,7 +243,9 @@ def derive(
     image keeps every module); *kernel_off* the options a built kernel turns off (empty for
     a distribution kernel); *glue* the cloud units lowering adds that read the metadata
     servers (``tundravm._platforms.metadata_units``), checked for their egress only;
-    *cmdline* the parameters the image appends to the UKI's command line."""
+    *cmdline* the parameters the image appends to the UKI's command line; *rootfs*
+    the root layout (``initramfs`` or ``verity``) and *root_size* the initramfs
+    root's tmpfs cap, when one is set."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
     from tundravm.declarative.model import (
         ContainerRoot,
@@ -256,6 +265,7 @@ def derive(
     checks = [
         Check("mode", f"{execution.MODE_FILE} says simulated or tdx", ""),
         Check("rtmr", "RTMR0..2 against measurements.json (skipped: needs a quote)", ""),
+        _rootfs(rootfs, root_size),
     ]
     if cmdline:
         checks.append(
@@ -563,6 +573,35 @@ def _resolver_name(file: object) -> str:
                 if "#" in entry:
                     return entry.partition("#")[2]
     return "deb.debian.org"
+
+
+def _rootfs(layout: str, size: str | None) -> Check:
+    """The ``rootfs:LAYOUT`` check: ``/`` is what the image's ``rootfs=`` declared."""
+    if layout == "verity":
+        return Check(
+            "rootfs:verity",
+            "/ is the volatile overlay on the erofs root, a read-only dm-verity target, and "
+            "takes a write under /usr/bin",
+            "probe_rootfs verity",
+            "rootfs",
+        )
+    kib = _kib(size)
+    capped = "" if kib is None else f", capped at {size} (size={kib}k)"
+    return Check(
+        "rootfs:initramfs",
+        f"/ is the initrd's tmpfs{capped}",
+        " ".join(["probe_rootfs", "initramfs", *([] if kib is None else [str(kib)])]),
+        "rootfs",
+        () if kib is None else ("systemd-remount-fs.service",),
+    )
+
+
+def _kib(size: str | None) -> int | None:
+    """*size* (``"4G"``, ``"512M"``) in KiB, as the kernel reports a tmpfs ``size=``;
+    ``None`` for no cap or a percentage, which the kernel reports resolved."""
+    if size is None or not size[:-1].isdigit() or size[-1] not in "KMG":
+        return None
+    return int(size[:-1]) << {"K": 0, "M": 10, "G": 20}[size[-1]]
 
 
 def _owned(items: Iterable[Declaration]) -> Iterator[tuple[str, str, str]]:
@@ -891,6 +930,55 @@ probe_dns() {{
         ok "DNSOverTLS=yes${{protocols:+ ($protocols)}}: $name is $address, resolved over TLS to $peer:853"
     fi
 }}
+""",  # noqa: E501
+    "rootfs": """\
+probe_rootfs() {
+    layout=$1
+    size=${2:-}
+    mount=
+    while read -r line; do
+        set -- $line
+        [ "$5" = / ] && mount=${line#* - }
+    done </proc/self/mountinfo
+    set -- $mount
+    fstype=${1:-}
+    options=${3:-}
+    if [ "$layout" = verity ]; then
+        device=
+        for dm in /sys/block/dm-*; do
+            [ -e "$dm/dm/name" ] && [ "$(cat "$dm/dm/name")" = root ] || continue
+            device="${dm##*/} uuid=$(cat "$dm/dm/uuid") ro=$(cat "$dm/ro")"
+        done
+        case $device in
+            *" uuid=CRYPT-VERITY-"*" ro=1") ;;
+            "") fail "no device-mapper device named root: the initrd did not open the verity root; journalctl -b -u systemd-veritysetup@root.service"; return ;;
+            *) fail "the root device is $device, not a read-only dm-verity target"; return ;;
+        esac
+        case $fstype,$options, in
+            overlay,*,lowerdir=/sysroot,*) ;;
+            *) fail "/ is $fstype ($options), not the overlay systemd.volatile=overlay stacks on /sysroot"; return ;;
+        esac
+        if touch /usr/bin/.tundravm-probe 2>/dev/null; then
+            rm -f /usr/bin/.tundravm-probe
+            ok "overlay on the erofs root under dm-verity (${device%% *}, read-only); a write under /usr/bin lands in the overlay"
+        else
+            fail "a write under /usr/bin is refused: the overlay's upper layer is not writable"
+        fi
+        return
+    fi
+    case $fstype in
+        rootfs|tmpfs) ;;
+        *) fail "/ is $fstype, not the initrd's tmpfs: the OS is not in the UKI's initrd"; return ;;
+    esac
+    if [ -z "$size" ]; then
+        ok "$fstype"
+    else
+        case ,$options, in
+            *,size=${size}k,*) ok "$fstype, size=${size}k" ;;
+            *) fail "/ is $fstype ($options), not capped at size=${size}k: systemd-remount-fs did not apply /etc/fstab's RootFS.initramfs(max_size=); journalctl -u systemd-remount-fs.service" ;;
+        esac
+    fi
+}
 """,  # noqa: E501
     "service": f"""\
 probe_service() {{

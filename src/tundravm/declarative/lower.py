@@ -332,7 +332,13 @@ def _probes(
             items = (*items, firewall)
         glue = metadata_units(recipe_targets(recipe))
         probe = probe_module.derive(
-            items, modules=modules, kernel_off=off, glue=glue, cmdline=cmdline
+            items,
+            modules=modules,
+            kernel_off=off,
+            glue=glue,
+            cmdline=cmdline,
+            rootfs=recipe.mkosi.root,
+            root_size=recipe.mkosi.root_size,
         )
         builder.probe(name, probe)
         found[name] = probe

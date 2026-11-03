@@ -1,5 +1,5 @@
 # test is the unit suite alone; stages and boot bake the attested node's stage 1 for real, and
-# the fixture jobs lock and build tests/fixtures/native-tree/recipe.py, whose sources are a
+# the fixture jobs lock and build tests/fixtures/native-tree/fixture.py, whose sources are a
 # public Go program (a Git source) asking for a newer Go than Debian's and
 # tests/fixtures/rust-probe (a Local source, pinned by its content digest) pinning a newer
 # Rust: the runner's go fetches the one toolchain and its rustup installs the other. A
@@ -143,21 +143,22 @@ jobs:
           if-no-files-found: ignore
 
   fixture-boot:
-    # Gate 1, 3 and 5 evidence: the fixture recipe (initramfs root, a Go build from a Git
+    # Gate 1, 3 and 5 evidence: the fixture image (initramfs root, a Go build from a Git
     # source and a Rust one from a Local directory) built into build directories, its
     # production profile and its dev one, each verified against its manifest, which names the
     # Go toolchain the Go source's go.mod asks for, the Rust one the crate's
     # rust-toolchain.toml pins and the crate's content digest. The production build is
     # booted under QEMU with OVMF both ways
     # (payload.efi through -kernel, qemu.raw through its ESP) by the harness: no TDX here,
-    # so it must be fail-closed (tdx-evidence.service refuses, web.service never starts,
-    # the boot probe still prints). The dev build runs as an instance with
-    # `tundravm run --mode simulated --probe` (KVM when the runner has it, TCG otherwise),
-    # where the gate records simulated and the boot probe its declarations compile in must
-    # pass every check (the observability exporters' among them), until the host fetches the
-    # fixture's page through the forward and the in-guest sink has printed a journal upload
-    # and a remote-write batch, each carried through it as the proxy. Then `attest` (simulated)
-    # and `secrets deliver` speak plan 6.3's protocol to its attested endpoint.
+    # so it must be fail-closed (tdx-evidence.service refuses, web.service never starts).
+    # The dev build runs as an instance with `tundravm dev --no-follow` (KVM when the runner
+    # has it, TCG otherwise), where the gate records simulated and the platform probe its
+    # declarations compile in must pass every check (the root tmpfs and its cap, the
+    # observability exporters' among them), the Go and the Rust program print their lines,
+    # until the host fetches the fixture's page through the forward and the in-guest sink has
+    # printed a journal upload and a remote-write batch, each carried through it as the
+    # proxy. Then `attest` (simulated) and `secrets deliver` speak plan 6.3's protocol to its
+    # attested endpoint.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     timeout-minutes: 120
@@ -180,9 +181,9 @@ jobs:
 
       - name: Lock and build the fixture's production and dev profiles
         run: |
-          uv run tundravm lock tests/fixtures/native-tree/recipe.py
-          uv run tundravm build tests/fixtures/native-tree/recipe.py --profile default
-          uv run tundravm build tests/fixtures/native-tree/recipe.py --profile dev
+          uv run tundravm lock tests/fixtures/native-tree/fixture.py
+          uv run tundravm build tests/fixtures/native-tree/fixture.py
+          uv run tundravm build tests/fixtures/native-tree/fixture.py --dev
           ls -lL "$TUNDRAVM_BUILD/fixture/latest-production/" "$TUNDRAVM_BUILD/fixture/latest-development/"
 
       - name: Verify the build directories and show them
@@ -212,8 +213,12 @@ jobs:
       - name: Run the dev build as an instance, probe it and fetch its page
         run: |
           uv run tundravm show latest-development
-          uv run tundravm dev tests/fixtures/native-tree/recipe.py --no-follow
-          jq -e '.ok' .tundravm/instances/fixture-1/probe.json
+          uv run tundravm dev tests/fixtures/native-tree/fixture.py --no-follow
+          probe=.tundravm/instances/fixture-1/probe.json
+          jq -r '.results[] | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          jq -e '.ok' "$probe"
+          jq -e '.results[] | select(.check == "rootfs:initramfs")
+            | .verdict == "ok" and (.detail | test("size=4194304k"))' "$probe"
           receipt=.tundravm/instances/fixture-1/instance.json
           port=$(jq -r '.ports["8080"]' "$receipt")
           console=.tundravm/instances/fixture-1/console.log
@@ -236,8 +241,9 @@ jobs:
           grep -F 'sink: proxy carries 127.0.0.2:19580' "$console"
           grep -F 'sink: proxy carries 127.0.0.2:19581' "$console"
           grep -E 'tundravm-instance-key: pub 0[23][0-9a-f]{64}' "$console"
-          jq -e '.results[] | select(.check == "key:instance") | .verdict == "ok"' \
-            .tundravm/instances/fixture-1/probe.json
+          grep -F 'Usage: git-codereview <command> [-n] [-v]' "$console"
+          grep -F 'built by rustc 1.91.0' "$console"
+          jq -e '.results[] | select(.check == "key:instance") | .verdict == "ok"' "$probe"
           curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
 
       - name: Fetch the container's page and match its root against the manifest
@@ -349,7 +355,7 @@ jobs:
 
       - name: Follow a second dev instance through dev and stop it with Ctrl-C
         run: |
-          setsid .venv/bin/tundravm dev tests/fixtures/native-tree/recipe.py \
+          setsid .venv/bin/tundravm dev tests/fixtures/native-tree/fixture.py \
             > "$RUNNER_TEMP/dev-follow.txt" 2>&1 &
           pid=$!
           for attempt in $(seq 1 180); do
@@ -395,15 +401,16 @@ jobs:
           if-no-files-found: ignore
 
   verity:
-    # Gate 1 evidence: the fixture recipe with Mkosi(root="verity") (recipe.py's
-    # verity_recipe, picked with --attr) built through tundravm, its qemu.raw booted under
-    # QEMU through the ESP, and the root asserted to be erofs on dm-verity under a volatile
-    # overlay (the fixture's boot-probe task prints it to the console; it is a boot task,
-    # which the execution gate does not hold back, so the production build proves it while
-    # its services stay fail-closed).
+    # Gate 1 evidence: the fixture image with RootFS.verity() (fixture.py's verity, picked
+    # with --attr) built through tundravm, its production qemu.raw booted under QEMU through
+    # the ESP fail-closed, the initrd opening the root through dm-verity and mounting the
+    # erofs under a volatile overlay on the console; then its dev build run with
+    # `tundravm dev --no-follow`, whose platform probe reads the root back (rootfs:verity: a
+    # read-only dm-verity target under the overlay, a write under /usr/bin landing in it)
+    # and the owner of the page the owners step chowned in that overlay.
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       TUNDRAVM_BACKEND: local
     steps:
@@ -423,9 +430,8 @@ jobs:
 
       - name: Lock and build the verity fixture
         run: |
-          uv run tundravm lock tests/fixtures/native-tree/recipe.py --attr verity_recipe
-          uv run tundravm build tests/fixtures/native-tree/recipe.py --attr verity_recipe \
-            --profile default
+          uv run tundravm lock tests/fixtures/native-tree/fixture.py --attr verity
+          uv run tundravm build tests/fixtures/native-tree/fixture.py --attr verity --target qemu
           uv run tundravm verify latest
           ls -lL "$TUNDRAVM_BUILD/fixture/latest-production/"
 
@@ -437,6 +443,23 @@ jobs:
           TUNDRAVM_VERITY_BUILD: ${{ runner.temp }}/verity/fixture/latest-production
         run: uv run pytest tests/integration/test_verity_boot.py -m boot -v -rsP
 
+      - name: Run the dev build as an instance and read its root from the probe
+        run: |
+          uv run tundravm dev tests/fixtures/native-tree/fixture.py --attr verity --no-follow
+          probe=.tundravm/instances/fixture-1/probe.json
+          jq -r '.results[] | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          jq -e '.ok' "$probe"
+          jq -e '.results[] | select(.check == "rootfs:verity") | .verdict == "ok"' "$probe"
+          jq -e '.results[] | select(.check == "owner:/srv/www/private.html")
+            | .verdict == "ok"' "$probe"
+
+      - name: Stop the instance
+        if: always()
+        run: |
+          uv run tundravm run stop fixture-1 || true
+          mkdir -p "$RUNNER_TEMP/boot-logs"
+          cp -r .tundravm/instances "$RUNNER_TEMP/boot-logs/instances" || true
+
       - name: Upload console logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -446,7 +469,7 @@ jobs:
           if-no-files-found: ignore
 
   verity-cloud:
-    # The verity layout's azure and gcp profiles: both converters must keep the root and
+    # The verity layout's azure and gcp targets: both converters must keep the root and
     # hash partitions byte for byte (tests/integration/test_verity_cloud.py).
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
@@ -464,30 +487,25 @@ jobs:
         with:
           host: build
 
-      - name: Lock and build the verity fixture's cloud profiles
+      - name: Lock and build the verity fixture's cloud targets
+        env:
+          TUNDRAVM_BUILD: ${{ runner.temp }}/verity-cloud
         run: |
-          mkdir -p "$RUNNER_TEMP/verity-cloud"
-          for profile in azure gcp; do
-            TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm lock \
-              tests/fixtures/native-tree/recipe.py --attr verity_recipe
-            TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm build \
-              tests/fixtures/native-tree/recipe.py --attr verity_recipe --profile "$profile"
-            TUNDRAVM_BUILD="$RUNNER_TEMP/verity-$profile" uv run tundravm verify latest
-            ln -s "$(readlink -f "$RUNNER_TEMP/verity-$profile/fixture/latest-production")" \
-              "$RUNNER_TEMP/verity-cloud/$profile"
-          done
-          ls -lL "$RUNNER_TEMP/verity-cloud/azure/" "$RUNNER_TEMP/verity-cloud/gcp/"
+          uv run tundravm lock tests/fixtures/native-tree/fixture.py --attr verity
+          uv run tundravm build tests/fixtures/native-tree/fixture.py --attr verity --target azure,gcp
+          uv run tundravm verify latest
+          ls -lL "$TUNDRAVM_BUILD/fixture/latest-production/"
 
       - name: The converters keep the verity partitions
         env:
-          TUNDRAVM_VERITY_CLOUD_BUILD: ${{ runner.temp }}/verity-cloud
+          TUNDRAVM_VERITY_CLOUD_BUILD: ${{ runner.temp }}/verity-cloud/fixture/latest-production
         run: uv run pytest tests/integration/test_verity_cloud.py -v -rs
 
   reproduce:
-    # Gate 1 and 5 evidence: the fixture's azure and gcp profiles each built twice through
+    # Gate 1 and 5 evidence: the fixture with its azure and gcp targets built twice through
     # tundravm, the second time in an independent workspace (`build --reproduce`: its own
     # sources, the Local crate copied again, mkosi state and tree); every artifact must
-    # match, which exits 1 otherwise. The verity layout's azure profile is built twice too:
+    # match, which exits 1 otherwise. The verity layout's azure target is built twice too:
     # its azure.vhd carries the erofs root and verity hash partitions, which verity-cloud
     # checks are kept byte for byte but builds once.
     # The comparison is recorded in each build directory's observations.json, and each
@@ -512,20 +530,16 @@ jobs:
           host: build
           doctor: build
 
-      - name: Lock, then build each cloud profile twice and compare
+      - name: Lock, then build the cloud targets twice and compare
         run: |
-          uv run tundravm lock tests/fixtures/native-tree/recipe.py
-          for profile in azure gcp; do
-            uv run tundravm build tests/fixtures/native-tree/recipe.py --profile "$profile" \
-              --reproduce
-            uv run tundravm verify latest
-          done
+          uv run tundravm lock tests/fixtures/native-tree/fixture.py
+          uv run tundravm build tests/fixtures/native-tree/fixture.py --target azure,gcp --reproduce
+          uv run tundravm verify latest
 
-      - name: Lock, then build the verity layout's azure profile twice and compare
+      - name: Lock, then build the verity layout's azure target twice and compare
         run: |
-          uv run tundravm lock tests/fixtures/native-tree/recipe.py --attr verity_recipe
-          uv run tundravm build tests/fixtures/native-tree/recipe.py --attr verity_recipe \
-            --profile azure --reproduce
+          uv run tundravm lock tests/fixtures/native-tree/fixture.py --attr verity
+          uv run tundravm build tests/fixtures/native-tree/fixture.py --attr verity --target azure --reproduce
           uv run tundravm verify latest
 
       - name: Collect the manifests and the comparisons
