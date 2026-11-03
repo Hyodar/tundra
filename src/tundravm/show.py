@@ -264,8 +264,8 @@ def image_egress(recipe: Recipe, profile: str) -> dict[str, list[str]] | None:
         return None
     found: dict[str, list[str]] = {}
     for rule in firewall.egress_rules:
-        for who, name in rule.origins:
-            found.setdefault(who, []).append(f"{rule} ({name})" if name else str(rule))
+        for who in rule.origins:
+            found.setdefault(who, []).append(str(rule))
     return found
 
 

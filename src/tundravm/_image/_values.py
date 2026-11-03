@@ -935,7 +935,9 @@ class Egress(Keywords):
     *ports* go to any address. Each of *hosts* is an address or CIDR block (any port) or
     ``HOST:PORT`` (TCP to that port; ``[ADDRESS]:PORT`` for IPv6). nftables matches
     addresses, not names, so a host name needs its port and ``"logs.example:443"`` accepts
-    TCP 443 to any address: the rule is per port, and the name is its comment.
+    TCP 443 to the addresses it resolves to: ``egress-resolve`` asks ``systemd-resolved``
+    (DNS over TLS) at boot and every 30s and fills the name's nftables sets, which the rule
+    matches. Until the first answer the name is unreachable.
 
     *metadata* lets a service reach the cloud metadata servers
     (:data:`~tundravm.declarative.model.CLOUD_METADATA`), where the instance's identity
@@ -1030,7 +1032,8 @@ _HOST_NAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9
 
 def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
     """An ``Egress(hosts=)`` entry as ``(host, port, named)``: *port* ``None`` for an address
-    or CIDR block, *named* when *host* is a name the firewall cannot match."""
+    or CIDR block, *named* when *host* is a name, which the firewall matches by the
+    addresses it resolves to at boot."""
     text = host if isinstance(host, str) else ""
     name, port = text, None
     if text.startswith("[") and "]:" in text:
@@ -1051,7 +1054,7 @@ def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
         problem = (
             "is not an address, a CIDR block or HOST:PORT"
             if port is not None or not _HOST_NAME.fullmatch(name)
-            else "is a host name without a port, which the firewall cannot match"
+            else "is a host name without a port, which the firewall needs to match it"
         )
         raise _fail(owner, f"hosts= entry {host!r} {problem}.", hint=hint)
     if port is not None and "/" in name:

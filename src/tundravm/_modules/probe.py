@@ -39,6 +39,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   sent from inside its network namespace finds no route out;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
+  ``egress:HOST``: each host name a rule accepts holds addresses in its sets, which it
+  prints (``egress-resolve`` filled them); ``time:nts``: chrony selected one of its NTS
+  sources (``chronyc -N sources``), which it prints;
   ``egress:metadata:OWNER``: with a firewall, a datagram to the cloud metadata server sent
   as each service's user (``setpriv``; root with its group for the cloud glue) is refused
   unless that service's ``egress`` names it, and leaves the guest when it does;
@@ -127,6 +130,9 @@ DENIED_ADDRESSES = ("192.0.2.1", "198.51.100.1", "203.0.113.1")
 """Documentation addresses (RFC 5737) the egress check sends to, the first no rule accepts."""
 DENIED_PORTS = (9, 7, 13, 19, 37)
 """Ports the egress check sends to (discard first), the first no rule accepts."""
+RESOLVE_WAIT_SECONDS = 90
+"""How long a host name's sets may stay empty: ``egress-resolve`` runs once the network is
+online and again every 30s."""
 
 SYMBOLS: dict[str, str] = {
     "CONFIG_MAGIC_SYSRQ": "handle_sysrq",
@@ -154,6 +160,8 @@ Helper = Literal[
     "volume",
     "container",
     "egress",
+    "hostset",
+    "time",
     "metadata",
     "upload",
     "agent",
@@ -256,6 +264,7 @@ def derive(
     the root layout (``initramfs`` or ``verity``) and *root_size* the initramfs
     root's tmpfs cap, when one is set."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
+    from tundravm.declarative._network import host_names
     from tundravm.declarative.model import (
         ContainerRoot,
         Disk,
@@ -266,6 +275,7 @@ def derive(
         Service,
         Task,
         Unit,
+        host_sets,
     )
     from tundravm.declarative.systemd import ceiling
     from tundravm.declarative.utils import RESOLVED_DROPIN, RESOLVERS_DROPIN, SSH_HOST_KEY
@@ -374,6 +384,17 @@ def derive(
                     ("nftables.service",),
                 )
             )
+        for name in host_names(firewall, items):
+            four, six = host_sets(name)
+            checks.append(
+                Check(
+                    f"egress:{name}",
+                    f"{name} resolved into {four} and {six}, the addresses its rules accept",
+                    f"probe_hostset {name} {four} {six}",
+                    "hostset",
+                    ("nftables.service",),
+                )
+            )
     if any(isinstance(item, Firewall) for item in items):
         checks += _metadata(items, glue)
     files = {item.path: item for item in items if isinstance(item, File)}
@@ -386,6 +407,18 @@ def derive(
                 f"probe_dns {_quote(name)}",
                 "dns",
                 ("systemd-resolved.service", "systemd-networkd-wait-online.service"),
+            )
+        )
+    chrony = files.get(CHRONY_CONF)
+    servers = [] if chrony is None else _nts_servers(str(chrony.content))
+    if servers:
+        checks.append(
+            Check(
+                "time:nts",
+                f"chrony selected an NTS source ({', '.join(servers)})",
+                " ".join(["probe_time", *servers]),
+                "time",
+                ("chrony.service",),
             )
         )
     endpoints = [item for item in items if isinstance(item, Secrets)]
@@ -683,7 +716,7 @@ def _observability(
     running (or retrying a sink), its configuration taken by the program itself, no service
     waiting on it and, with a filtering *firewall*, the rules its sinks asked for loaded."""
     from tundravm.components._observability import LOGS_SERVICE, METRICS_SERVICE
-    from tundravm.declarative._network import egress_match
+    from tundravm.declarative._network import egress_matches
     from tundravm.declarative.model import File, Service
 
     logs_unit, metrics_unit = unit_name(LOGS_SERVICE), unit_name(METRICS_SERVICE)
@@ -753,14 +786,16 @@ def _observability(
     rules = [
         rule
         for rule in (() if firewall is None else firewall.egress_rules)
-        if any(who == "observability" for who, _ in rule.origins)
+        if "observability" in rule.origins
     ]
     if rules:
         checks.append(
             Check(
                 "observability:egress",
                 f"the output chain accepts {', '.join(map(str, rules))} (the sinks' egress)",
-                " ".join(["probe_rules", *(_quote(egress_match(rule)) for rule in rules)]),
+                " ".join(
+                    ["probe_rules", *(_quote(m) for rule in rules for m in egress_matches(rule))]
+                ),
                 "rules",
                 ("nftables.service",),
             )
@@ -801,7 +836,7 @@ def _flag(argv: str | Sequence[str], name: str) -> str:
 def _denied(rules: Sequence[EgressRule]) -> tuple[str, int] | None:
     """An IPv4 address and UDP port no egress rule accepts, else ``None``."""
     hosts = [rule.host for rule in rules if rule.host is not None]
-    ports = [rule.port for rule in rules if rule.host is None]
+    ports = [rule.port for rule in rules if rule.host is None and rule.name is None]
     networks = [ipaddress.ip_network(host, strict=False) for host in hosts]
     address = next(
         (
@@ -816,6 +851,18 @@ def _denied(rules: Sequence[EgressRule]) -> tuple[str, int] | None:
     if address is None or number is None:
         return None
     return address, number
+
+
+CHRONY_CONF = "/etc/chrony/chrony.conf"
+
+
+def _nts_servers(config: str) -> list[str]:
+    """The ``server NAME ... nts`` sources of a chrony configuration."""
+    return [
+        words[1]
+        for words in (line.split() for line in config.splitlines())
+        if len(words) > 2 and words[0] == "server" and "nts" in words[2:]
+    ]
 
 
 def _quote(text: str) -> str:
@@ -1189,6 +1236,59 @@ probe_egress() {
         *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
     esac
 }
+""",  # noqa: E501
+    "hostset": f"""\
+probe_hostset() {{
+    if ! command -v nft >/dev/null 2>&1; then
+        skip "no nft in the image"
+        return
+    fi
+    waited=0
+    while :; do
+        held=
+        for set in "$2" "$3"; do
+            elements=$(nft list set inet filter "$set" 2>/dev/null | tr -d '\\n\\t' | tr -s ' ' |
+                sed -n 's/.*elements = {{ *\\([^}}]*[^ }}]\\) *}}.*/\\1/p')
+            [ -z "$elements" ] || held="$held${{held:+, }}$elements"
+        done
+        if [ -n "$held" ]; then
+            ok "$1 holds $held"
+            return
+        fi
+        if [ "$waited" -ge {RESOLVE_WAIT_SECONDS} ]; then
+            fail "$1 resolved to nothing after {RESOLVE_WAIT_SECONDS}s, so its rules accept no address: egress-resolve fills $2 and $3 through systemd-resolved; journalctl -u egress-resolve.service"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}}
+""",  # noqa: E501
+    "time": f"""\
+probe_time() {{
+    if ! command -v chronyc >/dev/null 2>&1; then
+        skip "no chronyc in the image"
+        return
+    fi
+    waited=0
+    while :; do
+        sources=$(chronyc -N sources 2>/dev/null)
+        for name in "$@"; do
+            line=$(echo "$sources" | grep -E "^\\^[*+] +$name " | head -n 1)
+            if [ -n "$line" ]; then
+                ok "$(echo "$line" | tr -s ' ')"
+                return
+            fi
+        done
+        if [ "$waited" -ge {RESOLVE_WAIT_SECONDS} ]; then
+            seen=$(for name in "$@"; do echo "$sources" | grep -E "^.. +$name "; done | tr -s ' ' | paste -sd ';' -)
+            fail "no NTS source selected after {RESOLVE_WAIT_SECONDS}s (${{seen:-chronyc lists none of $*}}): chrony's key exchange (TCP 4460) and NTP (UDP 123 as _chrony) must pass the output chain; chronyc -N authdata"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}}
 """,  # noqa: E501
     "metadata": """\
 probe_metadata() {

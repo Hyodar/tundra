@@ -345,7 +345,9 @@ traffic. It accepts what the baseline (NTS time, resolvers) and each component's
 `outbound()` send. `Service(egress=Egress(...))` accepts more for that service's user
 alone. The cloud metadata server and its identity token take only tundravm's cloud glue
 and a service with `Egress(metadata=True)` (`service-metadata` warns). A host may be
-`HOST:PORT`. nftables matches no names, so `"logs.example:443"` opens 443 to any address.
+`HOST:PORT`. `"logs.example:443"` opens 443 only to the addresses the name resolves to,
+which `egress-resolve` asks over DNS over TLS at boot and every 30s; until then it is
+unreachable.
 A production profile without a filter warns `egress-unfiltered`.
 
 `TeeBase` resolves through `systemd-resolved` over strict DNS over TLS, with no fallback,
@@ -608,7 +610,7 @@ A development profile carries `tundravm-probe.service`. It prints
 | `service:`, `socket:`, `timer:` | each `Service`, socket or timer is active (or exited 0) |
 | `port:` | each `expose=` port has a listener |
 | `volume:` | each `Volume` is mounted, ext4, on dm-crypt |
-| `egress:` | with `Egress`, a datagram no rule accepts is refused |
+| `egress:` | with `Egress`, a datagram no rule accepts is refused, and each host name a rule accepts holds the addresses it resolved to |
 | `observability:` | exporters run or retry, took their configuration, block nothing, egress loaded |
 | `hardening:` | a preset's `systemd-analyze security` score is under its ceiling |
 | `kernel:` | no disabled symbol in `/proc/kallsyms` (`Kernel.build`), else no uncurated module |

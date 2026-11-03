@@ -30,6 +30,7 @@ mkosi-chroot systemctl enable attested-tls-8443-key.service
 mkosi-chroot systemctl enable attested-tls-8443.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable mode-switch.service
+mkosi-chroot systemctl enable egress-resolve.timer
 mkosi-chroot systemctl enable tundravm-root-mode.service
 mkosi-chroot systemctl enable tdx-evidence.service
 mkosi-chroot systemctl enable tundravm-instance-key.service
@@ -54,6 +55,7 @@ ln -sf "/etc/systemd/system/attested-tls-8443-key.service" "$BUILDROOT/etc/syste
 ln -sf "/etc/systemd/system/attested-tls-8443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/mode-switch.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/egress-resolve.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-root-mode.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

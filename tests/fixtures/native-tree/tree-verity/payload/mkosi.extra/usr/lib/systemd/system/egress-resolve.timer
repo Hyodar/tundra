@@ -1,0 +1,12 @@
+# tundravm Firewall: egress-resolve at boot (it waits for the network) and every 30s;
+# systemd-resolved answers from its cache until a record's TTL runs out, so a set
+# follows DNS within 30s of it.
+[Unit]
+Description=tundravm egress host names, refreshed
+
+[Timer]
+OnBootSec=1s
+OnUnitActiveSec=30s
+
+[Install]
+WantedBy=timers.target

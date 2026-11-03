@@ -1,0 +1,26 @@
+# tundravm Firewall: the host names an Egress accepts, resolved into the ruleset's sets,
+# started by egress-resolve.timer at boot and every 30s after; root for nft alone,
+# writing only its own run directory.
+[Unit]
+Description=tundravm egress host names into the firewall's sets
+Requires=nftables.service
+Wants=network-online.target
+After=nftables.service systemd-resolved.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/tundravm/egress-resolve
+StandardOutput=journal+console
+RuntimeDirectory=tundravm-egress
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

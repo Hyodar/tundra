@@ -2910,6 +2910,9 @@ _CALENDAR = re.compile(r"[A-Za-z0-9*:,./~+ -]+")
 _LISTEN_ADDRESS = re.compile(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}")
 _FS_TYPE = re.compile(r"[a-z0-9][a-z0-9._+-]*")
 _EGRESS_HOST = re.compile(r"[0-9A-Fa-f.:]+(/\d{1,3})?")
+_EGRESS_NAME = re.compile(
+    r"(?=.{1,249}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
+)
 
 
 def _require_span(owner: object, value: object, what: str, key: str, section: str) -> None:
@@ -3334,17 +3337,25 @@ class ContainerRoot(Declared):
 @dataclass(frozen=True, slots=True)
 class EgressRule:
     """One accept of a filtered output chain: *port* (``None``: every port) of *host* (an
-    address or CIDR block; ``None``: any address).
+    address or CIDR block; ``None``: any address), or of *name*.
 
-    *origins* say who asked for it, each a ``(who, name)`` pair: the component (``image``
-    for the image's own ``Egress``, the unit for a service's own) and the host
-    name the rule stands for when it cannot match one (``""`` otherwise). They become the
-    rule's comment.
+    *name* is a host name: nftables matches addresses, so the rule accepts the addresses
+    of the sets :func:`host_sets` names after it, which ``egress-resolve`` fills at boot
+    from ``systemd-resolved`` and refreshes; until it does, the rule accepts nothing. A
+    named rule takes a port and no *host*.
+
+    *origins* say who asked for it: the component (``image`` for the image's own
+    ``Egress``, the unit for a service's own). They become the rule's comment.
+
+    *user* accepts it for one system user's sockets alone (``meta skuid``): a packaged
+    daemon's, such as chrony's NTP, where a ``Service`` names its own in ``egress``.
     """
 
     port: Port | None = None
     host: str | None = None
-    origins: tuple[tuple[str, str], ...] = ()
+    origins: tuple[str, ...] = ()
+    name: str | None = None
+    user: str | None = None
 
     def __post_init__(self) -> None:
         if self.port is not None and not isinstance(self.port, Port):
@@ -3357,31 +3368,54 @@ class EgressRule:
                 f"egress host {self.host!r} is not an address or a CIDR block.",
                 hint="Pass '10.0.0.5' or '10.0.0.0/8'.",
             )
+        if self.name is not None and (
+            not isinstance(self.name, str)
+            or not _EGRESS_NAME.fullmatch(self.name)
+            or self.host is not None
+            or self.port is None
+        ):
+            raise _fail(
+                self,
+                f"egress name {self.name!r} is not a host name with a port and no address.",
+                hint="EgressRule(Port(443), name='api.example.com')",
+            )
         if self.port is None and self.host is None:
             raise _fail(
                 self,
                 "a rule needs a port, a host or both.",
                 hint="Egress(ports=[TCP(443)]) or Egress(hosts=['10.0.0.5:443'])",
             )
-        object.__setattr__(self, "origins", tuple(tuple(o) for o in self.origins))
+        if self.user is not None and (
+            not isinstance(self.user, str) or not _GROUP_NAME.fullmatch(self.user)
+        ):
+            raise _fail(self, f"user {self.user!r} is not a user name.", hint="user='_chrony'")
+        object.__setattr__(self, "origins", tuple(self.origins))
+        for who in self.origins:
+            if not isinstance(who, str) or not who:
+                raise _fail(self, f"origin {who!r} is not who asked.", hint="origins=('image',)")
 
     @property
     def comment(self) -> str:
-        """*origins* as ``who (name, name), who``."""
-        names: dict[str, list[str]] = {}
-        for who, name in self.origins:
-            found = names.setdefault(who, [])
-            if name and name not in found:
-                found.append(name)
-        return ", ".join(f"{who} ({', '.join(n)})" if n else who for who, n in names.items())
+        """*origins*, comma separated."""
+        return ", ".join(dict.fromkeys(self.origins))
 
     def __str__(self) -> str:
+        return self._destination() + ("" if self.user is None else f" as {self.user}")
+
+    def _destination(self) -> str:
+        if self.name is not None:
+            return f"{self.name}:{self.port}"
         if self.host is None:
             return str(self.port)
         if self.port is None:
             return self.host
         host = f"[{self.host}]" if ":" in self.host else self.host
         return f"{host}:{self.port}"
+
+
+def host_sets(name: str) -> tuple[str, str]:
+    """The nftables sets holding *name*'s IPv4 and IPv6 addresses, in ``inet filter``."""
+    return f"host4_{name}", f"host6_{name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -3794,6 +3828,7 @@ __all__ = [
     "Edit",
     "CLOUD_METADATA",
     "EgressRule",
+    "host_sets",
     "ExternalDelivery",
     "File",
     "FileTree",

@@ -52,6 +52,7 @@ mkosi-chroot systemctl enable ssh.service
 mkosi-chroot systemctl enable attested-tls-8546-key.service
 mkosi-chroot systemctl enable attested-tls-8546.service
 mkosi-chroot systemctl enable nftables.service
+mkosi-chroot systemctl enable egress-resolve.timer
 mkosi-chroot systemctl enable tdx-evidence.service
 mkosi-chroot systemctl enable tundravm-instance-key.service
 mkosi-chroot systemctl enable runtime-init.service
@@ -88,6 +89,7 @@ ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.
 ln -sf "/etc/systemd/system/attested-tls-8546-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-8546.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/egress-resolve.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

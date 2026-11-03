@@ -239,5 +239,5 @@ class Tdxs:
                 network="inet" if online else "unix",
             ),
             needs=needs,
-            egress=(EgressRule(host=IMDS, origins=(("tdxs", ""),)),) if cloud else (),
+            egress=(EgressRule(host=IMDS, origins=("tdxs",)),) if cloud else (),
         )

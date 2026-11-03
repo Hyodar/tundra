@@ -19,31 +19,36 @@ Built into production:
   Build packages (1): golang
   Sources (1):
     tdxs  local tundravm:tools    pinned=-
-  Files (14):
+  Files (19):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
-    /etc/nftables.conf                                                                       0755  1669B  sha256:97f70ed0727f
+    /etc/nftables.conf                                                                       0755  2302B  sha256:d29d7d393ce9
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
     /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
     /etc/systemd/resolved.conf.d/50-tundravm-network.conf                                    0644  115B  sha256:642b6a10c3e1
     /etc/systemd/resolved.conf.d/50-tundravm-tee.conf                                        0644  386B  sha256:e9cd4d7e5172
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
+    /etc/tundravm/egress-hosts                                                               0644  34B  sha256:072f11e6c183
+    /usr/lib/systemd/system/chrony.service.d/50-tundravm-egress.conf                         0644  168B  sha256:96dcd0c6b5a4
+    /usr/lib/systemd/system/egress-resolve.service                                           0644  853B  sha256:0720266027ce
+    /usr/lib/systemd/system/egress-resolve.timer                                             0644  333B  sha256:cfc6f2f549dc
     /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
     /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
     /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
+    /usr/lib/tundravm/egress-resolve                                                         0755  1647B  sha256:261319bac71a
     /usr/lib/tundravm/instance-key                                                           0755  1112B  sha256:63e33f30e3b8
     /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (1): tdxs
   Groups (1): tdx
-  Enabled units (10): chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (11): chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (1): tdxs.service
   Masked units (4): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
   Firewall (4):
     in   nothing beyond replies and DHCP
-    out  169.254.169.254:123/udp           metadata time
-    out  123/udp, 4460/tcp                 tee-base
-    out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp  network
+    out  169.254.169.254:123/udp                                                                                                                          metadata time
+    out  123/udp, @host4_time.cloudflare.com:4460/tcp, @host6_time.cloudflare.com:4460/tcp, @host4_nts.netnod.se:4460/tcp, @host6_nts.netnod.se:4460/tcp  tee-base
+    out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp                                                                                                                 network
   Instance key: secp256k1, fresh each boot; taken by no service
   Build steps (3):
     builds tdxs from source
@@ -56,7 +61,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  10280B  sha256:1a564bc8e634
+    + /usr/lib/tundravm/probe  0755  12283B  sha256:6ef1be0d345b
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

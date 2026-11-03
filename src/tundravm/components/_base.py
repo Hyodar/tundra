@@ -53,6 +53,10 @@ __all__ = [
 EVIDENCE = ServiceReady("tdxs.service", Notify())
 """The implied evidence service is ready: what a service that asks for quotes requires."""
 
+CHRONY_NTP = dm.EgressRule(dm.Port(123, "udp"), origins=("tee-base",), user="_chrony")
+"""NTP to any address, from chrony's sockets alone: ``TeeBase(time=True)``'s, beside its
+``outbound()``."""
+
 INTEL_PCS = "api.trustedservices.intel.com:443"
 """Intel's provisioning certification service: TDX collateral and the PCK CRL, over HTTPS."""
 INTEL_CERTIFICATES = "certificates.trustedservices.intel.com:443"
@@ -113,9 +117,14 @@ class TeeBase(Component):
         return tuple(parameter for parameter, _reason in du.TEE_KERNEL_CMDLINE)
 
     def outbound(self) -> Egress:
-        """NTS time (TCP 4460, NTP on UDP 123) with *time*; the ``Network`` names where DNS
+        """With *time*, NTS key exchange (TCP 4460) to each of *nts_servers*. NTP on UDP 123
+        goes where the key exchange says (RFC 8915 4.1.7), so the firewall accepts it to any
+        address for chrony's user alone (:data:`CHRONY_NTP`). The ``Network`` names where DNS
         goes."""
-        return Egress(ports=[TCP(4460), UDP(123)] if self.time else [])
+        if not self.time:
+            return Egress()
+        servers = (f"[{s}]" if ":" in s else s for s in self.nts_servers)
+        return Egress(hosts=[f"{server}:4460" for server in servers])
 
     rules = (
         Rule(
@@ -786,23 +795,24 @@ class Tdxs(Component):
 
 def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.EgressRule, ...]:
     """The output-chain rules *contributions* (``(who, egress)`` pairs) ask for: one per
-    destination, with every ``(who, host name)`` that asked for it, in the order asked;
-    *metadata* is one rule per cloud metadata server."""
-    found: dict[tuple[dm.Port | None, str | None], list[tuple[str, str]]] = {}
+    destination, with everyone who asked for it, in the order asked; a host name is its
+    own destination, matched by the addresses it resolves to at boot; *metadata* is one
+    rule per cloud metadata server."""
+    found: dict[tuple[dm.Port | None, str | None, str | None], list[str]] = {}
     for who, egress in contributions:
         if egress.metadata:
             for host in dm.CLOUD_METADATA:
-                found.setdefault((None, host), []).append((who, ""))
+                found.setdefault((None, host, None), []).append(who)
         for value in egress.ports:
-            found.setdefault((dm.Port(value.port, value.protocol), None), []).append((who, ""))
+            found.setdefault((dm.Port(value.port, value.protocol), None, None), []).append(who)
         for entry in egress.hosts:
             host, number, named = egress_host(egress, entry)
             port = None if number is None else dm.Port(number)
-            key = (port, None) if named else (port, host)
-            found.setdefault(key, []).append((who, host if named else ""))
+            key = (port, None, host) if named else (port, host, None)
+            found.setdefault(key, []).append(who)
     return tuple(
-        dm.EgressRule(port, host, tuple(dict.fromkeys(origins)))
-        for (port, host), origins in found.items()
+        dm.EgressRule(port, host, tuple(dict.fromkeys(origins)), name=name)
+        for (port, host, name), origins in found.items()
     )
 
 

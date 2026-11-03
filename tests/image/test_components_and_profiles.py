@@ -430,7 +430,12 @@ def test_an_egress_filters_the_output_chain() -> None:
     assert 'tcp dport 443 accept comment "image"' in rules
     assert 'ip daddr 10.0.0.5 accept comment "image"' in rules
     # what the baseline sends: NTS time and DNS over TLS; the wireserver is the glue's
-    assert 'tcp dport 4460 accept comment "tee-base"' in rules and "udp dport 123 accept" in rules
+    nts = 'ip daddr @host4_time.cloudflare.com tcp dport 4460 accept comment "tee-base"'
+    assert nts in rules and 'meta skuid "_chrony" udp dport 123 accept comment "tee-base"' in rules
+    assert [line for line in rules.splitlines() if "udp dport 123 accept" in line] == [
+        '\t\tip daddr 169.254.169.254 udp dport 123 accept comment "metadata time"',
+        '\t\tmeta skuid "_chrony" udp dport 123 accept comment "tee-base"',
+    ]
     assert 'ip daddr 1.1.1.1 tcp dport 853 accept comment "network"' in rules
     assert "ip daddr 1.0.0.1 tcp dport 853 accept" in rules and "dport 53 " not in rules
     glue = 'meta skuid 0 meta skgid "azure-complete-provisioning" ip daddr 168.63.129.16 accept'
@@ -452,7 +457,14 @@ class Sink(Component):
 @pytest.mark.parametrize(
     ("host", "rule"),
     [
-        ("logs.example:19532", 'tcp dport 19532 accept comment "sink (logs.example)"'),
+        (
+            "logs.example:19532",
+            'ip daddr @host4_logs.example tcp dport 19532 accept comment "sink"',
+        ),
+        (
+            "logs.example:19532",
+            'ip6 daddr @host6_logs.example tcp dport 19532 accept comment "sink"',
+        ),
         ("10.0.0.5:8545", 'ip daddr 10.0.0.5 tcp dport 8545 accept comment "sink"'),
         ("[fd00::5]:8545", 'ip6 daddr fd00::5 tcp dport 8545 accept comment "sink"'),
         ("10.0.0.0/8", 'ip daddr 10.0.0.0/8 accept comment "sink"'),
@@ -465,6 +477,24 @@ def test_a_components_outbound_joins_the_image_egress(host: str, rule: str) -> N
     assert rule in rules and 'udp dport 30303 accept comment "image, sink"' in rules
     unfiltered = plan(Image("x", components=[Sink(host=host)]), "production")
     assert "30303" not in unfiltered.file("/etc/nftables.conf").text
+
+
+def test_a_host_name_is_reached_only_at_the_addresses_it_resolves_to() -> None:
+    planned = plan(Image("x", components=[Sink()], network=Network(egress=Egress())), "production")
+    rules = planned.file("/etc/nftables.conf").text
+    assert "set host4_logs.example {\n\t\ttype ipv4_addr\n\t}" in rules
+    assert [
+        line for line in rules.splitlines() if "dport 19532" in line and "@host" not in line
+    ] == []
+    assert planned.file("/etc/tundravm/egress-hosts").text.splitlines() == [
+        "time.cloudflare.com",
+        "nts.netnod.se",
+        "logs.example",
+    ]
+    timer = planned.file("/usr/lib/systemd/system/egress-resolve.timer").text
+    assert "OnUnitActiveSec=30s" in timer
+    unfiltered = plan(Image("x", components=[Sink()]), "production")
+    assert "host4_" not in unfiltered.file("/etc/nftables.conf").text
 
 
 @pytest.mark.parametrize(

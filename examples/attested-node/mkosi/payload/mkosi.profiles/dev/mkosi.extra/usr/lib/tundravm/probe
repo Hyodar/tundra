@@ -283,6 +283,55 @@ probe_egress() {
         *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
     esac
 }
+probe_hostset() {
+    if ! command -v nft >/dev/null 2>&1; then
+        skip "no nft in the image"
+        return
+    fi
+    waited=0
+    while :; do
+        held=
+        for set in "$2" "$3"; do
+            elements=$(nft list set inet filter "$set" 2>/dev/null | tr -d '\n\t' | tr -s ' ' |
+                sed -n 's/.*elements = { *\([^}]*[^ }]\) *}.*/\1/p')
+            [ -z "$elements" ] || held="$held${held:+, }$elements"
+        done
+        if [ -n "$held" ]; then
+            ok "$1 holds $held"
+            return
+        fi
+        if [ "$waited" -ge 90 ]; then
+            fail "$1 resolved to nothing after 90s, so its rules accept no address: egress-resolve fills $2 and $3 through systemd-resolved; journalctl -u egress-resolve.service"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
+probe_time() {
+    if ! command -v chronyc >/dev/null 2>&1; then
+        skip "no chronyc in the image"
+        return
+    fi
+    waited=0
+    while :; do
+        sources=$(chronyc -N sources 2>/dev/null)
+        for name in "$@"; do
+            line=$(echo "$sources" | grep -E "^\^[*+] +$name " | head -n 1)
+            if [ -n "$line" ]; then
+                ok "$(echo "$line" | tr -s ' ')"
+                return
+            fi
+        done
+        if [ "$waited" -ge 90 ]; then
+            seen=$(for name in "$@"; do echo "$sources" | grep -E "^.. +$name "; done | tr -s ' ' | paste -sd ';' -)
+            fail "no NTS source selected after 90s (${seen:-chronyc lists none of $*}): chrony's key exchange (TCP 4460) and NTP (UDP 123 as _chrony) must pass the output chain; chronyc -N authdata"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
 probe_metadata() {
     if ! command -v setpriv >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
         skip "no setpriv or bash to send a datagram as $1"
@@ -535,6 +584,12 @@ check=volume:/persistent/data
 probe_volume /persistent/data yes /run/tundravm/owner/data
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
+check=egress:time.cloudflare.com
+probe_hostset time.cloudflare.com host4_time.cloudflare.com host6_time.cloudflare.com
+check=egress:nts.netnod.se
+probe_hostset nts.netnod.se host4_nts.netnod.se host6_nts.netnod.se
+check=egress:checkpoint-sync.hoodi.ethpandaops.io
+probe_hostset checkpoint-sync.hoodi.ethpandaops.io host4_checkpoint-sync.hoodi.ethpandaops.io host6_checkpoint-sync.hoodi.ethpandaops.io
 check=egress:metadata:tdxs
 probe_metadata tdxs - 169.254.169.254 no
 check=egress:metadata:nethermind
@@ -561,6 +616,8 @@ check=egress:metadata:gcp-forwarded-ips
 probe_metadata root gcp-forwarded-ips 169.254.169.254 yes
 check=dns
 probe_dns 'cloudflare-dns.com'
+check=time:nts
+probe_time time.cloudflare.com nts.netnod.se
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=attested-tls:8546

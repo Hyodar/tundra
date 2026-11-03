@@ -129,6 +129,8 @@ class _Lowering:
     """The units of the services the profile being lowered removes, or its ancestors do."""
     backports: bool = False
     sends: tuple[tuple[str, Egress], ...] | None = None
+    owned_rules: tuple[dm.EgressRule, ...] = ()
+    """The rules a packaged daemon's user owns (chrony's NTP), beside what *sends* asks."""
     runtime: Runtime = field(init=False)
     baseline_types: tuple[type, ...] = field(init=False)
     declared: frozenset[str] = field(init=False)
@@ -254,7 +256,7 @@ class _Lowering:
         """What every image gets: the TEE baseline, the network, the firewall and the
         evidence service, each the image's own when it passed one in ``components=``."""
         from tundravm.components import Firewall, Network, Tdxs, TeeBase
-        from tundravm.components._base import egress_rules
+        from tundravm.components._base import CHRONY_NTP, egress_rules
 
         network = self.image.network
         if network is not None and self.explicit(Network) is not None:
@@ -279,7 +281,8 @@ class _Lowering:
         filtering = self.component(firewall)
         if egress is not None:
             self.sends = tuple(self.outbound(egress, (tee, tdxs, network)))
-            rules = egress_rules(self.sends)
+            self.owned_rules = (CHRONY_NTP,) if tee.time else ()
+            rules = (*egress_rules(self.sends), *self.owned_rules)
             with _at(firewall):
                 filtering = _with_rules(filtering, rules)
         found: list[dm.Declaration | dm.Fragment] = [
@@ -323,7 +326,7 @@ class _Lowering:
         rules = egress_rules((*before, *_sends(added)))
         if rules == egress_rules(before):
             return ()
-        return (dm.Ref("Firewall").edit(egress_rules=rules),)
+        return (dm.Ref("Firewall").edit(egress_rules=(*rules, *self.owned_rules)),)
 
     def shared_groups(self) -> tuple[str, ...]:
         """The groups shared volume directories name, declared once each."""

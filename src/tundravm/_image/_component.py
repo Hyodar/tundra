@@ -352,8 +352,8 @@ class Component(Located, metaclass=_ComponentMeta):
         An image that declares an ``Egress`` accepts it as it accepts the baseline's
         traffic, in every profile the component is part of (one a ``Profile`` adds, in that
         profile's ``nftables.conf`` only), and each rule's comment names the component. A URL
-        field becomes ``HOST:PORT``; a host name the firewall cannot match becomes its port
-        with the name as the comment (see :class:`~tundravm.components.Egress`).
+        field becomes ``HOST:PORT``; a host name is matched by the addresses it resolves
+        to at boot (see :class:`~tundravm.components.Egress`).
         """
         return Egress()
 

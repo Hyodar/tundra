@@ -31,6 +31,7 @@ from .model import (
     Task,
     Unit,
     egress_owner,
+    host_sets,
 )
 
 NFTABLES_CONF = "/etc/nftables.conf"
@@ -227,10 +228,10 @@ def _mode_chains(
         else:
             for rule in mode.egress_rules:
                 why = _comment([rule.comment if rule.origins else f"{mode.name} mode"])
-                rules.append(
-                    f"{egress_match(rule)} ct mark set {_mark(marks[mode.name])} "
-                    f'accept comment "{why}"'
-                )
+                rules += [
+                    f'{match} ct mark set {_mark(marks[mode.name])} accept comment "{why}"'
+                    for match in egress_matches(rule)
+                ]
         body = "".join(f"\t\t{rule}\n" for rule in rules)
         text += f"\tchain {mode.name}_{hook} {{\n{body}\t}}\n"
     return text + f"\tchain mode_{hook} {{\n\t\tjump {firewall.modes[0].name}_{hook}\n\t}}\n"
@@ -265,9 +266,13 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
     body = "".join(f"\t\t{rule}\n" for rule in rules)
     filtered = firewall.egress == "filter"
     outbound = "".join(f"\t\t{rule}\n" for rule in _output_rules(firewall, items))
-    modes = ""
+    sets = ""
     if firewall.modes:
-        modes = f"\tset current_mode {{\n\t\ttype mark\n\t\telements = {{ {_mark(1)} }}\n\t}}\n"
+        sets = f"\tset current_mode {{\n\t\ttype mark\n\t\telements = {{ {_mark(1)} }}\n\t}}\n"
+    names = host_names(firewall, items) if filtered else ()
+    for name in names:
+        for family, table in zip(("ipv4_addr", "ipv6_addr"), host_sets(name), strict=True):
+            sets += f"\tset {table} {{\n\t\ttype {family}\n\t}}\n"
     return (
         "#!/usr/sbin/nft -f\n"
         "# tundravm Firewall: inbound traffic is dropped unless a rule below accepts it;\n"
@@ -278,6 +283,12 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
         )
         + "# The cloud metadata servers take only what the units that declare them send.\n"
         + (
+            "# Host names: egress-resolve fills each host4_/host6_ set from DNS over TLS at\n"
+            "# boot and every 30s; a rule naming one accepts nothing until it has.\n"
+            if names
+            else ""
+        )
+        + (
             "# Modes: mode-switch swaps mode_input/mode_output and current_mode; a flow\n"
             "# keeps its mode's ct mark and drops once another mode is in force.\n"
             if firewall.modes
@@ -285,7 +296,7 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
         )
         + "flush ruleset\n\n"
         "table inet filter {\n"
-        f"{modes}"
+        f"{sets}"
         + (_mode_chains(firewall, items, "input") if firewall.modes else "")
         + "\tchain input {\n"
         "\t\ttype filter hook input priority filter; policy drop;\n"
@@ -303,7 +314,7 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
     )
 
 
-METADATA_SHARED = (EgressRule(Port(123, "udp"), CLOUD_METADATA[0], (("metadata time", ""),)),)
+METADATA_SHARED = (EgressRule(Port(123, "udp"), CLOUD_METADATA[0], ("metadata time",)),)
 """What every process may send the metadata server: its NTP, which ``chrony`` refines the
 NTS time from, and which carries no identity token. Its plain DNS is not: ``TeeBase``
 resolves over TLS only."""
@@ -343,9 +354,9 @@ def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]
     own = unit_egress(items)
     for unit, owner, rule in own:
         if rule.host in CLOUD_METADATA:
-            rules.append(f'{owner} {egress_match(rule)} accept comment "{unit}"')
+            rules += [f'{owner} {m} accept comment "{unit}"' for m in egress_matches(rule)]
     for rule in METADATA_SHARED:
-        rules.append(f'{egress_match(rule)} accept comment "{rule.comment}"')
+        rules += [f'{m} accept comment "{rule.comment}"' for m in egress_matches(rule)]
     for family in ("ip", "ip6"):
         servers = sorted(host for host in CLOUD_METADATA if _family(host) == family)
         spelled = servers[0] if len(servers) == 1 else "{ " + ", ".join(servers) + " }"
@@ -354,23 +365,41 @@ def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]
         return rules
     for unit, owner, rule in own:
         if rule.host not in CLOUD_METADATA:
-            rules.append(f'{owner} {egress_match(rule)} accept comment "{unit}"')
-    anywhere = [rule for rule in firewall.egress_rules if rule.host is None]
-    hosts = [rule for rule in firewall.egress_rules if rule.host is not None]
+            rules += [f'{owner} {m} accept comment "{unit}"' for m in egress_matches(rule)]
+    anywhere = [rule for rule in firewall.egress_rules if rule.host is None and rule.name is None]
+    hosts = [rule for rule in firewall.egress_rules if rule not in anywhere]
     for rule in [*sorted(anywhere, key=_port_order), *hosts]:
         comment = _comment([rule.comment]) if rule.origins else "egress"
-        rules.append(f'{egress_match(rule)} accept comment "{comment}"')
+        rules += [f'{m} accept comment "{comment}"' for m in egress_matches(rule)]
     if firewall.modes:
         rules.append("jump mode_output")
     return rules
 
 
-def egress_match(rule: EgressRule) -> str:
-    """*rule*'s match in the output chain, as ``nft list ruleset`` prints it back."""
+def egress_matches(rule: EgressRule) -> tuple[str, ...]:
+    """*rule*'s matches in the output chain, as ``nft list ruleset`` prints them back: one,
+    or a named rule's two, its IPv4 set's and its IPv6 set's."""
+    port = [] if rule.port is None else [f"{rule.port.protocol} dport {rule.port.number}"]
+    owner = [] if rule.user is None else [f'meta skuid "{rule.user}"']
+    if rule.name is not None:
+        four, six = host_sets(rule.name)
+        return (
+            " ".join([*owner, f"ip daddr @{four}", *port]),
+            " ".join([*owner, f"ip6 daddr @{six}", *port]),
+        )
     match = [] if rule.host is None else [f"{_family(rule.host)} daddr {rule.host}"]
-    if rule.port is not None:
-        match.append(f"{rule.port.protocol} dport {rule.port.number}")
-    return " ".join(match)
+    return (" ".join([*owner, *match, *port]),)
+
+
+def host_names(firewall: Firewall, items: Iterable[Declaration]) -> tuple[str, ...]:
+    """The host names the rules of *firewall*, its modes and the units of *items* accept,
+    in the order they appear: each has its sets."""
+    rules = [
+        *firewall.egress_rules,
+        *(rule for mode in firewall.modes for rule in mode.egress_rules),
+        *(rule for _unit, _owner, rule in unit_egress(items)),
+    ]
+    return tuple(dict.fromkeys(rule.name for rule in rules if rule.name is not None))
 
 
 def _family(host: str) -> str:
@@ -418,12 +447,129 @@ def _switcher(
     )
 
 
+EGRESS_HOSTS = "/etc/tundravm/egress-hosts"
+"""The host names the output chain's rules accept, one per line, for ``egress-resolve``."""
+EGRESS_RESOLVE = "/usr/lib/tundravm/egress-resolve"
+EGRESS_RESOLVE_UNIT = "egress-resolve.service"
+EGRESS_RESOLVE_TEXT = r"""#!/bin/sh
+# tundravm Firewall: each host name of /etc/tundravm/egress-hosts resolved through
+# systemd-resolved (DNS over TLS to the literal resolvers) into its host4_/host6_ sets,
+# which the output chain's rules for that name accept alone. A name that does not resolve
+# keeps what its sets held: nothing, before its first answer.
+set -u
+state=/run/tundravm-egress
+addresses() {
+    getent "$1" "$2" 2>/dev/null | while read -r address _; do
+        case $address in ::ffff:*) ;; *) echo "$address" ;; esac
+    done | sort -u | paste -sd, -
+}
+transaction=
+changed=
+while read -r name; do
+    [ -n "$name" ] || continue
+    four=$(addresses ahostsv4 "$name")
+    six=$(addresses ahostsv6 "$name")
+    if [ -z "$four$six" ]; then
+        if [ "$(cat "$state/$name" 2>/dev/null)" != - ]; then
+            echo "egress-resolve: $name does not resolve; its rules accept what they held"
+            echo - > "$state/$name"
+        fi
+        continue
+    fi
+    transaction="${transaction}flush set inet filter host4_$name
+flush set inet filter host6_$name
+"
+    [ -z "$four" ] || transaction="${transaction}add element inet filter host4_$name { $four }
+"
+    [ -z "$six" ] || transaction="${transaction}add element inet filter host6_$name { $six }
+"
+    held="$four${four:+${six:+,}}$six"
+    [ "$(cat "$state/$name" 2>/dev/null)" = "$held" ] || changed="$changed $name=$held"
+done < /etc/tundravm/egress-hosts
+[ -n "$transaction" ] || exit 0
+printf '%s' "$transaction" | nft -f - || exit 1
+for entry in $changed; do
+    echo "$entry" | sed 's/=/ holds /; s/,/, /g; s/^/egress-resolve: /'
+    printf '%s\n' "${entry#*=}" > "$state/${entry%%=*}"
+done
+"""
+"""``egress-resolve``: an empty answer leaves a name's sets as they were, so a resolver
+outage keeps the last addresses and a name never answered stays unreachable."""
+EGRESS_RESOLVE_SERVICE = """\
+# tundravm Firewall: the host names an Egress accepts, resolved into the ruleset's sets,
+# started by egress-resolve.timer at boot and every 30s after; root for nft alone,
+# writing only its own run directory.
+[Unit]
+Description=tundravm egress host names into the firewall's sets
+Requires=nftables.service
+Wants=network-online.target
+After=nftables.service systemd-resolved.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/tundravm/egress-resolve
+StandardOutput=journal+console
+RuntimeDirectory=tundravm-egress
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+"""
+EGRESS_RESOLVE_TIMER = """\
+# tundravm Firewall: egress-resolve at boot (it waits for the network) and every 30s;
+# systemd-resolved answers from its cache until a record's TTL runs out, so a set
+# follows DNS within 30s of it.
+[Unit]
+Description=tundravm egress host names, refreshed
+
+[Timer]
+OnBootSec=1s
+OnUnitActiveSec=30s
+
+[Install]
+WantedBy=timers.target
+"""
+
+
+CHRONY_DROPIN = "/usr/lib/systemd/system/chrony.service.d/50-tundravm-egress.conf"
+"""What orders chrony after the first resolution: its NTS servers are host names."""
+CHRONY_DROPIN_TEXT = (
+    "# tundravm Firewall: the NTS servers are host names, reachable once egress-resolve\n"
+    "# filled their sets\n"
+    "[Unit]\nWants=egress-resolve.service\nAfter=egress-resolve.service\n"
+)
+
+
+def _resolver(names: tuple[str, ...], items: tuple[Declaration, ...]) -> tuple[Declaration, ...]:
+    """``egress-resolve``, its host names and its unit and timer; with chrony's
+    configuration, the drop-in that starts chrony after the first resolution."""
+    chrony = any(
+        isinstance(item, File) and item.path == "/etc/chrony/chrony.conf" for item in items
+    )
+    return (
+        File.text(EGRESS_HOSTS, "".join(f"{name}\n" for name in names)),
+        File.text(EGRESS_RESOLVE, EGRESS_RESOLVE_TEXT, mode=0o755),
+        Unit(EGRESS_RESOLVE_UNIT, EGRESS_RESOLVE_SERVICE),
+        Unit("egress-resolve.timer", EGRESS_RESOLVE_TIMER, enabled=True),
+        *((File.text(CHRONY_DROPIN, CHRONY_DROPIN_TEXT),) if chrony else ()),
+    )
+
+
 def expand_firewall(
     firewall: Firewall, items: Iterable[Declaration], *, production: bool = False
 ) -> tuple[Declaration, ...]:
     """The declarations *firewall* stands for in a variant declaring *items*: with an enabled
     ``systemd-networkd`` (``Network``), :data:`NETWORKD_FIREWALL_DROPIN` too; with modes,
-    ``mode-switch`` (*production*: the variant is a production build)."""
+    ``mode-switch`` (*production*: the variant is a production build); with a host name
+    a filtered output chain accepts, ``egress-resolve`` and its timer."""
     items = tuple(items)
     rendered: tuple[Declaration, ...] = (
         Package("nftables"),
@@ -438,6 +584,9 @@ def expand_firewall(
         )
     if firewall.modes:
         rendered += _switcher(firewall, items, production)
+    names = host_names(firewall, items) if firewall.egress == "filter" else ()
+    if names:
+        rendered += _resolver(names, items)
     networkd = any(
         isinstance(item, Unit) and item.name == "systemd-networkd.service" and item.enabled
         for item in items

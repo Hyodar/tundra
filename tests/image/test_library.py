@@ -27,7 +27,7 @@ from tundravm.components import (
 )
 from tundravm.components._observability import PROXY_HOSTS, PROXY_HOSTS_SCRIPT
 from tundravm.errors import ValidationError
-from tundravm.ports import TCP, UDP
+from tundravm.ports import TCP
 from tundravm.secrets import Secret
 from tundravm.sources import Git
 from tundravm.storage import OperatorKey, Volume
@@ -132,7 +132,7 @@ PCS = "api.trustedservices.intel.com:443"
 @pytest.mark.parametrize(
     ("component", "sends"),
     [
-        (TeeBase(), Egress([TCP(4460), UDP(123)])),
+        (TeeBase(), Egress(hosts=["time.cloudflare.com:4460", "nts.netnod.se:4460"])),
         (TeeBase(time=False, dns=False), Egress()),
         (Network(), Egress(hosts=["1.1.1.1:853", "1.0.0.1:853"])),
         (Network(dns=["2620:fe::fe#dns.quad9.net"]), Egress(hosts=["[2620:fe::fe]:853"])),

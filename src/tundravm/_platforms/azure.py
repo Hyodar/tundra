@@ -140,7 +140,7 @@ def provisioning_task(network_setup: bool) -> Task:
         description="Azure Provisioning Completion",
         user=Root(),
         group="azure-complete-provisioning",
-        egress=(EgressRule(host=WIRESERVER, origins=(("azure", ""),)),),
+        egress=(EgressRule(host=WIRESERVER, origins=("azure",)),),
         after=("network.target",) if network_setup else (),
         requires=("network-setup.service",) if network_setup else (),
         wants=() if network_setup else ("network-online.target",),
