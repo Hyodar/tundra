@@ -1,7 +1,7 @@
 [Unit]
-Description=A trivial scheduled job
-After=runtime-init.service tdx-evidence.service
-Requires=runtime-init.service tdx-evidence.service
+Description=tick.service
+After=runtime-init-owners.service tdx-evidence.service
+Requires=runtime-init-owners.service tdx-evidence.service
 
 [Service]
 Type=oneshot

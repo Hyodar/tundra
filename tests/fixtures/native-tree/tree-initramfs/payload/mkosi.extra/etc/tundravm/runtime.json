@@ -1,0 +1,34 @@
+{
+  "control_plane": "attested endpoint: TLS bound to the quote",
+  "ingress": [
+    {
+      "binding": "a key pair per boot; the attested endpoint's quote binds its key",
+      "kind": "attested-tls",
+      "port": 8443,
+      "unit": "attested-tls-8443.service",
+      "upstream": "http://127.0.0.1:8090/"
+    }
+  ],
+  "management_port": 8745,
+  "rootfs": "initramfs",
+  "schema": 1,
+  "secrets": [
+    {
+      "location": "/run/tundravm/credentials/greeting-token",
+      "name": "greeting-token",
+      "required": false,
+      "source": null,
+      "units": [
+        "token.service"
+      ]
+    },
+    {
+      "location": "/run/tundravm/credentials/tenant-keys",
+      "name": "tenant-keys",
+      "required": false,
+      "source": null,
+      "units": []
+    }
+  ],
+  "volumes": []
+}

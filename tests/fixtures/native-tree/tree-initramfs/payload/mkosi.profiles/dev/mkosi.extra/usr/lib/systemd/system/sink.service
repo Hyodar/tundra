@@ -1,13 +1,23 @@
 [Unit]
-Description=Receive the observability export
-After=runtime-init.service tdx-evidence.service
-Requires=runtime-init.service tdx-evidence.service
+Description=sink.service
+After=runtime-init-owners.service tdx-evidence.service
+Requires=runtime-init-owners.service tdx-evidence.service
 
 [Service]
 Type=exec
 ExecStart=/usr/bin/sink 127.0.0.2:19580 127.0.0.2:19581 127.0.0.1:19582
+User=root
 Restart=on-failure
 RestartSec=5s
+ProtectSystem=full
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
 
 [Install]
 WantedBy=minimal.target

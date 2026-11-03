@@ -1,7 +1,7 @@
 [Unit]
-Description=web
-After=runtime-init.service tdx-evidence.service
-Requires=runtime-init.service tdx-evidence.service
+Description=web.service
+After=runtime-init-owners.service tdx-evidence.service
+Requires=runtime-init-owners.service tdx-evidence.service
 
 [Service]
 Type=exec

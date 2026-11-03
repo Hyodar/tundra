@@ -1,7 +1,7 @@
 [Unit]
 Description=box-forward-8081.service
-After=box-forward-8081.socket tdx-evidence.service
-Requires=box-forward-8081.socket tdx-evidence.service
+After=runtime-init-owners.service box-forward-8081.socket tdx-evidence.service
+Requires=runtime-init-owners.service box-forward-8081.socket tdx-evidence.service
 
 [Service]
 Type=exec
