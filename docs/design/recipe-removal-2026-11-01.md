@@ -1,4 +1,15 @@
-# Removing Recipe files from the CLI
+# ~~Removing Recipe files from the CLI~~
+
+Done (2026-11-03, `recipe-removal`): the fixture is `tests/fixtures/native-tree/fixture.py`,
+an `Image` with `targets=("qemu", "azure", "gcp")`, the verity layout bound to `verity`
+(`--attr verity`) and no seed (the compiler's fixed one applies); every command loads `Image`
+files only, and the 28 internal codes went with `Rule(internal=)`. No public spelling for an
+unsandboxed root task was added: the boot probe's root checks are the platform probe's
+`rootfs:initramfs` and `rootfs:verity` rows, read from each dev build's `probe.json` in CI's
+`fixture-boot` and `verity` jobs, and the sink is a root `Service` under the relaxed sandbox.
+The production boots assert what the kernel's and systemd's own console lines say;
+`verity-cloud` and `reproduce` build `--target azure,gcp` of the one production profile.
+`tests/fixtures/kernel/recipe.py` (the manual `kernel` workflow) is still a Recipe file.
 
 Date: 2026-11-01. Base: master at `24f09c8`, then `leftovers-8`. Franco: "you do not need
 to support the previous syntax". `check`, `build`, `lock`, `dev` and the rest still load a

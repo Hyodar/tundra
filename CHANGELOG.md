@@ -72,6 +72,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - A local instance's QEMU monitor listens in `$XDG_RUNTIME_DIR/tundravm` (else `/tmp/tundravm-<uid>`, refused unless only you can enter it), named in the receipt, not under the project, so a deeply nested project can start one.
 - `run` forwards, `deploy`'s firewall line names, and `deploy status` probes 8745 only where the image's firewall opens it.
 - With `Observability`, the probe checks each exporter runs (or retries an absent sink) on the configuration its program took, blocks no service and has its sinks' egress loaded, and that a loopback metrics sink holds `tundravm_image_digest` and no series the keep-list drops (`observability:series`).
+- The probe checks `/` is what `rootfs=` declared (`rootfs:initramfs`, `rootfs:verity`): the initrd's tmpfs with the cap `RootFS.initramfs(max_size=)` set, or the volatile overlay on a read-only dm-verity root that takes a write under `/usr/bin`.
 - **Breaking:** `show IMAGE` reads like the image file: components by class and keyword, services with their program, source, ports, hardening, volume, credentials and probe, profiles with what each changes, then what each profile builds (build and boot steps said by what they do), a profile beyond the one it extends; no internal fragment, probe unit or shell.
 - **Breaking:** `show --dev` is the image's dev profile, as `build --dev`; the latest development build is `show latest-development`, and `show BUILD --dev` is refused.
 - **Breaking:** `show IMAGE --json` mirrors the text: `image`, `file`, `digest`, `base`, `components`, `services`, `ingress`, `content`, `profiles`, `resolved` and `provenance`, which names each declaration as the image file wrote it (`GoBinary('server')`, `Service('app').readiness`) and the class of each component it came through.
@@ -121,7 +122,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Lint
 
 - Every code is a registered rule with its severities and a fix in public spelling; `check --explain CODE` prints one, a component's own included.
-- Every fix an `Image` file can hit names the keyword to change (`hardening="relaxed"`, `value.ref.edit(...)`, `Tree(exclude=[...])`); the 28 codes only the internal model reaches sit apart in the lint reference and `check --explain` marks them `internal`.
+- Every fix an `Image` file can hit names the keyword to change (`hardening="relaxed"`, `value.ref.edit(...)`, `Tree(exclude=[...])`).
 - **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces `service-command-not-shipped`: a service's program must be something the image ships.
@@ -143,6 +144,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Removed
 
 - **Breaking:** `Nethermind`, `Lighthouse`, `TaikoClient` and `Raiko` leave `tundravm.components`: the library ships no application, and `examples/attested-node/components/` carries the two the example runs.
+- **Breaking:** Recipe files: `check`, `build`, `lock`, `dev` and the other commands, and `tundravm.recipe.load_file`, load `Image` files only, as `tundravm.load` does, and a file binding a declarative `Recipe` is refused with what to bind instead; `tundravm.declarative.load`, `load_recipe`, the `recipe` and `build` factory names and the 28 lint codes only such a file could reach are gone, with `Rule(internal=)`.
 - **Breaking:** the 23 old verbs, without aliases: `init` is `new`; `inspect`, `explain` and `status` are `show`; `lint` and `diff` are `check`.
 - **Breaking:** `compile` is `build --tree-only`, `bake` is `build`, `deploy qemu` is `run`, `import` and `units convert` are `convert`, `clean` is `build --clean-cache`.
 - **Breaking:** the per-variant tree layouts and the `nethermind-v1` dialect.

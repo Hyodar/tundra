@@ -1,25 +1,23 @@
 """Boot the gate 1 fixture (``initramfs`` layout) both ways: ``-kernel`` and ``qemu.raw``.
 
-``tests/fixtures/native-tree/recipe.py``'s ``recipe`` is a plain ``Recipe`` whose source
-builds are a public Go program asking for a newer Go than Debian's and a Rust program
-pinning a newer Rust, so it bakes where the Linux backend does with ``go``, ``rustup`` and
-the network on the host. Its ``default`` variant, a
-production profile, is booted under QEMU with OVMF from pflash twice: the payload's UKI
+``tests/fixtures/native-tree/fixture.py``'s ``image`` builds a public Go program asking for
+a newer Go than Debian's and a Rust program pinning a newer Rust, so it bakes where the
+Linux backend does with ``go``, ``rustup`` and the network on the host. Its ``production``
+profile is booted under QEMU with OVMF from pflash twice: the payload's UKI
 (``payload.efi``) through ``-kernel``, and ``qemu.raw`` attached as a virtio disk on a
 snapshot with no ``-kernel``, which OVMF boots from the same UKI at ``EFI/BOOT/BOOTX64.EFI``
 on the ESP (the way ``run --mode simulated`` boots it). There is no TDX here, so each boot
 must be fail-closed (plan 6.1): ``minimal.target`` reached, ``tdx-evidence.service`` failed
 with the gate's console line, the ``web`` and ``greeter`` services never started on that
-dependency, and the ungated ``boot-probe`` task run, the Go and the Rust program among
-what it prints.
-The kernel's command line (and ``/proc/cmdline``, which the probe prints) must be the UKI's
-own with the harness's SMBIOS console words appended.
+dependency, and the instance key printed. The kernel's command line must be the UKI's own
+with the harness's SMBIOS console words appended.
 
-CI's ``fixture-boot`` job builds it with ``tundravm build --profile default`` and points
+CI's ``fixture-boot`` job builds it with ``tundravm build`` and points
 ``TUNDRAVM_FIXTURE_BUILD`` at that build directory; without it the test bakes the
-``default`` variant itself. The same job builds the ``dev`` profile and runs it with
-``tundravm run --mode simulated``, where the gate records ``simulated`` and the host
-fetches the page. Needs a Linux build host, ``qemu-system-x86_64`` and OVMF.
+``production`` profile itself. The same job runs the ``dev`` profile with ``tundravm dev``,
+where the gate records ``simulated``, the platform probe checks the root tmpfs and its cap
+(``rootfs:initramfs``) with every service, the Go and the Rust program print their lines
+and the host fetches the page. Needs a Linux build host, ``qemu-system-x86_64`` and OVMF.
 Run with: uv run pytest tests/integration/test_fixture_boot.py -m boot
 """
 
@@ -42,7 +40,6 @@ from .support import (
     FAIL_CLOSED_MARKERS,
     FAIL_CLOSED_UNITS,
     assert_fail_closed,
-    probe_lines,
     read_fat,
     read_gpt,
     remove_build,
@@ -55,29 +52,29 @@ FIXTURE = Path(__file__).parents[1] / "fixtures" / "native-tree"
 BOOT_TIMEOUT = float(os.environ.get("TUNDRAVM_BOOT_TIMEOUT", "900"))
 LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 BUILD = os.environ.get("TUNDRAVM_FIXTURE_BUILD")
-"""A build directory ``tundravm build tests/fixtures/native-tree/recipe.py --profile default``
-published (``payload.efi`` and ``qemu.raw`` at its top)."""
+"""A build directory ``tundravm build tests/fixtures/native-tree/fixture.py`` published
+(``payload.efi`` and ``qemu.raw`` at its top)."""
 
 
 @pytest.fixture(scope="module")
 def output(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """The ``default`` variant's output directory: ``payload.efi`` and ``qemu.raw``."""
+    """The ``production`` profile's output directory: ``payload.efi`` and ``qemu.raw``."""
     require_boot()
     if BUILD:
         yield Path(BUILD)
         return
     build = tmp_path_factory.mktemp("fixture") / "build"
     try:
-        lowered = load_file(FIXTURE / "recipe.py").lowered()
-        bake_image(lowered, ("default",), locked=None, backend=LocalLinuxBackend(), build=build)
-        yield build / "default" / "output"
+        lowered = load_file(FIXTURE / "fixture.py").lowered()
+        bake_image(lowered, ("production",), locked=None, backend=LocalLinuxBackend(), build=build)
+        yield build / "production" / "output"
     finally:
         remove_build(build)
 
 
 def _boot(output: Path, logs: Path, via: BootPath) -> BootResult:
-    """Boot until the target, the probe and the gate's refusal are on the console and the
-    gate and each gated service has started or failed."""
+    """Boot until the target, the gate's refusal and the instance key are on the console and
+    the gate and each gated service has started or failed."""
     image = output / ("payload.efi" if via == "kernel" else "qemu.raw")
     log = Path(LOG_DIR or logs) / f"fixture-{via}.console.log"
     result = boot(
@@ -134,36 +131,15 @@ def test_disk_boots_through_its_esp_fail_closed(output: Path, disk_boot: BootRes
     assert_fail_closed(disk_boot)
 
 
-def test_the_go_program_built_with_its_go_mod_toolchain_runs(kernel_boot: BootResult) -> None:
-    """``git-codereview``, whose go.mod says ``go 1.26.0`` (trixie's Go is 1.24), built in the
-    offline sandbox with the toolchain the host fetched, runs and prints its usage line."""
-    assert probe_lines(kernel_boot.console, "go") == ["Usage: git-codereview <command> [-n] [-v]"]
-
-
-def test_the_rust_program_built_with_its_pinned_toolchain_runs(kernel_boot: BootResult) -> None:
-    """``rust-probe``, whose rust-toolchain.toml pins 1.91.0 (trixie's Rust is 1.85), built
-    in the offline sandbox with the toolchain the host's rustup installed, says so."""
-    assert probe_lines(kernel_boot.console, "rust") == ["built by rustc 1.91.0"]
-
-
 @pytest.mark.parametrize("via", ["kernel", "disk"])
 def test_the_kernel_boots_the_ukis_cmdline(
     output: Path, via: BootPath, request: pytest.FixtureRequest
 ) -> None:
-    """The kernel's command line, and ``/proc/cmdline`` as the probe read it, are the UKI's
-    ``.cmdline`` with the SMBIOS console words: neither ``-kernel`` nor OVMF's boot from the
-    ESP passes load options that would replace it."""
+    """The kernel's command line is the UKI's ``.cmdline`` with the SMBIOS console words:
+    neither ``-kernel`` nor OVMF's boot from the ESP passes load options that would replace
+    it."""
     result: BootResult = request.getfixturevalue(f"{via}_boot")
-    expected = expected_cmdline(output / "payload.efi")
-    assert result.kernel_cmdline == expected
-    assert probe_lines(result.console, "cmdline") == [expected]
-
-
-def test_the_root_tmpfs_is_capped_at_its_max_size(kernel_boot: BootResult) -> None:
-    """``Mkosi(root_size="4G")``: systemd-remount-fs remounts the initramfs root with
-    ``/etc/fstab``'s size, which the kernel reports in KiB."""
-    mounts = [line.split() for line in probe_lines(kernel_boot.console, "mount /")]
-    assert any("size=4194304k" in mount[2].split(",") for mount in mounts), mounts
+    assert result.kernel_cmdline == expected_cmdline(output / "payload.efi")
 
 
 def test_the_production_build_carries_no_boot_probe(disk_boot: BootResult) -> None:

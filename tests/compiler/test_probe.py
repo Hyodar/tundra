@@ -104,3 +104,22 @@ def test_the_endpoint_check_passes_only_on_evidence_for_its_nonce(
         check=True,
     )
     assert done.stdout.split()[:3] == [probe.PREFIX.strip(), "endpoint:8745", verdict]
+
+
+@pytest.mark.parametrize(
+    ("rootfs", "size", "call", "after"),
+    [
+        ("initramfs", None, "probe_rootfs initramfs", ()),
+        ("initramfs", "4G", "probe_rootfs initramfs 4194304", ("systemd-remount-fs.service",)),
+        ("initramfs", "50%", "probe_rootfs initramfs", ()),
+        ("verity", None, "probe_rootfs verity", ()),
+    ],
+    ids=["initramfs", "capped", "percent", "verity"],
+)
+def test_the_root_check_is_what_rootfs_declared(
+    rootfs: str, size: str | None, call: str, after: tuple[str, ...]
+) -> None:
+    """Every probe checks ``/``: the initrd's tmpfs, with the KiB cap the kernel reports
+    for a sized one, or the volatile overlay on the verity root."""
+    check = probe.derive((), modules=None, rootfs=rootfs, root_size=size).checks[2]
+    assert (check.name, check.call, check.after) == (f"rootfs:{rootfs}", call, after)
