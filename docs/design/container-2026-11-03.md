@@ -1,7 +1,8 @@
 # Container: a tenant root built with the image
 
-Date: 2026-11-03. Status: the first slice is built (below); a non-empty `egress=` and OCI
-images are not. Item 38 of `status-2026-11-01.md`, section 1 of
+Date: 2026-11-03. Status: the first slice is built (below). Its network, egress, host
+endpoints and UDP are built as `container-net-2026-11-03.md` says, which replaces the
+socket-proxyd forwards and the "Egress" section here; OCI images are not. Item 38 of `status-2026-11-01.md`, section 1 of
 `flashbots-images-gaps-2026-11-02.md`.
 
 ## The spelling

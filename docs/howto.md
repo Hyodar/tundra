@@ -167,9 +167,8 @@ web = Container(
 ```
 
 Pass it in `components=`. The build makes its root from the image's snapshot, and the
-measured payload ships it. The program runs in that root with no network but the loopback.
-Each exposed port is relayed in from the host. [Components](manual.md#components) lists
-what is refused.
+measured payload ships it. Each exposed port reaches it from the host's. It sends only
+what `egress=` names. [Components](manual.md#components) has the rest.
 
 ## Ship booleans, not raw series
 

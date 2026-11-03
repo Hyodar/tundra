@@ -229,7 +229,7 @@ project's.
 | `SshAccess` | root SSH by public key, keys baked or delivered; `login=` for others | `port` |
 | `DevAccess` | debug access, only in the `dev` profile | none |
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
-| `Container` | a program in a Debian root of its own, with no network | `unit`, `image` |
+| `Container` | a program in a Debian root of its own | `unit`, `image`, `endpoint(port)` |
 
 `SshAccess(login=Login(name, keys=, owner=, commands={...}, shell=))` lets another account
 in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to an argv. A list runs
@@ -250,12 +250,12 @@ at the installed commit. `Tdxs(source=Git(mirror, commit, subdir="tools"))` poin
 one of them at a mirror. `Tdxs.from_policy(policy)` also validates quotes against the
 registers of an image you trust.
 
-`Container("web", argv, packages=, files=, state=, user=, expose=)`
-([a task](howto.md#run-a-container)) builds its root as the subimage `mkosi.images/web/`
-from the image's snapshot. The payload ships it as `/usr/lib/tundravm/containers/web.raw`,
-and the manifest records its sha256. The program runs from that root as its own user, in
-a network namespace holding only `lo`. An OCI reference, a non-empty `egress=` and a shell
-in production (`container-shell`) are refused.
+`Container("web", argv, packages=, files=, state=, user=, expose=, egress=, modes=,
+requires=, serves=, probe=)` ([a task](howto.md#run-a-container)) runs a program from a
+root built from the image's snapshot. OCI references and production shells
+(`container-shell`) are refused. A network keyword gives it the veth `ve-web`: `expose=`
+(TCP or UDP), `egress=`, `modes={"maintenance": Egress(...)}`, `requires=[nethermind.rpc]`
+(a host endpoint, same address) and `serves=` with `probe=` (`endpoint(port)`).
 
 ## Profiles
 

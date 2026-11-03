@@ -90,4 +90,5 @@ boots into `production`. An operator switches modes over the control plane with
 `run switch`. `attest` shows every switch since boot.
 
 **Container.** A program in a Debian root of its own, built with the image from the same
-snapshot. Its only network is the ports relayed into it.
+snapshot. Its network is a veth the firewall forwards: the ports it exposes, the
+destinations its egress names, and the host endpoints it requires.
