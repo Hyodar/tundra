@@ -16,7 +16,8 @@ one fixed-address proxy, the only destination a filtered egress then needs, and
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Iterator
+import re
+from collections.abc import Iterator, Sequence
 from dataclasses import KW_ONLY, dataclass
 from urllib.parse import urlsplit
 
@@ -31,7 +32,7 @@ from tundravm.errors import ValidationError
 
 from .._keywords import Keywords
 
-__all__ = ["JournalExport", "Observability", "PrometheusRemoteWrite", "Proxy"]
+__all__ = ["EXPORT_PRESETS", "JournalExport", "Observability", "PrometheusRemoteWrite", "Proxy"]
 
 LOGS_SERVICE = "journal-export"
 """The journal uploader's service."""
@@ -64,6 +65,23 @@ METRICS_SINK_CONFIG = "/etc/tundravm/metrics-sink.yml"
 """The in-guest receiver's configuration: it scrapes nothing, so it is empty."""
 
 _NODE_EXPORTER_DEFAULTS = "/etc/default/prometheus-node-exporter"
+
+EXPORT_PRESETS: dict[str, tuple[str, ...]] = {
+    "health": (
+        "up",
+        "node_boot_time_seconds",
+        "node_filesystem_avail_bytes",
+        "node_filesystem_size_bytes",
+        "node_memory_MemAvailable_bytes",
+        "node_memory_MemTotal_bytes",
+        "node_vmstat_oom_kill",
+    ),
+}
+"""The named keep-lists :class:`PrometheusRemoteWrite` takes in ``export=``. ``health`` is
+what an operator watches a node by, after flashbots' recording rules: each scrape's
+``up``, the boot time, free and total disk and memory, and the OOM kills."""
+
+_SERIES = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
 JOURNAL_ACCESS = "/usr/lib/tundravm/journal-access"
 """What ``journal-export`` runs as root before the uploader: the journal's directories and
@@ -295,6 +313,13 @@ class PrometheusRemoteWrite(Keywords):
     of samples it could not send; in memory, at most four shards of 10000 samples wait,
     retried from one second to one minute apart, a 429 included.
 
+    *export* is the keep-list: series names and the presets of :data:`EXPORT_PRESETS`
+    (``"health"``) by name. The agent drops every other series before the write
+    (``write_relabel_configs``), since raw series from a TEE are a side channel;
+    ``export=[]`` sends nothing. Without *export* it keeps ``health``, and
+    ``observability-export-unset`` reports it: an error in a production profile that
+    writes to *url*, a warning where nothing leaves the VM.
+
     Without *url* the receiver is in the guest: ``metrics-sink``, Prometheus with its
     remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A dev
     boot shows the export working, nothing leaves the VM, *credential* waits unbound for a
@@ -306,6 +331,7 @@ class PrometheusRemoteWrite(Keywords):
     credential: Secret | None = None
     interval: str = "30s"
     buffer: str = "1h"
+    export: str | Sequence[str] | None = None
 
     def __post_init__(self) -> None:
         if self.url is not None:
@@ -318,10 +344,33 @@ class PrometheusRemoteWrite(Keywords):
                     f"PrometheusRemoteWrite: {what} {value!r} is not a duration such as '30s'.",
                     hint="Use a number with s, m or h: '30s', '1h'.",
                 )
+        self.kept()
+
+    def kept(self) -> tuple[str, ...]:
+        """The series names that leave: *export* with its presets expanded (``health``
+        without one), in order, once each."""
+        export = "health" if self.export is None else self.export
+        entries: Sequence[object] = (
+            [export] if isinstance(export, str) or not isinstance(export, Sequence) else export
+        )
+        found: list[str] = []
+        for entry in entries:
+            if isinstance(entry, str) and entry in EXPORT_PRESETS:
+                found.extend(EXPORT_PRESETS[entry])
+            elif isinstance(entry, str) and _SERIES.fullmatch(entry):
+                found.append(entry)
+            else:
+                presets = ", ".join(repr(name) for name in EXPORT_PRESETS)
+                raise ValidationError(
+                    f"PrometheusRemoteWrite: export entry {entry!r} is neither a preset "
+                    f"({presets}) nor a series name.",
+                    hint='Pass export=["health", "node_load1"]: presets and series names.',
+                )
+        return tuple(dict.fromkeys(found))
 
     def config(self, proxy: Proxy | None = None) -> dict[str, object]:
-        """The agent's configuration: scrape the node exporter, write to *url*, through
-        *proxy* when given; without *url*, to the in-guest :meth:`sink`."""
+        """The agent's configuration: scrape the node exporter, keep :meth:`kept`, write to
+        *url*, through *proxy* when given; without *url*, to the in-guest :meth:`sink`."""
         local = self.url is None
         remote: dict[str, object] = {"url": METRICS_SINK_URL if local else self.url}
         if proxy is not None and not local:
@@ -332,6 +381,14 @@ class PrometheusRemoteWrite(Keywords):
                 "credentials_file": f"/run/credentials/metrics-export.service/"
                 f"{self.credential.name}",
             }
+        kept = self.kept()
+        remote["write_relabel_configs"] = [
+            {
+                "source_labels": ["__name__"],
+                "regex": "|".join(kept) if kept else "",
+                "action": "keep",
+            }
+        ]
         remote["queue_config"] = {
             "capacity": 10000,
             "max_shards": 4,
@@ -477,6 +534,15 @@ class Observability(Component):
             "Point the sink at an https:// URL.",
         ),
         Rule(
+            "observability-export-unset",
+            ("error", "warning"),
+            "PrometheusRemoteWrite names no export= keep-list, so what leaves the TEE is "
+            "undeclared; it keeps the health preset.",
+            'Pass export="health", or the series names that may leave: '
+            'export=["health", "node_load1"].',
+            when=("where nothing leaves the VM: a development profile, or no url=",),
+        ),
+        Rule(
             "observability-sink-unset",
             "warning",
             "A production profile ships its logs or metrics to the in-guest receiver, so "
@@ -489,8 +555,22 @@ class Observability(Component):
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``observability-plaintext``: an http:// sink sees what the TD logs in the clear;
         ``observability-sink-unset``: a production profile's logs or metrics never leave the
-        VM."""
+        VM; ``observability-export-unset``: the metrics name no keep-list, an error where a
+        production profile writes them to *url*."""
         found: list[dm.Diagnostic] = []
+        metrics = self.metrics
+        if metrics is not None and metrics.export is None:
+            leaves = resolved.production and metrics.url is not None
+            found.append(
+                dm.Diagnostic(
+                    "observability-export-unset",
+                    "error" if leaves else "warning",
+                    f"PrometheusRemoteWrite names no export=: {metrics.url} would receive "
+                    "undeclared series"
+                    if leaves
+                    else "PrometheusRemoteWrite names no export=: it keeps the health preset",
+                )
+            )
         for sink, what in ((self.logs, "the journal"), (self.metrics, "the node metrics")):
             if resolved.production and sink is not None and sink.url is None:
                 found.append(

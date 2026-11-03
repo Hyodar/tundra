@@ -832,7 +832,7 @@ The export path for logs and metrics: `image.observability` takes it.
 
 | Member | Does |
 |---|---|
-| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM. |
+| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM; `observability-export-unset`: the metrics name no keep-list, an error where a production profile writes them to *url*. |
 | `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one. |
 
 ### `PrometheusRemoteWrite`
@@ -845,6 +845,7 @@ PrometheusRemoteWrite(
     credential: Secret | None = None,
     interval: str = '30s',
     buffer: str = '1h',
+    export: str | Sequence[str] | None = None,
 )
 ```
 
@@ -852,7 +853,8 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 
 | Member | Does |
 |---|---|
-| `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
+| `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, keep `kept`, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
+| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave: *export* with its presets expanded (`health` without one), in order, once each. |
 | `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
 | `PrometheusRemoteWrite.sink() -> Service` | `metrics-sink`: the in-guest receiver, plain HTTP on the loopback. |
 

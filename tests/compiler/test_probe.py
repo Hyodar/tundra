@@ -55,7 +55,7 @@ def test_a_dev_profile_compiles_the_checks_its_declarations_imply(tmp_path: Path
         ],
         observability=Observability(
             logs=JournalExport("https://logs.example:19532"),
-            metrics=PrometheusRemoteWrite("https://10.0.0.9/api/v1/write"),
+            metrics=PrometheusRemoteWrite("https://10.0.0.9/api/v1/write", export="health"),
         ),
         network=Network(egress=Egress(ports=[UDP(9), TCP(443)], hosts=["192.0.2.0/24"])),
         kernel=Kernel.build(

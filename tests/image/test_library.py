@@ -140,7 +140,7 @@ PCS = "api.trustedservices.intel.com:443"
         (
             Observability(
                 logs=JournalExport("https://logs.example:19532"),
-                metrics=PrometheusRemoteWrite("https://[fd00::9]/api/v1/write"),
+                metrics=PrometheusRemoteWrite("https://[fd00::9]/api/v1/write", export="health"),
             ),
             Egress(hosts=["logs.example:19532", "[fd00::9]:443"]),
         ),
@@ -266,7 +266,7 @@ def test_the_exporters_reach_their_sinks_through_the_proxy(
 ) -> None:
     observability = Observability(
         logs=JournalExport("https://logs.example"),
-        metrics=PrometheusRemoteWrite("https://metrics.example"),
+        metrics=PrometheusRemoteWrite("https://metrics.example", export="health"),
         proxy=proxy,
     )
     planned = plan(Image("x", observability=observability), "production")
@@ -340,12 +340,52 @@ def test_a_sink_without_a_url_ships_to_the_in_guest_receiver(
     assert "observability-plaintext" not in codes
 
 
+HEALTH = (
+    "up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes"
+    "|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill"
+)
+
+
+@pytest.mark.parametrize(
+    ("export", "url", "profile", "regex", "severity"),
+    [
+        ("health", "https://metrics.example", "production", HEALTH, None),
+        (["node_load1", "up"], "https://metrics.example", "production", "node_load1|up", None),
+        (["health", "up", "node_load1"], None, "dev", f"{HEALTH}|node_load1", None),
+        ([], "https://metrics.example", "production", "", None),
+        (None, "https://metrics.example", "production", HEALTH, "error"),
+        (None, None, "production", HEALTH, "warning"),
+        (None, None, "dev", HEALTH, "warning"),
+    ],
+)
+def test_only_the_keep_list_leaves(
+    export: str | list[str] | None,
+    url: str | None,
+    profile: str,
+    regex: str,
+    severity: str | None,
+) -> None:
+    """The agent keeps the named series and the presets' and drops the rest before the
+    write; no export= keeps health and is an error only where a production profile writes
+    out."""
+    metrics = PrometheusRemoteWrite(url, export=export)
+    relabel = metrics.config()["remote_write"][0]["write_relabel_configs"]  # type: ignore[index]
+    assert relabel == [{"source_labels": ["__name__"], "regex": regex, "action": "keep"}]
+    image = Image("x", observability=Observability(metrics=metrics), dev=DevAccess(password="tdx"))
+    found = [d for d in plan(image, profile).lint() if d.code == "observability-export-unset"]
+    assert [d.severity for d in found] == ([] if severity is None else [severity])
+    with pytest.raises(ValidationError, match="neither a preset"):
+        PrometheusRemoteWrite(export=["health", "node load"])
+
+
 def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     logs_key = Secret("logs-key")
     token = Secret("metrics-token")
     observability = Observability(
         logs=JournalExport("https://logs.example:19532", credential=logs_key),
-        metrics=PrometheusRemoteWrite("https://metrics.example/api/v1/write", credential=token),
+        metrics=PrometheusRemoteWrite(
+            "https://metrics.example/api/v1/write", credential=token, export="health"
+        ),
     )
     image = Image("x", observability=observability)
     planned = plan(image, "production")

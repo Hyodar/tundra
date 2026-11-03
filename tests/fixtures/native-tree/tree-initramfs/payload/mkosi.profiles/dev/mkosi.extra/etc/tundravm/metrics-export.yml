@@ -7,6 +7,10 @@ scrape_configs:
 remote_write:
   - url: http://127.0.0.2:19581/api/v1/write
     proxy_url: http://127.0.0.1:19582
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill"
+        action: keep
     queue_config:
       capacity: 10000
       max_shards: 4
