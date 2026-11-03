@@ -364,6 +364,20 @@ identity, `tundravm_image_digest`; without it a production profile writing to a 
 is refused.
 `Observability(proxy="IP:PORT")` reaches every sink through that one address.
 
+### The firewall and its modes
+
+`Firewall()` opens what services expose, an ingress's port and 8745. `Firewall(modes=
+{"production": Mode(), "maintenance": Mode(ingress=[TCP(22)], lasts="30m")})` makes it
+switchable: a port a mode names opens in that mode only, a mode's `egress=` adds to the
+image's, and the image boots into `production`. `tundravm run switch INSTANCE maintenance`
+(`deploy switch` in a cloud) goes over the attested endpoint, signed by the pinned owner;
+`mode-switch` extends RTMR3 with the switch, then swaps the ruleset, and old flows drop on
+their next packet. The window closes itself after `lasts` (30 minutes by default) of boot
+time. `attest` prints the history from RTMR3, the probe's `mode:firewall` row checks it,
+and a policy's `"modes": ["production"]` refuses an instance that left production. Refused:
+22 in `production`, a mode named `tdx` or `simulated`, a switch on a production build that
+pins no operator, and RTMR3 extends on a kernel older than 6.16.
+
 ### The control plane
 
 An image with a volume, a secret or `AttestedTLS` runs the attested endpoint on port

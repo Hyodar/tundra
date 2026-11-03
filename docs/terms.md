@@ -53,6 +53,11 @@ checking the quote. A *generated* secret is made in the guest at each boot inste
 **Control plane.** What an image with a volume, a secret or an attested ingress runs: the
 *attested endpoint* on port 8745, which serves quotes and takes deliveries, and SSH on 22.
 
+**Firewall mode.** A named set of open ports, such as `maintenance` opening SSH, that an
+operator switches to with `run switch`. The image boots into `production`, a window closes
+itself, and each switch is extended into RTMR3, so `attest` shows every mode since boot. It
+is not the security *mode* (`simulated`, `tdx`).
+
 **Instance key.** A key pair each boot generates. The quote covers its public key, so a
 client can tell that a signature came from this TD.
 

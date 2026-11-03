@@ -68,12 +68,12 @@ the reason, and a `tundravm.policy/2` policy.
 | `gcp` | MRTD and RTMR0 for Google's published firmware and machine types, RTMR1, RTMR2 | nothing |
 | `azure` | no TDX register: the quote measures Azure's paravisor | everything; Azure's evidence is its vTPM |
 
-RTMR3 is outside every policy: no event schema is defined for it, and each build lists that
-under `unchecked`. MRTD and RTMR0 values carry the firmware they belong to, and values
-from different firmware never match.
+RTMR3 holds only firewall mode switches (`tundravm:mode:<name>:<seconds>`): `attest`
+replays them, and a policy's `"modes": ["production"]` refuses an instance that opened
+another mode; without `Firewall(modes=)` it is outside the policy. MRTD and RTMR0 values
+carry the firmware they belong to, and values from different firmware never match.
 
-Every package in the UKI comes from one pinned Debian snapshot: a moved snapshot is a
-new image, whose measurements need approving again.
+Every UKI package comes from one pinned Debian snapshot; a moved snapshot is a new image.
 
 `attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
 quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
@@ -81,7 +81,7 @@ value. For a production build, a TD with the `DEBUG` attribute is `untrusted` an
 evidence never passes. Without a validator the best verdict is `measurements-match`: the registers match,
 but nobody checked that a TDX module signed them. With a register missing it is `partial`,
 which never releases a secret. For `qemu`, approve MRTD and RTMR0 in the policy's
-`platform_approval` from a quote of a host you trust, or the verdict stays `partial`.
+`platform_approval` from a quote of a host you trust.
 
 Predictions (the build), observations (`attest --output`) and the approved policy
 (`policies/`) are three files, never one.

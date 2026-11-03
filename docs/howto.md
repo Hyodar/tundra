@@ -123,6 +123,33 @@ An `OperatorKey` volume takes them signed by its owner's key only, the one `atte
 [Delivering secrets](manual.md#delivering-secrets) says what each build and mode
 releases on.
 
+## Open a maintenance window
+
+Declare the window; `production` is required:
+
+```python
+from tundravm.components import Firewall, Mode
+from tundravm.ports import TCP
+
+window = Mode(ingress=[TCP(22)], lasts="30m")
+firewall = Firewall(modes={"production": Mode(), "maintenance": window})
+```
+
+Pass it in `components=`.
+
+Attest the instance, then open, use and close it:
+
+```console
+$ tundravm run switch demo-1 maintenance
+demo-1: maintenance since 412s of boot, closes at 2212s (switch 1, from production, ...)
+$ tundravm run ssh demo-1
+$ tundravm run switch demo-1 production
+```
+
+Use `deploy switch` for a cloud instance. Each switch is extended into RTMR3, so `attest`
+prints `modes  production; 2 switches since boot: ...`, and a policy with
+`"modes": ["production"]` refuses the instance until it reboots.
+
 ## Upgrade or roll back
 
 ```console
