@@ -1,0 +1,2 @@
+# tundravm Login tenant: these commands as root, nothing else
+tenant ALL=(root) NOPASSWD: /usr/bin/systemctl is-active web

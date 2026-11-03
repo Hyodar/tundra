@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+
+chown -R tenant:tenant /home/tenant

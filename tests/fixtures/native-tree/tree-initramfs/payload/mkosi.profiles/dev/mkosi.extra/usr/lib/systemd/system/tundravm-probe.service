@@ -1,6 +1,6 @@
 [Unit]
 Description=Check what this profile's declarations promise
-After=tdx-evidence.service greeter.service greeter-ready.service web.service web-ready.service tick.timer image-metrics.service image-metrics-ready.service sink.service sink-ready.service tdxs.socket attested-tls-8443.service attested-tls-8443-ready.service nftables.service tundravm-endpoint.service journal-export.service metrics-export.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service tundravm-instance-key.service runtime-init-owners.service
+After=tdx-evidence.service greeter.service greeter-ready.service web.service web-ready.service tick.timer image-metrics.service image-metrics-ready.service sink.service sink-ready.service tdxs.socket attested-tls-8443.service attested-tls-8443-ready.service nftables.service tundravm-endpoint.service journal-export.service metrics-export.service systemd-udev-trigger.service systemd-modules-load.service ssh-host-keys.service tundravm-instance-key.service runtime-init-owners.service runtime-init-owners-login-tenant.service
 
 [Service]
 Type=oneshot

@@ -1,7 +1,7 @@
 [Unit]
 Description=Runtime Init
-After=runtime-init-owners.service runtime-init-secrets.service
-Requires=runtime-init-owners.service runtime-init-secrets.service
+After=runtime-init-owners.service runtime-init-secrets.service runtime-init-owners-login-tenant.service
+Requires=runtime-init-owners.service runtime-init-secrets.service runtime-init-owners-login-tenant.service
 
 [Service]
 Type=oneshot

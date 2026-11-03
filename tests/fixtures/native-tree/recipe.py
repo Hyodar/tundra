@@ -64,11 +64,14 @@ from tundravm.declarative.utils import (
     CargoBinary,
     Composite,
     GoBinary,
+    Login,
     Network,
     SshAccess,
+    Sudo,
     Tdxs,
 )
 from tundravm.ports import AttestedTLS
+from tundravm.secrets import Secret as Delivered
 
 SNAPSHOT = "20261018T082309Z"
 SEED = "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70"
@@ -241,6 +244,21 @@ DEV_SECRET = Secret(
 """The secret CI delivers to the dev boot over the attested endpoint; optional, so nothing
 waits for it and ``run --probe`` finishes before it arrives."""
 
+TENANT = Login(
+    "tenant",
+    keys=Delivered("tenant-keys", required=False),
+    command="/bin/sh -c 'cat /etc/greeter/greeting; /usr/bin/sudo -n /usr/bin/systemctl "
+    "is-active web'",
+    sudo=[Sudo("/usr/bin/systemctl is-active web")],
+    home=True,
+)
+"""A non-root login whose key CI delivers after attestation: whatever the client asks, it
+prints the greeting and runs its one sudo rule. The probe's ``login:tenant`` row reads it
+back."""
+TENANT_KEYS = Secret("tenant-keys", (SecretFile(TENANT.key_file, mode=0o644),), required=False)
+""":data:`TENANT`'s keys as the attested endpoint writes them (an ``Image`` adds this
+target itself)."""
+
 ATTESTED_PORT = 8443
 ATTESTED = AttestedTLS(ATTESTED_PORT, upstream=Endpoint("127.0.0.1", WEB_PORT))
 """Attested TLS in front of :class:`Web`'s page, whose certificate key the endpoint's
@@ -265,7 +283,7 @@ def relayed(way: AttestedTLS) -> tuple[Declaration, ...]:
 DEV = Fragment(
     "dev",
     items=(
-        SshAccess(authorized_keys=(DEV_KEY,)),
+        SshAccess(authorized_keys=(DEV_KEY,), logins=(TENANT,)),
         Firewall(
             egress="filter",
             egress_rules=egress_rules(((OBSERVABILITY.name, OBSERVABILITY.outbound()),)),
@@ -283,17 +301,23 @@ DEV = Fragment(
             hardening=Hardening.none(),
         ),
         Tdxs(),
-        Secrets(entries=(DEV_SECRET,), port=MANAGEMENT_PORT, attested_tls=(ATTESTED_PORT,)),
+        Secrets(
+            entries=(DEV_SECRET, TENANT_KEYS),
+            port=MANAGEMENT_PORT,
+            attested_tls=(ATTESTED_PORT,),
+        ),
         *relayed(ATTESTED),
     ),
 )
-"""What the ``dev`` variant adds: SSH by public key, a firewall whose output chain allows
-nothing beyond DHCP and what :data:`OBSERVABILITY`'s proxy asks for (the fixture fetches
-nothing once built), a scheduled job, and the export path with its proxy and receivers, so
-the derived probe boots its ``egress:``, ``timer:`` and ``observability:`` checks, and the
+"""What the ``dev`` variant adds: SSH by public key for root and :data:`TENANT`, a
+firewall whose output chain allows nothing beyond DHCP and what :data:`OBSERVABILITY`'s
+proxy asks for (the fixture fetches nothing once built), a scheduled job, and the export
+path with its proxy and receivers, so the derived probe boots its ``egress:``, ``timer:``
+and ``observability:`` checks, and the
 console shows the ``sink:`` lines of what arrived. The evidence service with the simulator
 issuer and the attested endpoint on :data:`MANAGEMENT_PORT` taking :data:`DEV_SECRET` give
-the probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``;
+the probe its ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``
+(:data:`TENANT_KEYS` among them, then an SSH login as :data:`TENANT`);
 :data:`ATTESTED` in front of the page gives it the ``attested-tls:`` check and CI its
 ``attest --tls``. :data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No
 ``Volume``: ``run`` attaches disks only for an ``Image``'s runtime manifest, which this

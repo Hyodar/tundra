@@ -276,6 +276,7 @@
           "prometheus",
           "prometheus-node-exporter",
           "socat",
+          "sudo",
           "systemd",
           "systemd-boot-efi",
           "systemd-journal-remote",

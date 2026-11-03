@@ -361,6 +361,46 @@ probe_instance_key() {
         ok "root:root 600, pub $pub"
     fi
 }
+probe_login() {
+    if ! entry=$(getent shadow "$1"); then
+        fail "no user $1: the image's useradd for it did not run; read the build log"
+        return
+    fi
+    hash=$(echo "$entry" | cut -d: -f2)
+    case $hash in
+        '!'* | '*'*) ;;
+        *) fail "$1 has a password: a login has none; something set one (chpasswd, usermod -p)"; return ;;
+    esac
+    if [ "$2" != - ] && ! said=$(visudo -c -f "$2" 2>&1); then
+        fail "visudo -c -f $2: $(echo "$said" | tail -n 1): sudo refuses the file, so no rule runs"
+        return
+    fi
+    if ! effective=$(sshd -T -C "user=$1,host=probe,addr=127.0.0.1" 2>&1); then
+        fail "sshd -T: $(echo "$effective" | tail -n 1)"
+        return
+    fi
+    forced=$(echo "$effective" | sed -n 's/^forcecommand //p')
+    if [ "$forced" != "$4" ]; then
+        fail "sshd forces '$forced' for $1, declared '$4': another sshd_config.d file overrides its Match block"
+        return
+    fi
+    if ! echo "$effective" | grep -qx 'disableforwarding yes'; then
+        fail "sshd lets $1 forward: another sshd_config.d file overrides its Match block"
+        return
+    fi
+    keys=/etc/ssh/authorized_keys.d/$1
+    if [ "$3" != - ] && [ -e "$keys" ]; then
+        while read -r line; do
+            case $line in
+                "$3 "*) ;;
+                *) fail "a key in $keys lacks '$3': the file is not the one the image declares"; return ;;
+            esac
+        done <"$keys"
+    fi
+    parsed=
+    [ "$2" = - ] || parsed="; $2 parses"
+    ok "password locked; sshd forces $4, no forwarding$parsed"
+}
 probe_owner() {
     if [ ! -e "$1" ]; then
         fail "no $1 in the image"
@@ -451,8 +491,12 @@ check=kernel:modules
 probe_modules crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
+check=login:tenant
+probe_login tenant /etc/sudoers.d/tenant '-' '/bin/sh -c '\''cat /etc/greeter/greeting; /usr/bin/sudo -n /usr/bin/systemctl is-active web'\'''
 check=key:instance
 probe_instance_key /run/tundravm/instance-key.pem /run/tundravm/instance-key.pub
 check=owner:/srv/www/private.html
 probe_owner '/srv/www/private.html' web:web 600
+check=owner:/home/tenant
+probe_owner '/home/tenant' tenant:tenant
 say "done $passed ok $failed fail"

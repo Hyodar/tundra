@@ -2,6 +2,7 @@
 set -euo pipefail
 
 mkosi-chroot groupadd --system tdx
+mkosi-chroot useradd --home-dir /home/tenant --create-home --shell /bin/sh tenant
 mkosi-chroot useradd --system --shell /usr/sbin/nologin tick
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-export
 mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
@@ -36,4 +37,6 @@ ln -sf "/etc/systemd/system/attested-tls-8443-key.service" "$BUILDROOT/etc/syste
 ln -sf "/etc/systemd/system/attested-tls-8443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+mkdir -p "$BUILDROOT/etc/ssh/authorized_keys.d"
+mkosi-chroot visudo -c -f /etc/sudoers.d/tenant
 mkosi-chroot systemctl mask systemd-journal-upload.service prometheus.service
