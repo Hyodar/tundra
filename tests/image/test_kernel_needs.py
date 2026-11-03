@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from tundravm import DebianConfig, Image, Kernel, KernelFragment, KernelPatch, Profile, RootFS
-from tundravm._image._lower import VERITY_KERNEL, kernel_of
-from tundravm.components import Component
+from tundravm._image._lower import CONTAINER_KERNEL, VERITY_KERNEL, kernel_of
+from tundravm.components import Component, Container
 from tundravm.errors import ValidationError
 
 BASE = DebianConfig("6.12.113-1")
@@ -57,22 +57,28 @@ def test_needs_merge_in_declaration_order(tmp_path: Path) -> None:
     ]
 
 
+BOX = Container("box", ["/usr/bin/busybox", "true"], packages=["busybox"])
+
+
 @pytest.mark.parametrize(
-    ("image", "patches", "verity"),
+    ("image", "patches", "fragments"),
     [
-        ({}, [], False),
-        ({"targets": ["qemu", "azure"]}, [], False),
-        ({"targets": ["gcp"]}, ["0001-acpi-gcp-block-aml-systemmemory-ram-access.patch"], False),
-        ({"rootfs": RootFS.verity()}, [], True),
+        ({}, [], []),
+        ({"targets": ["qemu", "azure"]}, [], []),
+        ({"targets": ["gcp"]}, ["0001-acpi-gcp-block-aml-systemmemory-ram-access.patch"], []),
+        ({"rootfs": RootFS.verity()}, [], [VERITY_KERNEL]),
+        ({"profiles": {"dev": Profile(add=[BOX])}}, [], [CONTAINER_KERNEL]),
     ],
-    ids=["qemu", "azure", "gcp", "verity"],
+    ids=["qemu", "azure", "gcp", "verity", "container"],
 )
-def test_the_root_and_targets_add_their_own(
-    image: dict[str, object], patches: list[str], verity: bool
+def test_the_root_targets_and_containers_add_their_own(
+    image: dict[str, object], patches: list[str], fragments: list[KernelFragment]
 ) -> None:
     lowered = kernel_of(Image("k", kernel=Kernel.build(base=BASE), **image))  # type: ignore[arg-type]
     assert [patch.name for patch in lowered.patches] == patches
-    assert bool(lowered.fragments) is verity
+    assert [(f.options, f.reason) for f in lowered.fragments] == [
+        (f.options, f.reason) for f in fragments
+    ]
 
 
 def test_a_profile_cannot_change_the_shared_kernel() -> None:

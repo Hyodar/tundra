@@ -70,7 +70,14 @@ from ._values import (
     mkosi_section,
 )
 
-__all__ = ["OWNERS_STEP", "VERITY_KERNEL", "component_classes", "kernel_of", "recipe_of"]
+__all__ = [
+    "CONTAINER_KERNEL",
+    "OWNERS_STEP",
+    "VERITY_KERNEL",
+    "component_classes",
+    "kernel_of",
+    "recipe_of",
+]
 
 IMPLIED_FRAGMENT = "tundravm-requires"
 """The fragment whose check reports ``requires-implied``; it declares nothing."""
@@ -93,6 +100,15 @@ VERITY_KERNEL = KernelFragment(
 ``DM_VERITY``, ``EROFS_FS`` and ``OVERLAY_FS`` built in, and this also requests them with
 their parents (``MD``, ``BLK_DEV_DM``), the hash the root hash is (``CRYPTO_SHA256``), and the
 extended attributes and ACLs of the root's files (``EROFS_FS_XATTR``, ``EROFS_FS_POSIX_ACL``)."""
+
+
+CONTAINER_KERNEL = KernelFragment(
+    {"CONFIG_BLK_DEV_LOOP": "y", "CONFIG_EROFS_FS": "y"},
+    reason="a Container: its unit attaches the erofs root image through a loop device",
+)
+"""What a ``Container`` in any profile asks of a built kernel: ``loop`` and ``erofs`` built
+in, since a built kernel loads no module and the container's loader skips ``modprobe`` once
+``/dev/loop-control`` exists. The drivers check already wanted both."""
 
 
 def kernel_of(image: Image) -> dm.Kernel:
@@ -400,6 +416,9 @@ class _Lowering:
                     )
         if image.rootfs.layout == "verity":
             yield VERITY_KERNEL
+        contents = (*image.components, *(i for p in image.profiles.values() for i in p.add))
+        if any(_declares_container(item) for item in contents):
+            yield CONTAINER_KERNEL
         if "gcp" in image.targets:
             yield KernelPatch(GCP_KERNEL_PATCH)
 
@@ -1287,6 +1306,13 @@ def _kernel_needs(component: Component) -> Iterator[KernelFragment | KernelPatch
     for item in composed(component):
         if isinstance(item, Component):
             yield from _kernel_needs(item)
+
+
+def _declares_container(item: object) -> bool:
+    """Whether *item* is or composes a ``Container`` (its root image, ``dm.ContainerRoot``)."""
+    if isinstance(item, dm.ContainerRoot):
+        return True
+    return isinstance(item, Component) and any(map(_declares_container, composed(item)))
 
 
 def _sends(items: Sequence[object]) -> Iterator[tuple[str, Egress]]:

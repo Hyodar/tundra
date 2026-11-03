@@ -133,8 +133,8 @@ merges first: io_uring, userfaultfd, kexec, KSM, 32-bit syscalls, debug info, an
 systems and protocols no image uses go off; lockdown, zeroed memory and stack canaries go
 on. The table, a reason per option, is `src/tundravm/declarative/_kernel_hardening.py`.
 `fragments=`, `.config` files or `KernelFragment({...})`, merge after it in order, then
-each component's `kernel()`, the verity root's options and the gcp target's ACPI patch. A
-fragment that sets a hardening option itself wins. `hardening=False` is the
+each component's `kernel()`, the verity root's options, a `Container`'s `loop` and `erofs`,
+and the gcp target's ACPI patch. A fragment that sets a hardening option itself wins. `hardening=False` is the
 `kernel-unhardened` error in a production profile. The build checks every option survived
 `olddefconfig`.
 
