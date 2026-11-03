@@ -245,7 +245,8 @@ def _service_ports(ports: Iterable[str | int]) -> list[int]:
 
 
 def status(instance: Instance, *, runner: CommandRunner | None = None) -> dict[str, object]:
-    """``deploy status``: the cloud's view, then control-plane and application readiness."""
+    """``deploy status``: the cloud's view, then control-plane and application readiness,
+    probing only the ports the build's firewall opens (no 8745 without the endpoint)."""
     text = _call(runner, _status_call(instance.platform, _cloud(instance)), "Describing the VM")
     if instance.platform == "gcp":
         state = str(json.loads(text or "{}").get("status", "unknown")).lower()
@@ -256,7 +257,12 @@ def status(instance: Instance, *, runner: CommandRunner | None = None) -> dict[s
             "unknown",
         )
     host = instance.host
-    services = {p: reachable(host, p) for p in _service_ports(instance.data.get("ports") or {})}
+    open_ports = instance.data.get("ports") or {}
+    services = {p: reachable(host, p) for p in _service_ports(open_ports)}
+    if str(MANAGEMENT_PORT) not in open_ports:
+        control = "none declared"
+    else:
+        control = "listening" if reachable(host, MANAGEMENT_PORT) else "not listening"
     return {
         "id": instance.id,
         "platform": instance.platform,
@@ -264,7 +270,7 @@ def status(instance: Instance, *, runner: CommandRunner | None = None) -> dict[s
         "state": state,
         "address": instance.data.get("address"),
         "build": instance.data["build"],
-        "control_plane": "listening" if reachable(host, MANAGEMENT_PORT) else "not listening",
+        "control_plane": control,
         "application": "listening" if services and all(services.values()) else "not listening",
         "successor": instance.data.get("successor"),
         "previous": instance.data.get("previous"),
@@ -652,7 +658,7 @@ def plan(
         {
             "step": "status",
             "call": _status_call(target, cloud),
-            "control_plane": MANAGEMENT_PORT,
+            "control_plane": MANAGEMENT_PORT if MANAGEMENT_PORT in ports else None,
             "application": _service_ports(ports),
         },
     ]
@@ -742,8 +748,9 @@ def render_plan(found: Mapping[str, Any]) -> str:
             text = step["path"]
         else:
             application = ", ".join(str(p) for p in step["application"]) or "none"
+            control = step["control_plane"] or "none"
             text = (
-                f"`{shlex.join(step['call'])}`,\n      then tcp {step['control_plane']} "
+                f"`{shlex.join(step['call'])}`,\n      then tcp {control} "
                 f"(control plane) and {application} (application)"
             )
         lines.append(f"{number}. {kind:<9} {text}")

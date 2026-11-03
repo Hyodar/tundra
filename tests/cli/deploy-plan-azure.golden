@@ -13,7 +13,7 @@ plan: deploy demo {build} (production) to azure; nothing runs
       vTPM PCR11 {PCR11}
 7. receipt   {root}/.tundravm/instances/demo-N/instance.json
 8. status    `az vm get-instance-view --name tdx-demo-XXXXXX --resource-group tdx-vms --output json`,
-      then tcp 8745 (control plane) and 8080 (application)
+      then tcp none (control plane) and 8080 (application)
 calls:
 1. az storage container create --account-name acct --name tdx-images --output json
 2. az storage blob upload --account-name acct --container-name tdx-images --name azure-XXXXXXXX.vhd --file {root}/build/demo/production/{build}/azure.vhd --type page --output json

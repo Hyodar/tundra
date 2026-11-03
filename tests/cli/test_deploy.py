@@ -155,6 +155,36 @@ def test_status_reports_as_json_and_takes_one_instance(
     assert cli("deploy", "status", "prover-1", "more").code == EXIT_ERROR
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "control_plane"), [(True, "not listening"), (False, "none declared")]
+)
+def test_status_probes_only_the_ports_the_firewall_opens(
+    prover_build: Build,
+    prover: Path,
+    cli: Cli,
+    cloud: RecordedCloud,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: bool,
+    control_plane: str,
+) -> None:
+    assert cli("deploy", "gcp", "--build", "latest", "--volume", "data=existing:disk-1").code == 0
+    path = prover / ".tundravm/instances/prover-1/instance.json"
+    receipt = json.loads(path.read_text())
+    if not endpoint:
+        del receipt["ports"]["8745"]
+    path.write_text(json.dumps(receipt))
+    probed: list[int] = []
+
+    def reachable(host: str, port: int) -> bool:
+        probed.append(port)
+        return False
+
+    monkeypatch.setattr(deployments, "reachable", reachable)
+    report = json.loads(cli("deploy", "status", "prover-1", "--json").out)
+    assert report["control_plane"] == control_plane
+    assert sorted(map(str, probed)) == sorted(receipt["ports"].keys() - {"22"})
+
+
 def test_run_actions_refuse_a_deployment(
     prover_build: Build, cli: Cli, cloud: RecordedCloud
 ) -> None:
