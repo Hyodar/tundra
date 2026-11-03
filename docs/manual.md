@@ -23,7 +23,7 @@ not.
 
 ## The project
 
-`new NAME` writes:
+`new NAME` writes these files. A `-` in NAME is `_` in their names.
 
 | File | Holds |
 |---|---|
@@ -32,7 +32,7 @@ not.
 | `pyproject.toml` | tundravm from git at a commit, pytest, and `[tool.tundravm]` |
 | `README.md` | the commands of the loop |
 | `.gitignore` | ignores `/.tundravm/` and `/build/*`, keeps `build/tundravm.lock` |
-| `.github/workflows/image.yml` | with `--ci`: see [Run CI](howto.md#run-ci) |
+| `.github/workflows/image.yml` | with `--ci`: [the image pipeline](release.md#the-image-pipeline-new-writes) |
 
 Commit `uv.lock`. `uv add --editable PATH/TO/tundravm` works against a local checkout.
 
@@ -60,16 +60,13 @@ The host picks the backend; an image file names none.
 | `lima` | macOS, other Linux | Lima; the guest is x86-64 Debian running the same pinned mkosi |
 
 `local` runs mkosi 27.1 in-process, never from `PATH`. Every other build tool comes from
-mkosi's tools tree, pinned to the same Debian snapshot. Without unprivileged user
-namespaces (Ubuntu 24.04's default), mkosi runs under `sudo`. `lima` on Apple Silicon
-emulates the x86-64 guest: the same bytes, several times slower. A build never switches
-backend on failure. `doctor --for build` names what a build here lacks.
+mkosi's tools tree, pinned to the same Debian snapshot. A build never switches backend on
+failure. `doctor --for build` names what a build here lacks.
 
 ## The image
 
 `Image` is a frozen dataclass. Every slot is optional and takes small typed values.
-Every public name has one home, without aliases: the
-[API reference](reference/api.md) lists each namespace.
+The [API reference](reference/api.md) lists each namespace.
 
 ### What is implied
 
@@ -79,7 +76,7 @@ Every public name has one home, without aliases: the
 | a measured UKI (kernel, initrd and command line in one PE file) with a curated module set: `tdx_guest`, virtio, NVMe, Hyper-V, gVNIC | `kernel=Kernel.default(modules=[...])` to keep more, `kernel=Kernel.build(...)` to compile one |
 | NTS time from two authenticated servers, a volatile journal, sysctl hardening, DNS over TLS, CPU mitigations on the command line, no apt timers, no console getty (`TeeBase`) | pass `TeeBase(...)` in `components=`, or remove a piece in a profile |
 | DHCP on `en*` and `eth*` (`Network`) | `network=Network(dhcp=False, static=StaticAddress(...))` |
-| an nftables firewall that drops inbound traffic except exposed ports; a volume or a secret opens 8745 and 22 for the control plane (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
+| an nftables firewall that drops inbound traffic except exposed ports; the [control plane](#the-control-plane) opens 8745 and 22 (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
 | one generated system user per service, the `static` sandbox, `Restart=on-failure` | `Service(user=, hardening=, unit=DropIn(...))` |
 | the evidence service `tdxs` from `tools/`, socket-activated on `/var/tdxs.sock` (`Tdxs`) | `components=[Tdxs(source=Git(url, commit, subdir="tools"))]` for a mirror |
 | `tdx-evidence.service`, which every service requires: without TDX a production profile starts none, a development one runs simulated ([trust](trust.md#threat-model)) | none: a dev profile is the way to run without TDX |
@@ -171,9 +168,6 @@ the other service ready. `After=` alone is never generated.
 | `TcpProbe(port)` | a bounded probe unit polls the port; installs nothing |
 | `HttpProbe(url)` | a bounded probe unit waits for a 2xx; installs `curl` |
 
-A probe is its own oneshot unit (`app-ready.service`), so a dependent waits for an answer,
-not for an exec.
-
 ### The sandbox
 
 `hardening="NAME"` picks a sandbox per runtime class. Each preset is the strict sandbox
@@ -199,7 +193,6 @@ cannot fix.
 | run periodically | `timer=Every("15m")` or `timer=Calendar("daily")` |
 | socket activation | `socket=Listen(8080)` or `Listen("/run/app.sock")` |
 | persistent state | `state=volume.directory("app")`; a bare name is a volatile `StateDirectory=` |
-| a delivered secret | `[app, "--key-file", secret]` |
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
@@ -237,10 +230,8 @@ project's.
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
 | `Container` | a program in a Debian root of its own, with no network | `unit`, `image` |
 
-`SshAccess(login=Login("tenant", keys=[...], command="/usr/bin/app-status", sudo=[Sudo("/usr/bin/systemctl restart app")]))`
-lets an account other than root in with its own keys, baked or a delivered `Secret`, into its forced
-command (or a `shell=` the image ships), with exactly those sudo rules and no password or
-forwarding.
+`SshAccess(login=Login(name, keys=, command=, shell=, sudo=[Sudo(...)]))` lets another
+account in with its own keys ([a task](howto.md#log-in-as-a-tenant)).
 
 A service that asks for quotes (`quotes=True`) joins the `tdx` group and requires
 `EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
@@ -249,12 +240,12 @@ at the installed commit. `Tdxs(source=Git(mirror, commit, subdir="tools"))` poin
 one of them at a mirror. `Tdxs.from_policy(policy)` also validates quotes against the
 registers of an image you trust.
 
-`Container("web", argv, packages=[...], files=[...], state=, expose=[TCP(8081)])` builds
-its root as the subimage `mkosi.images/web/` from the image's snapshot. The payload ships
-it as `/usr/lib/tundravm/containers/web.raw`, and the manifest records its sha256. The
-program runs from that root as its own user, in a network namespace holding only `lo`.
-Each exposed port is relayed in from the host. Nothing is pulled at boot. An OCI reference,
-a non-empty `egress=` and a shell in production (`container-shell`) are refused.
+`Container("web", argv, packages=, files=, state=, user=, expose=)`
+([a task](howto.md#run-a-container)) builds its root as the subimage `mkosi.images/web/`
+from the image's snapshot. The payload ships it as `/usr/lib/tundravm/containers/web.raw`,
+and the manifest records its sha256. The program runs from that root as its own user, in
+a network namespace holding only `lo`. An OCI reference, a non-empty `egress=` and a shell
+in production (`container-shell`) are refused.
 
 ## Profiles
 
@@ -302,7 +293,7 @@ permits formatting.
 | `BrokerKey(url, audience=)` | a key broker releases the key after attestation | no pull client yet: the image waits as for an operator |
 
 `TpmSeal` is refused for `targets=` that boot with another vTPM: a key sealed on one
-platform does not open on another. That is why the example unlocks with `OperatorKey()`.
+platform does not open on another.
 
 `data.directory("nethermind")` is a directory on the volume. A service binds it with
 `state=`. The image creates it, owned by that service, once the volume is open, and the
@@ -352,46 +343,44 @@ the build with both sizes. The manifest records the layout and the cap.
 `network=Network(egress=Egress(ports=[TCP(443)], hosts=["10.0.0.0/8"]))` filters outbound
 traffic. It accepts what the baseline (NTS time, resolvers) and each component's
 `outbound()` send. `Service(egress=Egress(...))` accepts more for that service's user
-alone, and only a service's `Egress(metadata=True)` reaches the cloud metadata server and
-its identity token. A host may be `HOST:PORT`. nftables matches no names, so
-`"logs.example:443"` opens 443 to any address. A production profile without a filter
-warns `egress-unfiltered`.
+alone. The cloud metadata server and its identity token take only tundravm's cloud glue
+and a service with `Egress(metadata=True)` (`service-metadata` warns). A host may be
+`HOST:PORT`. nftables matches no names, so `"logs.example:443"` opens 443 to any address.
+A production profile without a filter warns `egress-unfiltered`.
 
-`TeeBase` resolves through `systemd-resolved` over strict DNS over TLS (`DNSOverTLS=yes`,
-no fallback, no LLMNR or mDNS), so the host can neither read nor forge a lookup;
-`Network(dns=["9.9.9.9#dns.quad9.net"])` names the resolvers as `ADDRESS#TLS-NAME`
-(Cloudflare's pair by default: no target cloud's resolver speaks TLS), and the firewall
-accepts TCP 853 to them and no plain DNS.
+`TeeBase` resolves through `systemd-resolved` over strict DNS over TLS, with no fallback,
+LLMNR or mDNS. The host can neither read nor forge a lookup.
+`Network(dns=["9.9.9.9#dns.quad9.net"])` names the resolvers as `ADDRESS#TLS-NAME`,
+Cloudflare's pair by default: no target cloud's resolver speaks TLS. The firewall accepts TCP 853 to them and no plain DNS.
 
 `Observability(logs=JournalExport(url=, credential=), metrics=PrometheusRemoteWrite(url=,
-credential=))` ships the journal and node metrics. Without `url=` each goes to a receiver
-in the guest (`journal-sink`, `metrics-sink`). Once `url=` is set, the delivered credential
-authenticates the export. An `http://` sink warns: it carries the logs in the clear.
-Only the series `export=` names leave (`"health"` is a preset), with the image's
-identity, `tundravm_image_digest`; without it a production profile writing to a `url=`
-is refused.
+credential=, export=))` ships the journal and node metrics. Without `url=` each goes to a
+receiver in the guest (`journal-sink`, `metrics-sink`). Once `url=` is set, the delivered
+credential authenticates the export. An `http://` sink warns. Only the series on the
+`export=` keep-list leave, with the image's identity
+([a task](howto.md#keep-only-some-metrics)).
 `Observability(proxy="IP:PORT")` reaches every sink through that one address.
 
 ### The firewall and its modes
 
-`Firewall()` opens what services expose, an ingress's port and 8745. `Firewall(modes=
-{"production": Mode(), "maintenance": Mode(ingress=[TCP(22)], lasts="30m")})` makes it
-switchable: a port a mode names opens in that mode only, a mode's `egress=` adds to the
-image's, and the image boots into `production`. `tundravm run switch INSTANCE maintenance`
-(`deploy switch` in a cloud) goes over the attested endpoint, signed by the pinned owner;
-`mode-switch` extends RTMR3 with the switch, then swaps the ruleset, and old flows drop on
-their next packet. The window closes itself after `lasts` (30 minutes by default) of boot
-time. `attest` prints the history from RTMR3, the probe's `mode:firewall` row checks it,
-and a policy's `"modes": ["production"]` refuses an instance that left production. Refused:
-22 in `production`, a mode named `tdx` or `simulated`, a switch on a production build that
-pins no operator, and RTMR3 extends on a kernel older than 6.16.
+`Firewall()` opens what services expose, an ingress's port and 8745. `Firewall(modes=)`
+makes it switchable ([a task](howto.md#open-a-maintenance-window)). A port a mode names
+opens in that mode only. A mode's `egress=` adds to the image's. The image boots into
+`production`. A switch goes over the attested endpoint. `mode-switch` extends RTMR3 with
+it, then swaps the ruleset, and old flows drop on their next packet. A window closes
+itself after `lasts` (30 minutes by default) of boot time. The probe's `mode:firewall` row
+checks the history against RTMR3. Refused: 22 in `production`, a mode named `tdx` or
+`simulated`, and a switch on a production build without an owner. On TDX the extend
+needs Linux 6.16, so a 6.12 kernel refuses every switch.
 
 ### The control plane
 
-An image with a volume, a secret or `AttestedTLS` runs the attested endpoint on port
-8745, which needs nothing on a volume ([trust](trust.md#what-first-contact-proves)). It
-runs SSH on 22, for the key `attest` hands over. `/etc/tundravm/runtime.json` records every volume, secret and
-ingress.
+An image with a secret, `AttestedTLS`, firewall modes or a volume an operator or broker
+unlocks runs the attested endpoint on port 8745. The endpoint needs nothing on a volume
+([trust](trust.md#what-first-contact-proves)). The image also runs SSH on 22, for the key
+`attest` hands over. On TDX that key comes only from the [owner](terms.md#stages-2-to-6),
+so an image without an `OperatorKey()` volume has no delivered root SSH there.
+`/etc/tundravm/runtime.json` records every volume, secret and ingress.
 
 ## Sources and toolchains
 
@@ -408,10 +397,10 @@ one program in the build environment, never in the image. `files=[build]` ships 
 
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
-by sha256. `Git(url, ref, subdir="tools", auth="GITHUB_TOKEN")` builds a private
-repository's directory. The token is read from that host variable and never written
-anywhere. A credential pasted into a URL is refused. git sends it as an `Authorization`
-header in the scheme the host takes; a host other than github.com or `gitlab.*` names it:
+by sha256. `Git(url, ref, auth="GITHUB_TOKEN")` builds a private repository
+([a task](howto.md#use-a-private-source)). The token is read from that host variable and
+never written anywhere. A credential pasted into a URL is refused. git sends the token as
+an `Authorization` header. A host other than github.com or `gitlab.*` names its scheme:
 
 | Host | `auth=` |
 |---|---|
@@ -640,9 +629,9 @@ device `tundravm-NAME`. Azure with a volume is refused: its data disks are named
 which the image cannot match. The receipt records the VM, its address and the firewall
 rule the management port needs, which tundravm does not create.
 
-`attest`'s quote binds a fresh nonce, the TLS session's key, the SSH host keys and the
-instance public key. A `tundravm.policy/2` record in `policies/` holds the platform
-registers you approve (`platform_approval`: MRTD, RTMR0).
+`attest`'s quote binds a fresh nonce, the TLS session's key, the SSH host keys, the
+instance public key and each `AttestedTLS` certificate key. A `tundravm.policy/2` record in
+`policies/` holds the platform registers you approve (`platform_approval`: MRTD, RTMR0).
 
 | Verdict | Means |
 |---|---|

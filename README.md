@@ -35,7 +35,8 @@ missing. `new` writes a project whose image is stage 1 of the [guide](docs/guide
 
 1. [Terms](docs/terms.md): the ideas, in the order the guide needs them.
 2. [The guide](docs/guide.md): one image built up in six stages.
-3. [How do I](docs/howto.md): lock, build, deploy, attest, deliver a secret, convert.
+3. [How do I](docs/howto.md): the tasks around the story, from a lock to a maintenance
+   window.
 4. [The manual](docs/manual.md): every slot, rule and file.
 5. [Trust, limits and recovery](docs/trust.md): what the image defends against.
 6. Generated from the code: [commands](docs/reference/cli.md), [API](docs/reference/api.md)

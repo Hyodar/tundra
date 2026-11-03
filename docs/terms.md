@@ -1,7 +1,7 @@
 # Terms
 
-Each term the [guide](guide.md) uses, defined once, in the order it needs them. Read this
-page first if mkosi or TDX are new to you.
+Each term the [guide](guide.md) and the [how-to](howto.md) use, defined once, in the order
+they need them. Read this page first if mkosi or TDX are new to you.
 
 ## The two tools underneath
 
@@ -29,9 +29,9 @@ password.
 **Development and production.** A development build comes from a non-production profile,
 such as `dev`. Only a production build is meant to hold real secrets.
 
-**Mode.** `simulated` runs a build under plain QEMU, without TDX. `tdx` runs it in a real
-TD. A production build that finds no TDX starts none of its services: it *fails closed*.
-A development build runs its services either way.
+**Security mode.** `simulated` runs a build under plain QEMU, without TDX. `tdx` runs it
+in a real TD. A production build that finds no TDX starts none of its services: it *fails
+closed*. A development build runs its services either way.
 
 **Boot probe.** A checklist a development build runs inside the guest at boot: each
 service up, each port bound, egress refused. It proves the image works, not that it is
@@ -47,16 +47,15 @@ running it. It exports typed values, such as an endpoint. You write your own.
 **Volume.** An encrypted disk that keeps data across boots. Something must *unlock* it at
 each boot, such as an operator who sends its passphrase.
 
+**Owner.** The one SSH key an instance with an `OperatorKey()` volume takes writes from.
+The first signed write pins it in the volume's header.
+
 **Secret.** A value the image needs and never contains. An operator *delivers* it after
 checking the quote. A *generated* secret is made in the guest at each boot instead.
 
-**Control plane.** What an image with a volume, a secret or an attested ingress runs: the
-*attested endpoint* on port 8745, which serves quotes and takes deliveries, and SSH on 22.
-
-**Firewall mode.** A named set of open ports, such as `maintenance` opening SSH, that an
-operator switches to with `run switch`. The image boots into `production`, a window closes
-itself, and each switch is extended into RTMR3, so `attest` shows every mode since boot. It
-is not the security *mode* (`simulated`, `tdx`).
+**Control plane.** What an image with a volume an operator unlocks, a secret or an attested
+ingress runs: the *attested endpoint* on port 8745, which serves quotes and takes
+deliveries, and SSH on 22.
 
 **Instance key.** A key pair each boot generates. The quote covers its public key, so a
 client can tell that a signature came from this TD.
@@ -64,8 +63,7 @@ client can tell that a signature came from this TD.
 **Ingress.** A port that takes outside requests and relays them to a service on the
 loopback.
 
-**Container.** A program in a Debian root of its own, built with the image from the same
-snapshot, with no network beyond the ports relayed into it.
+**Keep-list.** The metric series allowed to leave the guest. Every other series stays in.
 
 ## After the stages
 
@@ -86,3 +84,10 @@ build time. A *policy* is the set of values you approve.
 
 **Attest.** Ask an instance for a quote, check it against a policy and print a *verdict*.
 Only `trusted` releases secrets to a production build.
+
+**Firewall mode.** A named set of open ports, such as `maintenance` opening SSH. The image
+boots into `production`. An operator switches modes over the control plane with
+`run switch`. `attest` shows every switch since boot.
+
+**Container.** A program in a Debian root of its own, built with the image from the same
+snapshot. Its only network is the ports relayed into it.

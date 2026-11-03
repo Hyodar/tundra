@@ -17,9 +17,9 @@ $ tundravm check stages/01-boot.py
 ```
 
 Run every command from there. `check` reads an image without building it. It
-prints one warning, `source-unpinned`, until you lock. Each stage boots with
-`tundravm dev stages/<stage>.py`. `tundravm show --diff OLD NEW` prints what a stage adds
-without building anything. The outputs below are excerpts of it unless they say otherwise.
+prints one warning, `source-unpinned`, until you lock. `tundravm show --diff OLD NEW`
+prints what a stage adds without building anything. The outputs below are excerpts of it
+unless they say otherwise.
 
 ## 1. The boot
 
@@ -189,8 +189,9 @@ class Nethermind(Component):
 
 Nethermind's database must survive a reboot. `data` is a **volume**, an encrypted disk.
 `unlock=OperatorKey()` means an operator sends its passphrase after checking the quote.
-Nethermind waits until then. `Generated("jwt")` is a **secret** the guest makes at each
-boot.
+Nethermind waits until then. The first key to sign a write becomes the volume's **owner**.
+The instance refuses writes signed by any other key. `Generated("jwt")` is a **secret** the
+guest makes at each boot.
 
 ### What the volume brings
 
@@ -364,7 +365,7 @@ The endpoint's quote binds the listener's certificate too. Either command checks
 
 ```console
 $ tundravm attest attested-node-1 --policy FILE --tls 8546
-$ go run ./tools/cmd/attested-client --dev https://127.0.0.1:8546
+$ go -C ../../tools run ./cmd/attested-client --dev https://127.0.0.1:8546
 ```
 
 ## 6. Operating it
@@ -442,9 +443,11 @@ Profiles:
 
 `Observability` ships the journal and the node metrics. Neither sink names a `url=`, so
 the export goes to a receiver in the guest until you set one. A production profile warns
-`observability-sink-unset` until then. `sync-status` runs hourly and logs Lighthouse's
-sync status. `staging` edits one file. `bench` adds `fio`, and `production=False` keeps it
-out of production builds. `targets=` adds Azure and GCP disks that boot the same OS.
+`observability-sink-unset` until then. No `export=` names the metrics' **keep-list**, so it
+holds the `health` preset. Every profile warns `observability-export-unset` until you pass
+`export=`. `sync-status` runs hourly and logs Lighthouse's sync status. `staging` edits one
+file. `bench` adds `fio`, and `production=False` keeps it out of production builds.
+`targets=` adds Azure and GCP disks that boot the same OS.
 
 ## Next
 

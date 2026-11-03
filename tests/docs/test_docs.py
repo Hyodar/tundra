@@ -276,7 +276,7 @@ def test_slugs_follow_github() -> None:
         ("README.md", 350),
         ("docs/terms.md", 800),
         ("docs/guide.md", 2200),
-        ("docs/howto.md", 1100),
+        ("docs/howto.md", 1300),
         ("docs/manual.md", 6000),
         ("docs/trust.md", 2500),
     ],
@@ -287,7 +287,7 @@ def test_pages_stay_short(page: str, limit: int) -> None:
 
 def test_the_guide_pages_share_one_budget() -> None:
     words = {page: len(_text(page).split()) for page in GUIDE_PAGES}
-    assert sum(words.values()) <= 9500, words
+    assert sum(words.values()) <= 9800, words
 
 
 def test_each_task_stays_under_120_words() -> None:
