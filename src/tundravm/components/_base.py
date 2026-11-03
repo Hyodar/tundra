@@ -469,13 +469,15 @@ class SshAccess(Component):
 
     *keys* are public keys baked into the image; *from_delivery* accepts the key the
     attested endpoint takes once ``tundravm attest`` verified the quote binding the host
-    keys. *login* is an account other than root, or a list of them: a :class:`Login` gets
-    in with its own keys, or the owner's (``owner=True``), into its command menu, its root
-    commands through exact sudoers lines, and nothing else. An image whose ``SshAccess``
-    declares a login hands root no delivered key unless *from_delivery* says so, and root
-    without a key never logs in. A key or a login is required. The port is
-    opened in the firewall; host keys are generated per instance at boot. Exports
-    :attr:`port`. Component name: ``ssh-access``.
+    keys. On a TDX boot the endpoint takes that key only from an owner the encrypted copy
+    of an ``OperatorKey()`` volume confirmed, so a TDX image without one gets no delivered
+    key at all: bake it with *keys*. *login* is an account other than root, or a list of
+    them: a :class:`Login` gets in with its own keys, or the owner's (``owner=True``), into
+    its command menu, its root commands through exact sudoers lines, and nothing else. An
+    image whose ``SshAccess`` declares a login hands root no delivered key unless
+    *from_delivery* says so, and root without a key never logs in. A key or a login is
+    required. The port is opened in the firewall; host keys are generated per instance at
+    boot. Exports :attr:`port`. Component name: ``ssh-access``.
     """
 
     keys: Sequence[str] = ()

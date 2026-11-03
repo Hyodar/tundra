@@ -17,12 +17,15 @@ values become the declarations the tools and systemd already understand:
   control plane: that ``Secrets`` block is the attested endpoint on the management port
   (evidence, credentials, unlock, the operator's SSH key), and
   ``SshAccess(from_delivery=True)`` lets only that key in, as root, or as the
-  ``Login(owner=True)`` of an ``SshAccess`` declaring logins, where root takes none;
+  ``Login(owner=True)`` of an ``SshAccess`` declaring logins, where root takes none. On a
+  TDX boot the endpoint takes SSH keys (root's and a login's) only from an owner the
+  volume's encrypted copy confirmed, so a TDX image without an ``OperatorKey()`` volume
+  gets no delivered SSH key at all (bake them with ``SshAccess(keys=)``);
 - an ingress is a ``socat`` TLS relay unit with its firewall port; an ``AttestedTLS`` one
   also has a root oneshot making its key pair and certificate each boot, which the relay
   reads as credentials and the endpoint's quotes bind;
 - a ``Login(keys=Secret(...))`` adds that secret, which the endpoint also writes to the
-  login's ``authorized_keys.d`` file;
+  login's ``authorized_keys.d`` file, on TDX from a confirmed owner only;
 - ``/etc/tundravm/runtime.json`` records all of it for the tools that deliver.
 
 Nothing here writes a secret or a key into the image.

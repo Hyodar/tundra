@@ -1209,6 +1209,9 @@ class Login(Keywords):
     The account has no password and no other way in. *keys* are public keys baked into the
     image (``/etc/ssh/authorized_keys.d/<name>``), or a ``Secret`` the attested endpoint
     writes there once ``tundravm secrets deliver`` verified a quote binding the host keys.
+    On a TDX boot the endpoint writes it only from an owner the encrypted copy of an
+    ``OperatorKey()`` volume confirmed, so a TDX image without one gets no delivered key
+    at all: bake them as a list in *keys*.
     *owner* makes the owner's key its only key instead: the key ``attest`` hands over, from
     the owner an ``OperatorKey()`` volume pins (in a simulated boot, the first). Root then
     takes no delivered key. *commands* maps each command the client may type to its argv:
