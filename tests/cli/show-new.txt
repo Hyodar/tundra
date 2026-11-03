@@ -15,17 +15,18 @@ Profiles (2):
 Built into production:
   Targets (1): qemu
   Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
-  Packages (10): ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-sysv udev
+  Packages (11): ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-resolved systemd-sysv udev
   Build packages (1): golang
   Sources (1):
     tdxs  local tundravm:tools    pinned=-
-  Files (13):
+  Files (14):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
-    /etc/nftables.conf                                                                       0755  1783B  sha256:0269645cd8a2
-    /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
+    /etc/nftables.conf                                                                       0755  1669B  sha256:97f70ed0727f
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
     /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
+    /etc/systemd/resolved.conf.d/50-tundravm-network.conf                                    0644  115B  sha256:642b6a10c3e1
+    /etc/systemd/resolved.conf.d/50-tundravm-tee.conf                                        0644  386B  sha256:e9cd4d7e5172
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
     /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
     /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
@@ -35,17 +36,18 @@ Built into production:
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (1): tdxs
   Groups (1): tdx
-  Enabled units (9): chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (10): chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (1): tdxs.service
   Masked units (4): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
   Firewall (4):
     in   nothing beyond replies and DHCP
-    out  169.254.169.254:53/udp, 169.254.169.254:53/tcp  metadata DNS
-    out  169.254.169.254:123/udp                         metadata time
-    out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1             tee-base
+    out  169.254.169.254:123/udp           metadata time
+    out  123/udp, 4460/tcp                 tee-base
+    out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp  network
   Instance key: secp256k1, fresh each boot; taken by no service
-  Build steps (2):
+  Build steps (3):
     builds tdxs from source
+    runs tee-base-resolv-conf (postinst)
     removes IMAGE_VERSION from os-release, so a rebuild matches
   Debloat: enabled, 30 paths removed, systemd minimize=yes
 
@@ -54,7 +56,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  6453B  sha256:30007c67b540
+    + /usr/lib/tundravm/probe  0755  8284B  sha256:f7e5d020e691
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

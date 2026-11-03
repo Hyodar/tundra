@@ -77,7 +77,7 @@ Every public name has one home, without aliases: the
 |---|---|
 | Debian trixie from snapshot `20261018T082309Z` | `base=Debian("trixie", snapshot="...")`; another release is untested |
 | a measured UKI (kernel, initrd and command line in one PE file) with a curated module set: `tdx_guest`, virtio, NVMe, Hyper-V, gVNIC | `kernel=Kernel.default(modules=[...])` to keep more, `kernel=Kernel.build(...)` to compile one |
-| NTS time from two authenticated servers, a volatile journal, sysctl hardening, a static resolver, no apt timers, no console getty (`TeeBase`) | pass `TeeBase(...)` in `components=`, or remove a piece in a profile |
+| NTS time from two authenticated servers, a volatile journal, sysctl hardening, DNS over TLS, CPU mitigations on the command line, no apt timers, no console getty (`TeeBase`) | pass `TeeBase(...)` in `components=`, or remove a piece in a profile |
 | DHCP on `en*` and `eth*` (`Network`) | `network=Network(dhcp=False, static=StaticAddress(...))` |
 | an nftables firewall that drops inbound traffic except exposed ports; a volume or a secret opens 8745 and 22 for the control plane (`Firewall`) | `expose=` opens a port; `network=Network(egress=Egress(...))` filters outbound |
 | one generated system user per service, the `static` sandbox, `Restart=on-failure` | `Service(user=, hardening=, unit=DropIn(...))` |
@@ -98,7 +98,7 @@ Passing a baseline component in `components=` replaces the implied one.
 | `services` | `Service` |
 | `components` | `Component` instances |
 | `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) |
-| `network` | `Network(dhcp=, static=, egress=, interfaces=)` |
+| `network` | `Network(dhcp=, static=, egress=, interfaces=, dns=)` |
 | `users`, `groups` | `User`, `Group` for resources several services share |
 | `kernel` | `Kernel.default(modules=, cmdline=)` or `Kernel.build(base=DebianConfig(...), fragments=, patches=, cmdline=)`: see [The kernel](#the-kernel) |
 | `rootfs` | `RootFS.initramfs()` (default) or `RootFS.verity()` |
@@ -349,6 +349,12 @@ its identity token. A host may be `HOST:PORT`. nftables matches no names, so
 `"logs.example:443"` opens 443 to any address. A production profile without a filter
 warns `egress-unfiltered`.
 
+`TeeBase` resolves through `systemd-resolved` over strict DNS over TLS (`DNSOverTLS=yes`,
+no fallback, no LLMNR or mDNS), so the host can neither read nor forge a lookup;
+`Network(dns=["9.9.9.9#dns.quad9.net"])` names the resolvers as `ADDRESS#TLS-NAME`
+(Cloudflare's pair by default: no target cloud's resolver speaks TLS), and the firewall
+accepts TCP 853 to them and no plain DNS.
+
 `Observability(logs=JournalExport(url=, credential=), metrics=PrometheusRemoteWrite(url=,
 credential=))` ships the journal and node metrics. Without `url=` each goes to a receiver
 in the guest (`journal-sink`, `metrics-sink`). Once `url=` is set, the delivered credential
@@ -585,6 +591,8 @@ A development profile carries `tundravm-probe.service`. It prints
 | Check | Holds when |
 |---|---|
 | `mode` | `/run/tundravm/mode` is `simulated` or `tdx` |
+| `cmdline` | `/proc/cmdline` holds every parameter the image appends, the CPU mitigations first |
+| `dns` | a resolver's name resolves, and `systemd-resolved` is connected to port 853 |
 | `rtmr` | always `skip`: the guest reads its registers only from a quote, which `attest` checks |
 | `service:`, `socket:`, `timer:` | each `Service`, socket or timer is active (or exited 0) |
 | `port:` | each `expose=` port has a listener |

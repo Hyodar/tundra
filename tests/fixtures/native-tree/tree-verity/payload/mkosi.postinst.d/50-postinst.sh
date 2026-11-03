@@ -7,7 +7,6 @@ mkosi-chroot groupadd --system gcp-forwarded-ips
 mkosi-chroot useradd --system --shell /usr/sbin/nologin greeter
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web
 mkosi-chroot systemctl enable azure-complete-provisioning.service
-mkosi-chroot systemctl enable gcp-metadata-dns.service
 mkosi-chroot systemctl enable gcp-hostname.service
 mkosi-chroot systemctl enable gcp-forwarded-ips.timer
 mkosi-chroot systemctl enable greeter.service
@@ -21,7 +20,6 @@ mkosi-chroot systemctl enable tundravm-instance-key.service
 mkosi-chroot systemctl enable runtime-init.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/gcp-metadata-dns.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-hostname.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-forwarded-ips.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/greeter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

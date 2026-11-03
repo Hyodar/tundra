@@ -92,7 +92,7 @@ def test_show_the_image_units_and_tree(project: Path, cli: Cli) -> None:
     filtered = filtered.replace('dev=DevAccess(password="tdx")', "network=Network(egress=Egress())")
     (project / "filtered.py").write_text(filtered, encoding="utf-8")
     assert (
-        "\n# egress\ntee-base  4460/tcp, 123/udp, 1.1.1.1"
+        "\n# egress\ntee-base  4460/tcp, 123/udp\nnetwork   1.1.1.1:853/tcp"
         in cli("show", "filtered.py", "--units").out
     )
     egress = json.loads(cli("show", "filtered.py", "--units", "--json").out)["egress"]

@@ -895,6 +895,7 @@ Network(
     static: StaticAddress | None = None,
     egress: Egress | None = None,
     interfaces: Sequence[str] = ('en*', 'eth*'),
+    dns: Sequence[str] = ('1.1.1.1#cloudflare-dns.com', '1.0.0.1#cloudflare-dns.com'),
 )
 ```
 
@@ -904,6 +905,7 @@ How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
 |---|---|
 | `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
 | `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
+| `Network.outbound() -> Egress` | DNS over TLS (TCP 853) to each of *dns*. |
 
 ### `Observability`
 
@@ -1123,18 +1125,17 @@ TeeBase(
     journal_max_use: str = '128M',
     sysctl: bool = True,
     dns: bool = True,
-    nameservers: Sequence[str] = ('1.1.1.1', '1.0.0.1'),
     mask: bool = True,
 )
 ```
 
-The confidential-VM baseline: authenticated time, a volatile journal, sysctl hardening, a static resolver, no apt timers or console getty, and the CPU mitigations the kernel boots with.
+The confidential-VM baseline: authenticated time, a volatile journal, sysctl hardening, DNS over TLS, no apt timers or console getty, and the CPU mitigations the kernel boots with.
 
 | Member | Does |
 |---|---|
 | `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
 | `TeeBase.kernel_cmdline` | `mitigations=auto,nosmt spec_store_bypass_disable=on`: every CPU vulnerability mitigated, SMT off where that needs it, Speculative Store Bypass off for every process (`TEE_KERNEL_CMDLINE` says why each). |
-| `TeeBase.outbound() -> Egress` | NTS time (TCP 4460, NTP on UDP 123) with *time*, *nameservers* with *dns*. |
+| `TeeBase.outbound() -> Egress` | NTS time (TCP 4460, NTP on UDP 123) with *time*; the `Network` names where DNS goes. |
 
 ## tundravm.storage
 

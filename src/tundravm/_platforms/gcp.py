@@ -1,7 +1,7 @@
 """The GCP integration's files: what lowering adds to a ``gcp`` target variant.
 
 ``tundravm.declarative.state`` installs ``udev`` and :data:`GCP_PACKAGES`, ships the
-metadata DNS files, Google's disk naming rules and their NVMe helper (vendored from
+metadata server's ``/etc/hosts`` name, Google's disk naming rules and their NVMe helper (vendored from
 guest-configs at :data:`GUEST_CONFIGS_COMMIT`), the hostname and forwarded-IP scripts, and
 sets the ``gcp`` target. Every unit is gated by ``ConditionVirtualization=google`` and the
 disk rules match Google's disk models only, so the same UKI stays inert on other clouds.
@@ -23,14 +23,6 @@ if TYPE_CHECKING:
 GCP_HOSTS = """\
 127.0.0.1 localhost
 169.254.169.254 metadata.google.internal metadata"""
-
-# ---------------------------------------------------------------------------
-# /etc/resolv.conf — GCP DNS resolver
-# ---------------------------------------------------------------------------
-
-GCP_RESOLV_CONF = """\
-nameserver 169.254.169.254
-options edns0 trust-ad"""
 
 # ---------------------------------------------------------------------------
 # The built kernel's ACPI patch, vendored unchanged
@@ -87,42 +79,6 @@ that the image did not declare."""
 NVME_HOST_IDS = 'rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"\n'
 """``nvme-cli``'s postinst writes a random host NQN and host ID, which would make every
 build differ; NVMe over fabrics, their only reader, is not used."""
-
-# ---------------------------------------------------------------------------
-# Metadata DNS, applied at boot on GCP only
-# ---------------------------------------------------------------------------
-
-GCP_RESOLV_CONF_PATH = "/usr/lib/tundravm/gcp/resolv.conf"
-"""Where the payload ships :data:`GCP_RESOLV_CONF`; ``gcp-metadata-dns.service``
-copies it over ``/etc/resolv.conf`` on Compute Engine only."""
-
-
-def metadata_dns_service() -> Service:
-    """``gcp-metadata-dns.service``: a root oneshot gated by ``ConditionVirtualization=google``
-    that points ``/etc/resolv.conf`` at the metadata server before the network comes up.
-
-    A static ``/etc/resolv.conf`` naming 169.254.169.254 would break DNS on QEMU and Azure;
-    gated at runtime, one UKI serves every output (``outputs=("qemu", "azure", "gcp")``).
-    """
-    from tundravm.declarative.model import Service
-    from tundravm.declarative.systemd import Condition, Hardening, Root
-
-    return Service(
-        "gcp-metadata-dns",
-        ("/usr/bin/cp", GCP_RESOLV_CONF_PATH, "/etc/resolv.conf"),
-        description="GCP metadata server DNS",
-        user=Root(),
-        type="oneshot",
-        remain_after_exit=True,
-        restart="no",
-        restart_sec=None,
-        before=("network-pre.target", "network-setup.service"),
-        needs=(),
-        hardening=Hardening.relaxed(),
-        write_paths=("/etc/resolv.conf",),
-        conditions=(Condition.virtualization("google"),),
-    )
-
 
 # ---------------------------------------------------------------------------
 # Hostname from the metadata server

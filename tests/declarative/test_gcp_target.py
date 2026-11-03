@@ -7,8 +7,6 @@ import pytest
 
 from tundravm._platforms.gcp import (
     DISK_RULES_PATH,
-    GCP_RESOLV_CONF,
-    GCP_RESOLV_CONF_PATH,
     NVME_HOST_IDS,
     NVME_ID_PATH,
     NVME_MASKED_UNITS,
@@ -16,8 +14,6 @@ from tundravm._platforms.gcp import (
 from tundravm.declarative import Recipe, Variant
 from tundravm.testing._model import CompiledTree, compile_tree
 
-RESOLV_CONF = "mkosi.extra/etc/resolv.conf"
-SHIPPED_RESOLV_CONF = f"mkosi.extra{GCP_RESOLV_CONF_PATH}"
 DNS_UNIT = "mkosi.extra/usr/lib/systemd/system/gcp-metadata-dns.service"
 RECIPE = Recipe(
     "cloud",
@@ -30,20 +26,14 @@ def tree(tmp_path: Path) -> CompiledTree:
     return compile_tree(RECIPE, path=tmp_path / "tree")
 
 
-def test_gcp_variant_applies_metadata_dns_at_boot_on_gcp_only(tree: CompiledTree) -> None:
-    """No static /etc/resolv.conf: it would break DNS where the same UKI boots off GCP."""
-    assert RESOLV_CONF not in tree.files(profile="gcp")
-    assert tree.read(SHIPPED_RESOLV_CONF, profile="gcp") == GCP_RESOLV_CONF
-    unit = tree.read(DNS_UNIT, profile="gcp")
-    assert "ConditionVirtualization=google" in unit
-    assert f"ExecStart=/usr/bin/cp {GCP_RESOLV_CONF_PATH} /etc/resolv.conf" in unit
-    assert "Before=network-pre.target network-setup.service" in unit
+def test_gcp_variant_leaves_dns_to_tee_base(tree: CompiledTree) -> None:
+    """The metadata resolver speaks plain DNS only, which the host reads and forges."""
+    assert DNS_UNIT not in tree.files(profile="gcp")
 
 
 @pytest.mark.parametrize(
     "unit",
     [
-        "gcp-metadata-dns.service",
         "gcp-hostname.service",
         "gcp-forwarded-ips.service",
         "gcp-forwarded-ips.timer",

@@ -588,9 +588,65 @@ TEE_NTS_SERVERS = ("time.cloudflare.com", "nts.netnod.se")
 TEE_HYPERVISOR_CLOCKS = ("169.254.169.254", "169.254.169.123")
 """Cloud hypervisor NTP endpoints (GCP metadata, AWS time sync) that refine the NTS sources."""
 
-TEE_NAMESERVERS = ("1.1.1.1", "1.0.0.1")
-"""The resolvers :class:`TeeBase` writes to ``/etc/resolv.conf``: flashbots-images'
-``shared/mkosi.extra/etc/systemd/resolved.conf`` (Cloudflare)."""
+TEE_RESOLVERS = ("1.1.1.1#cloudflare-dns.com", "1.0.0.1#cloudflare-dns.com")
+"""The DNS-over-TLS resolvers :class:`Network` names, ``ADDRESS#TLS-NAME``: flashbots-images'
+``shared/mkosi.extra/etc/systemd/resolved.conf`` (Cloudflare). No cloud tundravm targets runs
+a resolver that speaks TLS (Compute Engine's metadata server and Azure's wireserver answer
+plain DNS only), so every target resolves through them."""
+
+DOT_PORT = 853
+"""DNS over TLS (RFC 7858): the TCP port the output chain accepts to each resolver."""
+RESOLVED_DROPIN = "/etc/systemd/resolved.conf.d/50-tundravm-tee.conf"
+""":class:`TeeBase`'s ``systemd-resolved`` policy: strict DNS over TLS, nothing else."""
+RESOLVERS_DROPIN = "/etc/systemd/resolved.conf.d/50-tundravm-network.conf"
+"""The ``DNS=`` line :class:`Network` writes: its resolvers."""
+_RESOLVER_NAME = re.compile(
+    r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}"
+    r"[A-Za-z0-9])?)+"
+)
+
+
+def dot_resolver(owner: str, entry: object) -> tuple[str, str]:
+    """*entry* (``"1.1.1.1#cloudflare-dns.com"``) as ``(address, TLS name)``; *owner* names
+    who refuses it."""
+    text = entry if isinstance(entry, str) else ""
+    address, _, name = text.partition("#")
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        raise ValidationError(
+            f"{owner}: dns= entry {entry!r} is not ADDRESS#TLS-NAME.",
+            hint="Pass dns=['9.9.9.9#dns.quad9.net']: a resolver's address and the name "
+            "its TLS certificate carries.",
+        ) from None
+    if not _RESOLVER_NAME.fullmatch(name):
+        raise ValidationError(
+            f"{owner}: dns= entry {entry!r} names no TLS server name, so its certificate "
+            "cannot be checked.",
+            hint=f"Pass '{address}#NAME', NAME the host name its certificate carries "
+            "('9.9.9.9#dns.quad9.net').",
+        )
+    return address, name
+
+
+_RESOLVED_POLICY = """\
+[Resolve]
+# Strict DNS over TLS: a resolver whose certificate does not carry its name answers nothing
+DNSOverTLS=yes
+# flashbots-images leaves Debian's default: the TLS channel authenticates the answers
+DNSSEC=no
+# No resolver but Network(dns=): no built-in fallback
+FallbackDNS=
+# No plaintext link-local name resolution the host would read
+LLMNR=no
+MulticastDNS=no
+"""
+_STUB_RESOLV_CONF = (
+    "# resolv.conf is systemd-resolved's stub file, which forwards every lookup over TLS\n"
+    'ln -sfn ../run/systemd/resolve/stub-resolv.conf "$BUILDROOT/etc/resolv.conf"\n'
+)
+"""The postinst step that points ``/etc/resolv.conf`` at the stub: the package's own
+postinst makes that link, which an ``ExtraTrees`` file could not be written through."""
 
 TEE_SYSCTL: tuple[tuple[str, str, str], ...] = (
     ("kernel.kptr_restrict", "2", f"hide kernel pointers from every user ({_KSPP})"),
@@ -742,7 +798,9 @@ class Network(Composite):
     predictable ``en*`` and kernel ``eth*`` names) and enables ``systemd-networkd`` (Debian
     ships it in ``systemd``). *dhcp* takes a DHCPv4 lease, and with *ipv6* IPv6 router
     advertisements and DHCPv6 when they ask for it; the DHCP server sets no hostname, resolver
-    or time source (:class:`TeeBase` pins those). *static* is a fixed address instead of DHCP
+    or time source: *dns* names the DNS-over-TLS resolvers (``ADDRESS#TLS-NAME``, written to
+    :data:`RESOLVERS_DROPIN`, which :class:`TeeBase`'s ``systemd-resolved`` reads) and
+    :class:`TeeBase` the time. *static* is a fixed address instead of DHCP
     (pass ``dhcp=False``). With *wait_online*, ``systemd-networkd-wait-online`` holds
     ``network-online.target`` until any matched interface is configured, at most
     *wait_timeout* seconds, so a boot without a NIC continues. The implicit debloat keeps the
@@ -755,6 +813,7 @@ class Network(Composite):
     ipv6: bool = True
     wait_online: bool = True
     wait_timeout: int = 30
+    dns: tuple[str, ...] = TEE_RESOLVERS
 
     def compose(self) -> Iterator[Declaration]:
         if not self.interfaces or not all(_INTERFACE.fullmatch(i) for i in self.interfaces):
@@ -783,7 +842,19 @@ class Network(Composite):
                 "Network: wait_timeout must be a positive number of seconds.",
                 hint="Pass wait_timeout=30, or wait_online=False not to wait.",
             )
+        if isinstance(self.dns, str) or not self.dns:
+            raise ValidationError(
+                "Network: dns= names no resolver, so nothing resolves.",
+                hint="Pass dns=('1.1.1.1#cloudflare-dns.com',), or leave it out for "
+                "Cloudflare's pair.",
+            )
+        servers = [dot_resolver("Network", entry) for entry in self.dns]
         yield File.text(NETWORK_FILE, self.network_file())
+        dns = " ".join(f"{address}#{name}" for address, name in servers)
+        yield File.text(
+            RESOLVERS_DROPIN,
+            "# tundravm Network: the DNS-over-TLS resolvers\n[Resolve]\nDNS=" + dns + "\n",
+        )
         yield Unit("systemd-networkd.service", enabled=True)
         yield Unit("systemd-networkd.socket", enabled=True)
         wait = Unit(
@@ -828,8 +899,10 @@ class TeeBase(Composite):
     *journal*: journald keeps logs in RAM, capped (``Storage=volatile``, a
     ``journald.conf.d`` drop-in): nothing reaches a host-readable disk.
     *sysctl*: the :data:`TEE_SYSCTL` hardening in ``/etc/sysctl.d/50-tundravm-tee.conf``.
-    *dns*: a static ``/etc/resolv.conf`` naming the *nameservers*; on Compute Engine
-    ``gcp-metadata-dns.service`` replaces it at boot with the metadata server.
+    *dns*: ``systemd-resolved`` asks only :class:`Network`'s ``dns=`` resolvers, over strict
+    DNS over TLS (``DNSOverTLS=yes``, no fallback, no LLMNR or mDNS:
+    :data:`RESOLVED_DROPIN`), and ``/etc/resolv.conf`` links to its stub, so the host can
+    neither read nor forge a lookup.
     *mask*: masks :data:`TEE_MASKED_UNITS` (apt timers, the tty1 getty).
     *network*: :class:`Network` (DHCP on every ``en*``/``eth*`` interface); pass
     ``network=False`` and add your own ``Network(...)`` to configure it.
@@ -845,12 +918,13 @@ class TeeBase(Composite):
     journal_max_use: str = "128M"
     sysctl: bool = True
     dns: bool = True
-    nameservers: tuple[str, ...] = TEE_NAMESERVERS
     mask: bool = True
     network: bool = True
     firewall: bool = True
 
     def compose(self) -> Iterator[Declaration | Fragment]:
+        if self.time or self.dns:
+            yield Package("ca-certificates")  # NTS-KE and DNS over TLS check certificates
         if self.time:
             if not self.nts_servers:
                 raise ValidationError(
@@ -858,7 +932,6 @@ class TeeBase(Composite):
                     hint="Pass nts_servers=('time.cloudflare.com',), or time=False.",
                 )
             yield Package("chrony")
-            yield Package("ca-certificates")  # NTS-KE checks the servers' TLS certificates
             yield File.text("/etc/chrony/chrony.conf", self._chrony_conf())
             yield Unit("chrony.service", enabled=True)
         if self.journal:
@@ -872,8 +945,10 @@ class TeeBase(Composite):
             lines = [f"# {reason}\n-{key} = {value}" for key, value, reason in TEE_SYSCTL]
             yield File.text(_SYSCTL_FILE, _TEE_HEADER + "\n".join(lines) + "\n")
         if self.dns:
-            servers = "".join(f"nameserver {server}\n" for server in self.nameservers)
-            yield File.text("/etc/resolv.conf", _TEE_HEADER + servers)
+            yield Package("systemd-resolved")
+            yield File.text(RESOLVED_DROPIN, _TEE_HEADER + _RESOLVED_POLICY)
+            yield Hook("tee-base-resolv-conf", "postinst", _STUB_RESOLV_CONF)
+            yield Unit("systemd-resolved.service", enabled=True)
         if self.mask:
             for unit, _reason in TEE_MASKED_UNITS:
                 yield Unit(unit, masked=True)
@@ -1438,7 +1513,7 @@ __all__ = [
     "TEE_KERNEL_CMDLINE",
     "TEE_KERNEL_OVERRIDES",
     "TEE_MASKED_UNITS",
-    "TEE_NAMESERVERS",
+    "TEE_RESOLVERS",
     "TEE_NTS_SERVERS",
     "TEE_SYSCTL",
     "Tdxs",

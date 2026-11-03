@@ -44,8 +44,9 @@ def _ruleset(*items: object) -> str:
 
 def test_network_defaults_to_dhcp_on_every_nic_and_waits_with_a_timeout() -> None:
     items = list(Network().compose())
-    [network] = [i for i in items if isinstance(i, File)]
+    network, resolvers = [i for i in items if isinstance(i, File)]
     assert network.path == NETWORK_FILE == "/etc/systemd/network/50-tundravm.network"
+    assert "DNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com\n" in str(resolvers.content)
     text = str(network.content)
     assert "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\nIPv6AcceptRA=yes\n" in text
     assert "UseHostname=no\nUseDNS=no\nUseNTP=no\n" in text

@@ -293,7 +293,6 @@ CLOUD_GLUE: dict[str, str] = {
     "google-startup-scripts.service": "google",
     "google-shutdown-scripts.service": "google",
     "google-osconfig-agent.service": "google",
-    "gcp-metadata-dns.service": "google",
     "gcp-hostname.service": "google",
     "gcp-forwarded-ips.service": "google",
 }

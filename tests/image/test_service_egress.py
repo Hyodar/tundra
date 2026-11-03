@@ -52,7 +52,8 @@ def test_a_services_egress_is_its_users_alone(
         if "169.254" in rule or "168.63" in rule:
             assert chain.index(rule) < chain.index(DROP)
     assert not [line for line in chain for text in absent if text in line]
-    assert 'ip daddr 169.254.169.254 udp dport 53 accept comment "metadata DNS"' in chain
+    assert 'ip daddr 169.254.169.254 udp dport 123 accept comment "metadata time"' in chain
+    assert not [line for line in chain if "169.254.169.254" in line and "dport 53 " in line]
 
 
 def test_the_cloud_glue_alone_reaches_the_metadata_server() -> None:

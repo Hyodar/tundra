@@ -70,7 +70,7 @@ def test_one_variant_builds_one_uki_for_three_outputs(tmp_path: Path) -> None:
     # the QEMU disk is the main image around the same UKI
     assert "Output=qemu\n" in tree.main_conf()
     azure = tree.read(f"{UNITS}/azure-complete-provisioning.service")
-    gcp = tree.read(f"{UNITS}/gcp-metadata-dns.service")
+    gcp = tree.read(f"{UNITS}/gcp-hostname.service")
     assert "ConditionVirtualization=microsoft" in azure
     assert "ConditionVirtualization=google" in gcp
     assert "mkosi.extra/etc/resolv.conf" not in tree.files()
@@ -81,7 +81,7 @@ def test_one_variant_builds_one_uki_for_three_outputs(tmp_path: Path) -> None:
     ("packages", "files", "image"),
     [
         (("dmidecode",), ("mkosi.extra/usr/bin/azure-complete-provisioning",), "azure"),
-        ((), (f"{UNITS}/gcp-metadata-dns.service", "mkosi.extra/etc/hosts"), "gcp"),
+        ((), (f"{UNITS}/gcp-hostname.service", "mkosi.extra/etc/hosts"), "gcp"),
     ],
     ids=["azure", "gcp"],
 )

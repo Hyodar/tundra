@@ -412,15 +412,16 @@ def test_a_dev_profile_and_dev_access_together_are_refused() -> None:
 
 
 def test_an_egress_filters_the_output_chain() -> None:
-    egress = Egress(ports=[TCP(443)], hosts=["1.1.1.1"])
+    egress = Egress(ports=[TCP(443)], hosts=["10.0.0.5"])
     image = Image("x", network=Network(egress=egress), targets=("qemu", "azure"))
     rules = plan(image, "production").file("/etc/nftables.conf").text
     assert "hook output priority filter; policy drop" in rules
     assert 'tcp dport 443 accept comment "image"' in rules
-    assert 'ip daddr 1.1.1.1 accept comment "image, tee-base"' in rules
-    # what the baseline sends: NTS time and TeeBase's resolvers; the wireserver is the glue's
+    assert 'ip daddr 10.0.0.5 accept comment "image"' in rules
+    # what the baseline sends: NTS time and DNS over TLS; the wireserver is the glue's
     assert 'tcp dport 4460 accept comment "tee-base"' in rules and "udp dport 123 accept" in rules
-    assert "ip daddr 1.0.0.1 accept" in rules
+    assert 'ip daddr 1.1.1.1 tcp dport 853 accept comment "network"' in rules
+    assert "ip daddr 1.0.0.1 tcp dport 853 accept" in rules and "dport 53 " not in rules
     glue = 'meta skuid 0 meta skgid "azure-complete-provisioning" ip daddr 168.63.129.16 accept'
     assert glue in rules and 'ip daddr 168.63.129.16 accept comment "azure"' not in rules
 
@@ -486,7 +487,7 @@ def test_mkosi_settings_go_to_their_section_and_scripts_are_recorded(
     image = Image("x", mkosi=Mkosi(settings={key: "demo"}, scripts=[("postinst", "echo hi")]))
     planned = plan(image, "production")
     assert planned.settings(section)[key] == ("demo",)
-    assert [hook.script for hook in planned.hooks("postinst")] == ["echo hi"]
+    assert [hook.script for hook in planned.hooks("postinst")][-1:] == ["echo hi"]
 
 
 @pytest.mark.parametrize(

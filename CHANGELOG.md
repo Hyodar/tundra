@@ -61,6 +61,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### Network and clouds
 
 - `Network(egress=Egress(...))` drops every other outbound packet and accepts the baseline's NTS time, resolvers and cloud metadata; `Egress(hosts=)` takes `HOST:PORT`.
+- **Breaking:** `TeeBase` resolves through `systemd-resolved` over strict DNS over TLS (`DNSOverTLS=yes`, `DNSSEC=no` as flashbots-images, no fallback, LLMNR or mDNS) instead of a plain `/etc/resolv.conf`, so the host can neither read nor forge a lookup; `Network(dns=["ADDRESS#TLS-NAME"])` names the resolvers (Cloudflare's pair by default, `TeeBase(nameservers=)` is gone), the firewall accepts TCP 853 to them and no plain DNS, the GCP glue no longer points `/etc/resolv.conf` at the metadata server (`gcp-metadata-dns.service` is gone), and a development profile's boot probe gets a `dns` check.
 - `Component.outbound()` says where a component sends, and a filtered image accepts it in each profile that holds it, each rule naming who asked: the shipped components cover their sinks and collateral, and `Observability(proxy=)` sends through one proxy.
 - `Observability(proxy=Proxy(address, port, tls_name=))` reaches a proxy that speaks TLS at `https://<tls_name>:<port>`, the name mapped to the address in `/etc/hosts`.
 - The GCP glue names NVMe disks as Google does, sets the hostname and routes forwarded IPs; the Azure glue installs the `curl` its ready report needs.

@@ -278,7 +278,7 @@ def test_cloud_glue_is_in_the_payload_and_gated_at_boot() -> None:
     assert "ConditionVirtualization=microsoft" in (
         units / "azure-complete-provisioning.service"
     ).read_text(encoding="utf-8")
-    assert "ConditionVirtualization=google" in (units / "gcp-metadata-dns.service").read_text(
+    assert "ConditionVirtualization=google" in (units / "gcp-hostname.service").read_text(
         encoding="utf-8"
     )
     for conf in (FIXTURE / "tree-initramfs").rglob("*.conf"):

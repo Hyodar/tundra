@@ -20,7 +20,7 @@ verbatim ``Unit`` declarations, mounts, ``runtime-init.service`` and its steps (
 generation, disk setup, secret delivery: the control plane, which must be up before any
 application and is what an operator reads when the gate refuses), the instance key
 (``tundravm._modules.instance_key``, ordered before the gate), and the platform glue the
-cloud targets add (``gcp-metadata-dns``).
+cloud targets add (``gcp-hostname``).
 
 The gate does not ask for a test quote: a quote round-trip goes through the host's quote
 service (QGS) and configfs, which the systemd debloat leaves unmounted; ``tdxs`` makes the

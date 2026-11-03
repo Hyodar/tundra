@@ -184,14 +184,10 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
     )
 
 
-METADATA_SHARED = (
-    EgressRule(Port(53, "udp"), CLOUD_METADATA[0], (("metadata DNS", ""),)),
-    EgressRule(Port(53), CLOUD_METADATA[0], (("metadata DNS", ""),)),
-    EgressRule(Port(123, "udp"), CLOUD_METADATA[0], (("metadata time", ""),)),
-)
-"""What every process may send the metadata server: Compute Engine's resolver (the
-``resolv.conf`` the GCP glue installs names it) and its NTP, which ``chrony`` refines time
-from. Neither carries the identity token."""
+METADATA_SHARED = (EgressRule(Port(123, "udp"), CLOUD_METADATA[0], (("metadata time", ""),)),)
+"""What every process may send the metadata server: its NTP, which ``chrony`` refines the
+NTS time from, and which carries no identity token. Its plain DNS is not: ``TeeBase``
+resolves over TLS only."""
 
 
 def unit_egress(items: Iterable[Declaration]) -> list[tuple[str, str, EgressRule]]:

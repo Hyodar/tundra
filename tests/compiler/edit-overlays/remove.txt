@@ -240,8 +240,6 @@ table inet filter {
 	}
 	chain output {
 		type filter hook output priority filter; policy accept;
-		ip daddr 169.254.169.254 udp dport 53 accept comment "metadata DNS"
-		ip daddr 169.254.169.254 tcp dport 53 accept comment "metadata DNS"
 		ip daddr 169.254.169.254 udp dport 123 accept comment "metadata time"
 		ip daddr { 168.63.129.16, 169.254.169.254 } drop comment "cloud metadata"
 		ip6 daddr fd20:ce::254 drop comment "cloud metadata"

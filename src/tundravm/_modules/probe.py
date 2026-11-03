@@ -27,6 +27,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   (or ``owner none``), is a ``skip`` while it waits for ``tundravm secrets unlock`` (the
   probe does not wait for an operator), and fails when its header's owner is not the one
   the volume keeps inside;
+- ``dns``: with ``TeeBase``'s resolver, the first resolver's TLS name resolves through the
+  stub, ``systemd-resolved`` holds a connection to port 853 (DNS over TLS) and, where
+  ``resolvectl`` reaches it over D-Bus, reports ``+DNSOverTLS``;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
   ``egress:metadata:OWNER``: with a firewall, a datagram to the cloud metadata server sent
@@ -124,6 +127,7 @@ SYMBOLS: dict[str, str] = {
 Verdict = Literal["ok", "fail", "skip"]
 Helper = Literal[
     "cmdline",
+    "dns",
     "service",
     "active",
     "port",
@@ -228,7 +232,7 @@ def derive(
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
     from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task, Unit
     from tundravm.declarative.systemd import ceiling
-    from tundravm.declarative.utils import SSH_HOST_KEY
+    from tundravm.declarative.utils import RESOLVED_DROPIN, RESOLVERS_DROPIN, SSH_HOST_KEY
 
     checks = [
         Check("mode", f"{execution.MODE_FILE} says simulated or tdx", ""),
@@ -320,6 +324,18 @@ def derive(
             )
     if any(isinstance(item, Firewall) for item in items):
         checks += _metadata(items, glue)
+    files = {item.path: item for item in items if isinstance(item, File)}
+    if RESOLVED_DROPIN in files:
+        name = _resolver_name(files.get(RESOLVERS_DROPIN))
+        checks.append(
+            Check(
+                "dns",
+                f"{name} resolves over TLS: systemd-resolved connected to port 853",
+                f"probe_dns {_quote(name)}",
+                "dns",
+                ("systemd-resolved.service", "systemd-networkd-wait-online.service"),
+            )
+        )
     endpoints = [item for item in items if isinstance(item, Secrets)]
     for item in endpoints:
         unit = ENDPOINT_UNIT if len(endpoints) == 1 else f"tundravm-endpoint-{item.name}.service"
@@ -390,7 +406,6 @@ def derive(
             (instance_key.UNIT,),
         )
     )
-    files = {item.path: item for item in items if isinstance(item, File)}
     for step, path, owner in _owned(items):
         file = files.get(path)
         mode = [] if file is None or file.mode is None else [f"{file.mode:o}"]
@@ -487,6 +502,19 @@ def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
             "login",
             ("ssh-host-keys.service",),
         )
+
+
+def _resolver_name(file: object) -> str:
+    """The TLS name of the first resolver the ``Network``'s ``DNS=`` line names, the name the
+    ``dns`` check looks up (``deb.debian.org`` without one)."""
+    content = getattr(file, "content", None)
+    text = content if isinstance(content, str) else ""
+    for line in text.splitlines():
+        if line.startswith("DNS="):
+            for entry in line.removeprefix("DNS=").split():
+                if "#" in entry:
+                    return entry.partition("#")[2]
+    return "deb.debian.org"
 
 
 def _owned(items: Iterable[Declaration]) -> Iterator[tuple[str, str, str]]:
@@ -771,6 +799,50 @@ probe_cmdline() {
         fail "missing:$missing: the kernel did not boot the UKI's own command line; boot the UKI without a loader that replaces it (cat /proc/cmdline)"
     fi
 }
+""",  # noqa: E501
+    "dns": f"""\
+probe_dns() {{
+    name=$1
+    if ! command -v getent >/dev/null 2>&1; then
+        skip "no getent in the image to resolve with"
+        return
+    fi
+    if protocols=$(resolvectl status --no-pager 2>/dev/null | sed -n 's/^ *Protocols: //p' | head -n 1) &&
+        [ -n "$protocols" ]; then
+        case " $protocols " in
+            *" +DNSOverTLS "*) ;;
+            *) fail "resolvectl status says $protocols, not +DNSOverTLS: systemd-resolved does not read TeeBase's resolved.conf.d; journalctl -u systemd-resolved"; return ;;
+        esac
+    fi
+    waited=0
+    until answer=$(getent ahostsv4 "$name" 2>&1); do
+        if [ "$waited" -ge {WAIT_SECONDS} ]; then
+            fail "$name does not resolve after {WAIT_SECONDS}s: systemd-resolved reaches its resolvers on 853/tcp only (DNSOverTLS=yes), so the output chain must accept it; journalctl -u systemd-resolved"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    address=$(echo "$answer" | head -n 1 | cut -d ' ' -f 1)
+    peer=
+    for table in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$table" ] || continue
+        while read -r _ _ remote state _; do
+            [ "${{remote##*:}}" = 0355 ] && [ "$state" != 0A ] || continue
+            peer=${{remote%:*}}
+            if [ "${{#peer}}" -eq 8 ]; then
+                set -- $(echo "$peer" | sed 's/\\(..\\)\\(..\\)\\(..\\)\\(..\\)/0x\\4 0x\\3 0x\\2 0x\\1/')
+                peer=$(printf '%d.%d.%d.%d' "$@")
+            fi
+            break 2
+        done <"$table"
+    done
+    if [ -z "$peer" ]; then
+        fail "$name resolved to $address, but nothing is connected to port 853: the answer did not come over TLS; journalctl -u systemd-resolved"
+    else
+        ok "DNSOverTLS=yes${{protocols:+ ($protocols)}}: $name is $address, resolved over TLS to $peer:853"
+    fi
+}}
 """,  # noqa: E501
     "service": f"""\
 probe_service() {{

@@ -68,13 +68,14 @@ def _diagnostic(code: str, severity: Literal["error", "warning", "info"], messag
 
 class TeeBase(Component):
     """The confidential-VM baseline: authenticated time, a volatile journal, sysctl
-    hardening, a static resolver, no apt timers or console getty, and the CPU mitigations
-    the kernel boots with.
+    hardening, DNS over TLS, no apt timers or console getty, and the CPU mitigations the
+    kernel boots with.
 
     *time*: chrony over NTS from *nts_servers*, refined by the hypervisor clocks, so the
     host cannot set the guest's clock (TLS, certificates and attestation freshness
     depend on it). *journal*: journald in RAM, capped at *journal_max_use*. *sysctl*: the
-    kernel hardening set. *dns*: ``/etc/resolv.conf`` naming *nameservers*. *mask*: no
+    kernel hardening set. *dns*: ``systemd-resolved`` over strict DNS over TLS to the
+    ``Network``'s ``dns=`` resolvers, so the host can neither read nor forge a lookup. *mask*: no
     apt timers, no getty on the host-owned console. The UKI's command line always starts
     with :attr:`kernel_cmdline`, which ``Kernel(cmdline=)`` appends to and cannot override.
     Component name: ``tee-base``.
@@ -86,7 +87,6 @@ class TeeBase(Component):
     journal_max_use: str = "128M"
     sysctl: bool = True
     dns: bool = True
-    nameservers: Sequence[str] = du.TEE_NAMESERVERS
     mask: bool = True
 
     def compose(self) -> Iterator[object]:
@@ -97,7 +97,6 @@ class TeeBase(Component):
             journal_max_use=self.journal_max_use,
             sysctl=self.sysctl,
             dns=self.dns,
-            nameservers=tuple(self.nameservers),
             mask=self.mask,
             network=False,
             firewall=False,
@@ -112,11 +111,9 @@ class TeeBase(Component):
         return tuple(parameter for parameter, _reason in du.TEE_KERNEL_CMDLINE)
 
     def outbound(self) -> Egress:
-        """NTS time (TCP 4460, NTP on UDP 123) with *time*, *nameservers* with *dns*."""
-        return Egress(
-            ports=[TCP(4460), UDP(123)] if self.time else [],
-            hosts=list(self.nameservers) if self.dns else [],
-        )
+        """NTS time (TCP 4460, NTP on UDP 123) with *time*; the ``Network`` names where DNS
+        goes."""
+        return Egress(ports=[TCP(4460), UDP(123)] if self.time else [])
 
     rules = (
         Rule(
@@ -147,6 +144,8 @@ class Network(Component):
 
     *static* replaces DHCP with a fixed address
     (``Network(dhcp=False, static=StaticAddress("10.0.0.5/24", gateway="10.0.0.1"))``);
+    *dns* names the DNS-over-TLS resolvers, ``ADDRESS#TLS-NAME`` (Cloudflare's pair by
+    default; the firewall accepts TCP 853 to each, and no plain DNS);
     *egress* filters what the image may send (the image's firewall applies it).
     ``image.network`` takes it, and so does ``components=``. Exports :attr:`online`.
     Component name: ``network``.
@@ -156,6 +155,7 @@ class Network(Component):
     static: StaticAddress | None = None
     egress: Egress | None = None
     interfaces: Sequence[str] = ("en*", "eth*")
+    dns: Sequence[str] = du.TEE_RESOLVERS
 
     def __post_init__(self) -> None:
         if not isinstance(self.dhcp, bool):
@@ -180,6 +180,19 @@ class Network(Component):
                 hint="Pass interfaces=['en*', 'eth*'].",
             )
         object.__setattr__(self, "interfaces", tuple(self.interfaces))
+        if isinstance(self.dns, str):
+            raise ValidationError(
+                "Network: dns= takes a list of resolvers.",
+                hint=f"Pass dns=[{self.dns!r}].",
+            )
+        object.__setattr__(self, "dns", tuple(self.dns))
+        if not self.dns:
+            raise ValidationError(
+                "Network: dns= names no resolver, so nothing resolves.",
+                hint="Pass dns=['9.9.9.9#dns.quad9.net'], or leave it out for Cloudflare's pair.",
+            )
+        for entry in self.dns:
+            du.dot_resolver("Network", entry)
         if self.dhcp == (self.static is not None):
             raise ValidationError(
                 "Network: a network takes DHCP or a static address: "
@@ -193,8 +206,22 @@ class Network(Component):
         return ServiceReady("systemd-networkd-wait-online.service", Notify())
 
     def compose(self) -> Iterator[object]:
-        network = du.Network(dhcp=self.dhcp, interfaces=tuple(self.interfaces), static=self.static)
+        network = du.Network(
+            dhcp=self.dhcp,
+            interfaces=tuple(self.interfaces),
+            static=self.static,
+            dns=tuple(self.dns),
+        )
         yield from network.items
+
+    def outbound(self) -> Egress:
+        """DNS over TLS (TCP 853) to each of *dns*."""
+        hosts = []
+        for entry in self.dns:
+            address, _name = du.dot_resolver("Network", entry)
+            shown = f"[{address}]" if ":" in address else address
+            hosts.append(f"{shown}:{du.DOT_PORT}")
+        return Egress(hosts=hosts)
 
     def readiness(self) -> tuple[Readied, ...]:
         return (self.online,)

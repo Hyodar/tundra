@@ -926,10 +926,10 @@ class Egress(Keywords):
     Without an ``Egress`` the image does not filter outbound traffic. With one, the
     output chain accepts the replies of accepted inbound traffic, loopback, the DHCP
     client, the ICMPv6 messages IPv6 needs, what the baseline sends (``TeeBase``'s NTS
-    time on TCP 4460 and UDP 123, its resolvers), what each component's
-    :meth:`~tundravm.components.Component.outbound` names, *ports* and *hosts*, and drops
-    the rest. ``Service(egress=Egress(...))`` accepts what that one service sends beyond
-    it, matched by the service's user.
+    time on TCP 4460 and UDP 123, DNS over TLS on TCP 853 to the ``Network``'s
+    resolvers), what each component's :meth:`~tundravm.components.Component.outbound`
+    names, *ports* and *hosts*, and drops the rest. ``Service(egress=Egress(...))`` accepts
+    what that one service sends beyond it, matched by the service's user.
 
     *ports* go to any address. Each of *hosts* is an address or CIDR block (any port) or
     ``HOST:PORT`` (TCP to that port; ``[ADDRESS]:PORT`` for IPv6). nftables matches

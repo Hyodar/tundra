@@ -84,7 +84,7 @@ def test_the_cloud_glue_is_not_gated() -> None:
         Variant("gcp", outputs=("gcp",)),
     )
     tree = compile_tree(_recipe(Service("app", "/usr/bin/app", needs=()), variants=variants))
-    assert gate.GATE_UNIT not in tree.unit("gcp-metadata-dns")
+    assert gate.GATE_UNIT not in tree.unit("gcp-hostname")
     assert gate.GATE_UNIT not in tree.unit("azure-complete-provisioning")
 
 

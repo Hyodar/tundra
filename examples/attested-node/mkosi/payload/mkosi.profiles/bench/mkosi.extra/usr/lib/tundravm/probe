@@ -44,6 +44,48 @@ probe_cmdline() {
         fail "missing:$missing: the kernel did not boot the UKI's own command line; boot the UKI without a loader that replaces it (cat /proc/cmdline)"
     fi
 }
+probe_dns() {
+    name=$1
+    if ! command -v getent >/dev/null 2>&1; then
+        skip "no getent in the image to resolve with"
+        return
+    fi
+    if protocols=$(resolvectl status --no-pager 2>/dev/null | sed -n 's/^ *Protocols: //p' | head -n 1) &&
+        [ -n "$protocols" ]; then
+        case " $protocols " in
+            *" +DNSOverTLS "*) ;;
+            *) fail "resolvectl status says $protocols, not +DNSOverTLS: systemd-resolved does not read TeeBase's resolved.conf.d; journalctl -u systemd-resolved"; return ;;
+        esac
+    fi
+    waited=0
+    until answer=$(getent ahostsv4 "$name" 2>&1); do
+        if [ "$waited" -ge 30 ]; then
+            fail "$name does not resolve after 30s: systemd-resolved reaches its resolvers on 853/tcp only (DNSOverTLS=yes), so the output chain must accept it; journalctl -u systemd-resolved"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    address=$(echo "$answer" | head -n 1 | cut -d ' ' -f 1)
+    peer=
+    for table in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$table" ] || continue
+        while read -r _ _ remote state _; do
+            [ "${remote##*:}" = 0355 ] && [ "$state" != 0A ] || continue
+            peer=${remote%:*}
+            if [ "${#peer}" -eq 8 ]; then
+                set -- $(echo "$peer" | sed 's/\(..\)\(..\)\(..\)\(..\)/0x\4 0x\3 0x\2 0x\1/')
+                peer=$(printf '%d.%d.%d.%d' "$@")
+            fi
+            break 2
+        done <"$table"
+    done
+    if [ -z "$peer" ]; then
+        fail "$name resolved to $address, but nothing is connected to port 853: the answer did not come over TLS; journalctl -u systemd-resolved"
+    else
+        ok "DNSOverTLS=yes${protocols:+ ($protocols)}: $name is $address, resolved over TLS to $peer:853"
+    fi
+}
 probe_service() {
     state=$(systemctl show -P ActiveState "$1")
     waited=0
@@ -467,6 +509,8 @@ check=egress:metadata:gcp-hostname
 probe_metadata root gcp-hostname 169.254.169.254 yes
 check=egress:metadata:gcp-forwarded-ips
 probe_metadata root gcp-forwarded-ips 169.254.169.254 yes
+check=dns
+probe_dns 'cloudflare-dns.com'
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=attested-tls:8546

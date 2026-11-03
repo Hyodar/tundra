@@ -84,7 +84,10 @@ def test_the_tee_baseline_is_there(planned: PlannedImage) -> None:
     journal = planned.file("/etc/systemd/journald.conf.d/50-tundravm-tee.conf").text
     assert "Storage = volatile" in journal
     assert "kexec_load_disabled = 1" in planned.file("/etc/sysctl.d/50-tundravm-tee.conf").text
-    assert "nameserver 1.1.1.1" in planned.file("/etc/resolv.conf").text
+    resolved = planned.file("/etc/systemd/resolved.conf.d/50-tundravm-tee.conf").text
+    assert "DNSOverTLS=yes\n" in resolved and "FallbackDNS=\n" in resolved
+    servers = planned.file("/etc/systemd/resolved.conf.d/50-tundravm-network.conf").text
+    assert "DNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com\n" in servers
     assert "DHCP=yes" in planned.file("/etc/systemd/network/50-tundravm.network").text
 
 

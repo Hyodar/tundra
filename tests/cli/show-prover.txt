@@ -27,7 +27,7 @@ Profiles (2):
 Built into production:
   Targets (3): qemu azure gcp
   Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
-  Packages (18): busybox ca-certificates chrony cryptsetup curl dmidecode iproute2 kmod linux-image-amd64 nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-sysv udev
+  Packages (19): busybox ca-certificates chrony cryptsetup curl dmidecode iproute2 kmod linux-image-amd64 nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-resolved systemd-sysv udev
   Build packages (3): build-essential git golang
   Sources (4):
     attested-endpoint  local tundravm:tools    pinned=-
@@ -37,12 +37,13 @@ Built into production:
   Files (30):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  69B  sha256:c94c854fc0e2
-    /etc/nftables.conf                                                                       0755  2287B  sha256:ddb0313c66fd
-    /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
+    /etc/nftables.conf                                                                       0755  2173B  sha256:aeb32450e5f4
     /etc/ssh/sshd_config.d/50-tundravm.conf                                                  0644  396B  sha256:45929059ede3
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
     /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
+    /etc/systemd/resolved.conf.d/50-tundravm-network.conf                                    0644  115B  sha256:642b6a10c3e1
+    /etc/systemd/resolved.conf.d/50-tundravm-tee.conf                                        0644  386B  sha256:e9cd4d7e5172
     /etc/tdx/disk-setup.yaml                                                                 0644  273B  sha256:ead2cfed722c
     /etc/tdx/key-gen.yaml                                                                    0644  140B  sha256:7638ac64d41a
     /etc/tdx/secrets.json                                                                    0644  307B  sha256:452df7d4bb74
@@ -59,7 +60,6 @@ Built into production:
     /usr/lib/tundravm/attested-tls-key                                                       0755  1000B  sha256:bf53e52e308c
     /usr/lib/tundravm/gcp/forwarded-ips                                                      0755  1235B  sha256:a708f93eac75
     /usr/lib/tundravm/gcp/hostname                                                           0755  607B  sha256:9763439d3eb8
-    /usr/lib/tundravm/gcp/resolv.conf                                                        0644  49B  sha256:93e93b1c49be
     /usr/lib/tundravm/instance-key                                                           0755  1112B  sha256:63e33f30e3b8
     /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
     /usr/lib/udev/google_nvme_id                                                             0755  16576B  sha256:0c3590103e0b
@@ -67,22 +67,23 @@ Built into production:
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (3): app attested-tls-443 tdxs
   Groups (4): azure-complete-provisioning gcp-forwarded-ips gcp-hostname tdx
-  Enabled units (21): azure-complete-provisioning.service gcp-metadata-dns.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (21): azure-complete-provisioning.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (2): gcp-forwarded-ips.service tdxs.service
   Masked units (8): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
   Firewall (9):
-    in   22/tcp                                          ssh.service
-    in   443/tcp                                         attested-tls-443.service
-    in   8745/tcp                                        attested-endpoint
-    out  168.63.129.16                                   azure-complete-provisioning.service
-    out  169.254.169.254                                 gcp-hostname.service
-    out  169.254.169.254                                 gcp-forwarded-ips.service
-    out  169.254.169.254:53/udp, 169.254.169.254:53/tcp  metadata DNS
-    out  169.254.169.254:123/udp                         metadata time
-    out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1             tee-base
+    in   22/tcp                            ssh.service
+    in   443/tcp                           attested-tls-443.service
+    in   8745/tcp                          attested-endpoint
+    out  168.63.129.16                     azure-complete-provisioning.service
+    out  169.254.169.254                   gcp-hostname.service
+    out  169.254.169.254                   gcp-forwarded-ips.service
+    out  169.254.169.254:123/udp           metadata time
+    out  123/udp, 4460/tcp                 tee-base
+    out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp  network
   Instance key: secp256k1, fresh each boot; taken by no service
-  Build steps (3):
+  Build steps (4):
     builds attested-endpoint, disk-encryption, key-generation and tdxs from source
+    runs tee-base-resolv-conf (postinst)
     drops the NVMe host ids, which GCP sets per instance
     removes IMAGE_VERSION from os-release, so a rebuild matches
   Boot steps (4):
@@ -97,7 +98,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  14252B  sha256:ab318d889b71
+    + /usr/lib/tundravm/probe  0755  16083B  sha256:d1507f4b2023
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

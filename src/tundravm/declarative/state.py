@@ -536,15 +536,11 @@ class StateBuilder:
         _set_targets(profile, ("azure",))
 
     def _gcp(self, profile: ProfileState) -> None:
-        """The GCP integration: metadata DNS, hostname and forwarded-IP routes, Google's
-        disk naming rules and their NVMe helper, each unit gated to Compute Engine.
-
-        The metadata resolver ships under ``/usr/lib`` and is copied into place at boot on
-        Compute Engine only."""
+        """The GCP integration: the metadata server's name, hostname and forwarded-IP
+        routes, Google's disk naming rules and their NVMe helper, each unit gated to Compute
+        Engine. DNS is ``TeeBase``'s over TLS: the metadata resolver speaks none."""
         profile.packages.update(("udev", *gcp.GCP_PACKAGES))
         _add_file(profile, "/etc/hosts", gcp.GCP_HOSTS)
-        _add_file(profile, gcp.GCP_RESOLV_CONF_PATH, gcp.GCP_RESOLV_CONF)
-        _service(profile, gcp.metadata_dns_service(), users=())
         _add_file(profile, gcp.HOSTNAME_SCRIPT_PATH, gcp.HOSTNAME_SCRIPT, "0755")
         hostname, routes = gcp.metadata_units()
         _glue_group(profile, hostname)

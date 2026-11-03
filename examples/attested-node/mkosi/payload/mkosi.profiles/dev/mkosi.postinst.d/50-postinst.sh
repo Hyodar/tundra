@@ -9,7 +9,7 @@ for unit in "serial-getty@.service"; do
     fi
 done
 # A kept trigger is masked exactly when its unit is
-systemd_svc_whitelist=("basic.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "serial-getty@.service" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-remount-fs.service" "systemd-sysctl.service" "timers.target")
+systemd_svc_whitelist=("basic.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "serial-getty@.service" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-remount-fs.service" "systemd-resolved.service" "systemd-sysctl.service" "timers.target")
 mkosi-chroot dpkg-query -L systemd |
     grep -E '/systemd/system/[^/]+\.(socket|timer|path|automount)$' | while read -r path; do
     trigger=${path##*/}

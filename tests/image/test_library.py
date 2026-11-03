@@ -132,8 +132,10 @@ PCS = "api.trustedservices.intel.com:443"
 @pytest.mark.parametrize(
     ("component", "sends"),
     [
-        (TeeBase(nameservers=["9.9.9.9"]), Egress([TCP(4460), UDP(123)], ["9.9.9.9"])),
+        (TeeBase(), Egress([TCP(4460), UDP(123)])),
         (TeeBase(time=False, dns=False), Egress()),
+        (Network(), Egress(hosts=["1.1.1.1:853", "1.0.0.1:853"])),
+        (Network(dns=["2620:fe::fe#dns.quad9.net"]), Egress(hosts=["[2620:fe::fe]:853"])),
         (Tdxs(), Egress()),
         (Tdxs(get_collateral=True), Egress(hosts=[PCS])),
         (
@@ -186,6 +188,9 @@ def test_egress_unfiltered_reports_a_production_profile_that_sends_anywhere(
         (lambda: Proxy("p.example", 3128), "is not an IP address"),
         (lambda: Proxy("10.0.0.9", 3128, tls_name="10.0.0.9"), "is an address"),
         (lambda: Image("x", components=[DevAccess(password="p")]), "dev=DevAccess"),
+        (lambda: Network(dns=["9.9.9.9"]), "names no TLS server name"),
+        (lambda: Network(dns=["dns.quad9.net"]), "is not ADDRESS#TLS-NAME"),
+        (lambda: Network(dns=[]), "names no resolver"),
     ],
 )
 def test_component_configuration_is_checked(make: object, message: str) -> None:
