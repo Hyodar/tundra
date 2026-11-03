@@ -132,6 +132,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `docs/release.md`: a `v*` tag tests, builds, installs and releases tundravm on GitHub, with the wheel and the sdist; install a release with `uv tool install git+https://github.com/Hyodar/tundra@vX.Y.Z`.
 - `README.md` and `docs/release.md` name the four Debian or Ubuntu packages `dev` needs beside tundravm: `debian-archive-keyring`, `golang`, `qemu-system-x86`, `ovmf`.
 - The README, the guide, the trust page and the release page read end to end as a first user after the day's landings: each stage section adds one idea, every term links to where it is defined, every claim about a command matches what it prints, and the old example's names are gone from the deploy, attest and recovery commands (`docs/design/walkthrough-4-2026-11-01.md`).
+- The docs split by purpose: the README says what tundravm is and runs it in five commands, `docs/terms.md` defines each term once, the guide is the six stages with each one's command and output, `docs/howto.md` holds the recurring tasks and `docs/manual.md` the reference prose, in fewer words than the README and guide had (`docs/design/docs-clarity-2026-11-03.md`).
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 
 ### Removed
