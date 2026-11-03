@@ -9,6 +9,8 @@ production profile carries none.
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -18,6 +20,7 @@ import pytest
 import tundravm
 from tundravm import Image, Kernel, Service
 from tundravm._modules import probe
+from tundravm.attestation import tagged
 from tundravm.components import (
     DevAccess,
     Egress,
@@ -76,19 +79,23 @@ def test_a_dev_profile_compiles_the_checks_its_declarations_imply(tmp_path: Path
 
 
 @pytest.mark.parametrize(
-    ("answer", "verdict"),
-    [("$nonce", "ok"), ("00" * 16, "fail")],
-    ids=["answers-the-nonce", "answers-another"],
+    ("answer", "caller", "verdict"),
+    [("$nonce", "endpoint", "ok"), ("00" * 16, "endpoint", "fail"), ("$nonce", "signer", "fail")],
+    ids=["answers-the-nonce", "answers-another", "quoted-for-another-caller"],
 )
 def test_the_endpoint_check_passes_only_on_evidence_for_its_nonce(
-    tmp_path: Path, answer: str, verdict: str
+    tmp_path: Path, answer: str, caller: str, verdict: str
 ) -> None:
-    """Against a stand-in ``curl`` printing the endpoint's JSON for the nonce it was asked."""
+    """Against a stand-in ``curl`` printing the endpoint's JSON for the nonce it was asked,
+    with a document tdxs quoted for *caller*."""
+    user_data = base64.b64encode(tagged(caller, b"binding")).decode()
+    document = json.dumps({"raw_quote": "", "user_data": user_data}, separators=(",", ":"))
     curl = tmp_path / "curl"
     curl.write_text(
         "#!/bin/sh\n"
         "for arg; do case $arg in *nonce=*) nonce=${arg##*nonce=} ;; esac; done\n"
-        f'printf \'{{"purpose":"tundravm-endpoint/1","nonce":"%s"}}\' "{answer}"\n'
+        f'printf \'{{"purpose":"tundravm-endpoint/1","nonce":"%s",'
+        f'"document":"{document.encode().hex()}"}}\' "{answer}"\n'
     )
     curl.chmod(0o755)
     script = (

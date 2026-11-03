@@ -165,7 +165,8 @@ probe_endpoint() {
     while :; do
         said=$(curl -ksS --max-time 10 "https://127.0.0.1:$1/evidence?nonce=$nonce" 2>&1) || true
         case $said in
-            *"\"nonce\":\"$nonce\""*) ok "listening, evidence answers nonce $nonce"; return ;;
+            *"\"nonce\":\"$nonce\""*22757365725f64617461223a2241414141434756755a48427661573530*) ok "listening, evidence answers nonce $nonce, caller endpoint"; return ;;
+            *"\"nonce\":\"$nonce\""*) fail "evidence for nonce $nonce on :$1 is not quoted for caller endpoint: journalctl -u tdxs says who asked"; return ;;
         esac
         [ "$waited" -ge 30 ] && break
         sleep 1

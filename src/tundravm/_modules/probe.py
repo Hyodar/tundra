@@ -75,6 +75,9 @@ The checks, each only when its declaration exists (:func:`derive`):
 - ``mode:firewall``: with ``Firewall(modes=)``, ``mode-switch status``: the mode in force,
   the switches since boot, and whether the RTMR3 the evidence service reports is their
   replay;
+- ``endpoint:PORT``: the attested endpoint on ``PORT`` answers ``GET /evidence`` with the
+  nonce it was given, quoted by ``tdxs`` for the caller ``endpoint`` (the tag tdxs gives
+  uid 0, :data:`ENDPOINT_TAG`), so no other service of the guest asked for it;
 - ``attested-tls:PORT``: the attested TLS listener on ``PORT`` serves a certificate, and
   its key is the one the attested endpoint's evidence binds for that port
   (``Secrets(attested_tls=)``);
@@ -88,6 +91,7 @@ compromised guest could fake. It is a development aid, not evidence.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import re
@@ -98,6 +102,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
+from tundravm.attestation import ENDPOINT_CALLER, tagged
 from tundravm.models import ServiceSpec, unit_name
 
 from . import execution, instance_key, root_mode
@@ -114,6 +119,10 @@ WAIT_SECONDS = 30
 """How long a service may stay ``activating`` and a declared port stay unbound."""
 DROPIN = f"/usr/lib/systemd/system/{UNIT}.d/50-tundravm-production.conf"
 """What a production profile extending a development default sets: the probe never runs."""
+ENDPOINT_TAG = (b'"user_data":"' + base64.b64encode(tagged(ENDPOINT_CALLER, b""))).hex()
+"""What the evidence's ``document`` (hex of the tdxs document's JSON) holds when tdxs quoted
+it for the caller ``endpoint``: the start of its ``user_data``, ``lp("endpoint")`` in
+base64, which ends on a whole base64 group."""
 DENIED_ADDRESSES = ("192.0.2.1", "198.51.100.1", "203.0.113.1")
 """Documentation addresses (RFC 5737) the egress check sends to, the first no rule accepts."""
 DENIED_PORTS = (9, 7, 13, 19, 37)
@@ -1015,7 +1024,8 @@ probe_endpoint() {{
     while :; do
         said=$(curl -ksS --max-time 10 "https://127.0.0.1:$1/evidence?nonce=$nonce" 2>&1) || true
         case $said in
-            *"\\"nonce\\":\\"$nonce\\""*) ok "listening, evidence answers nonce $nonce"; return ;;
+            *"\\"nonce\\":\\"$nonce\\""*{ENDPOINT_TAG}*) ok "listening, evidence answers nonce $nonce, caller endpoint"; return ;;
+            *"\\"nonce\\":\\"$nonce\\""*) fail "evidence for nonce $nonce on :$1 is not quoted for caller endpoint: journalctl -u tdxs says who asked"; return ;;
         esac
         [ "$waited" -ge {WAIT_SECONDS} ] && break
         sleep 1
