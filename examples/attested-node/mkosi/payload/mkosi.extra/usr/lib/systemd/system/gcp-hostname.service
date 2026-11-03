@@ -8,6 +8,7 @@ ConditionVirtualization=google
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/lib/tundravm/gcp/hostname
+Group=gcp-hostname
 ReadWritePaths=/etc/hosts
 ProtectSystem=full
 PrivateTmp=yes

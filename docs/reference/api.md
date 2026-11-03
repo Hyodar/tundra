@@ -311,6 +311,7 @@ Service(
     logs: str | None = None,
     runtime: str | None = None,
     package: str | None = None,
+    egress: Egress | None = None,
 )
 ```
 
@@ -728,10 +729,14 @@ One finding: a lint *code*, its *severity* and a one-line *message*.
 *dataclass*
 
 ```python
-Egress(ports: Sequence[PortValue] = (), hosts: Sequence[str] = ())
+Egress(
+    ports: Sequence[PortValue] = (),
+    hosts: Sequence[str] = (),
+    metadata: bool = False,
+)
 ```
 
-Outbound traffic the image may send; everything else is dropped.
+Outbound traffic the image, or one service, may send; everything else is dropped.
 
 ### `Endpoint`
 

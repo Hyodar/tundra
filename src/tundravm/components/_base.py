@@ -160,6 +160,7 @@ class Network(Component):
                 "Network: egress= must be an Egress or None.",
                 hint="Pass egress=Egress(ports=[TCP(443)], hosts=[...]).",
             )
+        _whole_image("Network", self.egress)
         if isinstance(self.interfaces, str):
             raise ValidationError(
                 "Network: interfaces= takes a list of names or globs.",
@@ -218,8 +219,10 @@ class Firewall(Component):
     packaged daemon); each rule's comment names what listens. Outbound it
     filters only with *egress*, and then accepts what the baseline and every component's
     ``outbound()`` send as well, each rule commented with who asked for it; a component a
-    ``Profile`` adds joins that profile's rules only. The image holds ``Firewall()`` by
-    default;
+    ``Profile`` adds joins that profile's rules only. A service's own
+    ``Service(egress=...)`` is accepted for its user alone. Filtered or not, the cloud
+    metadata servers take only what the services declaring ``Egress(metadata=True)`` and
+    tundravm's cloud glue send. The image holds ``Firewall()`` by default;
     ``network=Network(egress=...)`` is the usual way to set *egress*. Component name:
     ``firewall``.
     """
@@ -245,6 +248,7 @@ class Firewall(Component):
                 "Firewall: egress= must be an Egress or None.",
                 hint="Pass egress=Egress(...), or set it on the Network.",
             )
+        _whole_image("Firewall", self.egress)
 
     def compose(self) -> Iterator[object]:
         allow = tuple(dm.Port(p.port, p.protocol) for p in self.allow)
@@ -269,8 +273,9 @@ class Firewall(Component):
             "A production profile accepts every outbound packet (no Egress, or one allowing "
             "0.0.0.0/0 or ::/0), so a compromised service sends what it holds anywhere.",
             "List what its services talk to: network=Network(egress=Egress(ports=[TCP(443)], "
-            "hosts=[...])); what the baseline sends (NTS time, resolvers, cloud metadata) is "
-            "accepted for you. A Profile(production=False) is exempt.",
+            "hosts=[...])), or give one service its own with Service(..., egress=Egress(...)); "
+            "what the baseline sends (NTS time, resolvers) is accepted for you. A "
+            "Profile(production=False) is exempt.",
         ),
     )
 
@@ -607,9 +612,13 @@ class Tdxs(Component):
 
 def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.EgressRule, ...]:
     """The output-chain rules *contributions* (``(who, egress)`` pairs) ask for: one per
-    destination, with every ``(who, host name)`` that asked for it, in the order asked."""
+    destination, with every ``(who, host name)`` that asked for it, in the order asked;
+    *metadata* is one rule per cloud metadata server."""
     found: dict[tuple[dm.Port | None, str | None], list[tuple[str, str]]] = {}
     for who, egress in contributions:
+        if egress.metadata:
+            for host in dm.CLOUD_METADATA:
+                found.setdefault((None, host), []).append((who, ""))
         for value in egress.ports:
             found.setdefault((dm.Port(value.port, value.protocol), None), []).append((who, ""))
         for entry in egress.hosts:
@@ -621,3 +630,14 @@ def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.Egress
         dm.EgressRule(port, host, tuple(dict.fromkeys(origins)))
         for (port, host), origins in found.items()
     )
+
+
+def _whole_image(owner: str, egress: Egress | None) -> None:
+    """Refuse *egress* given to the whole image with *metadata*, a service's alone."""
+    if egress is not None and egress.metadata:
+        raise ValidationError(
+            f"{owner}: egress=Egress(metadata=True) would let every process of the image reach "
+            "the cloud metadata server and its identity token.",
+            hint="Give it to the one service that reads it: "
+            "Service(..., egress=Egress(metadata=True)).",
+        )

@@ -12,6 +12,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tundravm.declarative.model import Task
 
+WIRESERVER = "168.63.129.16"
+"""Azure's wire server, which the provisioning script reports health to. Only that unit
+reaches it (``egress=``)."""
+
 AZURE_PACKAGES = ("curl", "dmidecode")
 """What the provisioning script runs: ``dmidecode`` to tell Azure from elsewhere, ``curl``
 for the wireserver. Without ``curl`` the VM never reports ready and Azure fails it."""
@@ -125,8 +129,9 @@ def provisioning_task(network_setup: bool) -> Task:
     (no ``User=``: it reads DMI and posts to the wireserver) under
     ``Hardening.relaxed()``, after ``network-setup.service`` when the profile ships it,
     else ``network-online.target``; it does not wait for runtime-init. It is gated by
-    ``ConditionVirtualization=microsoft``, so the same UKI boots cleanly on QEMU and GCP."""
-    from tundravm.declarative.model import Task
+    ``ConditionVirtualization=microsoft``, so the same UKI boots cleanly on QEMU and GCP.
+    Its own group is the one the firewall lets reach the wire server."""
+    from tundravm.declarative.model import EgressRule, Task
     from tundravm.declarative.systemd import Condition, Hardening, Root
 
     return Task(
@@ -134,6 +139,8 @@ def provisioning_task(network_setup: bool) -> Task:
         "/usr/bin/azure-complete-provisioning",
         description="Azure Provisioning Completion",
         user=Root(),
+        group="azure-complete-provisioning",
+        egress=(EgressRule(host=WIRESERVER, origins=(("azure", ""),)),),
         after=("network.target",) if network_setup else (),
         requires=("network-setup.service",) if network_setup else (),
         wants=() if network_setup else ("network-online.target",),

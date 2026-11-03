@@ -39,6 +39,7 @@ from ._values import (
     TCP,
     UDP,
     Credential,
+    Egress,
     HttpProbe,
     Notify,
     PortValue,
@@ -62,6 +63,7 @@ _EXPECTED = {
     "timer": "an Every or a Calendar",
     "socket": "a Listen",
     "unit": "a DropIn",
+    "egress": "an Egress",
 }
 _EXAMPLE = {
     "readiness": "TcpProbe(8080), HttpProbe(url) or Notify()",
@@ -70,6 +72,7 @@ _EXAMPLE = {
     "timer": 'Every("1h") or Calendar("daily")',
     "socket": "Listen(8080)",
     "unit": "DropIn(...)",
+    "egress": "Egress(hosts=['10.0.0.5:443'])",
 }
 _DIRECTORY_ROOTS = {"state": "/var/lib", "logs": "/var/log", "runtime": "/run"}
 
@@ -178,6 +181,10 @@ class Service(Located):
     ``Wants=`` on the setup task, ``ConditionPathExists=`` on what it writes, so a failed
     setup skips this service instead of failing it.
     ``expose=[TCP(8080)]`` opens that port in the image's firewall and nothing else does.
+    ``egress=Egress(hosts=["10.0.0.5:443"])`` lets this service alone send there, beyond
+    what the image's ``Egress`` accepts for every process; the firewall matches it by its
+    user. ``Egress(metadata=True)`` is the only way any service reaches the cloud metadata
+    server, where the instance's identity token lives.
     ``quotes=True`` says it asks the evidence service for TDX quotes: it joins the ``tdx``
     group and requires :data:`~tundravm.components.EVIDENCE`.
 
@@ -229,6 +236,9 @@ class Service(Located):
     package: str | None = None
     """The Debian package whose own unit this is (:meth:`packaged`): its ``ExecStart=``,
     ``User=`` and ``Type=`` run, and *argv* is empty."""
+    egress: Egress | None = None
+    """What this service alone may send, beyond the image's ``Egress``: matched by its
+    user, so it needs one of its own (not ``user="root"``)."""
 
     def __post_init__(self) -> None:
         self._freeze()
@@ -359,6 +369,7 @@ class Service(Located):
             "socket": self.socket,
             "resources": self.resources,
             "shutdown": self.shutdown,
+            "egress": self.egress,
         }
         for keyword, value in given.items():
             if value:
@@ -447,6 +458,7 @@ class Service(Located):
             ("timer", self.timer, (Every, Calendar)),
             ("socket", self.socket, Listen),
             ("unit", self.unit, DropIn),
+            ("egress", self.egress, Egress),
         )
         for name, value, kinds in checks:
             if value is not None and not isinstance(value, kinds):
@@ -538,6 +550,13 @@ class Service(Located):
                 )
         if self.timer is not None:
             self._check_timer()
+        if self.egress is not None and self.user == "root":
+            raise _fail(
+                self,
+                'runs as user="root" with egress=, which would open it to every root process: '
+                "the firewall matches a service's egress by its user.",
+                hint="Drop user= so it runs as its own system user, which the firewall names.",
+            )
 
     def _check_bindings(self) -> None:
         """One credential per name, and every argv word that names one names a bound one."""

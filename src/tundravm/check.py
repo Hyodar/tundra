@@ -1140,10 +1140,19 @@ def unit_declaration_check(
     return found
 
 
+_METADATA_FIX = (
+    "A service rarely needs it: tundravm's cloud glue already reads the hostname, the "
+    "forwarded IPs and the provisioning state, and the identity token lets whoever holds it "
+    "act as the instance in the cloud. Deliver what the service needs as a Secret, and keep "
+    "Egress(metadata=True) for a program that must speak for the instance itself."
+)
+
+
 def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnostic]:
-    """``service-runs-as-root``, ``hardening-disabled`` and ``hardening-relaxed`` of a typed
-    ``Service``/``Task``."""
+    """``service-runs-as-root``, ``service-metadata``, ``hardening-disabled`` and
+    ``hardening-relaxed`` of a typed ``Service``/``Task``."""
     from ._units.render import STRICT_HARDENING
+    from .declarative.model import CLOUD_METADATA
     from .declarative.model import Service as TypedService
     from .declarative.systemd import Hardening, Root
 
@@ -1159,6 +1168,16 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             hint="Drop user= to run as a system user named after the service (declared for "
             'you); grant one capability with hardening=Hardening.preset("static", '
             "capabilities=[...]) if it needs one.",
+        )
+    if any(rule.host in CLOUD_METADATA for rule in item.egress):
+        yield Diagnostic(
+            code="service-metadata",
+            severity="warning",
+            message=f"unit {name!r} reaches the cloud metadata server "
+            "(egress=Egress(metadata=True)), which hands out the instance's identity token",
+            subject=name,
+            profile=variant,
+            hint=_METADATA_FIX,
         )
     sandbox = item.sandbox if isinstance(item, TypedService) else item.hardening
     entries = STRICT_HARDENING if sandbox is None else sandbox.entries()
@@ -1850,6 +1869,13 @@ _REGISTRY: tuple[Rule, ...] = (
         "Drop user= to run as a system user named after the service (declared for you); "
         'grant one capability with hardening=Hardening.preset("static", capabilities=[...]) '
         "if it needs one.",
+    ),
+    Rule(
+        "service-metadata",
+        "warning",
+        "A Service reaches the cloud metadata server (egress=Egress(metadata=True)), which "
+        "hands out the instance's identity token.",
+        _METADATA_FIX,
     ),
     Rule(
         "hardening-disabled",

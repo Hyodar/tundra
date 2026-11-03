@@ -418,10 +418,11 @@ def test_an_egress_filters_the_output_chain() -> None:
     assert "hook output priority filter; policy drop" in rules
     assert 'tcp dport 443 accept comment "image"' in rules
     assert 'ip daddr 1.1.1.1 accept comment "image, tee-base"' in rules
-    # what the baseline sends: NTS time, TeeBase's resolvers, Azure's wireserver
+    # what the baseline sends: NTS time and TeeBase's resolvers; the wireserver is the glue's
     assert 'tcp dport 4460 accept comment "tee-base"' in rules and "udp dport 123 accept" in rules
     assert "ip daddr 1.0.0.1 accept" in rules
-    assert 'ip daddr 168.63.129.16 accept comment "azure"' in rules
+    glue = 'meta skuid 0 meta skgid "azure-complete-provisioning" ip daddr 168.63.129.16 accept'
+    assert glue in rules and 'ip daddr 168.63.129.16 accept comment "azure"' not in rules
 
 
 class Sink(Component):

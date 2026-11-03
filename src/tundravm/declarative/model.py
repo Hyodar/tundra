@@ -1336,9 +1336,11 @@ class Service(Declared):
     remain_after_exit: bool = False
     conditions: tuple[Condition, ...] = ()
     ports: tuple[Port | int, ...] = ()
+    egress: tuple[EgressRule, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "exec_start", "exec_start_pre", "conditions")
+        _require_egress(self)
         _require_ports(self, "ports")
         condition_entries(self, self.conditions)
         _require_steps(self, "needs", sentinel=True)
@@ -1436,6 +1438,50 @@ class Service(Declared):
 _RESTARTS = ("always", "on-failure", "on-abnormal", "no")
 _RELATIONS = ("after", "requires", "wants", "before", "part_of", "binds_to", "conflicts")
 _DIRECTORIES = ("state", "logs", "runtime", "cache")
+
+
+def egress_owner(owner: Service | Task) -> tuple[str, str | None]:
+    """Whose sockets *owner*'s ``egress`` rules accept: ``(user, None)``, or ``("root",
+    group)`` for a root unit, which the firewall tells from other root processes by its own
+    primary group."""
+    user = owner.user
+    if user is None:
+        stem = owner.default_user if isinstance(owner, Service) else owner.unit
+        return stem.removesuffix(".service"), None
+    if isinstance(user, Root) or user == "root":
+        assert owner.group is not None
+        return "root", owner.group
+    assert isinstance(user, str)
+    return user, None
+
+
+def _require_egress(owner: Service | Task) -> None:
+    """``egress`` holds rules, and names an owner the firewall can match when it loads: a
+    named user, or root with a group of its own."""
+    _freeze(owner, "egress")
+    for rule in owner.egress:
+        if not isinstance(rule, EgressRule):
+            raise _fail(
+                owner,
+                f"egress rule {rule!r} is not an EgressRule.",
+                hint="Service(..., egress=Egress(ports=[TCP(443)], hosts=[...]))",
+            )
+    if not owner.egress:
+        return
+    if isinstance(owner.user, Dynamic):
+        raise _fail(
+            owner,
+            f"{owner.name!r} has egress= and runs as a transient user: the firewall names a "
+            "socket's owner when it loads at boot, before any transient user exists.",
+            hint="Run it as its own system user (leave user= out), which the firewall names.",
+        )
+    if (isinstance(owner.user, Root) or owner.user == "root") and owner.group is None:
+        raise _fail(
+            owner,
+            f"{owner.name!r} runs as root with egress=, which would open it to every root process.",
+            hint="Drop user= so it runs as its own user, or give it a group= of its own: the "
+            "firewall then accepts root with that group only.",
+        )
 
 
 def _require_unit_fields(owner: Service | DropIn) -> None:
@@ -3070,6 +3116,9 @@ class Firewall(Declared):
     Outbound traffic is unfiltered until *egress* is ``"filter"``: then the output chain
     drops what no rule accepts, and *egress_rules* are the rules, beside the replies to
     accepted inbound traffic, loopback, the DHCP client and the ICMPv6 messages IPv6 needs.
+    A ``Service``'s or ``Task``'s own *egress* accepts what it sends beyond them, matched
+    by its user. Either way the cloud metadata servers (:data:`CLOUD_METADATA`) are
+    reachable only by the units whose *egress* names them.
     """
 
     allow: tuple[Port | int, ...] = ()
@@ -3100,6 +3149,23 @@ class Firewall(Declared):
                 "egress_rules need egress='filter'; nothing is filtered outbound without it.",
                 hint="Pass egress='filter' to drop the outbound traffic no rule accepts.",
             )
+        for rule in self.egress_rules:
+            if rule.host in CLOUD_METADATA:
+                raise _fail(
+                    self,
+                    f"egress rule to {rule.host} opens the cloud metadata server to the whole "
+                    "image.",
+                    hint="Give it to the one service that reads it: "
+                    "Service(..., egress=Egress(metadata=True)).",
+                )
+
+
+CLOUD_METADATA = ("169.254.169.254", "168.63.129.16", "fd20:ce::254")
+"""The cloud metadata servers, where the instance's identity token lives: the metadata
+server of Compute Engine and Azure's IMDS (169.254.169.254, Compute Engine's also at
+fd20:ce::254) and Azure's wire server (168.63.129.16). The firewall drops what any process
+sends them, except the DNS and time Compute Engine's serves and what a unit's ``egress``
+accepts."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -3108,7 +3174,7 @@ class EgressRule:
     address or CIDR block; ``None``: any address).
 
     *origins* say who asked for it, each a ``(who, name)`` pair: the component (``image``
-    for the image's own ``Egress``, a target for its cloud's metadata servers) and the host
+    for the image's own ``Egress``, the unit for a service's own) and the host
     name the rule stands for when it cannot match one (``""`` otherwise). They become the
     rule's comment.
     """
@@ -3270,9 +3336,11 @@ class Task(Declared):
     timeout_stop: str | None = None
     kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
     directives: Extra = field(default_factory=FrozenMap)
+    egress: tuple[EgressRule, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "command", "conditions", "groups")
+        _require_egress(self)
         _require_env(self)
         for name, target in _freeze_map(self, "credentials").items():
             if not _ENTRY_NAME.fullmatch(name):
@@ -3558,6 +3626,7 @@ __all__ = [
     "Dotnet",
     "EMPTY_FRAGMENT",
     "Edit",
+    "CLOUD_METADATA",
     "EgressRule",
     "ExternalDelivery",
     "File",

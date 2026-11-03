@@ -36,7 +36,7 @@ Built into production:
   Files (30):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  69B  sha256:c94c854fc0e2
-    /etc/nftables.conf                                                                       0755  1619B  sha256:775d340ab757
+    /etc/nftables.conf                                                                       0755  2287B  sha256:ddb0313c66fd
     /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
     /etc/ssh/sshd_config.d/50-tundravm.conf                                                  0644  396B  sha256:45929059ede3
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
@@ -65,17 +65,20 @@ Built into production:
     /usr/lib/udev/rules.d/65-gce-disk-naming.rules                                           0644  2638B  sha256:7f4c09e0cf36
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (3): app attested-tls-443 tdxs
-  Groups (1): tdx
+  Groups (4): azure-complete-provisioning gcp-forwarded-ips gcp-hostname tdx
   Enabled units (19): azure-complete-provisioning.service gcp-metadata-dns.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (2): gcp-forwarded-ips.service tdxs.service
   Masked units (8): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
-  Firewall (6):
-    in   22/tcp                               ssh.service
-    in   443/tcp                              attested-tls-443.service
-    in   8745/tcp                             attested-endpoint
-    out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1  tee-base
-    out  168.63.129.16                        azure
-    out  169.254.169.254                      azure, gcp
+  Firewall (9):
+    in   22/tcp                                          ssh.service
+    in   443/tcp                                         attested-tls-443.service
+    in   8745/tcp                                        attested-endpoint
+    out  168.63.129.16                                   azure-complete-provisioning.service
+    out  169.254.169.254                                 gcp-hostname.service
+    out  169.254.169.254                                 gcp-forwarded-ips.service
+    out  169.254.169.254:53/udp, 169.254.169.254:53/tcp  metadata DNS
+    out  169.254.169.254:123/udp                         metadata time
+    out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1             tee-base
   Instance key: secp256k1, fresh each boot; taken by no service
   Build steps (3):
     builds attested-endpoint, disk-encryption, key-generation and tdxs from source

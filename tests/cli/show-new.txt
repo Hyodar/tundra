@@ -20,7 +20,7 @@ Built into production:
     tdxs  local tundravm:tools    pinned=-
   Files (13):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
-    /etc/nftables.conf                                                                       0755  1362B  sha256:a61d2063f723
+    /etc/nftables.conf                                                                       0755  1783B  sha256:0269645cd8a2
     /etc/resolv.conf                                                                         0644  57B  sha256:d822a90e8975
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
@@ -37,9 +37,11 @@ Built into production:
   Enabled units (8): chrony.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service tdx-evidence.service tundravm-instance-key.service
   Units started on demand (1): tdxs.service
   Masked units (4): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
-  Firewall (2):
+  Firewall (4):
     in   nothing beyond replies and DHCP
-    out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1  tee-base
+    out  169.254.169.254:53/udp, 169.254.169.254:53/tcp  metadata DNS
+    out  169.254.169.254:123/udp                         metadata time
+    out  123/udp, 4460/tcp, 1.1.1.1, 1.0.0.1             tee-base
   Instance key: secp256k1, fresh each boot; taken by no service
   Build steps (2):
     builds tdxs from source

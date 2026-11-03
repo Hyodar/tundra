@@ -253,17 +253,14 @@ class _Lowering:
         self, egress: Egress, baseline: Sequence[Component]
     ) -> Iterator[tuple[str, Egress]]:
         """Who sends where: the image's *egress*, the ``outbound()`` of the *baseline*, of
-        every component and of what each composes, then the metadata servers of the
-        image's clouds."""
+        every component and of what each composes. The cloud glue reaches the metadata
+        servers by its own units' egress."""
         image = self.image
         yield "image", egress
         own = [item for item in image.components if not isinstance(item, self.baseline_types)]
         observability = [] if image.observability is None else [image.observability]
         for component in (*baseline, *own, *observability):
             yield from _outbound(component)
-        for target in image.targets:
-            if target in _CLOUD_EGRESS:
-                yield target, Egress(hosts=_CLOUD_EGRESS[target])
 
     def profile_egress(
         self, added: Sequence[object], inherited: Sequence[object] = ()
@@ -768,6 +765,7 @@ class _Lowering:
             requires=requires,
             after=requires,
             hardening=cast("Hardening", item.hardening),
+            egress=_own_egress(item),
             socket=item.socket,
             timeout_stop=None if shutdown is None else shutdown.timeout,
             kill_mode=None if shutdown is None else shutdown.kill_mode,
@@ -818,6 +816,7 @@ class _Lowering:
             requires=requires,
             needs=_outputs(item),
             hardening=cast("Hardening", item.hardening),
+            egress=_own_egress(item),
             timeout_stop=None if shutdown is None else shutdown.timeout,
             kill_mode=None if shutdown is None else shutdown.kill_mode,
             directives={"Service": directives} if directives else {},
@@ -1039,12 +1038,11 @@ def component_classes(recipe: dm.Recipe) -> tuple[type[Component], ...]:
     return tuple(found)
 
 
-_CLOUD_EGRESS: dict[str, tuple[str, ...]] = {
-    "azure": ("168.63.129.16", "169.254.169.254"),
-    "gcp": ("169.254.169.254",),
-}
-"""What each cloud's glue talks to: Azure's wireserver and IMDS, GCE's metadata server
-(its DNS resolver, too)."""
+def _own_egress(item: Service) -> tuple[dm.EgressRule, ...]:
+    """*item*'s ``egress=`` as the rules the firewall accepts for its user alone."""
+    from tundravm.components._base import egress_rules
+
+    return () if item.egress is None else egress_rules(((item.unit_name, item.egress),))
 
 
 def _outbound(component: Component) -> Iterator[tuple[str, Egress]]:

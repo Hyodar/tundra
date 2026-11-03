@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mkosi-chroot groupadd --system azure-complete-provisioning
+mkosi-chroot groupadd --system gcp-hostname
+mkosi-chroot groupadd --system gcp-forwarded-ips
 mkosi-chroot useradd --system --shell /usr/sbin/nologin greeter
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web
 mkosi-chroot systemctl enable azure-complete-provisioning.service

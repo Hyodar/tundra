@@ -2,6 +2,9 @@
 set -euo pipefail
 
 mkosi-chroot groupadd --system tdx
+mkosi-chroot groupadd --system azure-complete-provisioning
+mkosi-chroot groupadd --system gcp-hostname
+mkosi-chroot groupadd --system gcp-forwarded-ips
 mkosi-chroot useradd --system --home-dir /home/tdxs --create-home --shell /usr/sbin/nologin --gid tdx tdxs
 mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind
 mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind-ready

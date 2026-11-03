@@ -15,6 +15,7 @@ from typing import Any, Literal, cast
 
 from tundravm._location import declared_at, display_location, located
 from tundravm._modules.init import order_steps
+from tundravm._platforms import metadata_units
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
 from tundravm.models import NETWORK_SETUP_UNIT, unit_name
@@ -611,7 +612,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 state.expand(variant.add), where=f"profile {variant.name!r}", level=variant.name
             )
     _check_targets(state, chain)
-    _expand_firewall(state)
+    _expand_firewall(state, metadata_units(recipe_targets(recipe)))
     items = tuple(state.items.values())
     _check_unit_files(state, items)
     _check_network(state, items)
@@ -682,9 +683,10 @@ def _check_unit_files(state: _Resolution, items: Sequence[Declaration]) -> None:
             )
 
 
-def _expand_firewall(state: _Resolution) -> None:
+def _expand_firewall(state: _Resolution, glue: Sequence[Declaration]) -> None:
     """Replace the variant's :class:`Firewall` with what it renders, now that the services whose
-    ports it opens are final; the rendered declarations keep its location and provenance."""
+    ports it opens are final; the rendered declarations keep its location and provenance.
+    *glue* are the cloud units lowering adds later, whose own egress the ruleset accepts."""
     key = ("Firewall",)
     firewall = state.items.get(key)
     if not isinstance(firewall, Firewall):
@@ -701,7 +703,7 @@ def _expand_firewall(state: _Resolution) -> None:
                 hint=f"Open it with the service's expose=[{_spelled(port)}], or "
                 f"Firewall(allow=[{_spelled(port)}]) for a program no Service runs.",
             )
-    for item in expand_firewall(firewall, state.items.values()):
+    for item in expand_firewall(firewall, (*state.items.values(), *glue)):
         rendered = located(item, firewall.declared_at)
         ident = identity(rendered)
         existing = state.items.get(ident)

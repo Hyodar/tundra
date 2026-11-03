@@ -104,8 +104,9 @@ def test_firewall_opens_the_ports_the_variant_declares() -> None:
     assert "type filter hook input priority filter; policy drop;" in text
     assert "ct state established,related accept" in text and 'iifname "lo" accept' in text
     assert "nd-neighbor-solicit" in text and "udp sport 67 udp dport 68 accept" in text
+    inbound = text.partition("chain forward")[0]
     opened = [
-        line.strip() for line in text.splitlines() if " dport " in line and "sport" not in line
+        line.strip() for line in inbound.splitlines() if " dport " in line and "sport" not in line
     ]
     assert opened == [
         'tcp dport 22 accept comment "ssh"',

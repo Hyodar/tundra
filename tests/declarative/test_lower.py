@@ -139,15 +139,16 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "2c0039399ff926c3b51bbd5311a80a2ccc51e68f6cd4d6c3928917a9727490d7"
-EQUIVALENCE_RECIPE = "d7667857a5727d8531a1216b485de93da63a91b2caf090fd6bc64375994a5b46"
+EQUIVALENCE_TREE = "414d7a0ea50a1eecad85bb105ea867b2b879b6d7df9d0c4946bb8487f4a67a60"
+EQUIVALENCE_RECIPE = "7811aaa2b6089cadd0f69973c19aaacb67a6869440c3c3aa7c43f2ba00a7208d"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
 overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned
 build scripts' hint named ``tundravm build`` instead of the removed ``fetch``, and when
 every profile gained the execution gate, then the instance key, when the initramfs
 ESP became sized from the UKI's ceiling, and when the endpoint's configuration gained
-its ``attested_tls`` list. The recipe digest covers the compiler version, recorded as
+its ``attested_tls`` list, and when the cloud glue gained its own groups. The recipe
+digest covers the compiler version, recorded as
 ``0.1.0``."""
 
 

@@ -114,7 +114,10 @@ def metadata_dns_service() -> Service:
 # Hostname from the metadata server
 # ---------------------------------------------------------------------------
 
-METADATA = "http://169.254.169.254/computeMetadata/v1/instance"
+METADATA_SERVER = "169.254.169.254"
+"""Compute Engine's metadata server: the hostname, the forwarded IPs and the identity
+token. Only the units below reach it (``egress=``)."""
+METADATA = f"http://{METADATA_SERVER}/computeMetadata/v1/instance"
 _CURL = (
     "curl --fail --silent --show-error --connect-timeout 2 --retry 10 --retry-all-errors "
     '--retry-delay 1 --header "Metadata-Flavor: Google"'
@@ -141,8 +144,9 @@ grep -qx "127.0.1.1 $name" /etc/hosts || echo "127.0.1.1 $name" >> /etc/hosts
 def hostname_service() -> Service:
     """``gcp-hostname.service``: a root oneshot gated by ``ConditionVirtualization=google``
     that names the host after the instance once the network is up and before
-    ``network-online.target``, so a service ordered after the network sees the name."""
-    from tundravm.declarative.model import Service
+    ``network-online.target``, so a service ordered after the network sees the name. It
+    runs with its own group, the one the firewall lets reach the metadata server."""
+    from tundravm.declarative.model import EgressRule, Service
     from tundravm.declarative.systemd import Condition, Hardening, Root
 
     return Service(
@@ -150,6 +154,8 @@ def hostname_service() -> Service:
         (HOSTNAME_SCRIPT_PATH,),
         description="GCP hostname from the metadata server",
         user=Root(),
+        group="gcp-hostname",
+        egress=(EgressRule(host=METADATA_SERVER, origins=(("gcp", ""),)),),
         type="oneshot",
         remain_after_exit=True,
         restart="no",
@@ -203,12 +209,18 @@ done
 """
 
 
+def metadata_units() -> tuple[Service, Task]:
+    """The GCP units that read the metadata server, each declaring it in ``egress=``."""
+    return (hostname_service(), forwarded_ips_task())
+
+
 def forwarded_ips_task() -> Task:
     """``gcp-forwarded-ips``: a root task on a one-minute timer, both gated by
     ``ConditionVirtualization=google``, that keeps :data:`ROUTES_SCRIPT`'s routes in step
     with the load balancers forwarding to the instance (Google's guest agent does this on
-    a stock image; a tundravm image runs no agent)."""
-    from tundravm.declarative.model import Every, Task
+    a stock image; a tundravm image runs no agent). Its own group is the one the firewall
+    lets reach the metadata server."""
+    from tundravm.declarative.model import EgressRule, Every, Task
     from tundravm.declarative.systemd import Condition, Hardening, Root
 
     return Task(
@@ -217,6 +229,8 @@ def forwarded_ips_task() -> Task:
         schedule=Every("1min", first="10s"),
         description="GCP forwarded-IP routes",
         user=Root(),
+        group="gcp-forwarded-ips",
+        egress=(EgressRule(host=METADATA_SERVER, origins=(("gcp", ""),)),),
         timeout="1min",
         after=("network-online.target",),
         wants=("network-online.target",),

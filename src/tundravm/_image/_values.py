@@ -670,23 +670,30 @@ def _check_kernel_parameter(owner: Kernel, parameter: object) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Egress(Keywords):
-    """Outbound traffic the image may send; everything else is dropped.
+    """Outbound traffic the image, or one service, may send; everything else is dropped.
 
     Without an ``Egress`` the image does not filter outbound traffic. With one, the
     output chain accepts the replies of accepted inbound traffic, loopback, the DHCP
     client, the ICMPv6 messages IPv6 needs, what the baseline sends (``TeeBase``'s NTS
-    time on TCP 4460 and UDP 123, its resolvers, the metadata servers of the image's
-    clouds), what each component's :meth:`~tundravm.components.Component.outbound` names,
-    *ports* and *hosts*, and drops the rest.
+    time on TCP 4460 and UDP 123, its resolvers), what each component's
+    :meth:`~tundravm.components.Component.outbound` names, *ports* and *hosts*, and drops
+    the rest. ``Service(egress=Egress(...))`` accepts what that one service sends beyond
+    it, matched by the service's user.
 
     *ports* go to any address. Each of *hosts* is an address or CIDR block (any port) or
     ``HOST:PORT`` (TCP to that port; ``[ADDRESS]:PORT`` for IPv6). nftables matches
     addresses, not names, so a host name needs its port and ``"logs.example:443"`` accepts
     TCP 443 to any address: the rule is per port, and the name is its comment.
+
+    *metadata* lets a service reach the cloud metadata servers
+    (:data:`~tundravm.declarative.model.CLOUD_METADATA`), where the instance's identity
+    token lives. Nothing else in the image can, filtered or not: the cloud glue tundravm
+    ships declares it for itself, and the image-wide ``Egress`` refuses it.
     """
 
     ports: Sequence[PortValue] = ()
     hosts: Sequence[str] = ()
+    metadata: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.ports, (TCP, UDP)):
@@ -703,7 +710,18 @@ class Egress(Keywords):
                     hint="Egress(ports=[TCP(443)])",
                 )
         for host in self.hosts:
-            egress_host(self, host)
+            name = egress_host(self, host)[0]
+            if name in dm.CLOUD_METADATA:
+                raise _fail(
+                    self,
+                    f"hosts= names {name}, a cloud metadata server.",
+                    hint="Egress(metadata=True), on the one service that reads it: "
+                    "Service(..., egress=Egress(metadata=True)).",
+                )
+        if not isinstance(self.metadata, bool):
+            raise _fail(
+                self, f"metadata= holds {self.metadata!r}.", hint="Pass metadata=True or drop it."
+            )
 
 
 _HOST_NAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?)+")

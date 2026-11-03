@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from tundravm.declarative.model import Ready, Service
 
 TDXS_DEFAULT_CONFIG_PATH = "/etc/tdxs/config.yaml"
+IMDS = "169.254.169.254"
+"""Where the ``azure`` and ``gcp`` issuers fetch the attested document or identity token."""
 TDXS_ROLE_TYPE_ALIASES = {
     "dcap": "tdx",
     "azure-tdx": "azure",
@@ -203,10 +205,13 @@ class Tdxs:
           ``AF_UNIX``: ``RestrictAddressFamilies=AF_UNIX`` unless the issuer is ``azure`` or
           ``gcp`` (IMDS/metadata over HTTP) or a validator option fetches collateral,
           revocations or tokens over HTTPS.
+        - The ``azure`` and ``gcp`` issuers read the metadata server (Azure's attested
+          document, Compute Engine's identity token): the service's ``egress`` names it,
+          the only way past the firewall's metadata drop.
         - No ``WorkingDirectory=/home/<user>``: ``ProtectHome=yes`` hides it, and tdxs
           reads its config by absolute path.
         """
-        from tundravm.declarative.model import Listen, Service
+        from tundravm.declarative.model import EgressRule, Listen, Service
         from tundravm.declarative.systemd import Hardening
 
         issuer = self._canonical_role_type(self.issuer_type)
@@ -216,7 +221,8 @@ class Tdxs:
             or self.verify_imds
             or self.verify_identity_token
         )
-        online = fetches or issuer in ("azure", "gcp")
+        cloud = issuer in ("azure", "gcp")
+        online = fetches or cloud
         quotes = issuer in QUOTE_ISSUERS
         return Service(
             self.service_name,
@@ -233,4 +239,5 @@ class Tdxs:
                 network="inet" if online else "unix",
             ),
             needs=needs,
+            egress=(EgressRule(host=IMDS, origins=(("tdxs", ""),)),) if cloud else (),
         )

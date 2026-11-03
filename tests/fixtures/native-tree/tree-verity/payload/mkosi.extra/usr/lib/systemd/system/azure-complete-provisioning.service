@@ -8,6 +8,7 @@ ConditionVirtualization=microsoft
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/azure-complete-provisioning
+Group=azure-complete-provisioning
 TimeoutStartSec=5min
 ProtectSystem=full
 PrivateTmp=yes

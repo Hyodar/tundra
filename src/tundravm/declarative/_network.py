@@ -13,6 +13,7 @@ from typing import Literal
 from tundravm.models import unit_name
 
 from .model import (
+    CLOUD_METADATA,
     Declaration,
     EgressRule,
     File,
@@ -22,7 +23,9 @@ from .model import (
     Port,
     Secrets,
     Service,
+    Task,
     Unit,
+    egress_owner,
 )
 
 NFTABLES_CONF = "/etc/nftables.conf"
@@ -154,7 +157,7 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
         ]
     body = "".join(f"\t\t{rule}\n" for rule in rules)
     filtered = firewall.egress == "filter"
-    outbound = "".join(f"\t\t{rule}\n" for rule in _egress_rules(firewall))
+    outbound = "".join(f"\t\t{rule}\n" for rule in _output_rules(firewall, items))
     return (
         "#!/usr/sbin/nft -f\n"
         "# tundravm Firewall: inbound traffic is dropped unless a rule below accepts it;\n"
@@ -163,7 +166,8 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
             if filtered
             else "# outbound traffic is not filtered.\n"
         )
-        + "flush ruleset\n\n"
+        + "# The cloud metadata servers take only what the units that declare them send.\n"
+        "flush ruleset\n\n"
         "table inet filter {\n"
         "\tchain input {\n"
         "\t\ttype filter hook input priority filter; policy drop;\n"
@@ -180,18 +184,62 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
     )
 
 
-def _egress_rules(firewall: Firewall) -> list[str]:
-    """The output-chain rules of a ``Firewall(egress="filter")``; none when it is unfiltered."""
-    if firewall.egress != "filter":
-        return []
-    rules = [
-        "ct state established,related accept",
-        "ct state invalid drop",
-        'oifname "lo" accept',
-        f"icmpv6 type {{ {', '.join(ICMPV6_ESSENTIAL)} }} accept",
-        'udp sport 68 udp dport 67 accept comment "DHCPv4 requests"',
-        'udp sport 546 udp dport 547 accept comment "DHCPv6 requests"',
-    ]
+METADATA_SHARED = (
+    EgressRule(Port(53, "udp"), CLOUD_METADATA[0], (("metadata DNS", ""),)),
+    EgressRule(Port(53), CLOUD_METADATA[0], (("metadata DNS", ""),)),
+    EgressRule(Port(123, "udp"), CLOUD_METADATA[0], (("metadata time", ""),)),
+)
+"""What every process may send the metadata server: Compute Engine's resolver (the
+``resolv.conf`` the GCP glue installs names it) and its NTP, which ``chrony`` refines time
+from. Neither carries the identity token."""
+
+
+def unit_egress(items: Iterable[Declaration]) -> list[tuple[str, str, EgressRule]]:
+    """``(unit, owner match, rule)`` of every ``Service``'s and ``Task``'s own egress in
+    *items*, in declaration order."""
+    found: list[tuple[str, str, EgressRule]] = []
+    for item in items:
+        if isinstance(item, (Service, Task)) and item.egress:
+            user, group = egress_owner(item)
+            owner = (
+                f'meta skuid "{user}"' if group is None else f'meta skuid 0 meta skgid "{group}"'
+            )
+            found += [(unit_name(item.name), owner, rule) for rule in item.egress]
+    return found
+
+
+def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]:
+    """The output chain: with ``egress="filter"`` the baseline accepts, then the cloud
+    metadata servers for the units that declare them and dropped for the rest, then each
+    unit's other egress and *firewall*'s rules; unfiltered, the metadata part alone."""
+    filtered = firewall.egress == "filter"
+    rules = (
+        [
+            "ct state established,related accept",
+            "ct state invalid drop",
+            'oifname "lo" accept',
+            f"icmpv6 type {{ {', '.join(ICMPV6_ESSENTIAL)} }} accept",
+            'udp sport 68 udp dport 67 accept comment "DHCPv4 requests"',
+            'udp sport 546 udp dport 547 accept comment "DHCPv6 requests"',
+        ]
+        if filtered
+        else []
+    )
+    own = unit_egress(items)
+    for unit, owner, rule in own:
+        if rule.host in CLOUD_METADATA:
+            rules.append(f'{owner} {egress_match(rule)} accept comment "{unit}"')
+    for rule in METADATA_SHARED:
+        rules.append(f'{egress_match(rule)} accept comment "{rule.comment}"')
+    for family in ("ip", "ip6"):
+        servers = sorted(host for host in CLOUD_METADATA if _family(host) == family)
+        spelled = servers[0] if len(servers) == 1 else "{ " + ", ".join(servers) + " }"
+        rules.append(f'{family} daddr {spelled} drop comment "cloud metadata"')
+    if not filtered:
+        return rules
+    for unit, owner, rule in own:
+        if rule.host not in CLOUD_METADATA:
+            rules.append(f'{owner} {egress_match(rule)} accept comment "{unit}"')
     anywhere = [rule for rule in firewall.egress_rules if rule.host is None]
     hosts = [rule for rule in firewall.egress_rules if rule.host is not None]
     for rule in [*sorted(anywhere, key=_port_order), *hosts]:

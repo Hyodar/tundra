@@ -7,6 +7,7 @@ ConditionVirtualization=google
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/tundravm/gcp/forwarded-ips
+Group=gcp-forwarded-ips
 TimeoutStartSec=1min
 ProtectSystem=full
 PrivateTmp=yes

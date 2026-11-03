@@ -520,7 +520,9 @@ class StateBuilder:
             profile, "/usr/bin/azure-complete-provisioning", azure.AZURE_PROVISIONING_SCRIPT, "0755"
         )
         network_setup = ships_unit(self.state.effective_profile(profile.name), NETWORK_SETUP_UNIT)
-        _task(profile, azure.provisioning_task(network_setup), users=())
+        provisioning = azure.provisioning_task(network_setup)
+        _glue_group(profile, provisioning)
+        _task(profile, provisioning, users=())
         _set_targets(profile, ("azure",))
 
     def _gcp(self, profile: ProfileState) -> None:
@@ -534,9 +536,12 @@ class StateBuilder:
         _add_file(profile, gcp.GCP_RESOLV_CONF_PATH, gcp.GCP_RESOLV_CONF)
         _service(profile, gcp.metadata_dns_service(), users=())
         _add_file(profile, gcp.HOSTNAME_SCRIPT_PATH, gcp.HOSTNAME_SCRIPT, "0755")
-        _service(profile, gcp.hostname_service(), users=())
+        hostname, routes = gcp.metadata_units()
+        _glue_group(profile, hostname)
+        _service(profile, hostname, users=())
         _add_file(profile, gcp.ROUTES_SCRIPT_PATH, gcp.ROUTES_SCRIPT, "0755")
-        _task(profile, gcp.forwarded_ips_task(), users=())
+        _glue_group(profile, routes)
+        _task(profile, routes, users=())
         _add_file(profile, gcp.DISK_RULES_PATH, gcp.GCE_DISK_NAMING_RULES)
         _add_file(profile, gcp.NVME_ID_PATH, gcp.GOOGLE_NVME_ID, "0755")
         _shell(profile, gcp.NVME_HOST_IDS, phase="postinst")
@@ -675,6 +680,13 @@ def _repository(item: Repository) -> RepositorySpec:
         in_image=item.in_image,
         sha256=item.sha256,
     )
+
+
+def _glue_group(profile: ProfileState, unit: Service | Task) -> None:
+    """Declare the group a root glue unit runs with: the firewall tells it from every other
+    root process by that group, and lets only it reach the metadata server."""
+    assert unit.group is not None
+    _group(profile, Group(unit.group))
 
 
 def _group(profile: ProfileState, group: Group) -> None:
