@@ -666,7 +666,7 @@ class Kernel(Keywords):
     every driver built in and no loadable modules.
 
     *cmdline* adds kernel parameters to the UKI's measured command line, after the ones
-    the image sets itself: ``Kernel.default(cmdline=["nospectre_v2"])``. Each entry is one
+    the image sets itself. Each entry is one
     parameter, ``name`` or ``name=value``. None is added by default, and the parameters the
     image owns (the root and its verity, the init, the boot target, the console) are refused.
     """

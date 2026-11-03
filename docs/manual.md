@@ -100,7 +100,7 @@ Passing a baseline component in `components=` replaces the implied one.
 | `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) |
 | `network` | `Network(dhcp=, static=, egress=, interfaces=)` |
 | `users`, `groups` | `User`, `Group` for resources several services share |
-| `kernel` | `Kernel.default(modules=, cmdline=)` or `Kernel.build(version, source, config=, patches=, cmdline=)` |
+| `kernel` | `Kernel.default(modules=, cmdline=)` or `Kernel.build(base=DebianConfig(...), fragments=, patches=, cmdline=)`: see [The kernel](#the-kernel) |
 | `rootfs` | `RootFS.initramfs()` (default) or `RootFS.verity()` |
 | `observability` | `Observability(logs=JournalExport(...), metrics=PrometheusRemoteWrite(...))` |
 | `targets` | a subset of `("qemu", "azure", "gcp")`; `qemu` is always built |
@@ -122,6 +122,20 @@ runtime-init step `owners` applies it at boot.
 measured command line, after the image's own: `Kernel.default(cmdline=["nospectre_v2"])`.
 A parameter tundravm sets (`root=`, `init=`, `console=` and their kin) is refused, naming
 what sets it. `Kernel.build` is for a driver built in or a symbol turned off.
+
+### The kernel
+
+`Kernel.build(base=DebianConfig("6.12.113-1"))` compiles the stable release that Debian
+package carries, from gregkh/linux, with Debian's `cloud-amd64` config and every driver
+built in. `config=Path(...)` starts from a config of your own instead. Tundra's hardening
+merges first: io_uring, userfaultfd, kexec, KSM, 32-bit syscalls, debug info, and file
+systems and protocols no image uses go off; lockdown, zeroed memory and stack canaries go
+on. The table, a reason per option, is `src/tundravm/declarative/_kernel_hardening.py`.
+`fragments=`, `.config` files or `KernelFragment({...})`, merge after it in order, then
+each component's `kernel()`, the verity root's options and the gcp target's ACPI patch. A
+fragment that sets a hardening option itself wins. `hardening=False` is the
+`kernel-unhardened` error in a production profile. The build checks every option survived
+`olddefconfig`.
 
 ## Services
 
@@ -201,7 +215,9 @@ at boot, as the probe's `service:` failure naming it.
 
 A `Component` groups declarations and exports typed values: [stage
 2](guide.md#the-component) writes one. Each code `check()` reports is declared in `rules`:
-`--explain` prints it, and an undeclared code is a `rule-undeclared` error.
+`--explain` prints it, and an undeclared code is a `rule-undeclared` error. `outbound()`
+says where it sends, and `kernel()` the `KernelFragment` and `KernelPatch` values a built
+kernel needs for it.
 
 `tundravm.components` ships the baseline and the ways in. Application components are the
 project's.

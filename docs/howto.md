@@ -38,6 +38,21 @@ declares. `production=False` makes its builds development builds. Build it with
 `tundravm build --profile staging`. [Profiles](manual.md#profiles) lists what an edit may
 change.
 
+## Build a kernel
+
+<!-- fragment -->
+```python
+kernel=Kernel.build(
+    base=DebianConfig("6.12.113-1"),
+    fragments=[KernelFragment({"CONFIG_XFS_FS": "y"}, reason="the data disk is XFS")],
+)
+```
+
+Pass it to `Image(kernel=...)`. It compiles 6.12.113 from Debian's config, hardened, with
+every driver built in; the first build takes about half an hour. A fragment keeps on what
+the hardening turns off. `tundravm check` refuses `hardening=False` in production.
+[The kernel](manual.md#the-kernel) lists what merges and in which order.
+
 ## Keep the mkosi tree committed
 
 ```console

@@ -982,7 +982,14 @@ Each tree took about 5 GB of disk. Run 41322173378 (master `9edb8d6`, by hand) i
 first on the bumped fixture, 6.12.113 from the security pool: green, `recipe` in 22m16s and
 `example` in 14m01s; the same counts as below (1138 `=m` all `=y`, none dropped; 105, 104
 and `BT_CMTP` for the example; 30 required and 1 denied, all passing), and the probe prints
-`release 6.12.113` and `6.13.12-yocto-tiny`.
+`release 6.12.113` and `6.13.12-yocto-tiny`. Run 41662442388 (branch `kernel-build`, by
+hand) is the first on the public spelling: both fixtures lower `Kernel.build(...)` in an
+image with the qemu, azure and gcp targets, so each merges Tundra's hardening fragment (160
+options, every one surviving `olddefconfig`) and applies the gcp target's BadAML ACPI
+patch. Green: `recipe` in 22m04s, `example` in 14m49s, 30 required and 1 denied, all
+passing, the same releases printed. Booted under QEMU without TDX, the patched kernel logs
+`ACPI Error: SANDBOX: Unknown platform` and denies the AML reads of the HPET region
+(`fed00000`), and the boot goes on.
 
 - **The config diff**: Debian's 6.12.113 config (as 6.12.111's) has 1138 `=m` options; after `olddefconfig`
   all 1138 are `=y` and none dropped, so Kconfig promotes `m` to `y` under
