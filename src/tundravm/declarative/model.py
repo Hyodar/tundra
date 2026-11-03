@@ -3502,7 +3502,7 @@ class Task(Declared):
     defaults to ``Hardening.strict()``. *needs* waits for runtime-init steps and
     *conditions* gate it (``Condition.virtualization("google")``), as on :class:`Service`.
     *env*, *credentials*, *groups*, *working_dir*, *logs*, *runtime*, *timeout_stop*,
-    *kill_mode* and *directives* render as :class:`Service`'s do (a public
+    *kill_mode*, *write_paths* and *directives* render as :class:`Service`'s do (a public
     ``Service(timer=...)`` keeps every keyword through them). A scheduled task requires the
     execution gate as a ``Service`` does; a boot task does not (probes and boot plumbing
     stay readable on a refused boot).
@@ -3534,11 +3534,15 @@ class Task(Declared):
     kill_mode: Literal["control-group", "mixed", "process", "none"] | None = None
     directives: Extra = field(default_factory=FrozenMap)
     egress: tuple[EgressRule, ...] = ()
+    write_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _freeze(self, "command", "conditions", "groups")
+        _freeze(self, "command", "conditions", "groups", "write_paths")
         _require_egress(self)
         _require_env(self)
+        for path in self.write_paths:
+            optional = isinstance(path, str) and path.startswith("-")
+            _require_absolute(self, path[1:] if optional else path, "write_paths entry")
         for name, target in _freeze_map(self, "credentials").items():
             if not _ENTRY_NAME.fullmatch(name):
                 raise _fail(self, f"invalid credential name {name!r}.", hint="Use 'api-token'.")

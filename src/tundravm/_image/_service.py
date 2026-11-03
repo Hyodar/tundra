@@ -33,7 +33,7 @@ from ._component import (
     ServiceRef,
     readiness_of,
 )
-from ._secrets import CREDENTIAL_REFERENCE, InstanceKey, Secret
+from ._secrets import CREDENTIAL_REFERENCE, Secret
 from ._storage import VolumeDirectory
 from ._values import (
     TCP,
@@ -204,9 +204,9 @@ class Service(Located):
     that generates it.
 
     ``timer=Every("1h")`` (or ``Calendar(...)``) runs it as a scheduled oneshot with every
-    other keyword kept; what only a long-lived service has (``socket=``, ``readiness=``,
-    ``expose=``, ``credentials=`` beyond ``InstanceKey()``, a volume ``state=``) is
-    refused.
+    other keyword kept, its secrets and its volume ``state=`` waited for as a long-lived
+    service's are; what only a long-lived service has (``socket=``, ``readiness=``,
+    ``expose=``) is refused.
 
     :meth:`packaged` runs the unit a Debian package ships, under ``hardening=``.
     """
@@ -616,16 +616,6 @@ class Service(Located):
             ),
             ("readiness", self.readiness is not None, "nothing waits for a scheduled run"),
             ("expose", bool(self.expose), "no port stays open between scheduled runs"),
-            (
-                "credentials",
-                any(not isinstance(c, InstanceKey) for c in self.credentials),
-                "secret delivery orders long-lived services only",
-            ),
-            (
-                "state",
-                isinstance(self.state, VolumeDirectory),
-                "volume unlock orders long-lived services only; use a /var/lib state",
-            ),
         )
         for name, given, why in refused:
             if given:
@@ -634,15 +624,6 @@ class Service(Located):
                     f"runs on a timer, so {name}= does not apply: {why}.",
                     hint=f"Drop {name}=, or drop timer= to run it as a long-lived service.",
                 )
-        referenced = tuple(r for r in self._references() if not isinstance(r, InstanceKey))
-        if referenced:
-            raise _fail(
-                self,
-                "runs on a timer, so it cannot read credential "
-                f"{referenced[0].name!r}: secret delivery orders long-lived services only.",
-                hint="Drop it from argv= and environment=, or drop timer= to run it as a "
-                "long-lived service.",
-            )
 
     @property
     def unit_name(self) -> str:

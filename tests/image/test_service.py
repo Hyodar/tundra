@@ -12,7 +12,7 @@ from tundravm.declarative import Root, Task
 from tundravm.declarative.systemd import PRESETS
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
-from tundravm.secrets import Credential
+from tundravm.secrets import Credential, Secret
 from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import (
     DropIn,
@@ -387,10 +387,27 @@ def test_the_shell_escape_is_explicit() -> None:
         ("socket", Listen(7)),
         ("readiness", TcpProbe(8080)),
         ("expose", [TCP(8080)]),
-        ("credentials", [Credential("jwt", "/etc/app/jwt")]),
-        ("state", Volume("data", mount="/data", unlock=OperatorKey()).directory("app")),
     ],
 )
 def test_a_timer_refuses_what_only_a_long_lived_service_has(field: str, value: object) -> None:
     with pytest.raises(ValidationError, match=f"runs on a timer, so {field}= does not apply"):
         Service("app", ["/usr/bin/app"], timer=Every("1h"), **{field: value})  # type: ignore[arg-type]
+
+
+def test_a_timer_waits_for_its_secret_and_its_volume_as_a_service_does() -> None:
+    data, token = Volume("data", mount="/data", unlock=OperatorKey()), Secret("token")
+    backup = Service(
+        "backup", ["/usr/bin/backup", token], state=data.directory("backup"), timer=Every("1h")
+    )
+    keeper = Service("keeper", ["/usr/bin/keeper", token], state=data.directory("keeper"))
+    planned = _plan(backup, keeper)
+    timer, service = planned.service("backup"), planned.service("keeper")
+    keys = [("Unit", "Requires"), ("Unit", "After"), ("Service", "LoadCredential")]
+    assert [timer.get(*key) for key in keys] == [service.get(*key) for key in keys]
+    assert "credential-token.service runtime-init-volume-data.service" in (
+        timer.get("Unit", "Requires") or ""
+    )
+    assert timer.get("Service", "ReadWritePaths") == "-/data/backup"
+    assert (
+        "install -d -o backup -g backup" in planned.file("/usr/lib/runtime-init/volume-data").text
+    )

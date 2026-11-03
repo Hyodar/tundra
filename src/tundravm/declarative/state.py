@@ -1580,6 +1580,7 @@ def _task(
             groups=tuple(task.groups),
             logs=task.logs,
             runtime=task.runtime,
+            write_paths=tuple(task.write_paths),
             timeout_stop=task.timeout_stop,
             kill_mode=task.kill_mode,
             extra_unit={section: dict(keys) for section, keys in task.directives.items()},

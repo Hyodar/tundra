@@ -827,23 +827,9 @@ class _Lowering:
 
     def unit(self, item: Service) -> dm.Service:
         """The generated ``.service``."""
-        directives = _directives(item)
-        optional = self.runtime.optional(item)
-        if optional:
-            directives["SetCredential"] = optional
-        requires = (*self.required_units(item), *self.runtime.waits(item))
+        directives, requires, environment, groups, working, write = self.bound(item)
         shutdown = item.shutdown
         state = item.state
-        environment = item.variables()
-        groups = _groups(item)
-        working = item.working_directory
-        write: tuple[str, ...] = ()
-        if isinstance(state, VolumeDirectory):
-            environment.setdefault("STATE_DIRECTORY", state.path)
-            working = working or state.path
-            write = (f"-{state.path}",)
-            if state.group is not None and state.group not in groups:
-                groups.append(state.group)
         return dm.Service(
             item.unit_name,
             item.command(),
@@ -891,21 +877,54 @@ class _Lowering:
             ports=tuple(dm.Port(port.port, port.protocol) for port in item.expose),
         )
 
-    def timer_task(self, item: Service) -> dm.Task:
-        """A ``Service(timer=...)`` as the scheduled oneshot it is, every keyword kept."""
-        assert not isinstance(item.state, VolumeDirectory)  # refused with timer=
-        requires = self.required_units(item)
-        shutdown = item.shutdown
+    def bound(
+        self, item: Service
+    ) -> tuple[
+        dict[str, str | tuple[str, ...]],
+        tuple[str, ...],
+        dict[str, str],
+        list[str],
+        str | None,
+        tuple[str, ...],
+    ]:
+        """What *item*'s secrets and volume add to its unit, timer or not: the directives
+        (an optional secret's ``SetCredential=``), the units it requires (readiness, then the
+        secret and volume waits), its environment, groups, working directory and the paths
+        it writes."""
         directives = _directives(item)
+        optional = self.runtime.optional(item)
+        if optional:
+            directives["SetCredential"] = optional
+        requires = (*self.required_units(item), *self.runtime.waits(item))
+        state = item.state
+        environment = item.variables()
+        groups = _groups(item)
+        working = item.working_directory
+        write: tuple[str, ...] = ()
+        if isinstance(state, VolumeDirectory):
+            environment.setdefault("STATE_DIRECTORY", state.path)
+            working = working or state.path
+            write = (f"-{state.path}",)
+            if state.group is not None and state.group not in groups:
+                groups.append(state.group)
+        return directives, requires, environment, groups, working, write
+
+    def timer_task(self, item: Service) -> dm.Task:
+        """A ``Service(timer=...)`` as the scheduled oneshot it is, every keyword kept: its
+        secrets and its volume are waited for as a long-lived service's are."""
+        directives, requires, environment, groups, working, write = self.bound(item)
+        shutdown = item.shutdown
+        state = item.state
         return dm.Task(
             item.unit_name,
             item.command(),
             schedule=item.timer,
             user=item.user,
-            groups=tuple(_groups(item)),
-            state=item.state,
-            working_dir=item.working_directory,
-            env=item.variables(),
+            groups=tuple(groups),
+            state=None if isinstance(state, VolumeDirectory) else state,
+            working_dir=working,
+            env=environment,
+            write_paths=write,
             credentials=_credentials(item.bindings),
             logs=item.logs,
             runtime=item.runtime,

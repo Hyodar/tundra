@@ -196,9 +196,9 @@ cannot fix.
 | a shared group | `groups=["tdx"]` |
 | anything systemd knows and no field covers | `unit=DropIn(...)` |
 
-A timer runs a scheduled oneshot. It refuses what only a long-lived service has:
-`socket=`, `readiness=`, `expose=`, a volume `state=`, and any credential but
-`InstanceKey()`. Writing a unit under `/etc/systemd/system` at boot is the
+A timer runs a scheduled oneshot. It binds secrets and a volume `state=`, waiting for
+them as a long-lived service does, and refuses what only one has: `socket=`,
+`readiness=` and `expose=`. Writing a unit under `/etc/systemd/system` at boot is the
 `unit-written-at-runtime` error: declare it instead.
 
 `Service.packaged("prometheus-node-exporter.service")` runs the unit a Debian package ships
