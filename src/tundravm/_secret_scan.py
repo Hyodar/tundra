@@ -11,6 +11,11 @@ the generic ``token|secret|password = value`` assignment is only looked for in
 config-like files, outside comments, and needs a token-like value (16+
 characters mixing letter cases, digits or base64 symbols; not a path, not a
 ``$VAR`` or ``{{ template }}`` reference).
+
+A source URL never carries a credential: :func:`url_credential` names one at
+construction, and :func:`refuse_credentials` stops the lock, the build manifest and the
+SBOM from being written with a password in a URL (``://user:token@``), a credential query
+parameter (``?token=``) or one of the strong patterns.
 """
 
 from __future__ import annotations
@@ -20,6 +25,9 @@ import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass
+from urllib.parse import unquote, urlsplit
+
+from .errors import ValidationError
 
 SCAN_LIMIT = 1 << 20
 """Bytes of a file the scan reads; the rest is not looked at."""
@@ -73,6 +81,19 @@ _VALUE_KEYS = frozenset({"value", "default", "data", "plaintext", "literal"})
 """Keys of a secrets YAML file that hold a secret's value rather than its configuration."""
 _YAML_NON_LITERALS = frozenset({"null", "~", '""', "''", "|", ">", "|-", ">-", "{}", "[]"})
 _COMMENT = ("#", ";", "//")
+_REFERENCE = r"(?![$%{<])"
+"""Not a ``$VAR``, ``%i``, ``{{ template }}`` or ``<placeholder>`` reference."""
+_URL_PASSWORD = re.compile(rf"://[^/\s\"'<>@]*:{_REFERENCE}[^/\s\"'<>@]+@")
+"""A URL whose user info holds a password: ``https://user:token@host``."""
+_QUERY_CREDENTIAL = re.compile(
+    rf"[?&](?P<key>{_SENSITIVE}|[\w.-]*?(?:signature|credential)|sig)={_REFERENCE}"
+    r"[^&#\s\"'<>]+",
+    re.IGNORECASE,
+)
+"""A query parameter carrying a credential: ``?token=``, ``&X-Amz-Signature=``, ``&sig=``."""
+_WEB_SCHEMES = frozenset({"http", "https"})
+AUTH_SPELLING = 'Git(url, ref, auth="GITHUB_TOKEN")'
+"""The public spelling of a private source: the token stays in the named variable."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,3 +257,56 @@ def _directive(line: str) -> str:
     """``ExecStart=`` for a unit file *line* setting that directive, else ``""``."""
     match = _DIRECTIVE.match(line)
     return f"{match.group(1)}=" if match else ""
+
+
+def url_credential(url: str) -> str | None:
+    """What credential *url* carries, else ``None``.
+
+    Any user info of an http(s) URL (a token often stands alone before the ``@``), a
+    password in another scheme's (``ssh://git@host`` is the SSH agent's, and allowed), or
+    a credential query parameter.
+    """
+    parts = urlsplit(url)
+    userinfo, at, _ = parts.netloc.rpartition("@")
+    if at and parts.scheme.lower() in _WEB_SCHEMES:
+        return "a user name or token before the host"
+    if at and ":" in userinfo:
+        return "a password before the host"
+    match = _QUERY_CREDENTIAL.search(f"?{parts.query}") if parts.query else None
+    if match is not None:
+        return f"a {match.group('key')}= query parameter"
+    return None
+
+
+def redact(url: str) -> str:
+    """*url* with its user info and its query replaced by ``***``, fit for an error."""
+    parts = urlsplit(url)
+    host = parts.netloc.rpartition("@")[2]
+    netloc = f"***@{host}" if "@" in parts.netloc else host
+    return parts._replace(netloc=netloc, query="***" if parts.query else "").geturl()
+
+
+def artifact_credential(text: str) -> str | None:
+    """What credential the text of a written artifact holds, percent-encoded or not."""
+    for candidate in dict.fromkeys((text, unquote(text))):
+        if _URL_PASSWORD.search(candidate):
+            return "a password in a URL"
+        match = _QUERY_CREDENTIAL.search(candidate)
+        if match is not None:
+            return f"a {match.group('key')}= query parameter in a URL"
+        for found in _strong(candidate):
+            return found.kind
+    return None
+
+
+def refuse_credentials(artifact: str, text: str) -> None:
+    """Raise unless the text of *artifact* (``tundravm.lock``, ``manifest.json``, the
+    SBOM) holds no credential: nothing a build produces ever carries one."""
+    found = artifact_credential(text)
+    if found is not None:
+        raise ValidationError(
+            f"{artifact} would hold {found}: a credential is never written into what a "
+            "build produces.",
+            hint="Drop the credential from the source URL and name the variable holding "
+            f"it: {AUTH_SPELLING}.",
+        )

@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from ._secret_scan import redact, url_credential
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, SourceError, StateError, TdxError, ValidationError
 from .lockfile.model import LockedFetch, LockedToolchain
@@ -144,6 +145,24 @@ warnings as errors would fail its pinned build the day an advisory lands) and no
 server outliving the build."""
 
 
+def refuse_url_credential(url: str, spelling: str) -> None:
+    """Refuse a credential in the source URL *url* of the public *spelling* (``Git``).
+
+    The URL is what the lock, the build manifest and the SBOM record; the message shows
+    it redacted, never the credential.
+    """
+    found = url_credential(url)
+    if found is None:
+        return
+    raise ValidationError(
+        f'{spelling}("{redact(url)}"): the url carries {found}, which would reach the lock, '
+        "the build manifest and the SBOM.",
+        hint=f'{spelling}("<url without the credential>", ..., auth="GITHUB_TOKEN"), '
+        "exporting GITHUB_TOKEN on the host that locks and builds; an SSH url "
+        "(git@host:org/repo.git) reads the SSH agent instead.",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GitSource:
     """A git repository at *ref* (branch, tag, or full 40-hex commit sha)."""
@@ -154,6 +173,9 @@ class GitSource:
     submodules: bool = field(default=False, kw_only=True)
 
     kind: Literal["git"] = field(default="git", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        refuse_url_credential(self.url, "Git")
 
     @property
     def requested(self) -> str:
@@ -189,6 +211,10 @@ class HttpSource:
     """URLs of the same file, read in order when *url* answers 404 (the sha256 pins it)."""
 
     kind: Literal["http"] = field(default="http", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        for url in (self.url, *self.mirrors):
+            refuse_url_credential(url, "Http")
 
     @property
     def requested(self) -> str:

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tundravm._secret_scan import refuse_credentials
 from tundravm.errors import LockfileError
 from tundravm.lockfile.model import (
     LOCKFILE_VERSION,
@@ -50,7 +51,9 @@ def serialize_lockfile(lockfile: Lockfile) -> str:
         payload["toolchains"] = [
             {key: getattr(item, key) for key in _TOOLCHAIN_KEYS} for item in lockfile.toolchains
         ]
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    refuse_credentials("tundravm.lock", text)
+    return text
 
 
 def parse_lockfile(raw: str) -> Lockfile:

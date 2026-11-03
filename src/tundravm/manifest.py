@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import _ssh_sig
+from ._secret_scan import refuse_credentials
 from .errors import StateError, TdxError
 
 SCHEMA = "tundravm.manifest/2"
@@ -441,7 +442,9 @@ def uki_cmdline(uki: Path) -> str | None:
 
 
 def write_canonical(path: Path, payload: Mapping[str, Any]) -> None:
-    path.write_bytes(canonical(payload))
+    data = canonical(payload)
+    refuse_credentials(path.name, data.decode("ascii"))
+    path.write_bytes(data)
 
 
 def records_of(measurements: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
+from tundravm._secret_scan import refuse_credentials
 from tundravm.errors import ArtifactError
 from tundravm.lockfile import LockedFetch
 
@@ -138,7 +139,9 @@ class Sbom:
 
     def render(self) -> str:
         """The document as SPDX 2.3 JSON."""
-        return json.dumps(self.to_spdx(), indent=2) + "\n"
+        text = json.dumps(self.to_spdx(), indent=2) + "\n"
+        refuse_credentials("the SBOM", text)
+        return text
 
     # ── SPDX 2.3 ────────────────────────────────────────────────────────
 

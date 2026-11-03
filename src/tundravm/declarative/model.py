@@ -22,7 +22,7 @@ from typing import ClassVar, Literal, get_args, overload
 from tundravm._location import Located, anchored, caller_location
 from tundravm._source import CargoBuild as Cargo
 from tundravm._source import DotnetBuild as Dotnet
-from tundravm._source import FrozenMap
+from tundravm._source import FrozenMap, refuse_url_credential
 from tundravm._source import GoBuild as Go
 from tundravm._units.directives import UNIT_SUFFIXES, check_value
 from tundravm.diagnostics import Diagnostic
@@ -2252,6 +2252,7 @@ class Git(Keywords):
 
     def __post_init__(self) -> None:
         _require_name(self, self.url, "url")
+        refuse_url_credential(self.url, "Git")
         _require_name(self, self.ref, "ref")
         if self.subdir is not None:
             _require_relative(self, self.subdir, "subdir")
@@ -2264,6 +2265,7 @@ class Http(Keywords):
 
     def __post_init__(self) -> None:
         _require_name(self, self.url, "url")
+        refuse_url_credential(self.url, "Http")
         if self.sha256 is not None and not _SHA256.fullmatch(self.sha256):
             raise _fail(
                 self,
