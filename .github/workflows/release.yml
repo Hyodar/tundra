@@ -55,6 +55,9 @@ jobs:
       - name: Check the example image and its committed tree
         run: uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
 
+      - name: Check the flashbox image and its committed tree
+        run: uv run tundravm check examples/flashbox/image.py --tree examples/flashbox/mkosi
+
   build:
     needs: test
     runs-on: ubuntu-24.04

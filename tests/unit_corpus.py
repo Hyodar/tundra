@@ -1,7 +1,7 @@
 """Every systemd unit text in the repository, for the unit text and unit lint tests.
 
 Sources: the committed attested node tree, the unit constants of modules, examples and templates,
-and the emitted tree of every example, the attested node and ``init`` template.
+and the emitted tree of every example, the attested node, flashbox and ``init`` template.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 
-from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT
+from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, FLASHBOX, REPO_ROOT
 
 _UNIT_PATH = re.compile(r"(^|/)(usr/lib|etc)/systemd/system/")
 _UNIT_SUFFIX = re.compile(r"\.(service|socket|target|timer|mount|path|conf)$")
@@ -41,9 +41,10 @@ def constant_units() -> Iterator[tuple[str, str]]:
 
 
 def recipe_paths() -> dict[str, Path]:
-    """Every stage of the attested node and its ``image.py``, by name."""
+    """Every stage of the attested node, its ``image.py`` and flashbox's, by name."""
     paths = {path.stem: path for path in EXAMPLE_RECIPES}
     paths["attested-node"] = ATTESTED_NODE / "image.py"
+    paths["flashbox"] = FLASHBOX / "image.py"
     return paths
 
 

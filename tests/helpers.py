@@ -19,6 +19,9 @@ from tundravm.templates import render_recipe_template
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ATTESTED_NODE = REPO_ROOT / "examples" / "attested-node"
+FLASHBOX = REPO_ROOT / "examples" / "flashbox"
+"""The flashbots-images port: flashbox-l1 as one image, its components linked from the
+attested node's."""
 EXAMPLE_RECIPES = tuple(sorted((ATTESTED_NODE / "stages").glob("*.py")))
 """The attested node's stages, in order; its ``image.py`` is the last one, built from
 ``signer/`` beside it."""

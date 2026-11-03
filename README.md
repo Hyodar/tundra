@@ -43,6 +43,9 @@ missing. `new` writes a project whose image is stage 1 of the [guide](docs/guide
    and [check codes](docs/reference/lint.md). [Releasing](docs/release.md) says what a tag
    pins.
 
+[`examples/flashbox`](examples/flashbox/) ports flashbots-images' searcher sandbox to one
+image.
+
 ## Development
 
 ```console

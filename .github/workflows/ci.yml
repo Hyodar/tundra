@@ -68,6 +68,9 @@ jobs:
         # and tree drift fail the step.
         run: uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
 
+      - name: Check the flashbox image and its committed tree
+        run: uv run tundravm check examples/flashbox/image.py --tree examples/flashbox/mkosi
+
   stages:
     # Real mkosi builds on the runner: the smoke recipe (no source builds) and the attested
     # node's stage 1, whose evidence service builds from tools/ (see the header), production
