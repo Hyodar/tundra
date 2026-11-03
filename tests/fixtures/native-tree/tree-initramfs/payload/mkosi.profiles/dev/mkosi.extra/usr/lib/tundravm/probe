@@ -233,6 +233,13 @@ probe_port() {
     done
     fail "nothing listens on $2/$1 after 30s: the service must bind every port expose= names, or drop it from expose="
 }
+container_connect() {
+    if said=$(timeout 10 nsenter -t "$1" -n bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$2" "$3" 2>&1); then
+        return 0
+    fi
+    echo "${said:-no answer in 10s}" | tail -n 1
+    return 1
+}
 probe_container() {
     state=$(systemctl show -P ActiveState "$1")
     waited=0
@@ -254,11 +261,19 @@ probe_container() {
         return
     fi
     digest=sha256:${digest%% *}
+    pid=$(systemctl show -P MainPID "$1")
+    if [ "$3" = veth ]; then
+        if grep -qF -- "$4" "/proc/$pid/net/fib_trie" 2>/dev/null; then
+            ok "active, root $digest, at $4 on its veth"
+        else
+            fail "root $digest, but its namespace holds no $4: journalctl -u ${1%.service}-net.service"
+        fi
+        return
+    fi
     if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
         skip "active, root $digest; no nsenter or bash to send a datagram from its namespace"
         return
     fi
-    pid=$(systemctl show -P MainPID "$1")
     if said=$(nsenter -t "$pid" -n bash -c 'printf x >"/dev/udp/$0/$1"' "$3" "$4" 2>&1); then
         fail "root $digest, but a datagram to $3:$4/udp left its namespace: it must hold lo only; cat /proc/$pid/net/dev"
         return
@@ -267,6 +282,96 @@ probe_container() {
         *unreachable*) ok "active, root $digest, no route out of its namespace" ;;
         *) fail "root $digest, a datagram to $3:$4/udp failed with $(echo "$said" | tail -n 1), not for want of a route" ;;
     esac
+}
+probe_container_egress() {
+    if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "no nsenter or bash to connect from its namespace"
+        return
+    fi
+    pid=$(systemctl show -P MainPID "$1")
+    shown=
+    if [ "$2" != - ]; then
+        if ! said=$(container_connect "$pid" "${2%:*}" "${2##*:}"); then
+            fail "$2/tcp, which its egress allows, did not connect ($said): nft list chain inet filter forward"
+            return
+        fi
+        shown="reaches $2/tcp, "
+    fi
+    for denied in "$3" "$4"; do
+        [ "$denied" = - ] && continue
+        if said=$(container_connect "$pid" "${denied%:*}" "${denied##*:}"); then
+            fail "$denied/tcp connected, but no egress rule of its accepts it: nft list chain inet filter forward"
+            return
+        fi
+        case $said in
+            *refused*) shown="$shown$denied/tcp refused, " ;;
+            *) fail "$denied/tcp failed with $said, not a reset from the forward chain"; return ;;
+        esac
+    done
+    ok "${shown%, }"
+}
+probe_container_endpoint() {
+    if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "no nsenter or bash to connect from its namespace"
+        return
+    fi
+    pid=$(systemctl show -P MainPID "$1")
+    if said=$(container_connect "$pid" "$2" "$3"); then
+        ok "$2:$3 answers inside its namespace"
+    else
+        fail "$2:$3 does not answer inside its namespace ($said): systemctl status $4"
+    fi
+}
+probe_container_serves() {
+    if ! command -v bash >/dev/null 2>&1; then
+        skip "no bash to connect with"
+        return
+    fi
+    if said=$(timeout 10 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$1" "$2" 2>&1); then
+        ok "the host reaches $1:$2 on its veth"
+    else
+        fail "the host does not reach $1:$2 (${said:-no answer in 10s}): nft list chain inet filter output"
+    fi
+}
+udp_in() {
+    set -- $(grep '^Udp:' "/proc/$1/net/snmp" | sed -n 2p)
+    echo "${2:-0}"
+}
+probe_container_udp() {
+    for tool in ip nsenter bash; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            skip "no $tool to send a datagram from a namespace of the probe's"
+            return
+        fi
+    done
+    pid=$(systemctl show -P MainPID "$1")
+    ip link delete vp-probe >/dev/null 2>&1
+    ip netns delete tundravm-probe >/dev/null 2>&1
+    if ! { ip netns add tundravm-probe &&
+        ip link add vp-probe type veth peer name probe0 netns tundravm-probe &&
+        ip addr add 169.254.255.1/30 dev vp-probe && ip link set vp-probe up &&
+        ip -n tundravm-probe addr add 169.254.255.2/30 dev probe0 &&
+        ip -n tundravm-probe link set probe0 up; } >/dev/null 2>&1; then
+        fail "the probe could not make its namespace and veth: is veth among the curated modules?"
+        ip netns delete tundravm-probe >/dev/null 2>&1
+        return
+    fi
+    before=$(udp_in "$pid")
+    after=$before
+    waited=0
+    while [ "$after" -le "$before" ] && [ "$waited" -lt 10 ]; do
+        nsenter --net=/run/netns/tundravm-probe bash -c 'printf tundravm-probe >"/dev/udp/$0/$1"' 169.254.255.1 "$2" 2>/dev/null
+        sleep 1
+        waited=$((waited + 1))
+        after=$(udp_in "$pid")
+    done
+    ip link delete vp-probe >/dev/null 2>&1
+    ip netns delete tundravm-probe >/dev/null 2>&1
+    if [ "$after" -gt "$before" ]; then
+        ok "a datagram to the host's $2/udp reached a socket in it (Udp InDatagrams $before -> $after)"
+    else
+        fail "no datagram to the host's $2/udp reached a socket in it in 10s: nft list chain inet filter prerouting; is its program listening?"
+    fi
 }
 probe_egress() {
     if ! command -v bash >/dev/null 2>&1; then
@@ -709,8 +814,8 @@ check=service:image-metrics.service
 probe_service image-metrics.service
 check=service:box.service
 probe_service box.service
-check=socket:box-forward-8081.socket
-probe_active box-forward-8081.socket 'the socket must listen; systemctl status names why it does not'
+check=socket:box-endpoint-8090.socket
+probe_active box-endpoint-8090.socket 'the socket must listen; systemctl status names why it does not'
 check=service:sink.service
 probe_service sink.service
 check=service:token.service
@@ -723,10 +828,16 @@ check=port:8080/tcp
 probe_port tcp 8080
 check=port:8443/tcp
 probe_port tcp 8443
-check=port:8081/tcp
-probe_port tcp 8081
 check=container:box
-probe_container box.service /usr/lib/tundravm/containers/box.raw 192.0.2.1 9
+probe_container box.service /usr/lib/tundravm/containers/box.raw veth 169.254.136.254
+check=container:box:egress
+probe_container_egress box.service 1.1.1.1:853 1.0.0.1:853 169.254.169.254:80
+check=container:box:endpoint:8090
+probe_container_endpoint box.service 127.0.0.1 8090 box-endpoint-8090.socket
+check=container:box:serves:8081
+probe_container_serves 169.254.136.254 8081
+check=container:box:udp:9999
+probe_container_udp box.service 9999
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=egress:time.cloudflare.com
@@ -749,8 +860,8 @@ check=egress:metadata:metrics-export
 probe_metadata metrics-export - 169.254.169.254 no
 check=egress:metadata:box
 probe_metadata box - 169.254.169.254 no
-check=egress:metadata:box-forward-8081
-probe_metadata box-forward-8081 - 169.254.169.254 no
+check=egress:metadata:box-endpoint-8090
+probe_metadata box-endpoint-8090 - 169.254.169.254 no
 check=egress:metadata:token
 probe_metadata token - 169.254.169.254 no
 check=egress:metadata:go-probe
@@ -780,7 +891,7 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|fixture:box_alive|fixture:box_cpu_under_80_percent|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up' 'fixture:box_alive' 'fixture:box_cpu_under_80_percent'
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-forward-8081.service sink.service token.service go-probe.service rust-probe.service
+probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-endpoint-8090.service sink.service token.service go-probe.service rust-probe.service
 check=observability:egress
 probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:web.service
@@ -797,8 +908,8 @@ check=hardening:metrics-export.service
 probe_hardening metrics-export.service 2.5 static
 check=hardening:box.service
 probe_hardening box.service 2.5 static
-check=hardening:box-forward-8081.service
-probe_hardening box-forward-8081.service 2.5 static
+check=hardening:box-endpoint-8090.service
+probe_hardening box-endpoint-8090.service 2.5 static
 check=hardening:sink.service
 probe_hardening sink.service 7.8 relaxed
 check=hardening:token.service
@@ -808,7 +919,7 @@ probe_hardening go-probe.service 2.5 static
 check=hardening:rust-probe.service
 probe_hardening rust-probe.service 2.5 static
 check=kernel:modules
-probe_modules button configfs crc32c_generic efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
+probe_modules button configfs crc32c_generic efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_chain_nat nft_ct nft_masq nft_nat nft_reject_inet nvme pci_hyperv sd_mod tdx_guest veth virtio_blk virtio_net virtio_scsi
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root
