@@ -281,6 +281,9 @@ class HttpSource:
     mirrors: tuple[str, ...] = field(default=(), kw_only=True)
     """URLs of the same file, read in order when *url* answers 404 (the sha256 pins it)."""
     auth: str | None = field(default=None, kw_only=True)
+    missing: str | None = field(default=None, kw_only=True, compare=False)
+    """Why every URL answering 404 means the declaration names nothing, in its words
+    (``DebianConfig``'s: the snapshot carries no such version); ``None``: ``HTTP 404``."""
 
     kind: Literal["http"] = field(default="http", init=False, repr=False)
 
@@ -3047,12 +3050,12 @@ def _download(source: HttpSource, pin: str, dest: Path) -> None:
                 out.write(chunk)
     except HTTPError as exc:
         exc.close()
-        reason = f"HTTP {exc.code}"
+        reason = _http_reason(source, exc.code)
         raise SourceError(
             f"Cannot fetch {described}: {reason}.",
             source=described,
             reason=reason,
-            hint="Check the URL with `curl -I URL`; it must serve the file.",
+            hint=_http_hint(source, exc.code, "Check the URL with `curl -I URL`"),
         ) from exc
     except OSError as exc:
         reason = _network_reason(exc.reason if isinstance(exc, URLError) else exc)
@@ -3167,12 +3170,12 @@ def _download_digest(source: HttpSource) -> str:
             return hashlib.sha256(response.read()).hexdigest()
     except HTTPError as exc:
         exc.close()
-        reason = f"HTTP {exc.code}"
+        reason = _http_reason(source, exc.code)
         raise SourceError(
             f"Cannot resolve {described}: {reason}.",
             source=described,
             reason=reason,
-            hint="Check the URL in a browser or with `curl -I URL`; it must serve the file.",
+            hint=_http_hint(source, exc.code, "Check the URL in a browser or with `curl -I URL`"),
         ) from exc
     except OSError as exc:
         reason = _network_reason(exc.reason if isinstance(exc, URLError) else exc)
@@ -3182,6 +3185,20 @@ def _download_digest(source: HttpSource) -> str:
             reason=reason,
             hint="Check the URL and the network path to its host.",
         ) from exc
+
+
+def _http_reason(source: HttpSource, code: int) -> str:
+    """``HTTP <code>``, or what a 404 means for *source* when it says."""
+    return source.missing if code == 404 and source.missing else f"HTTP {code}"
+
+
+def _http_hint(source: HttpSource, code: int, check: str) -> str:
+    if code == 404 and source.missing:
+        return (
+            "Name a version the snapshot ships (its dists/<suite>/main/binary-amd64/Packages "
+            "lists each), or a snapshot that ships this one."
+        )
+    return f"{check}; it must serve the file."
 
 
 def _network_reason(cause: object) -> str:

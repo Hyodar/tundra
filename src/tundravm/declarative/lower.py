@@ -685,6 +685,15 @@ def _kernel_base(kernel: Kernel, platform: Platform | None) -> dict[str, Any]:
     return {
         "base_deb": base.url(_snapshot_archive(archive)),
         "base_deb_mirrors": () if security is None else (base.security_url(security),),
+        "base_deb_missing": (
+            f"snapshot {archive} ships no linux-config-{base.series} {base.version}: "
+            + (
+                "its main pool (the release and its backports) does not hold it"
+                if security is None
+                else "neither its main pool (the release and its backports) nor its "
+                "security pool holds it"
+            )
+        ),
         "base_deb_sha256": base.sha256,
         "base_member": base.member,
     }

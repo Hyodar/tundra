@@ -27,6 +27,7 @@ from tundravm.declarative import (
     Git,
     Go,
     Install,
+    Kernel,
     Lock,
     Mkosi,
     Package,
@@ -41,7 +42,7 @@ from tundravm.declarative import (
 from tundravm.declarative import lifecycle as lifecycle_module
 from tundravm.declarative.lifecycle import bake_image, check_report, compile_image
 from tundravm.declarative.utils import EfiStub
-from tundravm.errors import ErrorCode, PolicyError, SourceError, StateError
+from tundravm.errors import ErrorCode, LockfileError, PolicyError, SourceError, StateError
 from tundravm.lockfile import LockedToolchain, parse_lockfile
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
 
@@ -1192,6 +1193,41 @@ def test_a_debian_config_is_read_from_the_main_pool_then_the_security_pool(
         path.write_bytes(pool.encode())
     source = _source.HttpSource(urls["main"], mirrors=(urls["security"],))
     assert _source._download_digest(source) == hashlib.sha256(read.encode()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("version", "served"),
+    [("6.12.113-1", True), ("6.18.15-1~bpo13+1", True), ("6.18.99-1~bpo13+1", False)],
+    ids=["trixie", "trixie-backports", "unknown"],
+)
+def test_the_lock_pins_a_debian_config_the_snapshot_ships(
+    tmp_path: Path, snapshot: tuple[str, str], version: str, served: bool
+) -> None:
+    archive, _ = snapshot
+    config = DebianConfig(version, snapshot=archive)
+    if served:
+        path = tmp_path / "www" / config.url(archive).split("/", 3)[3]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(version.encode())
+    recipe = _recipe(
+        Kernel(version.split("-")[0], Git("https://k.example/linux", "v1"), base=config)
+    )
+
+    def resolve(source: _source.Source) -> str:
+        return _source._download_digest(source) if source.kind == "http" else "a" * 40
+
+    if not served:
+        with pytest.raises(LockfileError, match=f"snapshot {archive} ships no linux-config-6.18"):
+            lock(recipe, resolver=resolve)
+        return
+    pins = {
+        pin.name: (pin.source, pin.digest)
+        for pin in lock(recipe, resolver=resolve).lockfile.fetches
+    }
+    assert pins["kernel-config"] == (
+        config.url(archive),
+        hashlib.sha256(version.encode()).hexdigest(),
+    )
 
 
 # ── EfiStub ──────────────────────────────────────────────────────────

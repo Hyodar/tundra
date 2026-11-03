@@ -2627,8 +2627,12 @@ class DebianConfig:
     ``config.<arch>_none_<flavor>.xz`` of ``linux-config-<major.minor>`` in the pools of
     *snapshot* (default: the platform's): the main pool first, then the security pool,
     which alone carries a kernel Debian ships as a security update until the next point
-    release. ``tundravm lock`` pins the package's
-    sha256, ``tundravm build`` downloads it on the host.
+    release. The main pool holds the release's and trixie-backports' packages, so a
+    backports version (``DebianConfig("6.18.15-1~bpo13+1", snapshot="20261003T143013Z")``,
+    a kernel whose ``tdx_guest`` extends RTMR3) is read the same way; a snapshot keeps only
+    what a suite listed then. ``tundravm lock`` pins the package's sha256 and refuses a
+    version neither pool holds, naming the snapshot; ``tundravm build`` downloads it on
+    the host.
     """
 
     version: str

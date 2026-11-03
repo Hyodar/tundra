@@ -464,6 +464,8 @@ class Kernel:
     """The Debian ``linux-config`` package whose *base_member* is the base config."""
     base_deb_mirrors: tuple[str, ...] = ()
     """Where *base_deb* is read when its pool lacks it: the snapshot's security pool."""
+    base_deb_missing: str | None = None
+    """Why no pool serving *base_deb* means the snapshot lacks that version, naming it."""
     base_deb_sha256: str | None = None
     base_member: str | None = None
     options: tuple[tuple[str, str], ...] = ()
