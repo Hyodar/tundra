@@ -10,9 +10,12 @@ import (
 	"time"
 )
 
-// evidence asks the image's evidence service (tdxs, on a unix socket) for quotes whose
-// report data is the signer's compressed public key, so a client can check that the key
-// signing its responses lives in the TD the quote attests.
+// evidence asks the image's evidence service (tdxs, on a unix socket) for quotes over the
+// signer's compressed public key, so a client can check that the key signing its responses
+// lives in the TD the quote attests. tdxs tags the user data with the caller's user name:
+// the document's user_data is lp("signer") || key and the report data
+// SHA-256(user_data || nonce), so a client requires the tag "signer" and never takes the
+// attested endpoint's quote, or another service's, for the signer's.
 type evidence struct {
 	socket string
 	signer []byte

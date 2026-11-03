@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/Hyodar/tundra/tools/pkg/attestation"
 )
 
 // Quoter asks the evidence service for a quote.
@@ -66,11 +68,13 @@ func (q SocketQuoter) call(ctx context.Context, method string, data any) (json.R
 	return answer.Data, nil
 }
 
-// Issue implements Quoter.
+// Issue implements Quoter. It claims the endpoint's caller tag, so tdxs refuses it unless
+// the endpoint runs as root: a misplaced endpoint fails here, not at every verifier.
 func (q SocketQuoter) Issue(ctx context.Context, userData, nonce []byte) (string, error) {
 	data, err := q.call(ctx, "issue", map[string]string{
 		"userData": hex.EncodeToString(userData),
 		"nonce":    hex.EncodeToString(nonce),
+		"caller":   attestation.EndpointCaller,
 	})
 	if err != nil {
 		return "", err

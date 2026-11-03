@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Hyodar/tundra/tools/pkg/attestation"
 	"github.com/Hyodar/tundra/tools/pkg/endpoint"
 	tdxabi "github.com/google/go-tdx-guest/abi"
 	pb "github.com/google/go-tdx-guest/proto/tdx"
@@ -174,7 +175,7 @@ func AttestedTLS(ctx context.Context, rawURL string, opts Options) (*Result, err
 			address, fingerprint(digest[:]), keyName(spki), boundKeys(listeners, keys))
 	}
 
-	judged, err := judge(evidence, userData, nonce, opts)
+	judged, err := judge(evidence, attestation.EndpointCaller, userData, nonce, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +190,7 @@ func AttestedTLS(ctx context.Context, rawURL string, opts Options) (*Result, err
 		Signature:   judged.signature,
 		Evidence:    evidence,
 	}
-	expected := sha256.Sum256(append(append([]byte{}, userData...), nonce...))
+	expected := sha256.Sum256(append(append([]byte{}, judged.userData...), nonce...))
 	nonceMatches := bytes.Equal(judged.reportData[:32], expected[:]) &&
 		(judged.platform == simulator || bytes.Equal(judged.reportData[32:], make([]byte, 32)))
 	var matched map[string]string
@@ -323,14 +324,18 @@ type judged struct {
 	platform   string
 	registers  map[string]string
 	reportData []byte
-	debug      bool
-	signature  string
-	rejection  string
+	// userData is what the report data binds: the caller's tag over the user data.
+	userData  []byte
+	debug     bool
+	signature string
+	rejection string
 }
 
 // judge reads the quote the evidence carries: a simulator's by its tag, a TDX one through
-// go-tdx-guest, its signature chain checked against Intel's root.
-func judge(evidence endpoint.Evidence, userData, nonce []byte, opts Options) (judged, error) {
+// go-tdx-guest, its signature chain checked against Intel's root. The document must carry
+// userData under caller's tag (attestation.Tagged): tdxs issued it to caller, not to
+// another service in the guest.
+func judge(evidence endpoint.Evidence, caller string, userData, nonce []byte, opts Options) (judged, error) {
 	raw, err := hex.DecodeString(evidence.Document)
 	if err != nil {
 		return judged{}, fmt.Errorf("the evidence is malformed: document: %w", err)
@@ -344,8 +349,11 @@ func judge(evidence endpoint.Evidence, userData, nonce []byte, opts Options) (ju
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return judged{}, fmt.Errorf("the evidence's document is not a tdxs attestation document: %w", err)
 	}
-	if !bytes.Equal(document.UserData, userData) || !bytes.Equal(document.Nonce, nonce) {
-		return judged{}, errors.New("refused: the quote's document carries other user data or nonce than the evidence")
+	if !bytes.Equal(document.Nonce, nonce) {
+		return judged{}, errors.New("refused: the quote's document carries another nonce than the evidence")
+	}
+	if err := attestation.RequireCaller(document.UserData, caller, userData); err != nil {
+		return judged{}, err
 	}
 	quote := document.RawQuote
 	if document.Platform == simulator {
@@ -364,6 +372,7 @@ func judge(evidence endpoint.Evidence, userData, nonce []byte, opts Options) (ju
 		return judged{
 			platform:   simulator,
 			registers:  registers,
+			userData:   document.UserData,
 			reportData: append(append([]byte{}, quote[:32]...), make([]byte, 32)...),
 			signature:  "unchecked",
 		}, nil
@@ -389,6 +398,7 @@ func judge(evidence endpoint.Evidence, userData, nonce []byte, opts Options) (ju
 	found := judged{
 		platform:   document.Platform,
 		registers:  registers,
+		userData:   document.UserData,
 		reportData: body.GetReportData(),
 		debug:      len(attributes) > 0 && attributes[0]&1 == 1,
 		signature:  "valid",

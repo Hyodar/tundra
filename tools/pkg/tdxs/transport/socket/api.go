@@ -48,6 +48,9 @@ func (r *SocketTransportRequest) UnmarshalData() (any, error) {
 type SocketTransportIssueRequest struct {
 	UserData string `json:"userData"`
 	Nonce    string `json:"nonce"`
+	// Caller, when set, is the tag the client expects: tdxs refuses the request unless the
+	// peer is that caller.
+	Caller string `json:"caller,omitempty"`
 }
 
 func (r *SocketTransportIssueRequest) ToAPIRequest() (*api.IssueRequest, error) {
@@ -61,7 +64,7 @@ func (r *SocketTransportIssueRequest) ToAPIRequest() (*api.IssueRequest, error) 
 		return nil, fmt.Errorf("failed to decode nonce: %w", err)
 	}
 
-	return &api.IssueRequest{UserData: userData, Nonce: nonce}, nil
+	return &api.IssueRequest{UserData: userData, Nonce: nonce, Caller: r.Caller}, nil
 }
 
 type SocketTransportMetadataRequest struct{}

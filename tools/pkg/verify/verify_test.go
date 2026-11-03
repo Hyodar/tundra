@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Hyodar/tundra/tools/pkg/attestation"
 	"github.com/Hyodar/tundra/tools/pkg/attestation/issuer"
 	"github.com/Hyodar/tundra/tools/pkg/endpoint"
 )
@@ -67,13 +68,15 @@ func listen(t *testing.T, cert tls.Certificate) string {
 }
 
 // fakeEndpoint answers GET /evidence as tools/cmd/attested-endpoint does, with a simulator
-// quote, binding its own TLS key and the listener keys it is given; with replay set it
-// answers every request with the nonce it was seeded with.
+// quote that tdxs tagged with caller ("" tags nothing, as a tdxs before caller tags),
+// binding its own TLS key and the listener keys it is given; with replay set it answers
+// every request with the nonce it was seeded with.
 type fakeEndpoint struct {
 	spki      []byte
 	listeners []endpoint.ListenerKey
 	keys      [][]byte
 	replay    []byte
+	caller    string
 }
 
 func (f *fakeEndpoint) evidence(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +86,11 @@ func (f *fakeEndpoint) evidence(w http.ResponseWriter, r *http.Request) {
 	}
 	userData := endpoint.Binding(nonce, f.spki, nil, nil, f.keys)
 	simulator := issuer.NewSimulatorIssuer()
-	doc, _ := simulator.Issue(context.Background(), userData, nonce)
+	issued := userData
+	if f.caller != "" {
+		issued = attestation.Tagged(f.caller, userData)
+	}
+	doc, _ := simulator.Issue(context.Background(), issued, nonce)
 	document, _ := json.Marshal(doc)
 	measurements, _ := simulator.Measurements(context.Background())
 	metadata, _ := json.Marshal(map[string]any{"issuerType": "simulator", "metadata": measurements})
@@ -100,7 +107,7 @@ func (f *fakeEndpoint) evidence(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func serveEndpoint(t *testing.T, bound []byte, replay []byte) string {
+func serveEndpoint(t *testing.T, bound []byte, replay []byte, caller string) string {
 	t.Helper()
 	cert, spki := selfSigned(t)
 	fake := &fakeEndpoint{
@@ -108,6 +115,7 @@ func serveEndpoint(t *testing.T, bound []byte, replay []byte) string {
 		listeners: []endpoint.ListenerKey{{Port: 8546, PublicKey: base64.StdEncoding.EncodeToString(bound)}},
 		keys:      [][]byte{bound},
 		replay:    replay,
+		caller:    caller,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /evidence", fake.evidence)
@@ -125,24 +133,28 @@ func TestAttestedTLSJudgesTheCertificateAgainstTheBinding(t *testing.T) {
 	boundCert, boundKey := selfSigned(t)
 	otherCert, _ := selfSigned(t)
 	stale := []byte(strings.Repeat("s", 32))
+	endpointTag := attestation.EndpointCaller
 	cases := []struct {
 		name        string
 		presented   tls.Certificate
 		replay      []byte
+		caller      string
 		development bool
 		refused     string
 		verdict     string
 		passed      bool
 	}{
-		{"the bound certificate, a development build", boundCert, nil, true, "", Simulated, true},
-		{"simulated evidence against a production relying party", boundCert, nil, false, "", Simulated, false},
-		{"wrong certificate: the port presents a key the quote does not bind", otherCert, nil, true, "not one the quote binds", "", false},
-		{"certificate bound, but evidence for another nonce", boundCert, stale, true, "another nonce", "", false},
+		{"the bound certificate, a development build", boundCert, nil, endpointTag, true, "", Simulated, true},
+		{"simulated evidence against a production relying party", boundCert, nil, endpointTag, false, "", Simulated, false},
+		{"wrong certificate: the port presents a key the quote does not bind", otherCert, nil, endpointTag, true, "not one the quote binds", "", false},
+		{"certificate bound, but evidence for another nonce", boundCert, stale, endpointTag, true, "another nonce", "", false},
+		{"a tdx-group service's quote of an endpoint binding", boundCert, nil, "signer", true, `issued to "signer", not "endpoint"`, "", false},
+		{"an untagged quote", boundCert, nil, "", true, "no caller tag", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			port := listen(t, c.presented)
-			where := serveEndpoint(t, boundKey, c.replay)
+			where := serveEndpoint(t, boundKey, c.replay, c.caller)
 			result, err := AttestedTLS(context.Background(), "https://"+port, Options{Endpoint: where, Development: c.development})
 			if c.refused != "" {
 				if err == nil || !strings.Contains(err.Error(), c.refused) {

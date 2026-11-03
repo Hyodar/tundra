@@ -20,7 +20,8 @@ func main() {
 		Use:   "attested-client https://HOST:PORT",
 		Short: "Check that an attested TLS port's certificate belongs to the TD its quote describes",
 		Long: "Connect to the attested TLS port, fetch evidence from the image's attested endpoint " +
-			"(HOST:8745) on a fresh nonce, refuse evidence not bound to that session, check the " +
+			"(HOST:8745) on a fresh nonce, refuse evidence not bound to that session or quoted for " +
+			"another caller than the endpoint, check the " +
 			"certificate's key is one the quote binds, and judge the quote against --policy. " +
 			"Verdicts: trusted, partial, measurements-match, measurements-mismatch, simulated " +
 			"(passes with --dev only), untrusted.",

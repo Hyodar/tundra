@@ -34,7 +34,8 @@ const Purpose = "tundravm-endpoint/1"
 // joined by newlines, instanceKey the instance public key's bytes (empty without one) and
 // ingressKeys the DER SubjectPublicKeyInfo of each attested TLS port's certificate key, one
 // part per port in ascending port order (an image without such a port binds the five parts
-// alone). The tdxs issuers put SHA-256(binding || nonce) in the quote's report data.
+// alone). tdxs tags it with the caller, uid 0's "endpoint" (attestation.Tagged), and its
+// issuers put SHA-256(lp("endpoint") || binding || nonce) in the quote's report data.
 func Binding(nonce, tlsKey []byte, hostKeys []string, instanceKey []byte, ingressKeys [][]byte) []byte {
 	h := sha512.New()
 	parts := [][]byte{[]byte(Purpose), nonce, tlsKey, []byte(strings.Join(hostKeys, "\n")), instanceKey}

@@ -24,6 +24,9 @@ type SocketTransport struct {
 	queues   *transport.TransportQueues
 	listener net.Listener
 	logger   logger.Logger
+	// peer reads a connection's uid and lookup names it: SO_PEERCRED and /etc/passwd.
+	peer   func(net.Conn) (uint32, error)
+	lookup func(string) (*user.User, error)
 }
 
 type SocketTransportConfig struct {
@@ -56,6 +59,8 @@ func NewSocketTransport(cfg *SocketTransportConfig, logger logger.Logger) (trans
 	return &SocketTransport{
 		cfg:    cfg,
 		logger: logger,
+		peer:   peerUID,
+		lookup: user.LookupId,
 	}, nil
 }
 
@@ -145,6 +150,8 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
+	// Who asks comes from the kernel, never from the request: the issuer binds it.
+	caller, callerErr := t.identify(conn)
 
 	for {
 		select {
@@ -172,6 +179,13 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 		switch req.Method {
 		case SocketTransportRequestMethodIssue:
 			issueReq := apiRequest.(*api.IssueRequest)
+			tagged, err := tag(caller, callerErr, issueReq.Caller, issueReq.UserData)
+			if err != nil {
+				t.logger.Warn("Refused a quote", "error", err)
+				encoder.Encode(NewIssueResponseFromError(err))
+				continue
+			}
+			issueReq.UserData = tagged
 			wrapper := &api.IssueRequestWrapper{
 				Request:  issueReq,
 				Response: make(chan *api.IssueResponse, 1),
