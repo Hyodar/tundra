@@ -1346,7 +1346,7 @@ A secret the image needs at run time and never contains: `Secret("jwt")`.
 | `Secret.credential` | The `LoadCredential=` binding a service gets. |
 | `Secret.location` | Where the delivered value lands: `/run/tundravm/credentials/<name>`. |
 | `Secret.path` | Where a bound service reads it: `${CREDENTIALS_DIRECTORY}/<name>`, an argv word. |
-| `Secret.ready` | "It has been delivered": what `requires=` takes for a secret. |
+| `Secret.ready` | "It has been delivered": what `requires=` takes for a required secret. An optional one has no wait, so nothing can wait for it. |
 
 ## tundravm.sources
 

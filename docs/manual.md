@@ -319,8 +319,8 @@ unit's read-only `$CREDENTIALS_DIRECTORY` at start.
 
 | Option | Meaning |
 |---|---|
-| `required=True` | every bound service waits for it (default) |
-| `required=False` | the service starts without it and reads an empty credential |
+| `required=True` | every bound service and the boot target wait for it (default) |
+| `required=False` | nothing waits: the boot completes and the service starts without it, reading one newline |
 | `source=BrokerKey(...)` | a broker delivers it instead of an operator (no pull client yet) |
 
 The endpoint delivers each secret once per boot.

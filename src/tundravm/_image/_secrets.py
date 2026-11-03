@@ -107,7 +107,8 @@ class Secret(Located):
     program finds it (an argv word, rendered as ``${CREDENTIALS_DIRECTORY}/jwt``).
 
     *required* secrets hold every bound service until they arrive (``jwt.ready``); an
-    optional one starts the service without it, which then reads an empty credential.
+    optional one starts the service without it, which then reads a credential holding
+    one newline (systemd takes no empty fallback).
     The endpoint delivers each secret once per boot.
     """
 
@@ -151,7 +152,15 @@ class Secret(Located):
 
     @property
     def ready(self) -> BootReady:
-        """ "It has been delivered": what ``requires=`` takes for a secret."""
+        """ "It has been delivered": what ``requires=`` takes for a required secret. An
+        optional one has no wait, so nothing can wait for it."""
+        if not self.required:
+            raise ValidationError(
+                f"Secret {self.name!r} is optional (required=False), so nothing waits for it "
+                "and it has no .ready.",
+                hint=f"Make it required (drop required=False from Secret({self.name!r})) to "
+                "wait for it.",
+            )
         return BootReady(credential_wait_unit(self.name))
 
 
