@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -146,6 +147,38 @@ func TestManager_SetupDisk_EncryptedMountExisting(t *testing.T) {
 	err := mgr.SetupDisk(ctx, "persistent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManager_SetupDisk_RefusesAnotherVolumesDisk(t *testing.T) {
+	// Scenario: the device found for "persistent" is initialized as volume "logs" (a disk
+	// attached at another volume's LUN): it is not opened, whatever the key.
+	ctx := context.Background()
+	cfg := &Config{
+		Disks: map[string]DiskConfig{
+			"persistent": {
+				Strategy:      "largest",
+				Format:        "on_initialize",
+				EncryptionKey: "key_persistent",
+				MountAt:       filepath.Join(t.TempDir(), "persistent"),
+			},
+		},
+	}
+	mr := newMockRunner()
+	mr.on("", nil, "cryptsetup", "isLuks", "/dev/sdc")
+	tok := luksToken{Type: "tundra-init", Keyslots: []any{}, Initialized: "true", DiskName: "logs"}
+	tokData, _ := json.Marshal(tok)
+	mr.on(string(tokData), nil, "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdc")
+
+	mgr := newTestManager(t, cfg, &staticKeyProvider{key: "test-key"}, mr, "/dev/sdc")
+	err := mgr.SetupDisk(ctx, "persistent")
+	if err == nil || !strings.Contains(err.Error(), `holds volume "logs"`) {
+		t.Fatalf("err = %v, want the other volume's disk refused", err)
+	}
+	for _, call := range mr.calls {
+		if call.args[1] == "luksOpen" {
+			t.Fatal("opened another volume's disk")
+		}
 	}
 }
 

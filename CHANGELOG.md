@@ -168,6 +168,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `tools/cmd/mode-switch`, a root daemon with no network, extends RTMR3 and loads each firewall mode in one `nft` transaction; the extend comes first, so a switch the quote does not show never happens.
 - `tools/cmd/image-metrics` writes the image's identity series for the node exporter; `health` also keeps its `tundravm_system_state` and `tundravm_units_failed`.
 - `tools/pkg/verify` (one function, `AttestedTLS`) and `go run ./cmd/attested-client https://HOST:PORT` give a relying party the `attest --tls` check and verdicts in Go, a TDX quote's chain checked against Intel's root.
+- `disk-setup` refuses a LUKS2 volume whose init token names another volume, so a disk attached in another volume's place is not opened even with the same passphrase.
 - `key-gen` draws random keys from `crypto/rand` only, never the host's `/dev/hwrng`; `disk-setup` closes a volume that fails to mount or to read its owner copy; `tdxs` hangs up on a malformed request instead of spinning.
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 

@@ -150,9 +150,9 @@ func (m *Manager) setupEncryptedDisk(ctx context.Context, md *ManagedDisk) error
 		return fmt.Errorf("setup encrypted disk %q: %w", md.Name, err)
 	}
 
-	initialized := false
+	initialized, holds := false, ""
 	if isLuks {
-		initialized, err = m.luks.IsInitialized(ctx, md.DevicePath)
+		initialized, holds, err = m.luks.InitToken(ctx, md.DevicePath)
 		if err != nil {
 			return fmt.Errorf("setup encrypted disk %q: check init: %w", md.Name, err)
 		}
@@ -167,6 +167,12 @@ func (m *Manager) setupEncryptedDisk(ctx context.Context, md *ManagedDisk) error
 
 	if !isLuks {
 		return fmt.Errorf("setup encrypted disk %q: device is not LUKS and format policy is %q", md.Name, md.Config.Format)
+	}
+
+	// The init token is not authenticated: this stops a disk attached in another
+	// volume's place (a swapped LUN), not the host; the key still decides.
+	if holds != "" && holds != md.Name {
+		return fmt.Errorf("disk %q: %s holds volume %q, so it is not opened\nfix: attach volume %q's own disk", md.Name, md.DevicePath, holds, md.Name)
 	}
 
 	return m.mountExistingEncrypted(ctx, md)

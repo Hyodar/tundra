@@ -40,20 +40,21 @@ type luksToken struct {
 	DiskName    string `json:"disk_name,omitempty"`
 }
 
-// IsInitialized reads LUKS token slot 1 and checks for "initialized": "true".
-func (l *LuksOps) IsInitialized(ctx context.Context, path string) (bool, error) {
+// InitToken reads LUKS token slot 1: whether it says "initialized": "true", and the
+// volume it names ("" when it names none).
+func (l *LuksOps) InitToken(ctx context.Context, path string) (bool, string, error) {
 	out, err := l.Runner.Run(ctx, "cryptsetup", "token", "export", "--token-id", "1", path)
 	if err != nil {
 		slog.DebugContext(ctx, "no init token found", "path", path, "err", err)
-		return false, nil
+		return false, "", nil
 	}
 
 	var tok luksToken
 	if err := json.Unmarshal([]byte(out), &tok); err != nil {
-		return false, fmt.Errorf("parse init token: %w", err)
+		return false, "", fmt.Errorf("parse init token: %w", err)
 	}
 
-	return tok.Initialized == "true", nil
+	return tok.Initialized == "true", tok.DiskName, nil
 }
 
 // FormatLuks formats the device as LUKS2 with the given passphrase.

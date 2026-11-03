@@ -94,7 +94,7 @@ func TestLuksOps_IsLuksDevice(t *testing.T) {
 	})
 }
 
-func TestLuksOps_IsInitialized(t *testing.T) {
+func TestLuksOps_InitToken(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("initialized", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestLuksOps_IsInitialized(t *testing.T) {
 		mr.on(string(data), nil, "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdb")
 		ops := NewLuksOps(mr)
 
-		ok, err := ops.IsInitialized(ctx, "/dev/sdb")
+		ok, _, err := ops.InitToken(ctx, "/dev/sdb")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestLuksOps_IsInitialized(t *testing.T) {
 		mr.on(string(data), nil, "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdb")
 		ops := NewLuksOps(mr)
 
-		ok, err := ops.IsInitialized(ctx, "/dev/sdb")
+		ok, _, err := ops.InitToken(ctx, "/dev/sdb")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -136,7 +136,7 @@ func TestLuksOps_IsInitialized(t *testing.T) {
 		mr.on("", fmt.Errorf("token not found"), "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdb")
 		ops := NewLuksOps(mr)
 
-		ok, err := ops.IsInitialized(ctx, "/dev/sdb")
+		ok, _, err := ops.InitToken(ctx, "/dev/sdb")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
