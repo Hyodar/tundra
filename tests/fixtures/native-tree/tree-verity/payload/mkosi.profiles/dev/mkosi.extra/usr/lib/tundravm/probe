@@ -32,6 +32,60 @@ probe_series() {
     fi
     ok "the sink at $1 holds tundravm_image_digest and $(printf '%s\n' "$names" | grep -c .) series, each one export= keeps"
 }
+probe_cmdline() {
+    line=" $(cat /proc/cmdline) "
+    missing=
+    for parameter in "$@"; do
+        case $line in *" $parameter "*) ;; *) missing="$missing $parameter" ;; esac
+    done
+    if [ -z "$missing" ]; then
+        ok "$*"
+    else
+        fail "missing:$missing: the kernel did not boot the UKI's own command line; boot the UKI without a loader that replaces it (cat /proc/cmdline)"
+    fi
+}
+probe_dns() {
+    name=$1
+    if ! command -v getent >/dev/null 2>&1; then
+        skip "no getent in the image to resolve with"
+        return
+    fi
+    if protocols=$(resolvectl status --no-pager 2>/dev/null | sed -n 's/^ *Protocols: //p' | head -n 1) &&
+        [ -n "$protocols" ]; then
+        case " $protocols " in
+            *" +DNSOverTLS "*) ;;
+            *) fail "resolvectl status says $protocols, not +DNSOverTLS: systemd-resolved does not read TeeBase's resolved.conf.d; journalctl -u systemd-resolved"; return ;;
+        esac
+    fi
+    waited=0
+    until answer=$(getent ahostsv4 "$name" 2>&1); do
+        if [ "$waited" -ge 30 ]; then
+            fail "$name does not resolve after 30s: systemd-resolved reaches its resolvers on 853/tcp only (DNSOverTLS=yes), so the output chain must accept it; journalctl -u systemd-resolved"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    address=$(echo "$answer" | head -n 1 | cut -d ' ' -f 1)
+    peer=
+    for table in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$table" ] || continue
+        while read -r _ _ remote state _; do
+            [ "${remote##*:}" = 0355 ] && [ "$state" != 0A ] || continue
+            peer=${remote%:*}
+            if [ "${#peer}" -eq 8 ]; then
+                set -- $(echo "$peer" | sed 's/\(..\)\(..\)\(..\)\(..\)/0x\4 0x\3 0x\2 0x\1/')
+                peer=$(printf '%d.%d.%d.%d' "$@")
+            fi
+            break 2
+        done <"$table"
+    done
+    if [ -z "$peer" ]; then
+        fail "$name resolved to $address, but nothing is connected to port 853: the answer did not come over TLS; journalctl -u systemd-resolved"
+    else
+        ok "DNSOverTLS=yes${protocols:+ ($protocols)}: $name is $address, resolved over TLS to $peer:853"
+    fi
+}
 probe_service() {
     state=$(systemctl show -P ActiveState "$1")
     waited=0
@@ -475,24 +529,34 @@ if [ "$mode" = tdx ]; then
 else
     skip "no TDX: a simulated guest has no registers to compare with measurements.json"
 fi
-check=service:greeter.service
-probe_service greeter.service
+check=cmdline
+probe_cmdline 'mitigations=auto,nosmt' 'spec_store_bypass_disable=on'
+check=socket:tdxs.socket
+probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
 check=service:web.service
 probe_service web.service
+check=service:web-loopback.service
+probe_service web-loopback.service
+check=service:greeter.service
+probe_service greeter.service
+check=service:attested-tls-8443.service
+probe_service attested-tls-8443.service
 check=timer:tick.timer
 probe_active tick.timer 'the timer must be enabled; systemctl status names why it is not'
 check=service:image-metrics.service
 probe_service image-metrics.service
-check=service:sink.service
-probe_service sink.service
-check=socket:tdxs.socket
-probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
-check=service:attested-tls-8443.service
-probe_service attested-tls-8443.service
 check=service:box.service
 probe_service box.service
 check=socket:box-forward-8081.socket
 probe_active box-forward-8081.socket 'the socket must listen; systemctl status names why it does not'
+check=service:sink.service
+probe_service sink.service
+check=service:token.service
+probe_service token.service
+check=service:go-probe.service
+probe_service go-probe.service
+check=service:rust-probe.service
+probe_service rust-probe.service
 check=port:8080/tcp
 probe_port tcp 8080
 check=port:8443/tcp
@@ -503,28 +567,38 @@ check=container:box
 probe_container box.service /usr/lib/tundravm/containers/box.raw 192.0.2.1 9
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
-check=egress:metadata:greeter
-probe_metadata greeter - 169.254.169.254 no
+check=egress:metadata:tdxs
+probe_metadata tdxs - 169.254.169.254 no
 check=egress:metadata:web
 probe_metadata web - 169.254.169.254 no
+check=egress:metadata:web-loopback
+probe_metadata web-loopback - 169.254.169.254 no
+check=egress:metadata:greeter
+probe_metadata greeter - 169.254.169.254 no
+check=egress:metadata:attested-tls-8443
+probe_metadata attested-tls-8443 - 169.254.169.254 no
 check=egress:metadata:journal-export
 probe_metadata journal-export - 169.254.169.254 no
 check=egress:metadata:metrics-export
 probe_metadata metrics-export - 169.254.169.254 no
-check=egress:metadata:tdxs
-probe_metadata tdxs - 169.254.169.254 no
-check=egress:metadata:attested-tls-8443
-probe_metadata attested-tls-8443 - 169.254.169.254 no
 check=egress:metadata:box
 probe_metadata box - 169.254.169.254 no
 check=egress:metadata:box-forward-8081
 probe_metadata box-forward-8081 - 169.254.169.254 no
+check=egress:metadata:token
+probe_metadata token - 169.254.169.254 no
+check=egress:metadata:go-probe
+probe_metadata go-probe - 169.254.169.254 no
+check=egress:metadata:rust-probe
+probe_metadata rust-probe - 169.254.169.254 no
 check=egress:metadata:azure-complete-provisioning
 probe_metadata root azure-complete-provisioning 168.63.129.16 yes
 check=egress:metadata:gcp-hostname
 probe_metadata root gcp-hostname 169.254.169.254 yes
 check=egress:metadata:gcp-forwarded-ips
 probe_metadata root gcp-forwarded-ips 169.254.169.254 yes
+check=dns
+probe_dns 'cloudflare-dns.com'
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=attested-tls:8443
@@ -538,23 +612,33 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.2:19581' 'up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode'
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- greeter.service web.service image-metrics.service sink.service tdxs.service attested-tls-8443.service box.service box-forward-8081.service
+probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-forward-8081.service sink.service token.service go-probe.service rust-probe.service
 check=observability:egress
 probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
-check=hardening:greeter.service
-probe_hardening greeter.service 2.5 static
 check=hardening:web.service
 probe_hardening web.service 2.5 static
+check=hardening:web-loopback.service
+probe_hardening web-loopback.service 2.5 static
+check=hardening:greeter.service
+probe_hardening greeter.service 2.5 static
+check=hardening:attested-tls-8443.service
+probe_hardening attested-tls-8443.service 2.5 static
 check=hardening:journal-export.service
 probe_hardening journal-export.service 2.5 static
 check=hardening:metrics-export.service
 probe_hardening metrics-export.service 2.5 static
-check=hardening:attested-tls-8443.service
-probe_hardening attested-tls-8443.service 2.5 static
 check=hardening:box.service
 probe_hardening box.service 2.5 static
 check=hardening:box-forward-8081.service
 probe_hardening box-forward-8081.service 2.5 static
+check=hardening:sink.service
+probe_hardening sink.service 7.8 relaxed
+check=hardening:token.service
+probe_hardening token.service 2.5 static
+check=hardening:go-probe.service
+probe_hardening go-probe.service 2.5 static
+check=hardening:rust-probe.service
+probe_hardening rust-probe.service 2.5 static
 check=kernel:modules
 probe_modules crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys
@@ -565,8 +649,8 @@ check=login:tenant
 probe_login tenant /etc/sudoers.d/tenant '-' '/bin/sh -c '\''cat /etc/greeter/greeting; /usr/bin/sudo -n /usr/bin/systemctl is-active web'\'''
 check=key:instance
 probe_instance_key /run/tundravm/instance-key.pem /run/tundravm/instance-key.pub
-check=owner:/srv/www/private.html
-probe_owner '/srv/www/private.html' web:web 600
 check=owner:/home/tenant
 probe_owner '/home/tenant' tenant:tenant
+check=owner:/srv/www/private.html
+probe_owner '/srv/www/private.html' web:web 600
 say "done $passed ok $failed fail"

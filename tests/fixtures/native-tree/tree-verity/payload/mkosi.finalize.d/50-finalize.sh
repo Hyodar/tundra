@@ -13,7 +13,7 @@ for kdir in "${kdirs[@]}"; do
         find "$kdir" -name '*.ko*' -printf '%f\n'
         sed 's|.*/||' "${kdir}modules.builtin" 2>/dev/null || true
     } | sed 's/\.ko.*//' | tr _ -)
-    for module in crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
+    for module in crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
         if ! grep -qxF "${module//_/-}" <<<"$present"; then
             echo "tundravm: kernel module $module is not in kernel $(basename "$kdir"):" \
                 "drop it from Debian(kernel_modules=...) or pick a kernel that ships it" >&2
@@ -23,7 +23,7 @@ for kdir in "${kdirs[@]}"; do
     # modules.dep is still the kernel package's (mkosi runs no depmod when it only keeps
     # modules): its line for a listed module names every module that loads first.
     files=$(find "$kdir" -name '*.ko*' -printf '%P\n')
-    for module in crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
+    for module in crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
         line=$(grep -E "(^|/)${module//[_-]/[_-]}\.ko[^:/]*:" "${kdir}modules.dep" || true)
         for dep in ${line#*:}; do
             if ! grep -qxF "$dep" <<<"$files"; then
@@ -93,6 +93,7 @@ rm -rf "$BUILDROOT/usr/share/zsh"
 
 # User-defined finalize commands
 sed -i '/^IMAGE_VERSION=/d' "$BUILDROOT/usr/lib/os-release" 
+rm -rf "$BUILDROOT/usr/lib/udev/hwdb.bin" "$BUILDROOT/usr/lib/udev/hwdb.d" "$BUILDROOT/usr/share/doc" "$BUILDROOT/usr/share/fonts" "$BUILDROOT/usr/share/info" "$BUILDROOT/usr/share/javascript" "$BUILDROOT/usr/share/locale" "$BUILDROOT/usr/share/man"
 
 # Deterministic accounts (Debian #963788): passwd and group by numeric id, then name;
 # shadow and gshadow in that order, as pwck --sort and grpck --sort leave them; subuid

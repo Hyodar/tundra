@@ -28,10 +28,11 @@ from tests.compiler.test_native_tree import FIXTURE, mkosi_summary, normalised, 
 from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT
 from tundravm.compiler import PAYLOAD, PHASE_DIRECTORIES
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
-from tundravm.declarative import Recipe, Tree, compile, load, lower, mkosi_argv
+from tundravm.declarative import Recipe, Tree, compile, lower, mkosi_argv
+from tundravm.recipe import load_file
 
 CHAIN = REPO_ROOT / "tests" / "fixtures" / "profile-chain" / "chain.py"
-RECIPES = [*EXAMPLE_RECIPES, ATTESTED_NODE / "image.py", FIXTURE / "recipe.py", CHAIN]
+IMAGES = [*EXAMPLE_RECIPES, ATTESTED_NODE / "image.py", FIXTURE / "fixture.py", CHAIN]
 OVERLAYS = "mkosi.profiles/"
 
 
@@ -45,9 +46,9 @@ def _overlay(tree: Tree, name: str) -> dict[str, Any]:
     return {e.path: e for e in tree.entries if e.path.startswith(prefixes)}
 
 
-@pytest.mark.parametrize("path", RECIPES, ids=lambda p: Path(p).parent.name + "/" + Path(p).stem)
+@pytest.mark.parametrize("path", IMAGES, ids=lambda p: Path(p).parent.name + "/" + Path(p).stem)
 def test_the_shared_payload_is_the_same_whatever_the_selection(path: Path) -> None:
-    recipe = load(Path(path))
+    recipe = load_file(path).recipe
     names = [variant.name for variant in recipe.variants]
     whole = compile(recipe)
     for name in names:
@@ -153,7 +154,7 @@ def _resolved(tree: Path, recipe: Recipe, scratch: Path) -> dict[str, dict[str, 
     [
         (FIXTURE / "tree-initramfs", lambda: recipe_with("initramfs")),
         (FIXTURE / "tree-verity", lambda: recipe_with("verity")),
-        (ATTESTED_NODE / "mkosi", lambda: load(ATTESTED_NODE / "image.py")),
+        (ATTESTED_NODE / "mkosi", lambda: load_file(ATTESTED_NODE / "image.py").recipe),
     ],
     ids=["fixture-initramfs", "fixture-verity", "attested-node"],
 )
@@ -184,7 +185,7 @@ def _enables(tree: Path, image: Mapping[str, Any], unit: str) -> bool:
 
 
 def test_a_chain_with_an_edit_and_a_removal_resolves_for_every_profile(tmp_path: Path) -> None:
-    recipe = load(CHAIN)
+    recipe = load_file(CHAIN).recipe
     tree = tmp_path / "tree"
     compile(recipe).write(tree)
     resolved = _resolved(tree, recipe, tmp_path)

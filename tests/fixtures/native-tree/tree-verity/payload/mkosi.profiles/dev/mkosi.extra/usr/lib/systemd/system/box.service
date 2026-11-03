@@ -1,7 +1,7 @@
 [Unit]
 Description=box.service
-After=tdx-evidence.service
-Requires=tdx-evidence.service
+After=runtime-init-owners.service tdx-evidence.service
+Requires=runtime-init-owners.service tdx-evidence.service
 
 [Service]
 Type=exec

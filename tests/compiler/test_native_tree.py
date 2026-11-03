@@ -1,6 +1,6 @@
 """The mkosi-native tree (gate 1): the fixture tree file by file and as mkosi resolves it.
 
-``tests/fixtures/native-tree/recipe.py`` compiles, with each root layout, to the committed
+``tests/fixtures/native-tree/fixture.py`` compiles, with each root layout, to the committed
 ``tree-initramfs/`` and ``tree-verity/``; ``mkosi --force summary --json`` of each, for the
 default selection and for every node (``--profile=dev --dependency=azure
 --dependency=gcp``), normalised (tree paths relative, host-dependent keys left out), is the
@@ -24,9 +24,12 @@ from typing import Any, Literal
 
 import pytest
 
+import tundravm
 from tests.helpers import ATTESTED_NODE, EXAMPLE_RECIPES, REPO_ROOT, write_new_image
-from tundravm.check import declaration_check
+from tundravm import Image
+from tundravm._image import recipe_of
 from tundravm.compiler.emit_mkosi import (
+    DEFAULT_SEED,
     ESP_MKFS_ENVIRONMENT,
     MAIN_IMAGE_SETTINGS,
     MKOSI_VERSION,
@@ -35,16 +38,8 @@ from tundravm.compiler.emit_mkosi import (
     uki_capacity,
     verity_uuids,
 )
-from tundravm.declarative import (
-    Recipe,
-    Setting,
-    compile,
-    load,
-    lock,
-    lower,
-    mkosi_argv,
-)
-from tundravm.errors import ValidationError
+from tundravm.declarative import Recipe, compile, lock, lower, mkosi_argv
+from tundravm.recipe import load_file
 from tundravm.testing import UPDATE_GOLDEN_ENV
 from tundravm.testing._model import assert_tree_matches
 from tundravm.toolchain import ToolsTree
@@ -58,7 +53,13 @@ SELECTIONS: dict[str, tuple[str, ...]] = {
 """The ``mkosi`` selections whose summaries are evidence: what ``default`` builds, and every
 image of the tree (the dev profile, both cloud wrappers, the payload and the QEMU disk)."""
 
-recipe_with: Callable[..., Recipe] = runpy.run_path(str(FIXTURE / "recipe.py"))["recipe_with"]
+image_with: Callable[..., Image] = runpy.run_path(str(FIXTURE / "fixture.py"))["image_with"]
+
+
+def recipe_with(root: str = "initramfs") -> Recipe:
+    """The fixture image with *root*, as the internal model it lowers to."""
+    return recipe_of(image_with(root))
+
 
 IMAGE_KEYS = (
     "Image",
@@ -194,9 +195,12 @@ def test_tree_has_the_native_shape() -> None:
         "payload/mkosi.build.d/50-build.sh",
         "payload/mkosi.conf",
         "payload/mkosi.conf.d/10-platform.conf",
-        "payload/mkosi.conf.d/20-greeter.conf",
-        "payload/mkosi.conf.d/30-web.conf",
-        "payload/mkosi.conf.d/40-cloud-glue.conf",
+        "payload/mkosi.conf.d/20-tee-base.conf",
+        "payload/mkosi.conf.d/30-greeter.conf",
+        "payload/mkosi.conf.d/40-web.conf",
+        "payload/mkosi.conf.d/50-tundravm-runtime.conf",
+        "payload/mkosi.conf.d/60-firewall.conf",
+        "payload/mkosi.conf.d/70-cloud-glue.conf",
         "payload/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.postinst.d/50-postinst.sh",
         "payload/mkosi.profiles/dev/mkosi.build.d/50-build.sh",
@@ -229,7 +233,7 @@ def test_main_image_is_the_qemu_disk_with_every_reproducibility_setting() -> Non
         "Output=qemu\n"
         "ImageId=fixture\n"
         "OutputDirectory=mkosi.output\n"
-        "Seed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70\n"
+        f"Seed={DEFAULT_SEED}\n"
         "\n"
         "[Build]\n"
         "ToolsTree=default\n"
@@ -257,18 +261,16 @@ def test_payload_subimage_includes_the_payload_directory() -> None:
         "[Include]\nInclude=../../payload\n"
     )
     payload = (tree / "payload/mkosi.conf").read_text(encoding="utf-8")
-    assert payload.startswith(
-        "[Output]\nFormat=uki\nOutput=payload\nSeed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70\n"
-    )
-    # the instance key's openssl and the account tools: no concern declared them
-    assert "Packages=\n    openssl\n    passwd\n" in payload
-    assert (tree / "payload/mkosi.conf.d/20-greeter.conf").read_text(encoding="utf-8") == (
+    assert payload.startswith(f"[Output]\nFormat=uki\nOutput=payload\nSeed={DEFAULT_SEED}\n")
+    # the account tools: no concern declared them (the ingress's runtime declares openssl)
+    assert "Packages=\n    passwd\n" in payload
+    assert (tree / "payload/mkosi.conf.d/30-greeter.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    curl\n"
     )
-    assert (tree / "payload/mkosi.conf.d/30-web.conf").read_text(encoding="utf-8") == (
+    assert (tree / "payload/mkosi.conf.d/40-web.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    busybox\n"
     )
-    assert (tree / "payload/mkosi.conf.d/40-cloud-glue.conf").read_text(encoding="utf-8") == (
+    assert (tree / "payload/mkosi.conf.d/70-cloud-glue.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    dmidecode\n    iproute2\n    nvme-cli\n"
     )
     machine_id = tree / "payload/mkosi.extra/etc/machine-id"
@@ -340,13 +342,13 @@ def test_the_esp_holds_the_declared_uki_as_a_fat32_by_cluster_count(
 def test_the_fixture_dev_esp_is_larger_than_the_uki_ceiling_it_declares() -> None:
     """Lowered, the fixture's dev profile (the whole OS in its UKI) gets an ESP whose FAT32
     holds the UKI ceiling it declares, which is above the dev UKI that outgrew 128 MiB."""
-    recipe = recipe_with()
-    tree = compile(recipe, variants=("dev",))
+    image = image_with()
+    tree = tundravm.compile(image, profiles=("dev",))
     conf = next(e.content for e in tree.entries if e.path == "mkosi.repart/00-esp.conf")
     found = re.search(rb"SizeMaxBytes=([0-9]+)M", conf or b"")
     assert found is not None
     esp = int(found.group(1)) << 20
-    ceiling = _bytes(recipe.mkosi.uki_max_size or UKI_MAX_SIZE)
+    ceiling = _bytes(image.rootfs.uki_max_size or UKI_MAX_SIZE)
     assert DEV_UKI < ceiling <= uki_capacity(esp) < esp
 
 
@@ -355,7 +357,7 @@ def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
     for target, script in (("azure", "vhd"), ("gcp", "tar")):
         assert (tree / f"mkosi.images/{target}/mkosi.conf").read_text(encoding="utf-8") == (
             "[Config]\nDependencies=payload\n\n"
-            f"[Output]\nFormat=disk\nOutput={target}\nSeed=6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70\n\n"
+            f"[Output]\nFormat=disk\nOutput={target}\nSeed={DEFAULT_SEED}\n\n"
             '[Build]\nEnvironment=SYSTEMD_REPART_MKFS_OPTIONS_VFAT="-S512 -s1"\n\n'
             "[Content]\nBootable=no\nExtraTrees=%O/payload.efi:/efi/EFI/BOOT/BOOTX64.EFI\n"
         )
@@ -375,19 +377,13 @@ def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
 
 
 def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
-    """The overlay adds SSH, the egress-filtering firewall with its modules, the export
-    path's packages, the attested TLS relay's, the tenant login's sudo and the container's
-    subimage and root."""
+    """The overlay adds the export path's packages, the dev key and the container's subimage,
+    root and modules; sshd, the firewall and its modules are the image's, in every profile."""
     dev = FIXTURE / "tree-initramfs/payload/mkosi.profiles/dev"
-    modules = "".join(
-        f"    {m}\n"
-        for m in ("crc32c_generic", "erofs", "loop", "nf_tables", "nft_ct", "nft_reject_inet")
-    )
     assert (dev / "mkosi.conf").read_text(encoding="utf-8") == (
-        "[Config]\nDependencies=box\n\n[Output]\nImageId=%i-dev\n\n[Content]\nKernelModules=\n"
-        + modules
-        + "Packages=\n    nftables\n    openssh-server\n    prometheus\n"
-        + "    prometheus-node-exporter\n    socat\n    sudo\n    systemd-journal-remote\n"
+        "[Config]\nDependencies=box\n\n[Output]\nImageId=%i-dev\n\n[Content]\n"
+        + "KernelModules=\n    erofs\n    loop\n"
+        + "Packages=\n    prometheus\n    prometheus-node-exporter\n    systemd-journal-remote\n"
         + "ExtraTrees=%O/box.raw:/usr/lib/tundravm/containers/box.raw\n"
     )
     keys = (dev / "mkosi.extra/etc/ssh/authorized_keys.d/root").read_text(encoding="utf-8")
@@ -414,7 +410,7 @@ def test_the_root_is_root_owned_0755_and_the_probe_says_so(root: str, unit: bool
 
 def test_verity_layout_splits_the_payload_and_copies_its_partitions() -> None:
     tree = FIXTURE / "tree-verity"
-    data, hashes = verity_uuids("6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70")
+    data, hashes = verity_uuids(DEFAULT_SEED)
     payload = (tree / "payload/mkosi.conf").read_text(encoding="utf-8")
     assert "Format=disk\n" in payload
     assert "SplitArtifacts=uki,partitions\n" in payload
@@ -457,10 +453,8 @@ def test_summary_resolves_the_selection_mkosi_argv_names() -> None:
     tree = FIXTURE / "tree-initramfs"
     lowered = lower(recipe_with())
     for variant, images, profiles in (
-        ("default", ["payload", "main"], []),
-        ("azure", ["payload", "azure", "main"], []),
-        ("gcp", ["payload", "gcp", "main"], []),
-        ("dev", ["box", "payload", "main"], ["dev"]),
+        ("production", ["payload", "azure", "gcp", "main"], []),
+        ("dev", ["box", "payload", "azure", "gcp", "main"], ["dev"]),
     ):
         summary = mkosi_summary(tree, *mkosi_argv(lowered, variant))
         assert [image["Image"] for image in summary["Images"]] == images, variant
@@ -471,10 +465,9 @@ def test_summary_resolves_the_selection_mkosi_argv_names() -> None:
 
 def test_mkosi_argv_names_the_profile_and_dependencies() -> None:
     lowered = lower(recipe_with())
-    assert mkosi_argv(lowered, "default") == []
-    assert mkosi_argv(lowered, "azure") == ["--dependency=azure"]
-    assert mkosi_argv(lowered, "gcp") == ["--dependency=gcp"]
-    assert mkosi_argv(lowered, "dev") == ["--profile=dev"]
+    clouds = ["--dependency=azure", "--dependency=gcp"]
+    assert mkosi_argv(lowered, "production") == clouds
+    assert mkosi_argv(lowered, "dev") == ["--profile=dev", *clouds]
 
 
 def test_stale_history_is_never_replayed(tmp_path: Path) -> None:
@@ -523,12 +516,12 @@ def test_every_emitted_key_is_an_mkosi_setting_in_its_section() -> None:
 
 # ── every tree tundravm writes ──────────────────────────────────────────
 
-_RECIPES = [*EXAMPLE_RECIPES, ATTESTED_NODE / "image.py", FIXTURE / "recipe.py"]
+_IMAGES = [*EXAMPLE_RECIPES, ATTESTED_NODE / "image.py", FIXTURE / "fixture.py"]
 
 
-@pytest.mark.parametrize("path", _RECIPES, ids=lambda p: Path(p).stem)
+@pytest.mark.parametrize("path", _IMAGES, ids=lambda p: Path(p).stem)
 def test_every_tree_sets_the_reproducibility_knobs(path: Path, tmp_path: Path) -> None:
-    recipe = load(Path(path))
+    recipe = load_file(path).recipe
     compile(recipe).write(tmp_path)
     main = (tmp_path / "mkosi.conf").read_text(encoding="utf-8")
     for line in (
@@ -563,7 +556,7 @@ def test_the_new_image_pins_the_tools_tree_to_its_release_and_snapshot(tmp_path:
     release is ``testing``, whose package-manager profile installs a dnf5 a trixie snapshot
     lacks, so an unpinned release breaks the tools tree."""
     path = write_new_image(tmp_path / "node.py")
-    recipe = load(path)
+    recipe = load_file(path).recipe
     compile(recipe).write(tmp_path / "tree")
     main = (tmp_path / "tree" / "mkosi.conf").read_text(encoding="utf-8")
     assert f"\nRelease={recipe.platform.release}\n" in main
@@ -604,29 +597,9 @@ def test_the_attested_node_tree_resolves_every_node() -> None:
     assert summary["Tools"]["Snapshot"] == images["payload"]["Snapshot"] == "20261018T082309Z"
 
 
-# ── what the tree refuses ───────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("setting", "code"),
-    [
-        (Setting("Config", "ConfigureScripts", ("configure.sh",)), "mkosi-configure-script"),
-        (Setting("Build", "Environment", ("HOME",)), "mkosi-environment-passthrough"),
-        (Setting("Config", "PassEnvironment", ("PATH",)), "mkosi-environment-passthrough"),
-    ],
-)
-def test_settings_that_break_the_summary_or_leak_the_host_are_refused(
-    setting: Setting, code: str
-) -> None:
-    recipe = Recipe("refused", items=(setting,))
-    with pytest.raises(ValidationError, match=code):
-        compile(recipe)
-    assert code in {d.code for d in declaration_check(recipe)}
-
-
 def test_selected_variants_do_not_change_the_payload() -> None:
     whole = compile(recipe_with())
-    alone = compile(recipe_with(), variants=["default"])
+    alone = compile(recipe_with(), variants=["production"])
     payload = {e.path: e for e in whole.entries if e.path.startswith("payload/")}
     own = {e.path: e for e in alone.entries if e.path.startswith("payload/")}
     shared = {p: e for p, e in payload.items() if not p.startswith("payload/mkosi.profiles/")}

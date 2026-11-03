@@ -3,9 +3,8 @@
 Name=en* eth*
 
 [Network]
-DHCP=ipv4
-IPv6AcceptRA=no
-LinkLocalAddressing=no
+DHCP=yes
+IPv6AcceptRA=yes
 
 [DHCPv4]
 # The host's DHCP server names no hostname, resolver or time source

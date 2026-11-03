@@ -54,9 +54,11 @@
         "ImageId": "fixture",
         "KernelCommandLine": [
           "root=/dev/mapper/root",
-          "systemd.verity_root_data=/dev/disk/by-partuuid/9a94e2e0-42d7-582e-baec-aa6600df7a19",
-          "systemd.verity_root_hash=/dev/disk/by-partuuid/b79bc3b9-65fa-5287-852a-34759dffe29f",
-          "systemd.volatile=overlay"
+          "systemd.verity_root_data=/dev/disk/by-partuuid/b61fd526-641e-507d-9c9c-960c43f20ee5",
+          "systemd.verity_root_hash=/dev/disk/by-partuuid/376d596e-c008-5e51-ad0d-ec14c9aa7002",
+          "systemd.volatile=overlay",
+          "mitigations=auto,nosmt",
+          "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
           "crc32c_generic",
@@ -69,6 +71,9 @@
           "hv_utils",
           "hv_vmbus",
           "mana",
+          "nf_tables",
+          "nft_ct",
+          "nft_reject_inet",
           "nvme",
           "overlay",
           "pci_hyperv",
@@ -88,16 +93,23 @@
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
           "busybox",
+          "ca-certificates",
+          "chrony",
           "curl",
           "dmidecode",
           "iproute2",
           "kmod",
           "linux-image-amd64",
+          "nftables",
           "nvme-cli",
+          "openssh-server",
           "openssl",
           "passwd",
+          "socat",
+          "sudo",
           "systemd",
           "systemd-boot-efi",
+          "systemd-resolved",
           "systemd-sysv",
           "udev"
         ],
@@ -112,7 +124,7 @@
           "<tree>/payload/mkosi.repart"
         ],
         "SandboxTrees": [],
-        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "Seed": "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d",
         "SkeletonTrees": [
           {
             "Source": "<tree>/payload/mkosi.skeleton",
@@ -189,7 +201,7 @@
           "<tree>/mkosi.repart"
         ],
         "SandboxTrees": [],
-        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "Seed": "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d",
         "SkeletonTrees": [],
         "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
@@ -288,9 +300,11 @@
         "ImageId": "fixture-dev",
         "KernelCommandLine": [
           "root=/dev/mapper/root",
-          "systemd.verity_root_data=/dev/disk/by-partuuid/9a94e2e0-42d7-582e-baec-aa6600df7a19",
-          "systemd.verity_root_hash=/dev/disk/by-partuuid/b79bc3b9-65fa-5287-852a-34759dffe29f",
-          "systemd.volatile=overlay"
+          "systemd.verity_root_data=/dev/disk/by-partuuid/b61fd526-641e-507d-9c9c-960c43f20ee5",
+          "systemd.verity_root_hash=/dev/disk/by-partuuid/376d596e-c008-5e51-ad0d-ec14c9aa7002",
+          "systemd.volatile=overlay",
+          "mitigations=auto,nosmt",
+          "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
           "crc32c_generic",
@@ -303,6 +317,9 @@
           "hv_utils",
           "hv_vmbus",
           "mana",
+          "nf_tables",
+          "nft_ct",
+          "nft_reject_inet",
           "nvme",
           "overlay",
           "pci_hyperv",
@@ -311,10 +328,7 @@
           "virtio_blk",
           "virtio_net",
           "virtio_scsi",
-          "loop",
-          "nf_tables",
-          "nft_ct",
-          "nft_reject_inet"
+          "loop"
         ],
         "MachineId": null,
         "ManifestFormat": [
@@ -326,6 +340,8 @@
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
           "busybox",
+          "ca-certificates",
+          "chrony",
           "curl",
           "dmidecode",
           "iproute2",
@@ -343,6 +359,7 @@
           "systemd",
           "systemd-boot-efi",
           "systemd-journal-remote",
+          "systemd-resolved",
           "systemd-sysv",
           "udev"
         ],
@@ -360,7 +377,7 @@
           "<tree>/payload/mkosi.repart"
         ],
         "SandboxTrees": [],
-        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "Seed": "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d",
         "SkeletonTrees": [
           {
             "Source": "<tree>/payload/mkosi.skeleton",
@@ -441,7 +458,7 @@
           "<tree>/mkosi.images/azure/mkosi.repart"
         ],
         "SandboxTrees": [],
-        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "Seed": "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d",
         "SkeletonTrees": [],
         "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
@@ -518,7 +535,7 @@
           "<tree>/mkosi.images/gcp/mkosi.repart"
         ],
         "SandboxTrees": [],
-        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "Seed": "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d",
         "SkeletonTrees": [],
         "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,
@@ -595,7 +612,7 @@
           "<tree>/mkosi.repart"
         ],
         "SandboxTrees": [],
-        "Seed": "6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70",
+        "Seed": "7a9ceb63-4a2c-4a85-9c36-1e0e3a8f7b5d",
         "SkeletonTrees": [],
         "Snapshot": "20261018T082309Z",
         "SourceDateEpoch": 0,

@@ -1,5 +1,5 @@
 [Unit]
-Description=A trivial scheduled job
+Description=tick
 
 [Timer]
 OnBootSec=1min

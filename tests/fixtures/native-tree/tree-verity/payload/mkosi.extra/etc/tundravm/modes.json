@@ -1,0 +1,17 @@
+{
+  "table": "inet filter",
+  "output": true,
+  "production_build": true,
+  "modes": [
+    {
+      "name": "production",
+      "mark": 1,
+      "lasts": 0
+    },
+    {
+      "name": "maintenance",
+      "mark": 2,
+      "lasts": 1800
+    }
+  ]
+}
