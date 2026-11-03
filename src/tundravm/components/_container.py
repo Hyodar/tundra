@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 
 from tundravm._image._component import Component, Endpoint, ServiceReady
 from tundravm._image._secrets import Secret
-from tundravm._image._service import Service
+from tundravm._image._service import Sandbox, Service, _sandbox
 from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import (
     TCP,
@@ -162,7 +162,8 @@ class Container(Component):
     packages=["busybox"], expose=[TCP(8081)])``. The keywords mean what they mean on a
     :class:`~tundravm.Service`: the program runs as *user* (default: the container's name),
     an account of its own with ids pinned from its name (:func:`uid`), which the root's
-    ``passwd`` and ``group`` name too, under the ``static`` sandbox, in a user namespace
+    ``passwd`` and ``group`` name too, under *hardening* (a ``Service``'s: the ``static``
+    preset by default, ``"jit"`` for a runtime that writes code), in a user namespace
     (``PrivateUsers=yes``) and a network namespace of its own; *state* is one volume
     directory, which it sees at the same path. Each port of *expose* (``TCP`` or ``UDP``)
     is DNATed from the host to the container through its veth, and a firewall mode naming
@@ -194,6 +195,7 @@ class Container(Component):
     serves: Sequence[PortValue] = ()
     probe: TcpProbe | None = None
     ssh: ContainerSsh | None = None
+    hardening: Sandbox = "static"
 
     def __init__(
         self,
@@ -211,6 +213,7 @@ class Container(Component):
         serves: Sequence[PortValue] = (),
         probe: TcpProbe | None = None,
         ssh: ContainerSsh | None = None,
+        hardening: Sandbox = "static",
     ) -> None:
         given = {
             "name": name,
@@ -226,6 +229,7 @@ class Container(Component):
             "serves": serves,
             "probe": probe,
             "ssh": ssh,
+            "hardening": hardening,
         }
         for keyword, value in given.items():
             object.__setattr__(self, keyword, value)
@@ -268,6 +272,13 @@ class Container(Component):
                 hint='state=data.directory("web"): a container root keeps nothing across boots.',
             )
         self._check_user()
+        _sandbox(self.hardening)
+        if not self.argv and self.hardening != "static":
+            raise _fail(
+                "hardening= sandboxes the program, and without argv= the program is sshd, "
+                "whose sandbox is tundravm's.",
+                hint="Drop hardening=, or give argv= the program it is for.",
+            )
         self._check_network()
 
     def _check_network(self) -> None:
@@ -564,7 +575,7 @@ class Container(Component):
             list(self.argv) or sshd,
             state=self.state,
             user=self.run_user,
-            hardening="static" if self.argv else SSHD_SANDBOX,
+            hardening=self.hardening if self.argv else SSHD_SANDBOX,
             requires=list(self.requires),
             readiness=None
             if self.probe is None or network is None

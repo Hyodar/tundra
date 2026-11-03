@@ -36,6 +36,7 @@ from tundravm.testing import plan
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 data = Volume("data", unlock=OperatorKey())
+SSH = ContainerSsh(port=10022, keys=Secret("web-keys"))
 HTTPD = ["/usr/bin/busybox", "httpd", "-f", "-p", "8081", "-h", "/srv/www"]
 PAGE = File.text("/srv/www/index.html", "<h1>web</h1>\n")
 RPC = Service(
@@ -80,6 +81,10 @@ def read(out: Path, path: str) -> str:
         (lambda: ContainerSsh(port=22, keys=Secret("web-keys")), "only root binds below 1024"),
         (lambda: web(ssh=ContainerSsh(port=8081, keys=Secret("k"))), "ssh= exposes already"),
         (lambda: Container("web", packages=["busybox"]), "argv= is empty"),
+        (
+            lambda: Container("web", packages=["sl"], ssh=SSH, hardening="jit"),
+            "sandbox is tundravm's",
+        ),
     ],
 )
 def test_a_container_refuses_what_would_fetch_or_leak(
@@ -88,6 +93,11 @@ def test_a_container_refuses_what_would_fetch_or_leak(
     with pytest.raises(ValidationError, match=message) as raised:
         make()
     assert raised.value.hint
+
+
+def test_a_container_runs_under_the_hardening_it_names() -> None:
+    planned = plan(Image("box", components=[web(hardening="jit")]))
+    assert planned.unit("web.service").get("Service", "MemoryDenyWriteExecute") is None
 
 
 def test_a_container_lowers_to_a_subimage_its_unit_runs_from(tmp_path: Path) -> None:

@@ -765,6 +765,7 @@ Container(
     serves: Sequence[PortValue] = (),
     probe: TcpProbe | None = None,
     ssh: ContainerSsh | None = None,
+    hardening: Sandbox = 'static',
 )
 ```
 
