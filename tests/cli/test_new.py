@@ -77,9 +77,15 @@ def test_the_ci_workflow_runs_the_project_it_was_written_for(
         ("build", "uv run tundravm build"),
         ("build", "uv run tundravm verify latest"),
         ("rebuild", 'uv run tundravm verify --rebuild "$RUNNER_TEMP"/release/*/'),
+        ("release", 'if [ "$ATTESTED" = true ]; then'),  # no verify line without attestation
     ):
         assert line in runs[job], (job, line)
     assert any(line.startswith("xargs gh release create") for line in runs["release"])
+    steps = {step["name"]: step for step in jobs["release"]["steps"]}
+    assert steps["Attest the provenance of the released files"]["id"] == "attest"
+    assert (
+        steps["Create the release"]["env"]["ATTESTED"] == "${{ steps.attest.outcome == 'success' }}"
+    )
     uses = [step["uses"] for job in jobs.values() for step in job["steps"] if "uses" in step]
     assert "actions/attest-build-provenance@v4.2.2" in uses
     for action in uses:

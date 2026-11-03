@@ -459,6 +459,7 @@ jobs:
           echo "BUILD_DIR=$GITHUB_WORKSPACE/$build" >> "$GITHUB_ENV"
 
       - name: Attest the provenance of the released files
+        id: attest
         if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@v4.2.2
         with:
@@ -481,11 +482,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          ATTESTED: ${{ steps.attest.outcome == 'success' }}
         run: |
           {
             echo "Build $(basename "$PWD") of $GITHUB_SHA, rebuilt on a second runner: every"
-            echo "artifact matched. Check a download with \\`sha256sum -c SHA256SUMS\\` and"
-            echo "\\`gh attestation verify payload.efi --repo $GITHUB_REPOSITORY\\`."
+            echo "artifact matched. Check a download with \\`sha256sum -c SHA256SUMS\\`."
+            if [ "$ATTESTED" = true ]; then
+              echo "Check its provenance with"
+              echo "\\`gh attestation verify payload.efi --repo $GITHUB_REPOSITORY\\`."
+            fi
           } > "$RUNNER_TEMP/notes.md"
           xargs gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \\
             --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" < "$RUNNER_TEMP/files.txt"
