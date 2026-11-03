@@ -747,8 +747,8 @@ recorded `Mkosi(scripts=)` escape, since nothing could say what it changed.
 
 A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
-by sha256. `Git(url, ref, subdir="tools")` builds one directory of the repository. Your own
-program is a `Local` source, as the [signer](#4-the-signer) is.
+by sha256. `Git(url, ref, subdir="tools", auth="GITHUB_TOKEN")` builds a private
+repository's directory. Your own program is a `Local` source, as the [signer](#4-the-signer) is.
 
 The path stays inside the project (the nearest `pyproject.toml`). The digest covers the
 path, sha256, exec bit and symlink target of what `git ls-files --cached --others

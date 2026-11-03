@@ -105,6 +105,8 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - The version is the release tag (`tundravm --version`; `<tag>.post1.dev<n>+g<sha>` between tags), and a wheel records the commit it was built from, so an installed release builds `tools/` at its tag's commit; the lock's compiler section records that version, so another tundravm is lock drift.
 - Go builds with the toolchain `go.mod` names, fetched by the host's `go` 1.21+, which every image needs (`Tdxs` is Go); Cargo with the one `rust-toolchain.toml` pins, installed by the host's `rustup`, and an unpinned channel is refused.
 - **Breaking:** `Dotnet` builds with the SDK `global.json` names: `lock` resolves it under the file's `rollForward` policy against the .NET release manifest and pins the release with its tarball's sha512 (lockfile version 8, `toolchains`), `build` downloads it on the host and restores the packages with its own `dotnet`, and the sandbox restores and publishes offline with it; `packages=` defaults to the SDK's Debian runtime (`libicu76`, `libssl3t64`, `libstdc++6`), no SDK package, since Debian ships none, and `Dotnet`, `Go` and `Cargo` are `tundravm.sources` names.
+- **Breaking:** a credential in a `Git` or `Http` url (`https://user:token@`, `?token=`) is refused, and the lock, the manifest and the SBOM are never written holding one; an SSH url still reads the agent.
+- `Git(url, ref, auth="GITHUB_TOKEN")` and `Http(url, auth=...)` read the token from that host variable at lock, fetch and prefetch and hand it to git (`GIT_CONFIG_*`, reaching Go and Cargo git dependencies on the same host) or the download as a header, never to disk, the sandbox or an artifact.
 
 ### Lint
 
