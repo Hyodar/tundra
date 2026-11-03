@@ -544,6 +544,12 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
 ) -> None:
     url, first = repo
     tools = _Toolchain(monkeypatch, ["go", "cargo", "dotnet"])
+    header = {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://h/.extraHeader",
+        "GIT_CONFIG_VALUE_0": "Authorization: Bearer t",
+    }
+    monkeypatch.setattr(_source, "git_auth_env", lambda source: header)  # what auth= sends
     recipe = _recipe(_build(url, kind))
     out = tmp_path / "out"
 
@@ -574,6 +580,7 @@ def test_fetch_prefetches_each_toolchains_dependencies_next_to_the_checkout(
         ),
     }[kind]
     assert argv == expected
+    assert env["GIT_CONFIG_KEY_0"] == header["GIT_CONFIG_KEY_0"]
     if kind == "go":
         assert env["GOMODCACHE"] == str(cache) and "-mod=mod" in env["GOFLAGS"].split()
         assert env["GOTOOLCHAIN"] == TOOLCHAIN

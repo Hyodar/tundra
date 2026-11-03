@@ -2860,7 +2860,7 @@ def prefetch_deps(
             env.update(DotnetBuild._host_env(sdk_root, scratch / "home"))
             name = sdk.version
             (deps / str(build.toolchain_file(pin))).write_text(f"{name}\n", encoding="utf-8")
-        if isinstance(recipe, (GoBuild, CargoBuild)) and isinstance(build.source, GitSource):
+        if isinstance(build.source, GitSource):
             try:
                 env.update(_git_deps_auth_env(recipe, build.source))
             except SourceError as exc:
@@ -2896,9 +2896,10 @@ def prefetch_deps(
 _GITHUB_HOSTS = frozenset({"github.com", "www.github.com"})
 
 
-def _git_deps_auth_env(recipe: GoBuild | CargoBuild, source: GitSource) -> dict[str, str]:
+def _git_deps_auth_env(recipe: LanguageBuild, source: GitSource) -> dict[str, str]:
     """The prefetch environment giving *source*'s ``auth`` token to the git dependencies
-    on its host: :func:`git_auth_env`, which ``go mod download`` passes to the git it runs.
+    on its host: :func:`git_auth_env`, which ``go mod download`` and ``dotnet restore``
+    (an MSBuild task that runs git) pass to the git they run.
 
     Cargo fetches git dependencies with its built-in libgit2, which reads a credential
     helper and the SSH agent but neither ``GIT_CONFIG_*`` nor ``http.extraHeader``, so
