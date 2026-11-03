@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/Hyodar/tundra/tools/pkg/exec"
+	"github.com/Hyodar/tundra/tools/pkg/owner"
 )
 
 // KeyProvider supplies encryption keys for disk setup.
@@ -37,6 +41,9 @@ type Manager struct {
 
 	// findDisk is a hook so tests can inject a fake finder.
 	findDisk func(cfg DiskConfig) (string, error)
+
+	// ownerWait is how long SyncOwners waits for a volume's device to appear.
+	ownerWait time.Duration
 }
 
 // NewManager creates a Manager from the given configuration.
@@ -51,6 +58,7 @@ func NewManager(cfg *Config, keyProvider KeyProvider, runner exec.Runner) *Manag
 		luks:         NewLuksOps(runner),
 		fs:           NewFilesystemOps(runner),
 		runner:       runner,
+		ownerWait:    30 * time.Second,
 	}
 
 	// Default findDisk uses the real DiskFinder factory.
@@ -189,12 +197,28 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 		return fmt.Errorf("disk %q: get encryption key: %w", md.Name, err)
 	}
 
+	pinned := ""
+	if md.Config.Owner != "" {
+		if pinned, err = owner.ReadFile(md.Config.Owner); err != nil {
+			return fmt.Errorf("disk %q: %w", md.Name, err)
+		}
+		if pinned == "" {
+			return fmt.Errorf("disk %q: no signed delivery named an owner this boot, so the volume is not created", md.Name)
+		}
+	}
+
 	if err := m.luks.FormatLuks(ctx, md.DevicePath, key); err != nil {
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
 	if err := m.luks.StoreInitToken(ctx, md.DevicePath, md.Name); err != nil {
 		return fmt.Errorf("disk %q: %w", md.Name, err)
+	}
+
+	if pinned != "" {
+		if err := m.luks.WriteOwner(ctx, md.DevicePath, pinned); err != nil {
+			return fmt.Errorf("disk %q: %w", md.Name, err)
+		}
 	}
 
 	if err := m.luks.OpenLuks(ctx, md.DevicePath, md.MapperName, key); err != nil {
@@ -209,6 +233,12 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
+	if pinned != "" {
+		if err := owner.WriteCopy(filepath.Join(md.Config.MountAt, owner.VolumeCopy), pinned); err != nil {
+			return fmt.Errorf("disk %q: %w", md.Name, err)
+		}
+	}
+
 	dirs := md.Config.EffectiveDirs()
 	if err := CreateMountDirs(md.Config.MountAt, dirs); err != nil {
 		return fmt.Errorf("disk %q: %w", md.Name, err)
@@ -219,8 +249,20 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 	return nil
 }
 
-// mountExistingEncrypted opens and mounts an already-formatted LUKS device.
+// mountExistingEncrypted opens and mounts an already-formatted LUKS device; an owned
+// volume opens only for the owner its header pins.
 func (m *Manager) mountExistingEncrypted(ctx context.Context, md *ManagedDisk) error {
+	pinned := ""
+	if md.Config.Owner != "" {
+		var err error
+		if pinned, err = m.reconcile(ctx, md); err != nil {
+			return fmt.Errorf("disk %q: %w", md.Name, err)
+		}
+		if pinned == "" {
+			return fmt.Errorf("disk %q: no signed delivery named an owner this boot, so the volume stays closed", md.Name)
+		}
+	}
+
 	key, err := m.getEncryptionKey(ctx, md)
 	if err != nil {
 		return fmt.Errorf("disk %q: get encryption key: %w", md.Name, err)
@@ -234,8 +276,67 @@ func (m *Manager) mountExistingEncrypted(ctx context.Context, md *ManagedDisk) e
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
+	if pinned != "" {
+		if err := m.checkCopy(ctx, md, pinned); err != nil {
+			return err
+		}
+	}
+
 	slog.InfoContext(ctx, "encrypted disk mounted", "name", md.Name, "device", md.DevicePath)
 	return nil
+}
+
+// checkCopy compares the header's owner with the copy inside the volume, just mounted and
+// before anything that waits for it starts: a volume without a copy (made before copies)
+// takes the header's, a copy that names the key a rotation this boot replaced takes the
+// new one, and any other difference closes the volume again, says so on the console and
+// leaves the mismatch file the endpoint and the probe report.
+func (m *Manager) checkCopy(ctx context.Context, md *ManagedDisk, header string) error {
+	path := filepath.Join(md.Config.MountAt, owner.VolumeCopy)
+	copied, err := owner.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("disk %q: %w", md.Name, err)
+	}
+	from, err := owner.ReadFile(md.Config.Owner + owner.FromSuffix)
+	if err != nil {
+		return fmt.Errorf("disk %q: %w", md.Name, err)
+	}
+	switch {
+	case copied == header:
+		return nil
+	case copied == "":
+		slog.InfoContext(ctx, "the volume had no copy of its owner (made before copies): wrote the header's",
+			"disk", md.Name, "owner", owner.Fingerprint(header))
+		return owner.WriteCopy(path, header)
+	case copied == from:
+		return owner.WriteCopy(path, header)
+	}
+	message := owner.MismatchMessage(md.Name)
+	slog.ErrorContext(ctx, message, "header", owner.Fingerprint(header), "volume", owner.Fingerprint(copied))
+	if console, err := os.OpenFile("/dev/console", os.O_WRONLY, 0); err == nil {
+		fmt.Fprintln(console, message)
+		console.Close()
+	}
+	if err := os.WriteFile(md.Config.Owner+owner.MismatchSuffix, []byte(message+"\n"), 0o644); err != nil {
+		slog.ErrorContext(ctx, "mismatch not recorded", "disk", md.Name, "err", err)
+	}
+	if err := m.fs.UnmountDevice(ctx, md.Config.MountAt); err != nil {
+		slog.ErrorContext(ctx, "not unmounted", "disk", md.Name, "err", err)
+	}
+	if err := m.luks.CloseLuks(ctx, md.MapperName); err != nil {
+		slog.ErrorContext(ctx, "not closed", "disk", md.Name, "err", err)
+	}
+	return fmt.Errorf("%s: the header names %s, the volume %s, so it stays closed",
+		message, owner.Fingerprint(header), owner.Fingerprint(copied))
+}
+
+// rotateCopy updates the copy of a volume that is open (its copy is there) to key.
+func rotateCopy(md *ManagedDisk, key string) error {
+	path := filepath.Join(md.Config.MountAt, owner.VolumeCopy)
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	return owner.WriteCopy(path, key)
 }
 
 // setupPlainDisk handles non-encrypted disk setup.
@@ -297,4 +398,129 @@ func (m *Manager) getEncryptionKey(ctx context.Context, md *ManagedDisk) (string
 	}
 
 	return m.getKeyProvider(md.Config.EncryptionKey).Get(ctx)
+}
+
+// reconcile brings together md's owner token and the boot's owner file: the header wins
+// while the file is empty (at boot), the file wins when the header has no token (a volume
+// made before tokens) or when it rotates from the header's key (the .from file names it).
+// Any other difference is refused. It returns the owner, "" for none.
+func (m *Manager) reconcile(ctx context.Context, md *ManagedDisk) (string, error) {
+	path := md.Config.Owner
+	boot, err := owner.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	token, err := m.luks.ReadOwner(ctx, md.DevicePath)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case boot == "" && token == "":
+		return "", nil
+	case boot == "":
+		slog.InfoContext(ctx, "owner read from the header", "disk", md.Name, "owner", owner.Fingerprint(token))
+		return token, owner.WriteFile(path, token)
+	case token == boot:
+		return boot, nil
+	case token == "":
+		return boot, m.luks.WriteOwner(ctx, md.DevicePath, boot)
+	}
+	from, err := owner.ReadFile(path + owner.FromSuffix)
+	if err != nil {
+		return "", err
+	}
+	if from != token {
+		return "", fmt.Errorf("the volume is owned by %s, not %s, the key that delivered this boot",
+			owner.Fingerprint(token), owner.Fingerprint(boot))
+	}
+	if err := m.luks.WriteOwner(ctx, md.DevicePath, boot); err != nil {
+		return "", err
+	}
+	return boot, rotateCopy(md, boot)
+}
+
+// SyncOwners reconciles each owned disk's header with its owner file: before the attested
+// endpoint starts (the header's owner becomes the boot's) and each time the endpoint pins or
+// rotates one (the file's reaches a header that exists). A disk not attached within
+// ownerWait, or not LUKS yet, is left alone: disk-setup writes the token as it creates it.
+func (m *Manager) SyncOwners(ctx context.Context) error {
+	var failed []string
+	for name, md := range m.disks {
+		if md.Config.Owner == "" {
+			continue
+		}
+		device, err := m.waitDisk(md.Config)
+		if err != nil {
+			slog.InfoContext(ctx, "owned volume not attached", "disk", name, "err", err)
+			continue
+		}
+		md.DevicePath = device
+		if isLuks, _ := m.luks.IsLuksDevice(ctx, device); !isLuks {
+			continue
+		}
+		if _, err := m.reconcile(ctx, md); err != nil {
+			slog.ErrorContext(ctx, "owner not reconciled", "disk", name, "err", err)
+			failed = append(failed, fmt.Sprintf("%s: %v", name, err))
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("owners: %s", strings.Join(failed, "; "))
+	}
+	return nil
+}
+
+func (m *Manager) waitDisk(cfg DiskConfig) (string, error) {
+	deadline := time.Now().Add(m.ownerWait)
+	for {
+		device, err := m.findDisk(cfg)
+		if err == nil || !time.Now().Before(deadline) {
+			return device, err
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// WatchOwners reconciles the owners once, calls ready, then reconciles again whenever an
+// owner file (or its .from) changes, checking every interval, until ctx ends. A failed
+// reconciliation is logged and leaves the header as it was: disk-setup refuses to open a
+// volume whose header and boot owner differ.
+func (m *Manager) WatchOwners(ctx context.Context, interval time.Duration, ready func()) error {
+	if err := m.SyncOwners(ctx); err != nil {
+		slog.ErrorContext(ctx, "owners", "err", err)
+	}
+	seen := m.ownerFiles()
+	ready()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+		now := m.ownerFiles()
+		if now == seen {
+			continue
+		}
+		if err := m.SyncOwners(ctx); err != nil {
+			slog.ErrorContext(ctx, "owners", "err", err)
+		}
+		seen = m.ownerFiles()
+	}
+}
+
+// ownerFiles is what every owner file and its .from hold, in one string.
+func (m *Manager) ownerFiles() string {
+	var parts []string
+	for name, md := range m.disks {
+		if md.Config.Owner == "" {
+			continue
+		}
+		for _, path := range []string{md.Config.Owner, md.Config.Owner + owner.FromSuffix} {
+			data, _ := os.ReadFile(path)
+			parts = append(parts, name+"\x00"+path+"\x00"+string(data))
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x01")
 }

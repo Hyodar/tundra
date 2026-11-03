@@ -232,32 +232,3 @@ func TestLuksOps_StoreInitToken(t *testing.T) {
 		t.Errorf("disk_name = %q, want %q", tok.DiskName, "persistent")
 	}
 }
-
-func TestLuksOps_SSHToken(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("store and get", func(t *testing.T) {
-		mr := newMockRunner()
-		mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "2", "/dev/sdb")
-
-		sshKey := "ssh-ed25519 AAAAC3..."
-		tok := luksToken{Type: "tundra-ssh", Keyslots: []any{}, SSHKey: sshKey}
-		data, _ := json.Marshal(tok)
-		mr.on(string(data), nil, "cryptsetup", "token", "export", "--token-id", "2", "/dev/sdb")
-
-		ops := NewLuksOps(mr)
-
-		err := ops.StoreSSHToken(ctx, "/dev/sdb", sshKey)
-		if err != nil {
-			t.Fatalf("store: unexpected error: %v", err)
-		}
-
-		got, err := ops.GetSSHToken(ctx, "/dev/sdb")
-		if err != nil {
-			t.Fatalf("get: unexpected error: %v", err)
-		}
-		if got != sshKey {
-			t.Errorf("got %q, want %q", got, sshKey)
-		}
-	})
-}

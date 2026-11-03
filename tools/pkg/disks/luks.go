@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/Hyodar/tundra/tools/pkg/exec"
+	"github.com/Hyodar/tundra/tools/pkg/owner"
 )
 
 // LuksOps provides LUKS2 encryption operations backed by cryptsetup.
@@ -37,7 +38,6 @@ type luksToken struct {
 	Keyslots    []any  `json:"keyslots"`
 	Initialized string `json:"initialized,omitempty"`
 	DiskName    string `json:"disk_name,omitempty"`
-	SSHKey      string `json:"ssh_key,omitempty"`
 }
 
 // IsInitialized reads LUKS token slot 1 and checks for "initialized": "true".
@@ -127,42 +127,32 @@ func (l *LuksOps) StoreInitToken(ctx context.Context, device, name string) error
 	return nil
 }
 
-// StoreSSHToken writes an SSH key to LUKS header slot 2.
-func (l *LuksOps) StoreSSHToken(ctx context.Context, device, sshKey string) error {
-	tok := luksToken{
-		Type:     "tundra-ssh",
-		Keyslots: []any{},
-		SSHKey:   sshKey,
-	}
-
-	data, err := json.Marshal(tok)
+// ReadOwner is the key the owner token (owner.TokenID) of the LUKS device pins, "" when
+// the header has none.
+func (l *LuksOps) ReadOwner(ctx context.Context, device string) (string, error) {
+	out, err := l.Runner.Run(ctx, "cryptsetup", "token", "export", "--token-id", owner.TokenID, device)
 	if err != nil {
-		return fmt.Errorf("store ssh token: marshal: %w", err)
+		slog.DebugContext(ctx, "no owner token", "device", device, "err", err)
+		return "", nil
 	}
-
-	_, err = l.Runner.RunWithStdin(ctx, string(data),
-		"cryptsetup", "token", "import",
-		"--token-id", "2",
-		device,
-	)
-	if err != nil {
-		return fmt.Errorf("store ssh token: %w", err)
-	}
-
-	return nil
+	return owner.ParseToken([]byte(out))
 }
 
-// GetSSHToken reads the SSH key stored in LUKS header slot 2.
-func (l *LuksOps) GetSSHToken(ctx context.Context, device string) (string, error) {
-	out, err := l.Runner.Run(ctx, "cryptsetup", "token", "export", "--token-id", "2", device)
+// WriteOwner writes (or replaces) the owner token that pins key.
+func (l *LuksOps) WriteOwner(ctx context.Context, device, key string) error {
+	tok, err := owner.NewToken(key)
 	if err != nil {
-		return "", fmt.Errorf("get ssh token: %w", err)
+		return fmt.Errorf("write owner token: %w", err)
 	}
-
-	var tok luksToken
-	if err := json.Unmarshal([]byte(out), &tok); err != nil {
-		return "", fmt.Errorf("get ssh token: parse: %w", err)
+	data, err := json.Marshal(tok)
+	if err != nil {
+		return fmt.Errorf("write owner token: %w", err)
 	}
-
-	return tok.SSHKey, nil
+	if _, err := l.Runner.RunWithStdin(ctx, string(data),
+		"cryptsetup", "token", "import", "--token-id", owner.TokenID, "--token-replace", device,
+	); err != nil {
+		return fmt.Errorf("write owner token: %w", err)
+	}
+	slog.InfoContext(ctx, "owner token written", "device", device, "owner", tok.Fingerprint)
+	return nil
 }

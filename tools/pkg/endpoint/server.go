@@ -45,6 +45,9 @@ type Accepts struct {
 	Credentials []string `json:"credentials"`
 	Volumes     []string `json:"volumes"`
 	SSHKey      bool     `json:"ssh_key"`
+	// Owner is there in an image that pins its operator (an OperatorKey() volume): who
+	// owns it, whose signature every write needs.
+	Owner *OwnerState `json:"owner,omitempty"`
 }
 
 // ListenerKey is one attested TLS port's certificate key as the evidence states it: the
@@ -78,6 +81,7 @@ type Server struct {
 	spki   []byte
 
 	mu        sync.Mutex
+	ownerMu   sync.Mutex
 	delivered map[string]bool
 	unlocked  map[string]bool
 	sshKey    string
@@ -164,6 +168,7 @@ func (s *Server) HTTPServer() *http.Server {
 	mux.HandleFunc("POST /credentials", s.credentials)
 	mux.HandleFunc("POST /unlock", s.unlock)
 	mux.HandleFunc("POST /ssh-key", s.sshKeyHandler)
+	mux.HandleFunc("POST /owner", s.rotate)
 	return &http.Server{
 		Handler: mux,
 		TLSConfig: &tls.Config{
@@ -202,7 +207,9 @@ func sessionOf(r *http.Request) *session {
 }
 
 func (s *Server) accepts() Accepts {
-	found := Accepts{Credentials: []string{}, Volumes: []string{}, SSHKey: s.cfg.SSH != nil}
+	found := Accepts{
+		Credentials: []string{}, Volumes: []string{}, SSHKey: s.cfg.SSH != nil, Owner: s.ownerState(),
+	}
 	seen := map[string]bool{}
 	for _, c := range s.cfg.Credentials {
 		if !seen[c.Name] {
@@ -319,13 +326,17 @@ func (s *Server) bound(w http.ResponseWriter, r *http.Request, value any, nonce 
 }
 
 type credentialsRequest struct {
-	Nonce       string            `json:"nonce"`
+	Nonce string `json:"nonce"`
+	Signed
 	Credentials map[string]string `json:"credentials"`
 }
 
 func (s *Server) credentials(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if !s.bound(w, r, &req, &req.Nonce) {
+		return
+	}
+	if _, ok := s.authorize(w, req.Nonce, req.Signed); !ok {
 		return
 	}
 	if len(req.Credentials) == 0 {
@@ -373,7 +384,8 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request) {
 }
 
 type unlockRequest struct {
-	Nonce      string `json:"nonce"`
+	Nonce string `json:"nonce"`
+	Signed
 	Volume     string `json:"volume"`
 	Passphrase string `json:"passphrase"`
 }
@@ -381,6 +393,9 @@ type unlockRequest struct {
 func (s *Server) unlock(w http.ResponseWriter, r *http.Request) {
 	var req unlockRequest
 	if !s.bound(w, r, &req, &req.Nonce) {
+		return
+	}
+	if _, ok := s.authorize(w, req.Nonce, req.Signed); !ok {
 		return
 	}
 	var pipe string
@@ -415,7 +430,8 @@ func (s *Server) unlock(w http.ResponseWriter, r *http.Request) {
 
 type sshKeyRequest struct {
 	Nonce string `json:"nonce"`
-	Key   string `json:"key"`
+	Signed
+	Key string `json:"key"`
 }
 
 func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
@@ -433,6 +449,14 @@ func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := fields[0] + " " + fields[1]
+	signer, ok := s.authorize(w, req.Nonce, req.Signed)
+	if !ok {
+		return
+	}
+	if signer != "" && signer != key {
+		fail(w, http.StatusForbidden, "the SSH key handed over is not the key that signed the delivery")
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sshKey == key {
@@ -447,16 +471,9 @@ func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	line := []byte(keyRestrictions + " " + key + "\n")
-	if err := writeAtomic(filepath.Join(s.cfg.SSH.Dir, authorizedKeys), line, 0o600, ""); err != nil {
+	if err := s.writeSSHKey(key); err != nil {
 		fail(w, http.StatusInternalServerError, "%v", err)
 		return
-	}
-	if s.cfg.SSH.KeyPath != "" {
-		if err := writeAtomic(s.cfg.SSH.KeyPath, []byte(fields[1]+"\n"), 0o600, ""); err != nil {
-			fail(w, http.StatusInternalServerError, "%v", err)
-			return
-		}
 	}
 	s.sshKey = key
 	s.log.Info("operator SSH key taken")

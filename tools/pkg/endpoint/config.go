@@ -48,10 +48,14 @@ type Credential struct {
 	Owner string `yaml:"owner"`
 }
 
-// Volume is one volume whose passphrase goes into key-gen's FIFO at Pipe.
+// Volume is one volume whose passphrase goes into key-gen's FIFO at Pipe. Owner, set for
+// an OperatorKey() volume, is the boot's owner file (/run/tundravm/owner/<name>) that
+// disk-setup fills from the volume's header: with it, every write must be signed by the
+// owner, and the first signed one pins its signer.
 type Volume struct {
-	Name string `yaml:"name"`
-	Pipe string `yaml:"pipe"`
+	Name  string `yaml:"name"`
+	Pipe  string `yaml:"pipe"`
+	Owner string `yaml:"owner"`
 }
 
 // SSHConfig is where the operator's SSH key goes.
@@ -108,6 +112,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("volume %q is invalid, repeated or has no absolute pipe", v.Name)
 		}
 		volumes[v.Name] = true
+		if v.Owner != "" && !filepath.IsAbs(v.Owner) {
+			return fmt.Errorf("volume %s: owner %q is not absolute", v.Name, v.Owner)
+		}
 	}
 	if c.SSH != nil && !filepath.IsAbs(c.SSH.Dir) {
 		return fmt.Errorf("ssh.dir %q is not absolute", c.SSH.Dir)

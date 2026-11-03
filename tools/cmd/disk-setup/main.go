@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/Hyodar/tundra/tools/pkg/disks"
 	"github.com/Hyodar/tundra/tools/pkg/exec"
+	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +25,7 @@ func main() {
 
 	root.AddCommand(setupCmd())
 	root.AddCommand(validateCmd())
+	root.AddCommand(ownerCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -57,6 +62,34 @@ func setupCmd() *cobra.Command {
 
 			slog.Info("all disks set up successfully")
 			return nil
+		},
+	}
+}
+
+func ownerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "owner <config.yaml>",
+		Short: "Keep each OperatorKey() volume's owner token and the boot's owner file in step",
+		Long: "Reconcile once (the header's owner becomes the boot's), tell systemd it is " +
+			"ready, then reconcile again each time an owner file changes (the attested " +
+			"endpoint pinned or rotated an owner), until stopped.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := disks.LoadConfig(args[0])
+			if err != nil {
+				return err
+			}
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+			mgr := disks.NewManager(cfg, &envKeyProvider{}, &exec.DefaultRunner{})
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			return mgr.WatchOwners(ctx, 2*time.Second, func() {
+				if _, err := daemon.SdNotify(false, daemon.SdNotifyReady); err != nil {
+					slog.Warn("no readiness notification", "error", err)
+				}
+			})
 		},
 	}
 }

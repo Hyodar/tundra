@@ -3,6 +3,7 @@ package disks
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +37,11 @@ type DiskConfig struct {
 
 	// MountAt is the mount point path.
 	MountAt string `yaml:"mount_at"`
+
+	// Owner is the file holding the boot's owner key (/run/tundravm/owner/<name>), set for
+	// an OperatorKey() volume: its header pins, in the owner token, the one key the
+	// attested endpoint takes deliveries from (package owner).
+	Owner string `yaml:"owner"`
 
 	// Dirs lists subdirectories to create inside the mount point.
 	// Defaults to ["ssh", "data", "logs"].
@@ -82,6 +88,10 @@ func (c *Config) Validate() error {
 
 		if !slices.Contains(validFormats, d.Format) {
 			return fmt.Errorf("validate config: disk %q: unsupported format policy %q", name, d.Format)
+		}
+
+		if d.Owner != "" && (!filepath.IsAbs(d.Owner) || (d.EncryptionKey == "" && d.EncryptionKeyPath == "")) {
+			return fmt.Errorf("validate config: disk %q: owner needs an absolute path and an encrypted disk", name)
 		}
 
 		if d.MountAt == "" {
