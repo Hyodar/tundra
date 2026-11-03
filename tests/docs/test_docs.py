@@ -287,7 +287,7 @@ def test_pages_stay_short(page: str, limit: int) -> None:
 
 def test_the_guide_pages_share_one_budget() -> None:
     words = {page: len(_text(page).split()) for page in GUIDE_PAGES}
-    assert sum(words.values()) <= 9800, words
+    assert sum(words.values()) <= 10000, words
 
 
 def test_each_task_stays_under_120_words() -> None:

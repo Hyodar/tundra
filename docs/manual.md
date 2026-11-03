@@ -81,7 +81,7 @@ The [API reference](reference/api.md) lists each namespace.
 | the evidence service `tdxs` from `tools/`, socket-activated on `/var/tdxs.sock` (`Tdxs`) | `components=[Tdxs(source=Git(url, commit, subdir="tools"))]` for a mirror |
 | `tdx-evidence.service`, which every service requires: without TDX a production profile starts none, a development one runs simulated ([trust](trust.md#threat-model)) | none: a dev profile is the way to run without TDX |
 | for each cloud in `targets=`, its provisioning glue, inert elsewhere through `ConditionVirtualization=`, so one payload boots on every target | `targets=` |
-| an orderly poweroff on the ACPI power button (a cloud stop, QEMU's `system_powerdown`): acpid runs `systemctl poweroff`, so services stop and volumes unmount first | none |
+| an orderly poweroff on the ACPI power button: services stop and volumes unmount first | none |
 | a raw bootable disk for QEMU | `targets=("qemu", "azure", "gcp")` adds the cloud disks |
 
 Passing a baseline component in `components=` replaces the implied one.
