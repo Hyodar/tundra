@@ -34,6 +34,6 @@ def test_declarative_values_do_not_touch_filesystem(
     tree = compile(recipe)
     image = lower(recipe)
 
-    assert image.state.profiles["default"].packages == {"curl", "jq", "openssl"}
+    assert image.state.profiles["default"].packages == {"acpid", "curl", "jq", "openssl"}
     assert tree.entries
     assert list(tmp_path.iterdir()) == []

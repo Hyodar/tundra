@@ -27,14 +27,14 @@ Profiles (2):
 Built into production:
   Targets (3): qemu azure gcp
   Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
-  Packages (20): azure-vm-utils busybox ca-certificates chrony cryptsetup curl dmidecode iproute2 kmod linux-image-amd64 nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-resolved systemd-sysv udev
+  Packages (23): acpid azure-vm-utils busybox ca-certificates chrony cryptsetup curl dmidecode e2fsprogs iproute2 kmod linux-image-amd64 mount nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-resolved systemd-sysv udev
   Build packages (3): build-essential git golang
   Sources (4):
     attested-endpoint  local tundravm:tools    pinned=-
     disk-encryption    local tundravm:tools    pinned=-
     key-generation     local tundravm:tools    pinned=-
     tdxs               local tundravm:tools    pinned=-
-  Files (36):
+  Files (37):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  69B  sha256:c94c854fc0e2
     /etc/nftables.conf                                                                       0755  2806B  sha256:cf51b09468c7
@@ -61,6 +61,7 @@ Built into production:
     /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
     /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
     /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
+    /usr/lib/tundravm/acpi/power-button                                                      0644  57B  sha256:9b1d00ed2f6f
     /usr/lib/tundravm/attested-tls-key                                                       0755  1000B  sha256:bf53e52e308c
     /usr/lib/tundravm/egress-resolve                                                         0755  1647B  sha256:261319bac71a
     /usr/lib/tundravm/gcp/forwarded-ips                                                      0755  1235B  sha256:a708f93eac75
@@ -73,9 +74,9 @@ Built into production:
     /usr/lib/udev/rules.d/81-tundravm-azure-volumes.rules                                    0644  434B  sha256:8fc00d290c64
   Users (3): app attested-tls-443 tdxs
   Groups (4): azure-complete-provisioning gcp-forwarded-ips gcp-hostname tdx
-  Enabled units (22): azure-complete-provisioning.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (23): azure-complete-provisioning.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
   Units started on demand (2): gcp-forwarded-ips.service tdxs.service
-  Masked units (8): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
+  Masked units (11): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service acpid.path acpid.service acpid.socket nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
   Firewall (9):
     in   22/tcp                                                                                                                                           ssh.service
     in   443/tcp                                                                                                                                          attested-tls-443.service
@@ -104,7 +105,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  20316B  sha256:1836fca5c27e
+    + /usr/lib/tundravm/probe  0755  20323B  sha256:5dff065979e0
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

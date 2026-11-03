@@ -29,6 +29,7 @@ from tundravm._modules import (
     KeySpec,
     SecretDelivery,
     instance_key,
+    power_button,
     root_mode,
 )
 from tundravm._modules import execution as gate
@@ -379,6 +380,16 @@ class StateBuilder:
         _add_file(profile, instance_key.SCRIPT_PATH, instance_key.SCRIPT, "0755")
         profile.services.append(instance_key.service())
         profile.packages.add(instance_key.PACKAGE)
+
+    def power_button(self, name: str) -> None:
+        """Give profile *name* the ACPI power button's unit (``tundravm._modules.power_button``):
+        acpid, its rule, and the package's own units masked."""
+        profile = self.state.ensure_profile(name)
+        _add_file(profile, power_button.RULE_PATH, power_button.RULE)
+        profile.services.append(power_button.service())
+        profile.packages.add(power_button.PACKAGE)
+        for unit in power_button.MASKED_UNITS:
+            _unit_state(profile, "mask", unit)
 
     def root_mode(self, name: str) -> None:
         """Give profile *name* the unit that makes the initramfs root ``root:root 0755``

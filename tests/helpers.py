@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from tundravm._modules import execution, instance_key
+from tundravm._modules import execution, instance_key, power_button
 from tundravm._source import GitSource, HttpSource, Resolver, checkout_identity
 from tundravm.cli import main
 from tundravm.declarative import Lock, Recipe, lower
@@ -22,12 +22,21 @@ ATTESTED_NODE = REPO_ROOT / "examples" / "attested-node"
 EXAMPLE_RECIPES = tuple(sorted((ATTESTED_NODE / "stages").glob("*.py")))
 """The attested node's stages, in order; its ``image.py`` is the last one, built from
 ``signer/`` beside it."""
-GATE_FILES = frozenset({execution.GATE_SCRIPT, execution.GATE_DROPIN, instance_key.SCRIPT_PATH})
-"""What the execution gate and the instance key add to every lowered profile."""
+GATE_FILES = frozenset(
+    {
+        execution.GATE_SCRIPT,
+        execution.GATE_DROPIN,
+        instance_key.SCRIPT_PATH,
+        power_button.RULE_PATH,
+    }
+)
+"""What the execution gate, the instance key and the power button add to every lowered
+profile."""
 
 
 def own_files(files: list[FileEntry]) -> list[FileEntry]:
-    """*files* without the execution gate's and the instance key's, which every profile ships."""
+    """*files* without the execution gate's, the instance key's and the power button's, which
+    every profile ships."""
     return [entry for entry in files if entry.path not in GATE_FILES]
 
 

@@ -214,6 +214,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         default.name, release=default.release, default=default.release, ships=True
     )
     builder.instance_key(default.name)
+    builder.power_button(default.name)
     builder.issuer(default.name, release=default.release)
     payload = builder.state.ensure_profile(default.name)
     declared = set(payload.packages)

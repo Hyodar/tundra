@@ -654,7 +654,7 @@ probe_hardening signer.service 2.5 static
 check=hardening:attested-tls-8546.service
 probe_hardening attested-tls-8546.service 2.5 static
 check=kernel:modules
-probe_modules aesni_intel algif_skcipher configfs crc32c_generic crc32c_intel dm_crypt dm_verity efivarfs erofs ext4 gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi xts
+probe_modules aesni_intel algif_skcipher button configfs crc32c_generic crc32c_intel dm_crypt dm_verity efivarfs erofs ext4 gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi xts
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root

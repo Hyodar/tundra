@@ -46,6 +46,7 @@
           "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
+          "button",
           "configfs",
           "crc32c_generic",
           "efivarfs",
@@ -75,6 +76,7 @@
         "Output": "payload",
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
+          "acpid",
           "azure-vm-utils",
           "busybox",
           "ca-certificates",
@@ -268,6 +270,7 @@
           "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
+          "button",
           "configfs",
           "crc32c_generic",
           "efivarfs",
@@ -299,6 +302,7 @@
         "Output": "payload",
         "OutputDirectory": "<tree>/mkosi.output",
         "Packages": [
+          "acpid",
           "azure-vm-utils",
           "busybox",
           "ca-certificates",

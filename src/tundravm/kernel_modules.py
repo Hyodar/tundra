@@ -24,7 +24,7 @@ from typing import Literal
 from tundravm.errors import ValidationError
 from tundravm.models import MODULES_PATH, DebloatConfig, ProfileState
 
-MODULE_SETS_VERSION = 3
+MODULE_SETS_VERSION = 4
 """Bumped whenever a curated set changes; the generated finalize check names it."""
 
 TDX_GUEST_MODULES: tuple[str, ...] = (
@@ -45,6 +45,8 @@ TDX_GUEST_MODULES: tuple[str, ...] = (
     # /sys/kernel/config, which systemd mounts at boot (sys-kernel-config.mount, in the
     # verity initrd too) and configfs-tsm lives in; tdx_guest holds it only inside a TD.
     "configfs",
+    # The ACPI power button a cloud stop and QEMU's system_powerdown press (acpid's events).
+    "button",
 )
 """Every TDX guest, whatever it boots on (the ``qemu`` output's whole set)."""
 
@@ -144,6 +146,7 @@ MODULE_OPTIONS: dict[str, str] = {
     "nvme": "CONFIG_BLK_DEV_NVME",
     "efivarfs": "CONFIG_EFIVAR_FS",
     "configfs": "CONFIG_CONFIGFS_FS",
+    "button": "CONFIG_ACPI_BUTTON",
     "hv_vmbus": "CONFIG_HYPERV",
     "hv_netvsc": "CONFIG_HYPERV_NET",
     "hv_storvsc": "CONFIG_HYPERV_STORAGE",

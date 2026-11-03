@@ -15,11 +15,11 @@ Profiles (2):
 Built into production:
   Targets (1): qemu
   Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
-  Packages (11): ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-resolved systemd-sysv udev
+  Packages (12): acpid ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-resolved systemd-sysv udev
   Build packages (1): golang
   Sources (1):
     tdxs  local tundravm:tools    pinned=-
-  Files (19):
+  Files (20):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/nftables.conf                                                                       0755  2302B  sha256:d29d7d393ce9
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
@@ -35,15 +35,16 @@ Built into production:
     /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/50-tundravm-network.conf  0644  96B  sha256:57be339766ae
     /usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf             0644  125B  sha256:5652610060d4
     /usr/lib/systemd/system/tdxs.socket                                                      0644  139B  sha256:fde16471c434
+    /usr/lib/tundravm/acpi/power-button                                                      0644  57B  sha256:9b1d00ed2f6f
     /usr/lib/tundravm/egress-resolve                                                         0755  1647B  sha256:261319bac71a
     /usr/lib/tundravm/instance-key                                                           0755  1112B  sha256:63e33f30e3b8
     /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (1): tdxs
   Groups (1): tdx
-  Enabled units (11): chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service
+  Enabled units (12): chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
   Units started on demand (1): tdxs.service
-  Masked units (4): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service
+  Masked units (7): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service acpid.path acpid.service acpid.socket
   Firewall (4):
     in   nothing beyond replies and DHCP
     out  169.254.169.254:123/udp                                                                                                                          metadata time
@@ -61,7 +62,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  12283B  sha256:6ef1be0d345b
+    + /usr/lib/tundravm/probe  0755  12290B  sha256:6e1dece13d51
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

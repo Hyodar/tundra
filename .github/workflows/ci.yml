@@ -409,6 +409,29 @@ jobs:
           grep -F 'stopped fixture-2' "$RUNNER_TEMP/dev-follow.txt"
           jq -e '.state == "stopped"' .tundravm/instances/fixture-2/instance.json
 
+      - name: Press the dev instance's power button and read an orderly poweroff
+        # system_powerdown on the QEMU monitor is the ACPI power button a cloud stop presses:
+        # acpid hands it to systemd, which stops the services, unmounts and detaches what they
+        # used and powers the kernel down, so QEMU exits by itself.
+        run: |
+          receipt=.tundravm/instances/fixture-1/instance.json
+          console=.tundravm/instances/fixture-1/console.log
+          pid=$(jq -r .pid "$receipt")
+          python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"system_powerdown\n")' \
+            "$(jq -r .monitor "$receipt")"
+          for attempt in $(seq 1 60); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            tail -n 80 "$console"
+            echo "QEMU still runs 300s after the power button"; exit 1
+          fi
+          grep -E 'acpid.*button/power' "$console"
+          grep -E 'Reached target.*(shutdown\.target|System Shutdown)' "$console"
+          grep -F 'All DM devices detached.' "$console"
+          grep -F 'reboot: Power down' "$console"
+
       - name: Stop the instance
         if: always()
         run: |

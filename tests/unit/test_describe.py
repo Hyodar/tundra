@@ -81,6 +81,7 @@ def test_describe_says_what_a_profile_builds_in_public_terms() -> None:
     info = describe(image, profile="default", resolved=resolve(recipe, variant="default"))
 
     assert info["packages"] == [
+        "acpid",
         "azure-vm-utils",
         "curl",
         "dmidecode",

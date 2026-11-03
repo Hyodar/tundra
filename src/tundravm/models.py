@@ -67,23 +67,35 @@ DEFAULT_DEBLOAT_PATHS_REMOVE = (
 
 DEFAULT_DEBLOAT_SYSTEMD_UNITS_KEEP = (
     "basic.target",
+    "final.target",
     "local-fs-pre.target",
     "local-fs.target",
     "minimal.target",
     "network-online.target",
+    "poweroff.target",
+    "reboot.target",
+    "shutdown.target",
     "slices.target",
     "sockets.target",
     "sysinit.target",
     "systemd-journald-dev-log.socket",
     "systemd-journald.service",
     "systemd-journald.socket",
+    "systemd-poweroff.service",
+    "systemd-reboot.service",
     "systemd-remount-fs.service",
     "systemd-sysctl.service",
     "timers.target",
+    "umount.target",
 )
 """Units of the ``systemd`` package debloat leaves unmasked. ``sockets.target`` and
 ``timers.target`` stay so ``WantedBy=sockets.target``/``timers.target`` of a generated
 socket or timer works on its own, not only through the boot target's wants link.
+
+The orderly poweroff and reboot stay: ``poweroff.target`` and ``reboot.target``, their
+services and the ``shutdown``, ``umount`` and ``final`` targets those require, so a power
+button or a cloud stop stops the services and unmounts the volumes before the power goes.
+``halt``, ``kexec``, ``soft-reboot``, ``exit`` and ``ctrl-alt-del.target`` stay masked.
 
 Boot-time tmpfiles are off: ``systemd-tmpfiles-setup.service`` is masked and the
 ``systemd-tmpfiles`` binary removed, so no ``tmpfiles.d`` line runs at boot. The image ships

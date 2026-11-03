@@ -262,8 +262,9 @@ def test_payload_subimage_includes_the_payload_directory() -> None:
     )
     payload = (tree / "payload/mkosi.conf").read_text(encoding="utf-8")
     assert payload.startswith(f"[Output]\nFormat=uki\nOutput=payload\nSeed={DEFAULT_SEED}\n")
-    # the account tools: no concern declared them (the ingress's runtime declares openssl)
-    assert "Packages=\n    passwd\n" in payload
+    # the power button's acpid and the account tools: no concern declared them (the
+    # ingress's runtime declares openssl)
+    assert "Packages=\n    acpid\n    passwd\n" in payload
     assert (tree / "payload/mkosi.conf.d/30-greeter.conf").read_text(encoding="utf-8") == (
         "[Content]\nPackages=\n    curl\n"
     )

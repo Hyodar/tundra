@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Kernel modules: mkosi kept KernelModules= and their dependencies (tundravm module sets
-# v3); each must be in the image
+# v4); each must be in the image
 kdirs=("$BUILDROOT"/usr/lib/modules/*/)
 if [ ! -d "${kdirs[0]}" ]; then
     echo "tundravm: no kernel modules under /usr/lib/modules" >&2

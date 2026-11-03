@@ -56,4 +56,4 @@ def test_disk_naming_is_googles_own_at_the_pinned_commit(tree: CompiledTree) -> 
     assert "nvme-cli" in tree.conf(profile="gcp")
     postinst = tree.read("mkosi.postinst.d/50-postinst.sh", profile="gcp")
     assert NVME_HOST_IDS in postinst
-    assert "systemctl mask " + " ".join(NVME_MASKED_UNITS) in postinst
+    assert " ".join(NVME_MASKED_UNITS) in postinst.partition("systemctl mask ")[2]

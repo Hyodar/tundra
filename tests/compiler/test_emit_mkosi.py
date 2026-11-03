@@ -121,7 +121,7 @@ def test_compile_golden_output(tmp_path: Path) -> None:
     assert "ManifestFormat=json" in conf_text
     assert "@Format" not in conf_text and "@ImageId" not in conf_text
     assert "CleanPackageMetadata=yes" in conf_text
-    assert conf_list(conf_text, "Packages") == ["curl", "jq", "openssl"]
+    assert conf_list(conf_text, "Packages") == ["acpid", "curl", "jq", "openssl"]
     # mkosi finds the scripts in mkosi.<phase>.d/: no *Scripts= key is written
     assert "Scripts=" not in conf_text
 

@@ -67,6 +67,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `tundravm.testing`: `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe`, `run_cli`, and `FakeEndpoint`, which plays the endpoint, presenting each listener's certificate, with `relay`, `replay`, `wrong-key` and `wrong-certificate` misbehaviours.
 - A `Volume` installs `e2fsprogs` and `mount` beside `cryptsetup`: `disk-setup` formats with `mkfs.ext4`, which no image had. Each `tools/` command's programs and their packages are one table that a test reads from the Go code.
 - A built kernel of an image with a `Container` in any profile asks for `CONFIG_BLK_DEV_LOOP=y` and `CONFIG_EROFS_FS=y`, and the container's loader skips `modprobe` where `/dev/loop-control` already exists.
+- Every image powers off in order: the debloat keeps `poweroff.target`, `reboot.target`, their services and the `shutdown`, `umount` and `final` targets, and `tundravm-power-button.service` (acpid on the ACPI `button` driver) runs `systemctl poweroff` on the power button, so a cloud stop unmounts volumes instead of cutting power.
 
 ### CLI
 
