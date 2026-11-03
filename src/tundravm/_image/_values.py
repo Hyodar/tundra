@@ -548,8 +548,9 @@ class KernelFragment(Located):
     Each key is a ``CONFIG_*`` name and each value ``"y"``, ``"m"``, a string or number as
     Kconfig spells it, or ``None`` (``"n"``) to turn the option off. *reason* says why, for
     whoever reviews the image. ``Kernel.build(fragments=)`` takes it beside ``.config``
-    fragment files; the build checks every value survived ``olddefconfig``, and two
-    fragments that set one option differently are refused, naming both.
+    fragment files, and a component's :meth:`~tundravm.components.Component.kernel` returns
+    it; the build checks every value survived ``olddefconfig``, and two fragments that set
+    one option differently are refused, naming both.
     """
 
     options: Mapping[str, str | None]
@@ -624,7 +625,8 @@ class KernelPatch(Located):
     """A patch a built kernel applies with ``patch -p1``: ``KernelPatch(Http(url, sha256=...))``.
 
     ``Kernel.build(patches=)`` takes a ``Path`` for a file beside the image and this for a
-    download, locked by sha256 like any fetch.
+    download, locked by sha256 like any fetch; a component's
+    :meth:`~tundravm.components.Component.kernel` returns it for either.
     """
 
     source: Path | Http
@@ -865,8 +867,9 @@ class Kernel(Keywords):
         on (the table, a reason per option, is the docstring of
         ``tundravm/declarative/_kernel_hardening.py``). ``hardening=False`` is refused in a
         production profile and warned about in a development one. Each of *fragments*, a
-        ``.config`` fragment file or a :class:`KernelFragment`, merges after it in order;
-        a fragment that sets an option of the deny list itself wins.
+        ``.config`` fragment file or a :class:`KernelFragment`, merges after it in order,
+        then what each component's :meth:`~tundravm.components.Component.kernel`, the root
+        and each target add; a fragment that sets an option of the deny list itself wins.
         *patches*, files or :class:`KernelPatch` downloads, apply with ``patch -p1`` in the
         same order. ``modules=False`` builds every driver in; ``True`` builds and installs
         loadable modules, and leaves lockdown out, which would refuse them unsigned. The

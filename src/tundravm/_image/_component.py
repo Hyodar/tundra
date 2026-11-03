@@ -13,7 +13,7 @@ typed values a caller references without knowing any of that: :class:`ServiceRea
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, dataclass_transform
 
@@ -25,7 +25,7 @@ from tundravm.errors import ValidationError
 
 from .._keywords import Keywords
 from ._change import Ref
-from ._values import Egress, Readiness
+from ._values import Egress, KernelFragment, KernelPatch, Readiness
 
 if TYPE_CHECKING:
     from ._service import Service
@@ -356,6 +356,19 @@ class Component(Located, metaclass=_ComponentMeta):
         with the name as the comment (see :class:`~tundravm.components.Egress`).
         """
         return Egress()
+
+    def kernel(self) -> Sequence[KernelFragment | KernelPatch]:
+        """What this component needs of a built kernel: ``()`` (nothing), unless a subclass
+        overrides it.
+
+        An image whose ``Kernel.build(...)`` compiles its kernel merges each
+        :class:`~tundravm.KernelFragment` after the kernel's own fragments and applies each
+        :class:`~tundravm.KernelPatch` after its own patches, component by component in the
+        order the image declares them, and the build checks every option survived
+        ``olddefconfig``. Every profile boots that one kernel, so a component a ``Profile`` adds
+        may not ask for anything. Debian's kernel ignores them: it loads the module instead.
+        """
+        return ()
 
     def service(self, name: str) -> ServiceRef:
         """The service called *name*, for ``requires=`` and for a profile's ``changes=``.

@@ -10,6 +10,7 @@ from tundravm.declarative import Debian, Git, Kernel, Recipe, Variant
 from tundravm.declarative.model import Target
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
+    CONTAINER_MODULES,
     DISK_MODULES,
     FIREWALL_MODULES,
     MODULE_OPTIONS,
@@ -128,7 +129,13 @@ def test_invalid_selections_are_rejected(platform: dict[str, object], message: s
 def test_cloud_drivers_derive_from_the_module_tables(
     targets: tuple[str, ...], required: dict[str, str], absent: set[str]
 ) -> None:
-    curated = {*TDX_GUEST_MODULES, *DISK_MODULES, *FIREWALL_MODULES, *VERITY_MODULES}
+    curated = {
+        *TDX_GUEST_MODULES,
+        *DISK_MODULES,
+        *FIREWALL_MODULES,
+        *VERITY_MODULES,
+        *CONTAINER_MODULES,
+    }
     curated.update(*TARGET_MODULES.values())
     assert set(MODULE_OPTIONS) == curated
     drivers = dict(CloudDrivers(targets).required)

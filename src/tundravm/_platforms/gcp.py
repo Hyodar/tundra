@@ -33,6 +33,20 @@ nameserver 169.254.169.254
 options edns0 trust-ad"""
 
 # ---------------------------------------------------------------------------
+# The built kernel's ACPI patch, vendored unchanged
+# ---------------------------------------------------------------------------
+
+KERNEL_PATCH = (
+    Path(__file__).with_name("gcp-kernel") / "0001-acpi-gcp-block-aml-systemmemory-ram-access.patch"
+)
+"""The BadAML sandbox a gcp target's built kernel applies: AML in the ACPI tables, which the
+host writes, may not read or write the guest's private memory through a SystemMemory
+region, so the host cannot use its own firmware to read secrets. Edgeless Systems' patch
+(BSD-3-Clause OR GPL-2.0, its header kept), copied byte for byte from flashbots-images
+``mkosi.profiles/gcp/kernel/patches/`` at ``09c7576``; it applies to 6.12 and 6.13. Without
+memory encryption (QEMU without TDX) it denies every such access and logs an ACPI error."""
+
+# ---------------------------------------------------------------------------
 # Disk naming: Google's udev rules and their NVMe helper, vendored unchanged
 # ---------------------------------------------------------------------------
 

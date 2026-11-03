@@ -22,6 +22,7 @@ from tundravm._location import anchored, declared_at, display_location
 from tundravm._modules import tdxs as _tdxs
 from tundravm._modules.execution import GATE_UNIT
 from tundravm._modules.init import OWNERS_STEP
+from tundravm._platforms.gcp import KERNEL_PATCH as GCP_KERNEL_PATCH
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Hardening
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
@@ -65,7 +66,26 @@ from ._values import (
     mkosi_section,
 )
 
-__all__ = ["OWNERS_STEP", "component_classes", "kernel_of", "recipe_of"]
+__all__ = ["OWNERS_STEP", "VERITY_KERNEL", "component_classes", "kernel_of", "recipe_of"]
+
+VERITY_KERNEL = KernelFragment(
+    {
+        "CONFIG_MD": "y",
+        "CONFIG_BLK_DEV_DM": "y",
+        "CONFIG_DM_VERITY": "y",
+        "CONFIG_CRYPTO_SHA256": "y",
+        "CONFIG_EROFS_FS": "y",
+        "CONFIG_EROFS_FS_XATTR": "y",
+        "CONFIG_EROFS_FS_POSIX_ACL": "y",
+        "CONFIG_OVERLAY_FS": "y",
+    },
+    reason="RootFS.verity(): the initrd opens an erofs root through dm-verity, then overlays it",
+)
+"""What ``RootFS.verity()`` asks of a built kernel, flashbots-images'
+``modules/verity-root/kernel/config.d/50-verity-root``: the drivers check already wanted
+``DM_VERITY``, ``EROFS_FS`` and ``OVERLAY_FS`` built in, and this also requests them with
+their parents (``MD``, ``BLK_DEV_DM``), the hash the root hash is (``CRYPTO_SHA256``), and the
+extended attributes and ACLs of the root's files (``EROFS_FS_XATTR``, ``EROFS_FS_POSIX_ACL``)."""
 
 
 def kernel_of(image: Image) -> dm.Kernel:
@@ -311,7 +331,7 @@ class _Lowering:
 
     def kernel(self) -> dm.Kernel:
         """The kernel ``Kernel.build`` compiles: its base, the hardening flag, then its own
-        fragments and patches, in order."""
+        fragments and patches and what :meth:`kernel_needs` adds, in that order."""
         kernel = self.image.kernel
         assert kernel.version is not None and kernel.source is not None
         base = kernel.base if kernel.base is not None else kernel.config
@@ -321,7 +341,7 @@ class _Lowering:
             for item in kernel.fragments
         ]
         own += [KernelPatch(item) if isinstance(item, Path) else item for item in kernel.patches]
-        needs = own
+        needs = [*own, *self.kernel_needs()]
         fragments = []
         for item in needs:
             if isinstance(item, KernelFragment):
@@ -338,6 +358,28 @@ class _Lowering:
             modules=kernel.loadable,
             hardening=kernel.hardening,
         )
+
+    def kernel_needs(self) -> Iterator[KernelFragment | KernelPatch]:
+        """What the image's components (each one's :meth:`~Component.kernel`, nested ones
+        after it, in declaration order, then the observability), its root and its targets
+        need of a built kernel. A component a profile adds may need nothing: every profile
+        boots the one kernel."""
+        image = self.image
+        observability = () if image.observability is None else (image.observability,)
+        for component in (*image.components, *observability):
+            yield from _kernel_needs(component)
+        for name, profile in image.profiles.items():
+            for item in profile.add:
+                if isinstance(item, Component) and tuple(_kernel_needs(item)):
+                    raise ValidationError(
+                        f"Image: profile {name!r} adds {item.name}, whose kernel() asks the "
+                        "built kernel for options or patches every profile would boot.",
+                        hint=f"Put {type(item).__name__}(...) in Image(components=[...]).",
+                    )
+        if image.rootfs.layout == "verity":
+            yield VERITY_KERNEL
+        if "gcp" in image.targets:
+            yield KernelPatch(GCP_KERNEL_PATCH)
 
     def repositories(self) -> Iterator[dm.Declaration]:
         """``Debian(repositories=)``: each archive for the build's apt only (an image never
@@ -1095,6 +1137,23 @@ def _outbound(component: Component) -> Iterator[tuple[str, Egress]]:
     for item in composed(component):
         if isinstance(item, Component):
             yield from _outbound(item)
+
+
+def _kernel_needs(component: Component) -> Iterator[KernelFragment | KernelPatch]:
+    """*component*'s ``kernel()``, then that of each component it composes."""
+    needs = component.kernel()
+    if isinstance(needs, (str, KernelFragment, KernelPatch)) or not all(
+        isinstance(item, (KernelFragment, KernelPatch)) for item in needs
+    ):
+        raise ValidationError(
+            f"{type(component).__name__}.kernel() returned {needs!r}, not a list of "
+            "KernelFragment and KernelPatch values.",
+            hint='Return [KernelFragment({"CONFIG_XFS_FS": "y"})], or () when it needs nothing.',
+        )
+    yield from needs
+    for item in composed(component):
+        if isinstance(item, Component):
+            yield from _kernel_needs(item)
 
 
 def _sends(items: Sequence[object]) -> Iterator[tuple[str, Egress]]:

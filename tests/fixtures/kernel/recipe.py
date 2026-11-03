@@ -3,8 +3,8 @@
 :data:`KERNEL` is ``Kernel.build(base=DebianConfig(...))`` as an image file writes it, and the
 recipe declares what it lowers to in an image with the qemu, azure and gcp targets
 (:func:`~tundravm._image._lower.kernel_of`): Debian's own config for the same release (the
-``cloud-amd64`` flavor, which ``tundravm lock`` pins) and Tundra's hardening fragment,
-every driver built in. So the build records what ``olddefconfig``
+``cloud-amd64`` flavor, which ``tundravm lock`` pins), Tundra's hardening fragment and the
+gcp target's ACPI patch, every driver built in. So the build records what ``olddefconfig``
 does to Debian's ``=m`` drivers under ``CONFIG_MODULES=n``, checks every hardening option
 survived, and its drivers check proves every target's are built in. It is a ``Recipe``
 rather than an ``Image`` because an image also builds the evidence service and the runtime

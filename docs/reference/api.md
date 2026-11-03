@@ -719,6 +719,7 @@ A named group of declarations, written as a class, with typed exports.
 | Member | Does |
 |---|---|
 | `Component.compose() -> Iterable[object]` | The declarations and nested components this component stands for. |
+| `Component.kernel() -> Sequence[KernelFragment \| KernelPatch]` | What this component needs of a built kernel: `()` (nothing), unless a subclass overrides it. |
 | `Component.name` | The component's name, as `show` and its diagnostics print it. |
 | `Component.outbound() -> Egress` | Where this component sends, derived from its fields: `Egress()` (nothing), unless a subclass overrides it. |
 | `Component.readiness() -> tuple[Readied, ...]` | What `ready` waits for: the readiness of each service it composes that declares one. A component whose readiness is not a service of its own (one that wraps a packaged or internal unit) overrides this. |

@@ -115,6 +115,13 @@ VERITY_MODULES: tuple[str, ...] = (
 """What the verity layout's initrd mounts the root with: Debian builds each as a module, and
 mkosi's kernel-modules initrd holds only the ``KernelModules=`` the payload keeps."""
 
+CONTAINER_MODULES: tuple[str, ...] = (
+    # A Container's root is an erofs RootImage= that systemd-nspawn attaches to a loop device.
+    "loop",
+    "erofs",
+)
+"""What a ``Container(...)``'s nspawn root needs of the kernel."""
+
 TARGET_MODULES: dict[str, tuple[str, ...]] = {
     "qemu": (),
     "azure": AZURE_MODULES,
@@ -150,6 +157,7 @@ MODULE_OPTIONS: dict[str, str] = {
     "dm_verity": "CONFIG_DM_VERITY",
     "erofs": "CONFIG_EROFS_FS",
     "overlay": "CONFIG_OVERLAY_FS",
+    "loop": "CONFIG_BLK_DEV_LOOP",
 }
 """Each curated module and the ``CONFIG_*`` option that builds it: a built kernel loads no
 module, so it needs every one ``=y``.
@@ -181,6 +189,7 @@ _FEATURE_MODULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("an encrypted Volume", DISK_MODULES),
     ("the Firewall", FIREWALL_MODULES),
     ("RootFS.verity()", VERITY_MODULES),
+    ("a Container", CONTAINER_MODULES),
 )
 
 
@@ -192,7 +201,8 @@ class CloudDrivers:
     kernel must be built in: :attr:`required` are ``(option, who needs it)``, the
     :data:`MODULE_OPTIONS` of :data:`TDX_GUEST_MODULES` and :data:`GUEST_OPTIONS` (every
     target), of each target's :data:`TARGET_MODULES` and of the features an image may
-    switch on (:data:`DISK_MODULES`, :data:`FIREWALL_MODULES`, :data:`VERITY_MODULES`).
+    switch on (:data:`DISK_MODULES`, :data:`FIREWALL_MODULES`, :data:`VERITY_MODULES`,
+    :data:`CONTAINER_MODULES`).
     :attr:`denied` are :data:`DENIED_DRIVERS`. The kernel build asserts both after
     ``olddefconfig``: it requests none of them, so a miss names what the config must say.
     """
@@ -356,6 +366,7 @@ __all__ = [
     "TARGET_MODULES",
     "TDX_GUEST_MODULES",
     "VERITY_MODULES",
+    "CONTAINER_MODULES",
     "CloudDrivers",
     "KernelModules",
     "ModuleSelection",

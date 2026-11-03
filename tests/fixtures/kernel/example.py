@@ -1,8 +1,8 @@
 """A kernel with a config of its own: gregkh/linux 6.13.12 from ``yocto.config``.
 
 :data:`KERNEL` is ``Kernel.build(VERSION, Git(...), config=CONFIG)``, lowered as in
-:mod:`tests.fixtures.kernel.recipe`: the config as the base and Tundra's hardening
-fragment, with the same ``BootProbe``. The config is the yocto one
+:mod:`tests.fixtures.kernel.recipe`: the config as the base, Tundra's hardening fragment
+and the gcp target's ACPI patch, with the same ``BootProbe``. The config is the yocto one
 the nethermind-tdx images built from. CI's ``kernel`` workflow builds it as a second matrix
 entry, so the hardening and the drivers check run on a config of their own as well as
 Debian's.
