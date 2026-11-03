@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KERNEL_CACHE="${BUILDDIR:-$BUILDROOT/build}/kernel-6.18.57-5ba8364233c4-2ff600d29ee4-fc2ec27163fab962"
-KERNEL_CHROOT="${BUILDDIR:-/build}/kernel-6.18.57-5ba8364233c4-2ff600d29ee4-fc2ec27163fab962"
+KERNEL_CACHE="${BUILDDIR:-$BUILDROOT/build}/kernel-6.18.57-1ed2bbe8d695-2ff600d29ee4-fc2ec27163fab962"
+KERNEL_CHROOT="${BUILDDIR:-/build}/kernel-6.18.57-1ed2bbe8d695-2ff600d29ee4-fc2ec27163fab962"
 KERNEL_VERSION="6.18.57"
 # make runs in the image through mkosi-chroot, where the build packages are, and the cache
 # is $KERNEL_CHROOT; the build stamps are fixed, so two builds give the same bytes
@@ -12,7 +12,7 @@ kmake() {
 }
 
 if [ -d "$KERNEL_CACHE/done" ]; then
-    echo "Using cached kernel build: kernel-6.18.57-5ba8364233c4-2ff600d29ee4-fc2ec27163fab962"
+    echo "Using cached kernel build: kernel-6.18.57-1ed2bbe8d695-2ff600d29ee4-fc2ec27163fab962"
 else
     rm -rf "$KERNEL_CACHE"
     mkdir -p "$KERNEL_CACHE"
@@ -221,12 +221,17 @@ else
     kconfig_check CONFIG_EROFS_FS_POSIX_ACL y || dropped=1
     kconfig_check CONFIG_OVERLAY_FS y || dropped=1
     kconfig_check CONFIG_BLK_DEV_LOOP y || dropped=1
-    # A built kernel loads no module: every driver a target boots with must be built in
+    # A built kernel loads no module: every driver a target boots with must be built in, unless
+    # the source no longer has the option (a newer kernel dropped crc32c-intel for lib/crc)
     drivers_report="$KERNEL_CACHE/kernel-drivers.txt"
     : > "$drivers_report"
     driver_required() {
         local final
         final=$(sed -n "s/^$1=//p" .config)
+        if [ -z "$final" ] && ! grep -rqs --include='Kconfig*' "^config ${1#CONFIG_}\$" .; then
+            echo "$1 is not in this kernel, so $2 needs nothing of it" >> "$drivers_report"
+            return 0
+        fi
         echo "$1=${final:-n} required by $2" >> "$drivers_report"
         if [ "${final:-n}" != y ]; then
             echo "tundravm: kernel-driver-missing: $1 is ${final:-n}, $2 needs it built in:" \

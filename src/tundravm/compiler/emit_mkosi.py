@@ -735,12 +735,17 @@ kconfig_check() {
 dropped=0"""
 
 _DRIVERS_CHECK = """\
-# A built kernel loads no module: every driver a target boots with must be built in
+# A built kernel loads no module: every driver a target boots with must be built in, unless
+# the source no longer has the option (a newer kernel dropped crc32c-intel for lib/crc)
 drivers_report="$KERNEL_CACHE/kernel-drivers.txt"
 : > "$drivers_report"
 driver_required() {
     local final
     final=$(sed -n "s/^$1=//p" .config)
+    if [ -z "$final" ] && ! grep -rqs --include='Kconfig*' "^config ${1#CONFIG_}\\$" .; then
+        echo "$1 is not in this kernel, so $2 needs nothing of it" >> "$drivers_report"
+        return 0
+    fi
     echo "$1=${final:-n} required by $2" >> "$drivers_report"
     if [ "${final:-n}" != y ]; then
         echo "tundravm: kernel-driver-missing: $1 is ${final:-n}, $2 needs it built in:" \\

@@ -172,6 +172,10 @@ BUILT_IN = "".join(f"{option}=y\n" for option, _ in GCP_DRIVERS.required)
 )
 def test_the_drivers_check_reads_the_final_config(tmp_path: Path, config: str, said: str) -> None:
     (tmp_path / ".config").write_text(config, encoding="utf-8")
+    kconfig = "".join(
+        f"config {option.removeprefix('CONFIG_')}\n" for option, _ in GCP_DRIVERS.required
+    )
+    (tmp_path / "Kconfig").write_text(kconfig, encoding="utf-8")
     script = f"set -eu\nKERNEL_CACHE=.\n{drivers_check(GCP_DRIVERS)}\n[ $missing -eq 0 ]\n"
     done = subprocess.run(
         ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False
@@ -182,3 +186,20 @@ def test_the_drivers_check_reads_the_final_config(tmp_path: Path, config: str, s
     assert len(report) == len(GCP_DRIVERS.required) + len(GCP_DRIVERS.denied)
     gve = "m" if "GVE=m" in config else "y"
     assert f"CONFIG_GVE={gve} required by gcp" in report
+
+
+def test_the_drivers_check_skips_an_option_the_kernel_source_no_longer_has(tmp_path: Path) -> None:
+    (tmp_path / ".config").write_text(BUILT_IN.replace("CONFIG_GVE=y\n", ""), encoding="utf-8")
+    kconfig = "".join(
+        f"config {option.removeprefix('CONFIG_')}\n"
+        for option, _ in GCP_DRIVERS.required
+        if option != "CONFIG_GVE"
+    )
+    (tmp_path / "Kconfig").write_text(kconfig, encoding="utf-8")
+    script = f"set -eu\nKERNEL_CACHE=.\n{drivers_check(GCP_DRIVERS)}\n[ $missing -eq 0 ]\n"
+    done = subprocess.run(
+        ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    report = (tmp_path / "kernel-drivers.txt").read_text(encoding="utf-8")
+    assert "CONFIG_GVE is not in this kernel, so gcp needs nothing of it" in report
