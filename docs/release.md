@@ -27,6 +27,17 @@ carries its notes in the tagged tree. Nothing is committed by the workflow.
    files attached.
 5. Publishes to PyPI by trusted publishing, only once a `pypi` environment exists.
 
+## The image pipeline `new` writes
+
+`tundravm new NAME --ci` writes `.github/workflows/image.yml` for the image project.
+Every push and pull request runs `check --tree mkosi` and `lock --check`, then builds the
+production profile, verifies it and uploads its manifest, `measurements.json` and SBOM. A
+`v*` tag also rebuilds that build on a second runner (`verify --rebuild`), attests the
+provenance of every released file (on a public repository: GitHub attests private ones on
+Enterprise Cloud only) and creates a release with `payload.efi`, each disk, the manifest,
+the measurements, the SBOM and `SHA256SUMS`. Commit `uv.lock`, `build/tundravm.lock` and
+`mkosi/` first.
+
 ## What a user installs
 
 ```console
