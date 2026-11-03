@@ -126,6 +126,13 @@ def test_attest_deliver_and_unlock_over_the_bound_session(
         ("replay", "replay", ("simulated", "development"), {}, "replayed evidence"),
         ("wrong key", "wrong-key", ("simulated", "development"), {}, "another TLS key"),
         (
+            "a service's quote",
+            "service-quote",
+            ("simulated", "development"),
+            {},
+            "issued to 'signer', not 'endpoint'",
+        ),
+        (
             "simulated in production",
             None,
             ("tdx", "production"),

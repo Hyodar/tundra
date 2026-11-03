@@ -53,7 +53,7 @@ from typing import Any, Protocol
 
 from . import _ssh_sig
 from . import manifest as mf
-from .attestation import Attestation, Transport, mode_history
+from .attestation import ENDPOINT_CALLER, Attestation, Transport, mode_history
 from .attestation import attest as check_quote
 from .attestation import connect as connect_issuer
 from .errors import AttestationError, StateError, ValidationError
@@ -632,6 +632,7 @@ def verify(
         allow_simulated=instance.mode == "simulated",
         production=instance.data["build"]["kind"] == "production",
         guest_mode=evidence.mode,
+        caller=ENDPOINT_CALLER,
         transport=evidence.transport(),
     )
     if evidence.firewall is not None:

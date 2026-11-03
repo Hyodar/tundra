@@ -2,7 +2,8 @@
 side's tests. It speaks through :class:`FakeSession` objects (one per TLS session), signs
 simulator quotes the way tdxs's simulator issuer does and builds synthetic TDX quotes,
 presents the certificate of each attested TLS listener it binds, and misbehaves on
-request: ``relay``, ``replay``, ``wrong-key``, ``wrong-certificate``, ``mode-log``."""
+request: ``relay``, ``replay``, ``wrong-key``, ``wrong-certificate``, ``mode-log``,
+``service-quote``."""
 
 from __future__ import annotations
 
@@ -20,15 +21,24 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 from tundravm import _ssh_sig
-from tundravm.attestation import SIMULATOR_KEY, replay_rtmr3, report_data_for
+from tundravm.attestation import (
+    ENDPOINT_CALLER,
+    SIMULATOR_KEY,
+    replay_rtmr3,
+    report_data_for,
+    tagged,
+)
 from tundravm.bootstrap import PURPOSE, SIGNATURE_NAMESPACE, binding
 
-Misbehaviour = Literal["relay", "replay", "wrong-key", "wrong-certificate", "mode-log"]
+Misbehaviour = Literal[
+    "relay", "replay", "wrong-key", "wrong-certificate", "mode-log", "service-quote"
+]
 """``relay``: the session's TLS key changes after the evidence (the delivery would land on
 another session); ``replay``: the evidence answers the first nonce it ever saw; ``wrong-key``:
 the evidence binds a TLS key that is not the session's; ``wrong-certificate``: an attested
 TLS listener presents a certificate whose key the evidence does not bind; ``mode-log``:
-the evidence's firewall events leave out the last switch RTMR3 holds."""
+the evidence's firewall events leave out the last switch RTMR3 holds; ``service-quote``:
+tdxs issued the quote to a ``tdx``-group service (tag ``signer``), not to the endpoint."""
 
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeEndpointHostKeyFakeEndpointHostKey00"
 INSTANCE_KEY = "02" + "ab" * 32
@@ -158,7 +168,9 @@ class FakeEndpoint:
             bytes.fromhex(INSTANCE_KEY),
             [self.listeners[port] for port in bound_ports],
         )
-        bound = report_data_for(user_data, nonce)
+        caller = "signer" if self.misbehave == "service-quote" else ENDPOINT_CALLER
+        issued = tagged(caller, user_data)
+        bound = report_data_for(issued, nonce)
         metadata = None
         if self.platform == "simulator":
             tag = hmac.new(SIMULATOR_KEY, bound[:32], hashlib.sha256).digest()
@@ -171,7 +183,7 @@ class FakeEndpoint:
             raw = tdx_quote(bound, registers=self.registers, debug=self.debug)
         document = {
             "raw_quote": base64.b64encode(raw).decode(),
-            "user_data": base64.b64encode(user_data).decode(),
+            "user_data": base64.b64encode(issued).decode(),
             "nonce": base64.b64encode(nonce).decode(),
             "platform": self.platform,
         }

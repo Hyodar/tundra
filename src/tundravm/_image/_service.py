@@ -186,7 +186,9 @@ class Service(Located):
     user. ``Egress(metadata=True)`` is the only way any service reaches the cloud metadata
     server, where the instance's identity token lives.
     ``quotes=True`` says it asks the evidence service for TDX quotes: it joins the ``tdx``
-    group and requires :data:`~tundravm.components.EVIDENCE`.
+    group and requires :data:`~tundravm.components.EVIDENCE`. tdxs tags each quote with the
+    caller's user name (the service's name unless ``user=``), which a verifier of its quote
+    requires; ``user="root"`` is refused, since uid 0's tag is the attested endpoint's.
 
     ``state=`` is a ``StateDirectory=`` name under ``/var/lib`` (volatile, like the rest
     of the root) or a directory on a persistent volume (``data.directory("app")``), which
@@ -531,6 +533,18 @@ class Service(Located):
         if not isinstance(self.quotes, bool):
             raise _fail(
                 self, f"quotes= holds {self.quotes!r}.", hint="Pass quotes=True or drop it."
+            )
+        quoter = self.user or self.name.removesuffix(".service").removesuffix("@")
+        if self.quotes and quoter in ("root", "endpoint"):
+            raise _fail(
+                self,
+                f"quotes=True as user {quoter!r}: tdxs tags each quote with the caller's user "
+                "name, and uid 0's tag is the attested endpoint's, so this service's quotes "
+                "would pass for the endpoint's or be refused.",
+                hint=f'Run it as a user of its own: drop user="root", or Service('
+                f'"{self.name}", ..., user="{self.name}-quotes").'
+                if quoter == "root"
+                else 'Give it another user: Service("endpoint", ..., user="endpoint-app").',
             )
         for key, value in self.environment.items():
             if not isinstance(key, str) or not _ENV_KEY.fullmatch(key):

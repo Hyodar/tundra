@@ -29,11 +29,14 @@ from tundravm.attestation import (
     read_attestation,
     render_attestation,
     report_data_for,
+    tagged,
 )
 from tundravm.errors import AttestationError, MeasurementError, ValidationError
 
 MRTD, R0, R1, R2, R3 = (bytes([n]) * 48 for n in (0x11, 0x20, 0x21, 0x22, 0x23))
 NONCE = bytes(range(32))
+TAGGED = tagged("operator", b"")
+"""What a relayed tdxs hands its issuer for an empty request: the operator's tag over nothing."""
 
 
 def tdx_quote(
@@ -107,6 +110,8 @@ class FakeIssuer:
         self.requests: list[Mapping[str, object]] = []
         self.replay: bytes | None = None
         self.report_data: bytes | None = None
+        self.caller: str | None = "operator"
+        """The tag tdxs gives the relayed request's caller; ``None`` tags nothing."""
 
     def __call__(self, request: Mapping[str, object]) -> Mapping[str, object]:
         self.requests.append(request)
@@ -124,6 +129,8 @@ class FakeIssuer:
             }
             return {"data": meta, "error": None}
         user_data = bytes.fromhex(str(data["userData"]))
+        if self.caller is not None:
+            user_data = tagged(self.caller, user_data)
         nonce = self.replay if self.replay is not None else bytes.fromhex(str(data["nonce"]))
         bound = self.report_data or report_data_for(user_data, nonce)
         raw = (
@@ -278,8 +285,8 @@ def test_a_replayed_quote_fails_the_nonce_check() -> None:
     assert result.reasons == ("nonce-mismatch",)
     assert result.to_dict()["nonce"] == {
         "value": NONCE.hex(),
-        "report_data": (hashlib.sha256(b"\x01" * 32).digest() + bytes(32)).hex(),
-        "expected_report_data": report_data_for(b"", NONCE).hex(),
+        "report_data": (hashlib.sha256(TAGGED + b"\x01" * 32).digest() + bytes(32)).hex(),
+        "expected_report_data": report_data_for(TAGGED, NONCE).hex(),
         "verdict": "mismatch",
     }
 
@@ -376,9 +383,43 @@ def test_placeholder_policies_and_bad_nonces_are_refused() -> None:
         attest("tcp://h:1", PEER, nonce="zz", transport=FakeIssuer())
 
 
+@pytest.mark.parametrize(
+    ("tag", "caller", "refused"),
+    [
+        ("endpoint", "endpoint", None),
+        ("signer", None, None),
+        ("signer", "endpoint", "issued to 'signer', not 'endpoint'"),
+        (None, "endpoint", "carries no caller tag"),
+        (None, None, "carries no caller tag"),
+    ],
+    ids=[
+        "the endpoint's",
+        "a relay's, any tag",
+        "a service's as the endpoint's",
+        "untagged",
+        "untagged relay",
+    ],
+)
+def test_the_quote_must_carry_the_callers_tag(
+    tag: str | None, caller: str | None, refused: str | None
+) -> None:
+    issuer = FakeIssuer()
+    issuer.caller = tag
+    if refused is not None:
+        with pytest.raises(AttestationError, match=refused) as exc:
+            attest("tcp://h:1", PEER, nonce=NONCE, caller=caller, transport=issuer)
+        assert exc.value.hint
+        return
+    result = attest("tcp://h:1", PEER, nonce=NONCE, caller=caller, transport=issuer)
+    assert result.caller == tag and result.nonce_matches
+    assert f"caller {tag}" in render_attestation(result, "text")
+    assert read_attestation(result.record()).attestation.caller == tag
+
+
 def test_to_dict_is_the_stable_json_shape() -> None:
     payload = attest("tcp://h:1", PEER, nonce=NONCE, transport=FakeIssuer()).to_dict()
     assert sorted(payload) == [
+        "caller",
         "certificate",
         "checks",
         "debug",
@@ -479,8 +520,8 @@ def test_a_record_keeps_the_document_the_policy_and_the_validator_reply(tmp_path
     assert record["document"] == result.document and bytes.fromhex(record["document"])
     assert record["nonce"] == NONCE.hex() and record["user_data"] == ""
     assert record["report_data"] == {
-        "expected": report_data_for(b"", NONCE).hex(),
-        "actual": report_data_for(b"", NONCE).hex(),
+        "expected": report_data_for(TAGGED, NONCE).hex(),
+        "actual": report_data_for(TAGGED, NONCE).hex(),
         "verdict": "match",
     }
     canonical = (json.dumps(PEER, indent=2, sort_keys=True) + "\n").encode()

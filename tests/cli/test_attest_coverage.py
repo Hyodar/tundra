@@ -118,6 +118,13 @@ def test_a_version_1_record_is_refused_with_a_re_attest_hint() -> None:
     assert "Attest again" in str(exc.value.hint)
 
 
+def test_a_version_2_record_is_refused_for_its_untagged_quote() -> None:
+    record = {**_judged(PEER).record(), "schema": "tundravm.attestation/2"}
+    with pytest.raises(ValidationError, match="no caller tag") as exc:
+        read_attestation(record)
+    assert "Attest again" in str(exc.value.hint)
+
+
 def test_tdxs_from_policy_checks_the_approved_platform_values() -> None:
     verifier = Tdxs.from_policy(PEER)
     assert verifier.expected_measurements == {

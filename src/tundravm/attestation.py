@@ -5,8 +5,10 @@ stream socket (``/var/tdxs.sock`` in the image, socket-activated). A request
 is ``{"method": "issue", "data": {"userData": HEX, "nonce": HEX}}`` and the
 reply ``{"data": {"document": HEX}, "error": null}``, where *document* is the
 hex of the JSON ``AttestationDocument`` (``raw_quote``, ``user_data``,
-``nonce`` base64; ``platform``). The quote's ``report_data`` is
-``SHA-256(userData || nonce)`` followed by 32 zero bytes. ``{"method":
+``nonce`` base64; ``platform``). tdxs tags the user data with the caller it read from the
+socket (:func:`tagged`: ``endpoint`` for uid 0, else the caller's user name), so the
+document's ``user_data`` is ``lp(caller) || userData`` and the quote's ``report_data``
+``SHA-256(lp(caller) || userData || nonce)`` followed by 32 zero bytes. ``{"method":
 "metadata", "data": {}}`` returns the issuer's measurements, which the
 simulator issuer (whose quote is not a TDX quote) is checked with.
 
@@ -21,7 +23,7 @@ and RTMR1 and RTMR2 (the image) must each match an accepted value; otherwise not
 disagreed but trust is not established and the verdict is ``partial``. Azure policies
 are refused: their image measurements are vTPM PCRs, which this path cannot verify.
 
-:meth:`Attestation.save` keeps what was observed as a ``tundravm.attestation/2``
+:meth:`Attestation.save` keeps what was observed as a ``tundravm.attestation/3``
 record: the document as received, the nonce, the policy's sha256 and artifact, the
 validator's whole reply and the verdict. :func:`read_attestation` re-derives the
 quote's registers, the nonce binding and the verdict from that record offline. The
@@ -88,10 +90,16 @@ SIMULATOR = "simulator"
 SIMULATOR_KEY = b"tundra-simulator-secret-key"
 """The fixed HMAC key of tdxs's simulator issuer: its tag proves the structure of a
 simulated quote (the report data it carries), never where it came from."""
-ATTESTATION_SCHEMA = "tundravm.attestation/2"
+ATTESTATION_SCHEMA = "tundravm.attestation/3"
 """The ``schema`` of the record :meth:`Attestation.save` (``attest --output``) writes.
-Version 2 adds the ``partial`` verdict: a version 1 record could say ``trusted`` without the
-platform registers approved, so it is no longer read."""
+Version 3 records the quote's ``caller``: a version 2 quote carries no caller tag, so any
+service in the guest could have asked for it, and it is no longer read. Version 2 added the
+``partial`` verdict."""
+ENDPOINT_CALLER = "endpoint"
+"""The caller tag tdxs gives uid 0, the attested endpoint: no other service's quote carries
+it, so evidence from 8745 must."""
+MAX_CALLER = 64
+"""The longest caller tag tdxs issues (a user name is at most 32 bytes)."""
 TRUST_NOTE = (
     "offline re-checking covers the quote's measurements and its nonce binding; the "
     "quote's signature, certificate chain and collateral are only as trusted as the "
@@ -214,8 +222,56 @@ def parse_quote(raw: bytes) -> Quote:
 
 
 def report_data_for(user_data: bytes, nonce: bytes) -> bytes:
-    """The 64-byte ``report_data`` a tdxs issuer binds: ``SHA-256(user_data || nonce)``, zeros."""
+    """The 64-byte ``report_data`` a tdxs issuer binds: ``SHA-256(user_data || nonce)``, zeros.
+    *user_data* is the tagged bytes (:func:`tagged`) the document carries."""
     return hashlib.sha256(user_data + nonce).digest() + bytes(32)
+
+
+def tagged(caller: str, user_data: bytes) -> bytes:
+    """The user data tdxs hands its issuer for *caller*: ``lp(caller) || user_data``, with
+    ``lp(x)`` the big-endian uint32 length of *x* followed by *x*."""
+    tag = caller.encode()
+    return struct.pack(">I", len(tag)) + tag + user_data
+
+
+def untag(data: bytes) -> tuple[str, bytes] | None:
+    """*data*'s caller and the caller's user data; ``None`` for untagged user data."""
+    if len(data) < 4:
+        return None
+    (size,) = struct.unpack(">I", data[:4])
+    if not 0 < size <= MAX_CALLER or size > len(data) - 4:
+        return None
+    try:
+        return data[4 : 4 + size].decode(), data[4 + size :]
+    except UnicodeDecodeError:
+        return None
+
+
+def _caller(issued: bytes, user_data: bytes, caller: str | None, where: str) -> str:
+    """The caller tag the document's *issued* user data carries over *user_data*, which must
+    be *caller* when given; ``AttestationError`` for an untagged or another caller's quote."""
+    found = untag(issued)
+    if found is None:
+        raise AttestationError(
+            f"Refused: the quote from {where} carries no caller tag, so any service in the "
+            "guest could have asked for it.",
+            hint="Rebuild the image with this tundravm: its tdxs tags each quote with the "
+            "caller, and evidence from an older tdxs is refused.",
+        )
+    tag, inner = found
+    if caller is not None and tag != caller:
+        raise AttestationError(
+            f"Refused: the quote from {where} was issued to {tag!r}, not {caller!r}: another "
+            "service in the guest asked for it.",
+            hint="Something in the guest answers for the attested endpoint; attest again, and "
+            "read `journalctl -u tdxs` in the guest for who asked.",
+        )
+    if inner != user_data:
+        raise AttestationError(
+            f"Refused: the quote from {where} binds other user data than the request's.",
+            hint="Attest again.",
+        )
+    return tag
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +450,9 @@ class Attestation:
     modes: ModeHistory | None = None
     """The firewall's modes since boot the evidence carries, replayed against RTMR3; ``None``
     for an image without modes (RTMR3 then stays outside the policy)."""
+    caller: str | None = None
+    """Whom tdxs issued the quote to, by its tag: ``endpoint`` for the attested endpoint's
+    evidence, a service's user name for its own quote."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -491,6 +550,7 @@ class Attestation:
                 "fingerprint": self.certificate[1],
                 "bound_to_quote": True,
             },
+            "caller": self.caller,
             "checks": CHECKS_NOTE,
             "debug": self.debug,
             "guest_mode": self.guest_mode,
@@ -522,10 +582,10 @@ class Attestation:
         }
 
     def record(self) -> dict[str, object]:
-        """The ``tundravm.attestation/2`` record :meth:`save` writes (``attest --output``).
+        """The ``tundravm.attestation/3`` record :meth:`save` writes (``attest --output``).
 
         It keeps what a later offline check needs: the ``document`` as received,
-        ``user_data`` and ``nonce``, ``report_data`` (``expected``, ``actual``,
+        ``user_data``, the ``caller`` tag and ``nonce``, ``report_data`` (``expected``, ``actual``,
         ``verdict``), ``platform``, ``source``, ``quote_version``, the simulator's
         ``metadata`` reply, ``registers``, ``debug``, ``simulated``, what it was checked for
         (``production``, the guest's ``guest_mode``), the ``policy`` (``path``, ``sha256``,
@@ -543,6 +603,7 @@ class Attestation:
             "issuer": self.issuer,
             "document": self.document,
             "user_data": self.user_data,
+            "caller": self.caller,
             "nonce": self.nonce,
             "report_data": {
                 "expected": self.expected_report_data,
@@ -595,6 +656,7 @@ def attest(
     accept_partial: bool = False,
     production: bool = False,
     guest_mode: str | None = None,
+    caller: str | None = None,
     transport: Transport | None = None,
     validator_transport: Transport | None = None,
     clock: Callable[[], datetime] | None = None,
@@ -606,7 +668,10 @@ def attest(
     ``measure --export-policy`` wrote, or its dict; a placeholder policy is
     refused. *nonce* (hex or bytes; default 32 random bytes) must come back in
     the quote's full 64-byte ``report_data``, with *user_data* (the attested endpoint's
-    binding: ``report_data`` is ``SHA-256(user_data || nonce)``). With *validator* the
+    binding) under the caller tag tdxs gave the quote: ``report_data`` is
+    ``SHA-256(lp(caller) || user_data || nonce)``. With *caller* the tag must be that one
+    (``endpoint`` for the endpoint's evidence); without, any tag passes and is recorded; an
+    untagged document is refused (``AttestationError``). With *validator* the
     document and
     nonce go to that tdxs validator, whose answer decides authenticity
     (``trusted``/``untrusted``); without it the verdict is
@@ -655,7 +720,8 @@ def attest(
     document = _document(encoded, issuer)
     platform = str(document.get("platform") or "")
     raw = _b64(document.get("raw_quote"), "raw_quote")
-    wanted = report_data_for(user_data, challenge)
+    found = _caller(_b64(document.get("user_data"), "user_data"), user_data, caller, issuer)
+    wanted = report_data_for(tagged(found, user_data), challenge)
     meta: Mapping[str, object] | None = None
     if platform == SIMULATOR:
         meta = _call(send, issuer, "metadata", {})
@@ -694,6 +760,7 @@ def attest(
         debug=debug,
         production=production,
         guest_mode=guest_mode,
+        caller=found,
     )
 
 
@@ -884,7 +951,7 @@ def _metadata_registers(meta: Mapping[str, object], endpoint: str) -> dict[str, 
 
 @dataclass(frozen=True, slots=True)
 class AttestationRecord:
-    """A ``tundravm.attestation/2`` record, re-derived offline by :func:`read_attestation`.
+    """A ``tundravm.attestation/3`` record, re-derived offline by :func:`read_attestation`.
 
     ``attestation`` is rebuilt from the record's ``document`` (the quote parsed again),
     its nonce and user data, the registers it was checked against (the given policy's
@@ -933,7 +1000,7 @@ def read_attestation(
     *,
     policy: str | Path | bytes | Mapping[str, object] | None = None,
 ) -> AttestationRecord:
-    """Read the ``tundravm.attestation/2`` record *source* (a path, its bytes or its dict)
+    """Read the ``tundravm.attestation/3`` record *source* (a path, its bytes or its dict)
     and re-derive it offline.
 
     The document is decoded and its quote parsed again (:func:`parse_quote`; a
@@ -954,11 +1021,15 @@ def read_attestation(
     """
     where, data, raw_bytes = _load_record(source)
     if data.get("schema") != ATTESTATION_SCHEMA:
-        legacy = data.get("schema") == "tundravm.attestation/1"
+        why = {
+            "tundravm.attestation/1": " (its trusted verdict did not require the platform "
+            "approved).",
+            "tundravm.attestation/2": " (its quote carries no caller tag: any service in the "
+            "guest could have asked for it).",
+        }.get(str(data.get("schema")))
         raise ValidationError(
-            f"{where} has schema {data.get('schema')!r}, not {ATTESTATION_SCHEMA}"
-            + (" (its trusted verdict did not require the platform approved)." if legacy else "."),
-            hint=("Attest again with this tundravm. " if legacy else "") + _RECORD_HINT,
+            f"{where} has schema {data.get('schema')!r}, not {ATTESTATION_SCHEMA}{why or '.'}",
+            hint=("Attest again with this tundravm. " if why else "") + _RECORD_HINT,
         )
     encoded = str(data.get("document") or "")
     meta = data.get("metadata")
@@ -968,12 +1039,17 @@ def read_attestation(
         platform = str(document.get("platform") or "")
         meta_map = meta if isinstance(meta, Mapping) else None
         source_kind, version, actual, bound, debug = _measured(platform, raw, meta_map, where)
+        issued = untag(_b64(document.get("user_data"), "user_data"))
     except MeasurementError as exc:
         raise ValidationError(
             f"{where}: its document is not an attestation document: "
             f"{exc.args[0] if exc.args else exc}",
             hint=_RECORD_HINT,
         ) from exc
+    if issued is None:
+        raise ValidationError(
+            f"{where}: its document's user data carries no caller tag.", hint=_RECORD_HINT
+        )
     nonce = _record_hex(data, "nonce", where)
     user_data = _record_hex(data, "user_data", where)
     stored_policy = data.get("policy") if isinstance(data.get("policy"), Mapping) else {}
@@ -1004,7 +1080,9 @@ def read_attestation(
         quote_version=version,
         nonce=nonce,
         report_data=bound.hex(),
-        expected_report_data=report_data_for(bytes.fromhex(user_data), bytes.fromhex(nonce)).hex(),
+        expected_report_data=report_data_for(
+            tagged(issued[0], bytes.fromhex(user_data)), bytes.fromhex(nonce)
+        ).hex(),
         registers=checks,
         validator=endpoint,
         signature_status=status,
@@ -1023,6 +1101,7 @@ def read_attestation(
         debug=debug,
         production=data.get("production") is True,
         guest_mode=_recorded_mode(data.get("guest_mode")),
+        caller=issued[0],
     )
     problems.extend(_disagreements(data, derived.record()))
     if parse_time(derived.observed_at) is None:
@@ -1287,6 +1366,8 @@ def render_attestation(result: Attestation, fmt: str) -> str:
         _signature_line(result),
         f"nonce  {nonce:<9}  {result.nonce}",
     ]
+    if result.caller is not None:
+        lines.append(f"caller {result.caller}  (whom tdxs issued the quote to)")
     if not result.nonce_matches:
         lines.append(f"{'':<6} {'quote':<9}  {result.report_data}")
         lines.append(f"{'':<6} {'expected':<9}  {result.expected_report_data}")
@@ -1324,6 +1405,7 @@ __all__ = [
     "ATTESTATION_SCHEMA",
     "CHECKS_NOTE",
     "REGISTERS",
+    "ENDPOINT_CALLER",
     "SIMULATOR_KEY",
     "TRUST_NOTE",
     "VERDICTS",
@@ -1343,4 +1425,6 @@ __all__ = [
     "read_attestation",
     "render_attestation",
     "report_data_for",
+    "tagged",
+    "untag",
 ]

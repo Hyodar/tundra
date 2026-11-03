@@ -687,7 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="REPORT",
-        help="Write the record (tundravm.attestation/2).",
+        help="Write the record (tundravm.attestation/3).",
     )
     attest.add_argument(
         "--identity",

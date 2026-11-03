@@ -390,7 +390,7 @@ options:
   --policy FILE         The verifier policy.
   --tls PORT            An AttestedTLS port: check the certificate it presents against the
                         binding.
-  --output REPORT       Write the record (tundravm.attestation/2).
+  --output REPORT       Write the record (tundravm.attestation/3).
   --identity KEY        The SSH key to hand over on success (default: ~/.ssh/id_ed25519 if
                         present).
   --issuer ENDPOINT     unix:PATH or tcp://HOST:PORT instead of the attested endpoint.

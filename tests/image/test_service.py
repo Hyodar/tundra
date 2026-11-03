@@ -168,6 +168,17 @@ def test_quotes_is_the_evidence_requirement_and_the_tdx_group(
         Service("app", ["/usr/bin/app"], quotes="yes")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    ("name", "user", "hint"),
+    [("app", "root", 'drop user="root"'), ("endpoint", None, 'user="endpoint-app"')],
+    ids=["root", "a user named endpoint"],
+)
+def test_a_quoter_cannot_hold_the_endpoints_tag(name: str, user: str | None, hint: str) -> None:
+    with pytest.raises(ValidationError, match="uid 0's tag is the attested endpoint's") as exc:
+        Service(name, ["/usr/bin/app"], quotes=True, user=user)
+    assert hint in str(exc.value.hint)
+
+
 def test_requiring_a_service_without_readiness_is_refused_where_it_is_written() -> None:
     silent = Service("silent", ["/usr/bin/silent"])
     with pytest.raises(ValidationError) as caught:

@@ -20,7 +20,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 | Measured UKI | the host swapping the kernel, the initrd or the command line unnoticed: they are one PE file the firmware measures into RTMR1 and RTMR2 | a verifier that does not check, or approves the wrong values | implemented; predictions are offline replays, never compared with a real quote (gate 2) |
 | dm-verity root (`RootFS.verity()`) | changes to the root partition at rest: the root hash is on the measured command line | runtime writes, which land in a volatile overlay and vanish at reboot; volume data | proven: CI boots from dm-verity |
 | Firewall | inbound connections to anything not exposed | outbound traffic unless `Egress` is set; requests on exposed plaintext ports | implemented; the rendered rules are asserted |
-| Service sandbox | a compromised service reaching the rest of the guest | kernel exploits; the service's own data and credentials; a `tdx`-group service forging endpoint evidence | implemented; each preset's directives are asserted |
+| Service sandbox | a compromised service reaching the rest of the guest | kernel exploits; the service's own data and credentials | implemented; each preset's directives are asserted |
 | LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlocked over the attested endpoint |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that binds the secret | implemented |
 | Metrics keep-list | series `export=` does not name leaving the TD, a side channel | the journal, which leaves whole | implemented; the dev probe reads the sink |
@@ -112,8 +112,8 @@ is `sha512(purpose ‖ nonce ‖ TLS key ‖ SSH host keys ‖ instance public k
 AttestedTLS certificate keys)`: length-prefixed parts (big-endian uint32), keys as
 DER SubjectPublicKeyInfo, ports ascending (`Binding` in `tools/pkg/endpoint`). `attest`
 sends a fresh nonce and refuses evidence for another nonce (a replay) or another TLS key
-than its session's (a relay), then judges the quote; on success it writes the bound host
-keys as `known_hosts`. `secrets deliver` and `unlock`
+than its session's (a relay) or lacking tdxs's `endpoint` tag (root's), then judges the
+quote; on success it writes the bound host keys as `known_hosts`. `secrets deliver` and `unlock`
 verify again and write only on that session, with its nonce, once per value per boot:
 the first writer wins. With an `OperatorKey` volume each write is signed, over the quote's
 user data, by the SSH key the first signed write pinned in the volume's LUKS2 header. That
