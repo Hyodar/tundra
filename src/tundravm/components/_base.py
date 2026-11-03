@@ -393,20 +393,40 @@ class SshAccess(Component):
             "Use SshAccess(from_delivery=True) so the control plane delivers the key at boot, "
             "or keep baked keys in a non-production profile with dev=DevAccess(...).",
         ),
+        Rule(
+            "ssh-login-shell",
+            "warning",
+            "A production login gets an interactive shell and no forced command, so whoever "
+            "holds its key runs whatever that shell allows.",
+            'Pin what it runs: Login("tenant", command="/usr/bin/app-status").',
+        ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
-        """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them."""
-        if not self.keys or not {"azure", "gcp"} & set(resolved.targets):
-            return ()
-        return (
-            _diagnostic(
-                "ssh-keys-baked",
+        """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them;
+        ``ssh-login-shell``: a production login with a shell and no forced command."""
+        found = [
+            dm.Diagnostic(
+                "ssh-login-shell",
                 "warning",
-                f"{len(self.keys)} SSH key(s) are baked into a cloud image: every instance "
-                "of it lets their holders in as root",
-            ),
-        )
+                f"login {login.name!r} gets the shell {login.shell} and no command=: whoever "
+                "holds its key runs whatever that shell allows",
+                subject=login.name,
+                hint=f'Login("{login.name}", command="/usr/bin/app-status") pins what it runs.',
+            )
+            for login in self.logins
+            if resolved.production and login.shell is not None and login.command is None
+        ]
+        if self.keys and {"azure", "gcp"} & set(resolved.targets):
+            found.append(
+                _diagnostic(
+                    "ssh-keys-baked",
+                    "warning",
+                    f"{len(self.keys)} SSH key(s) are baked into a cloud image: every instance "
+                    "of it lets their holders in as root",
+                )
+            )
+        return tuple(found)
 
 
 class DevAccess(Component):

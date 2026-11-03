@@ -1,5 +1,5 @@
 """``SshAccess(login=Login(...))``: a non-root login into a forced command or a shell, with
-fixed sudo rules, keys baked or delivered after attestation, and its probe row."""
+fixed sudo rules, keys baked or delivered after attestation, its probe row and its lint."""
 
 from __future__ import annotations
 
@@ -113,6 +113,23 @@ def test_the_dev_probe_checks_each_login() -> None:
         f"probe_login tenant /etc/sudoers.d/tenant 'restrict,command=\"{STATUS}\"' '{STATUS}'"
         in probe
     )
+
+
+@pytest.mark.parametrize(
+    ("login", "production", "found"),
+    [
+        (Login("tenant", keys=[KEY], shell="/bin/bash"), True, True),
+        (Login("tenant", keys=[KEY], shell="/bin/bash", command=STATUS), True, False),
+        (Login("tenant", keys=[KEY], command=STATUS), True, False),
+        (Login("tenant", keys=[KEY], shell="/bin/bash"), False, False),
+    ],
+)
+def test_a_production_shell_login_without_a_command_warns(
+    login: Login, production: bool, found: bool
+) -> None:
+    image = _image(login)
+    codes = {d.code for d in plan(image, "production" if production else "dev").lint()}
+    assert ("ssh-login-shell" in codes) is found
 
 
 @pytest.mark.parametrize(
