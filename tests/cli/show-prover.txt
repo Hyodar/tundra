@@ -87,6 +87,10 @@ Built into production:
     out  169.254.169.254:123/udp                                                                                                                          metadata time
     out  123/udp, @host4_time.cloudflare.com:4460/tcp, @host6_time.cloudflare.com:4460/tcp, @host4_nts.netnod.se:4460/tcp, @host6_nts.netnod.se:4460/tcp  tee-base
     out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp                                                                                                                 network
+  Control plane (3):
+    endpoint          8745/tcp, TLS bound to the quote
+    volume data       the operator, over the endpoint
+    secret api-token  the operator, over the endpoint
   Instance key: secp256k1, fresh each boot; taken by no service
   Build steps (4):
     builds attested-endpoint, disk-encryption, key-generation and tdxs from source

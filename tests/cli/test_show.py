@@ -74,6 +74,21 @@ def test_show_says_which_service_asks_for_quotes(
     assert f"Services (1):\n{block}\n" in result.out
 
 
+def test_show_names_who_hands_the_control_plane_each_value(prover: Path, cli: Cli) -> None:
+    text = (prover / "prover.py").read_text(encoding="utf-8")
+    broker = 'BrokerKey("https://broker.example.com", audience="prover")'
+    text = text.replace("OperatorKey, Volume", "BrokerKey, Volume").replace("OperatorKey()", broker)
+    (prover / "broker.py").write_text(text, encoding="utf-8")
+    result = cli("show", "broker.py", "--profile", "production")
+    assert result.code == EXIT_OK, result.err
+    assert (
+        "  Control plane (3):\n"
+        "    endpoint          8745/tcp, TLS bound to the quote\n"
+        "    volume data       broker https://broker.example.com, audience prover\n"
+        "    secret api-token  the operator, over the endpoint\n"
+    ) in result.out
+
+
 def test_show_selects_profiles(project: Path, cli: Cli) -> None:
     """--profile P picks some, --dev the dev profile, each shown whole."""
     dev = cli("show", "demo.py", "--dev")

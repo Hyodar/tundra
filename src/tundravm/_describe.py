@@ -41,6 +41,7 @@ MASKED = '"***"'
 
 _MASKED_FIELDS = frozenset({"password"})
 _FIREWALL = "/etc/nftables.conf"
+_RUNTIME = "/etc/tundravm/runtime.json"
 
 
 # ── the image as written ─────────────────────────────────────────────────
@@ -383,6 +384,7 @@ def describe(
         ],
         "units": _describe_units(profile_state, frozenset(probes)),
         "firewall": _describe_firewall(profile_state),
+        "control_plane": _describe_control_plane(profile_state),
         "build_steps": _describe_build_steps(profile_state, resolved),
         "boot_steps": [
             _boot_step(entry.name) for entry in runtime_init_order(profile_state.init_scripts)
@@ -475,6 +477,34 @@ def _describe_firewall(profile_state: ProfileState) -> dict[str, object] | None:
             continue
         chains[chain].append({"rule": _rule(words[: words.index("accept")]), "for": who})
     return {"inbound": chains["input"], "outbound": chains["output"] if filtered else None}
+
+
+def _describe_control_plane(profile_state: ProfileState) -> dict[str, object] | None:
+    """The attested endpoint and who hands it each value, from the profile's runtime
+    manifest: a volume's key and a secret come from the operator or a broker (its URL and
+    audience); a ``TpmSeal`` volume needs neither. ``None`` when no endpoint runs."""
+    found = next((f for f in profile_state.files if f.path == _RUNTIME), None)
+    runtime = None if found is None else json.loads(found.data)
+    if not isinstance(runtime, dict) or not runtime.get("control_plane"):
+        return None
+
+    def given_by(source: object) -> dict[str, object]:
+        if isinstance(source, dict) and source.get("kind") == "broker-key":
+            return {"by": "broker", "url": source["url"], "audience": source["audience"]}
+        return {"by": "operator"}
+
+    return {
+        "port": runtime["management_port"],
+        "values": [
+            {"value": f"volume {volume['name']}", **given_by(volume["unlock"])}
+            for volume in runtime["volumes"]
+            if volume["unlock"].get("kind") != "tpm-seal"
+        ]
+        + [
+            {"value": f"secret {secret['name']}", **given_by(secret["source"])}
+            for secret in runtime["secrets"]
+        ],
+    }
 
 
 def _rule(words: list[str]) -> str:
@@ -751,6 +781,9 @@ def resolved_rows(description: Mapping[str, Any]) -> list[Row]:
     firewall = get("firewall")
     if isinstance(firewall, Mapping):
         listing("Firewall", _firewall_items(firewall))
+    control = get("control_plane")
+    if isinstance(control, Mapping):
+        listing("Control plane", _control_plane_items(control))
     if "instance_key" in description:
         takers = ", ".join(description["instance_key"]) or "no service"
         rows.append(Row(f"Instance key: {instance_key.CURVE}, fresh each boot; taken by {takers}"))
@@ -823,6 +856,16 @@ def _firewall_items(firewall: Mapping[str, Any]) -> list[Item]:
     items += [("out", ", ".join(rules), who) for who, rules in grouped.items()]
     if not outbound:
         items.append(("out", "nothing beyond replies and DHCP"))
+    return items
+
+
+def _control_plane_items(control: Mapping[str, Any]) -> list[Item]:
+    items: list[Item] = [("endpoint", f"{control['port']}/tcp, TLS bound to the quote")]
+    for row in control["values"]:
+        if row["by"] == "broker":
+            items.append((row["value"], f"broker {row['url']}, audience {row['audience']}"))
+        else:
+            items.append((row["value"], "the operator, over the endpoint"))
     return items
 
 
