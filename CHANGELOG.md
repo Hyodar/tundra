@@ -79,6 +79,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `doctor` prints one row per capability, then a `fix:` block with the one command that clears each row (`sudo apt install golang`, `sudo apt install qemu-system-x86 ovmf`, the user-namespace sysctl, the cloud login), in `--json` too; `build:go` blocks without `go`.
 - `tundravm` with no arguments prints the first four commands, `doctor`, `new`, `check` and `dev`, and points at `--help`.
 - `dev` and `run --mode simulated` ask for QEMU and OVMF before anything builds, and name every missing apt package in one command.
+- Ctrl-C or SIGTERM stops the instance `dev` or `run` follows, even when the command was started as a script's `&` job, which inherits SIGINT ignored; SIGTERM used to leave QEMU running.
 - `convert` breaks long lines as `ruff format` does where ruff is not installed, as in a `uv tool install`.
 - **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset; both conversions write double-quoted Python.
 - **Breaking:** `convert --from mkosi` ends with one line per setting the tree sets, `kept` (the image's tree resolves it to the same value), `mapped` (the slot, named), `defaulted` (the opinion, named) or `refused` (why, and what to do), the files mkosi read for no selection included; the `# unsupported:` lines are gone, and `--json` prints source and report as one object.
