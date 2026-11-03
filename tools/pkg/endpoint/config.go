@@ -32,6 +32,10 @@ type Config struct {
 	AttestedTLS []Listener `yaml:"attested_tls"`
 	// SSH is where POST /ssh-key writes the operator's key; nil takes none.
 	SSH *SSHConfig `yaml:"ssh"`
+	// LoginKeys is sshd's directory of each login's authorized keys: a credential landing
+	// there (or in SSH.Dir) is a key that logs in, gated as POST /ssh-key is. Default
+	// /etc/ssh/authorized_keys.d.
+	LoginKeys string `yaml:"login_keys"`
 }
 
 // Listener is one attested TLS port and the PEM certificate its key unit writes at boot.
@@ -115,6 +119,9 @@ func (c *Config) Validate() error {
 		if v.Owner != "" && !filepath.IsAbs(v.Owner) {
 			return fmt.Errorf("volume %s: owner %q is not absolute", v.Name, v.Owner)
 		}
+	}
+	if c.LoginKeys == "" {
+		c.LoginKeys = "/etc/ssh/authorized_keys.d"
 	}
 	if c.SSH != nil && !filepath.IsAbs(c.SSH.Dir) {
 		return fmt.Errorf("ssh.dir %q is not absolute", c.SSH.Dir)

@@ -22,10 +22,11 @@ attested TLS port's certificate key)``, each part length-prefixed (:func:`bindin
   anything is sent (:func:`fail_closed`).
 - An image with an ``OperatorKey()`` volume pins its operator: the volume's LUKS2 header
   holds the owner's SSH key and every write carries the owner's SSH signature over its
-  nonce (:func:`signed`, namespace :data:`SIGNATURE_NAMESPACE`); the first signed one pins
-  its signer. The key is the one ``attest`` used (``--identity``), recorded in the receipt
-  so ``secrets deliver`` and ``secrets unlock`` sign with it; :func:`rotate` hands the
-  volumes to another key.
+  evidence's user data, which binds the nonce and this boot's TLS key (:func:`signed`,
+  namespace :data:`SIGNATURE_NAMESPACE`), so no other endpoint can replay it; the first
+  signed one pins its signer. The key is the one ``attest`` used (``--identity``), recorded
+  in the receipt so ``secrets deliver`` and ``secrets unlock`` sign with it; :func:`rotate`
+  hands the volumes to another key.
 
 Values travel in the TLS session's request bodies only: never on an argv, in a log, a
 tree, a manifest or a receipt (receipts name what was delivered, not what it was).
@@ -509,7 +510,7 @@ def signed(instance: Instance, evidence: Evidence, key: Operator | None) -> dict
             f"instance instead of reusing {instance.id}.",
         )
     signature = _ssh_sig.sign(
-        evidence.nonce.hex().encode(), key.path, namespace=SIGNATURE_NAMESPACE
+        evidence.user_data.hex().encode(), key.path, namespace=SIGNATURE_NAMESPACE
     )
     return {"signer": key.public, "signature": signature.decode()}
 
@@ -932,7 +933,7 @@ def rotate(
 ) -> tuple[Attestation, str]:
     """Verify again with the last approved policy, then hand *instance*'s volumes to the key
     pair at *identity* (``POST /owner``): signed by the recorded owner's key, carrying the
-    new key and its own signature over the same nonce. The receipt then records the new
+    new key and its own signature over the same user data. The receipt then records the new
     key; its fingerprint is returned."""
     new = operator(identity)
     approved = instance.data.get("attested")
@@ -956,7 +957,9 @@ def rotate(
             "--identity KEY` (its first signed write pins it).",
         )
     old = signed(instance, evidence, recorded_operator(instance))
-    proof = _ssh_sig.sign(evidence.nonce.hex().encode(), new.path, namespace=SIGNATURE_NAMESPACE)
+    proof = _ssh_sig.sign(
+        evidence.user_data.hex().encode(), new.path, namespace=SIGNATURE_NAMESPACE
+    )
     post(
         channel,
         evidence,

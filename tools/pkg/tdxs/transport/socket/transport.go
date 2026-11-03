@@ -158,8 +158,9 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 			if err == io.EOF {
 				return
 			}
+			// A decoder that failed keeps failing: answer once and hang up, or the loop spins.
 			encoder.Encode(NewIssueResponseFromError(fmt.Errorf("failed to decode request: %w", err)))
-			continue
+			return
 		}
 
 		apiRequest, err := req.UnmarshalData()

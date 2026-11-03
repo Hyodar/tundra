@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 
 	"github.com/Hyodar/tundra/tools/pkg/tpm"
 )
@@ -16,10 +15,10 @@ const defaultSize = 64
 
 // RandomProvider generates a cryptographically random key.
 type RandomProvider struct {
-	size int
+	size       int
 	tpmEnabled bool
 	tpmDevice  tpm.TPM
-	key  string // cached after first generation
+	key        string // cached after first generation
 }
 
 // NewRandomProvider creates a RandomProvider from the given key configuration.
@@ -38,8 +37,8 @@ func NewRandomProvider(cfg KeyConfig, t tpm.TPM) *RandomProvider {
 // Get returns the random key. On the first call it attempts, in order:
 //  1. Retrieve from TPM (if TPM is enabled and available)
 //  2. Return cached value
-//  3. Generate new random bytes (try /dev/hwrng, fall back to crypto/rand)
-//     then base64-encode, optionally store in TPM, and cache.
+//  3. Generate new random bytes (crypto/rand), then base64-encode, optionally store in
+//     TPM, and cache.
 func (p *RandomProvider) Get(ctx context.Context) (string, error) {
 	// 1. Try TPM retrieval.
 	if p.tpmEnabled && p.tpmDevice.Available() {
@@ -84,26 +83,14 @@ func (p *RandomProvider) Store(key string) error {
 	return nil
 }
 
-// generateRandom produces size random bytes. It first tries /dev/hwrng for
-// hardware entropy and falls back to crypto/rand.
+// generateRandom produces size random bytes from crypto/rand: the kernel's CRNG, which a TD
+// seeds from RDSEED. /dev/hwrng is never read raw: in a VM it is the host's virtio-rng, so
+// the host would choose the key.
 func generateRandom(size int) ([]byte, error) {
 	buf := make([]byte, size)
-
-	// Try hardware RNG first.
-	if f, err := os.Open("/dev/hwrng"); err == nil {
-		defer f.Close()
-		if _, err := io.ReadFull(f, buf); err == nil {
-			slog.Info("generated random bytes from /dev/hwrng", "size", size)
-			return buf, nil
-		}
-		slog.Info("/dev/hwrng read failed, falling back to crypto/rand")
-	}
-
-	// Fallback to crypto/rand.
 	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
 		return nil, fmt.Errorf("crypto/rand: %w", err)
 	}
 	slog.Info("generated random bytes from crypto/rand", "size", size)
-
 	return buf, nil
 }

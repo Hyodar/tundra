@@ -36,6 +36,10 @@ const (
 	// FromSuffix names the file beside a volume's owner file that holds the previous owner
 	// of a rotation this boot.
 	FromSuffix = ".from"
+	// ConfirmedSuffix names the file beside a volume's owner file that holds the owner the
+	// volume's encrypted copy confirmed this boot: the header alone is plaintext the host
+	// can rewrite, so on TDX the endpoint takes a delivered SSH key only from this owner.
+	ConfirmedSuffix = ".confirmed"
 	// MismatchSuffix names the file beside a volume's owner file that says the header's
 	// token and the volume's own copy name different keys (MismatchMessage).
 	MismatchSuffix = ".mismatch"

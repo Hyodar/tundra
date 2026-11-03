@@ -162,7 +162,8 @@ func TestFormatNeedsOwner(t *testing.T) {
 }
 
 // TestVolumeCopy: after the unlock, the header's owner must be the one the encrypted volume
-// keeps; a host that strips the token and pins its own key gets the volume closed again.
+// keeps, which confirms it for the boot; a host that strips the token and pins its own key
+// gets the volume closed again, and so does a mount that fails.
 func TestVolumeCopy(t *testing.T) {
 	ctx := context.Background()
 	a, b := testKey(t), testKey(t)
@@ -178,11 +179,12 @@ func TestVolumeCopy(t *testing.T) {
 		name               string
 		header, boot, copy string
 		want               string
-		fails              bool
+		fails              string
 	}{
 		{name: "the copy matches", header: a, boot: a, copy: a, want: a},
-		{name: "the header stripped and re-pinned by another key", boot: b, copy: a, want: a, fails: true},
+		{name: "the header stripped and re-pinned by another key", boot: b, copy: a, want: a, fails: owner.MismatchMessage("data")},
 		{name: "the first unlock without a copy writes it", header: a, boot: a, want: a},
+		{name: "a mount that fails", header: a, boot: a, copy: a, want: a, fails: "mount failed"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -214,7 +216,11 @@ func TestVolumeCopy(t *testing.T) {
 			}
 			mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "2", "--token-replace", "/dev/sdb")
 			mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_data")
-			mr.on("", nil, "mount", "/dev/mapper/crypt_disk_data", mount)
+			if c.fails == "mount failed" {
+				mr.on("", fmt.Errorf("mount failed"), "mount", "/dev/mapper/crypt_disk_data", mount)
+			} else {
+				mr.on("", nil, "mount", "/dev/mapper/crypt_disk_data", mount)
+			}
 			mr.on("", nil, "cryptsetup", "luksClose", "crypt_disk_data")
 			cfg := &Config{Disks: map[string]DiskConfig{"data": {
 				Strategy: "pathglob", Format: "on_initialize", EncryptionKeyPath: keyFile,
@@ -222,18 +228,19 @@ func TestVolumeCopy(t *testing.T) {
 			}}}
 			err := newTestManager(t, cfg, nil, mr, "/dev/sdb").SetupDisk(ctx, "data")
 			mismatch, _ := os.ReadFile(ownerFile + owner.MismatchSuffix)
-			if c.fails {
-				if err == nil || !strings.Contains(err.Error(), owner.MismatchMessage("data")) {
-					t.Fatalf("SetupDisk = %v, want the mismatch", err)
+			confirmed, _ := owner.ReadFile(ownerFile + owner.ConfirmedSuffix)
+			if c.fails != "" {
+				if err == nil || !strings.Contains(err.Error(), c.fails) {
+					t.Fatalf("SetupDisk = %v, want %q", err, c.fails)
 				}
-				if strings.TrimSpace(string(mismatch)) != owner.MismatchMessage("data") {
+				if c.fails == owner.MismatchMessage("data") && strings.TrimSpace(string(mismatch)) != c.fails {
 					t.Fatalf("the mismatch file says %q", mismatch)
 				}
-				if mr.lastCall().args[1] != "luksClose" {
-					t.Fatalf("the volume was not closed: last ran %v", mr.lastCall().args)
+				if mr.lastCall().args[1] != "luksClose" || confirmed != "" {
+					t.Fatalf("the volume was not closed (last ran %v) or confirmed %q", mr.lastCall().args, confirmed)
 				}
-			} else if err != nil || len(mismatch) != 0 {
-				t.Fatalf("SetupDisk = %v, mismatch %q", err, mismatch)
+			} else if err != nil || len(mismatch) != 0 || confirmed != c.want {
+				t.Fatalf("SetupDisk = %v, mismatch %q, confirmed %q", err, mismatch, confirmed)
 			}
 			if got, _ := owner.ReadFile(copyPath); got != c.want {
 				t.Fatalf("the volume's copy names %q, want %q", got, c.want)

@@ -12,13 +12,16 @@ import hmac
 import json
 import os
 import struct
+import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
+from tundravm import _ssh_sig
 from tundravm.attestation import SIMULATOR_KEY, report_data_for
-from tundravm.bootstrap import PURPOSE, binding
+from tundravm.bootstrap import PURPOSE, SIGNATURE_NAMESPACE, binding
 
 Misbehaviour = Literal["relay", "replay", "wrong-key", "wrong-certificate"]
 """``relay``: the session's TLS key changes after the evidence (the delivery would land on
@@ -86,8 +89,9 @@ class FakeEndpoint:
     written, one per name per boot. With *pins* the image pins its operator (an
     ``OperatorKey()`` volume): every write must name a ``signer`` and carry a ``signature``,
     the first signed one pins :attr:`owner` (a public key line), and a write by another key
-    is refused (403); :attr:`signers` holds who signed each write. The fake checks who
-    signed, not the signature (``tools/pkg/owner`` verifies it)."""
+    is refused (403); :attr:`signers` holds who signed each write. A signature must verify
+    (``ssh-keygen -Y check-novalidate``) over the hex user data of the evidence its nonce
+    fetched, by the key it names, as ``tools/pkg/owner`` checks it."""
 
     platform: Literal["simulator", "tdx"] = "simulator"
     registers: Mapping[str, bytes] = field(default_factory=dict)
@@ -106,7 +110,16 @@ class FakeEndpoint:
     pins: bool = False
     owner: str | None = None
     mismatch: str | None = None
+    confirmed: bool = False
+    """Whether the volume's encrypted copy confirmed :attr:`owner` this boot: outside a
+    ``simulated`` mode the endpoint takes an SSH key only then."""
     signers: list[str] = field(default_factory=list)
+
+    @property
+    def takes_ssh_key(self) -> bool:
+        """Whether ``POST /ssh-key`` installs a key: the first in a ``simulated`` mode, else
+        only a confirmed owner's."""
+        return self.ssh_key and (self.mode == "simulated" or (self.pins and self.confirmed))
 
     def connect(self, host: str, port: int) -> FakeSession:
         """A new TLS session (the ``connect=`` the operator commands take)."""
@@ -154,6 +167,7 @@ class FakeEndpoint:
             "platform": self.platform,
         }
         session.nonces.append(nonce.hex())
+        session.bound[nonce.hex()] = user_data
         if self.misbehave == "relay":
             session.key = os.urandom(91)
         return {
@@ -173,7 +187,7 @@ class FakeEndpoint:
             "accepts": {
                 "credentials": list(self.credentials),
                 "volumes": list(self.volumes),
-                "ssh_key": self.ssh_key,
+                "ssh_key": self.takes_ssh_key,
                 **(
                     {"owner": {"fingerprint": self._fingerprint(), "mismatch": self.mismatch}}
                     if self.pins
@@ -195,14 +209,18 @@ class FakeEndpoint:
         session.nonces.remove(nonce)
         if self.pins:
             signer = str(body.get("signer") or "")
-            if not signer or not body.get("signature"):
+            signed_over = session.bound[nonce].hex().encode()
+            if not _verifies(signer, str(body.get("signature") or ""), signed_over):
                 return 403
             if self.owner is not None and signer != self.owner:
                 return 403
             self.owner = self.owner or signer
             self.signers.append(signer)
             if path == "/owner":
-                self.owner = str(body.get("key"))
+                key = str(body.get("key"))
+                if not _verifies(key, str(body.get("key_signature") or ""), signed_over):
+                    return 403
+                self.owner = key
                 return 200
         if path == "/credentials":
             values = body.get("credentials")
@@ -222,7 +240,7 @@ class FakeEndpoint:
                 return 409
             self.unlocked[volume] = base64.b64decode(str(body.get("passphrase")))
             return 200
-        if path == "/ssh-key" and self.ssh_key:
+        if path == "/ssh-key" and self.takes_ssh_key:
             self.ssh_keys.append(str(body.get("key")))
             return 200
         return 404
@@ -235,6 +253,8 @@ class FakeSession:
     endpoint: FakeEndpoint
     key: bytes
     nonces: list[str] = field(default_factory=list)
+    bound: dict[str, bytes] = field(default_factory=dict)
+    """The user data the evidence served for each nonce bound."""
     requests: list[tuple[str, str]] = field(default_factory=list)
 
     def peer_key(self) -> bytes:
@@ -249,3 +269,23 @@ class FakeSession:
         status = self.endpoint.write(self, url.path, json.loads(body or b"{}"))
         reply = {} if status == 200 else {"error": f"refused with {status}"}
         return status, json.dumps(reply).encode()
+
+
+def _verifies(signer: str, signature: str, message: bytes) -> bool:
+    """Whether *signature* is *signer*'s SSH signature over *message* in the endpoint's
+    namespace."""
+    if not signer or not signature:
+        return False
+    if _ssh_sig.signature_fingerprint(signature.encode()) != _ssh_sig.fingerprint(signer):
+        return False
+    with tempfile.TemporaryDirectory(prefix="fake-endpoint-") as scratch:
+        sig = os.path.join(scratch, "write.sig")
+        with open(sig, "w") as out:
+            out.write(signature)
+        checked = subprocess.run(
+            ["ssh-keygen", "-Y", "check-novalidate", "-n", SIGNATURE_NAMESPACE, "-s", sig],
+            input=message,
+            capture_output=True,
+            check=False,
+        )
+    return checked.returncode == 0

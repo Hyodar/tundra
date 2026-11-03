@@ -1852,6 +1852,7 @@ FakeEndpoint(
     pins: bool = False,
     owner: str | None = None,
     mismatch: str | None = None,
+    confirmed: bool = False,
     signers: list[str] = list(),
 )
 ```
@@ -1863,6 +1864,7 @@ The endpoint of one boot: what it accepts, what it received.
 | `FakeEndpoint.connect(host: str, port: int) -> FakeSession` | A new TLS session (the `connect=` the operator commands take). |
 | `FakeEndpoint.evidence(session: FakeSession, nonce: bytes) -> dict[str, object]` |  |
 | `FakeEndpoint.presented(host: str, port: int) -> bytes` | The DER certificate the attested TLS listener on *port* presents (the `presented=` that `attest` takes): around its bound key, or around a key the evidence does not bind when misbehaving or when *port* is no listener. |
+| `FakeEndpoint.takes_ssh_key` | Whether `POST /ssh-key` installs a key: the first in a `simulated` mode, else only a confirmed owner's. |
 | `FakeEndpoint.write(session: FakeSession, path: str, body: Mapping[str, object]) -> int` |  |
 
 ### `FakeFetch`

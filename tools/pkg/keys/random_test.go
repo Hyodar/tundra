@@ -1,7 +1,9 @@
 package keys
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"testing"
@@ -181,5 +183,20 @@ func TestRandomProvider_Store(t *testing.T) {
 	}
 	if key != "my-key" {
 		t.Fatalf("expected %q, got %q", "my-key", key)
+	}
+}
+
+// TestRandomKeysComeFromCryptoRandOnly: a TD's /dev/hwrng is the host's virtio-rng, so a
+// key read from it would be the host's choice.
+func TestRandomKeysComeFromCryptoRandOnly(t *testing.T) {
+	saved := rand.Reader
+	t.Cleanup(func() { rand.Reader = saved })
+	rand.Reader = bytes.NewReader(bytes.Repeat([]byte{7}, 64))
+	key, err := NewRandomProvider(KeyConfig{Strategy: "random"}, &mockTPM{}).Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 64)) {
+		t.Fatalf("the key did not come from crypto/rand")
 	}
 }

@@ -31,16 +31,24 @@ func (o operator) key() string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(o.signer.PublicKey())))
 }
 
-func (o operator) sign(n string) string {
-	sig, err := owner.Sign(o.signer, []byte(n))
+func (o operator) sign(message string) string {
+	sig, err := owner.Sign(o.signer, []byte(message))
 	must(o.t, err)
 	return sig
 }
 
-// signed is body with o's signature over its nonce.
+// deferred is a body value made once the write's evidence is fetched.
+type deferred func(Evidence) any
+
+// over is o's signature over the user data of the write's evidence.
+func (o operator) over() deferred {
+	return func(e Evidence) any { return o.sign(e.UserData) }
+}
+
+// signed is body signed by o.
 func (o operator) signed(body map[string]any) map[string]any {
 	body["signer"] = o.key()
-	body["signature"] = o.sign(body["nonce"].(string))
+	body["signature"] = o.over()
 	return body
 }
 
@@ -57,10 +65,18 @@ func owned(t *testing.T, pinned string) (*fixture, string) {
 	return f, path
 }
 
+// write fetches evidence for body's nonce on a new session and posts body there.
 func (f *fixture) write(path string, body map[string]any) (int, string) {
 	c := f.session()
-	f.evidence(c, body["nonce"].(string))
-	return f.post(c, path, body)
+	found, _ := f.evidence(c, body["nonce"].(string))
+	sent := map[string]any{}
+	for name, value := range body {
+		if later, ok := value.(deferred); ok {
+			value = later(found)
+		}
+		sent[name] = value
+	}
+	return f.post(c, path, sent)
 }
 
 func TestOwnerPinsAndRefuses(t *testing.T) {
@@ -87,11 +103,18 @@ func TestOwnerPinsAndRefuses(t *testing.T) {
 			f.write("/credentials", a.signed(deliver(nonce(23))))
 			return f.write("/unlock", b.signed(map[string]any{"nonce": nonce(24), "volume": "data", "passphrase": "cA=="}))
 		}, http.StatusForbidden, "owned by " + owner.Fingerprint(a.key()), a.key()},
-		{"a signature over another nonce is refused", "", func(f *fixture) (int, string) {
+		{"a signature over the nonce alone is refused", a.key(), func(f *fixture) (int, string) {
 			body := a.signed(deliver(nonce(25)))
-			body["signature"] = a.sign(nonce(26))
+			body["signature"] = a.sign(nonce(25))
 			return f.write("/credentials", body)
-		}, http.StatusForbidden, "does not verify", ""},
+		}, http.StatusForbidden, "does not verify", a.key()},
+		{"a signature another endpoint saw for the same nonce is refused", a.key(), func(f *fixture) (int, string) {
+			other, _ := owned(t, a.key())
+			seen, _ := other.evidence(other.session(), nonce(26))
+			body := a.signed(deliver(nonce(26)))
+			body["signature"] = a.sign(seen.UserData)
+			return f.write("/credentials", body)
+		}, http.StatusForbidden, "does not verify", a.key()},
 		{"the owner hands over its own SSH key", a.key(), func(f *fixture) (int, string) {
 			return f.write("/ssh-key", a.signed(map[string]any{"nonce": nonce(27), "key": a.key() + " op@host"}))
 		}, http.StatusOK, "taken", a.key()},
@@ -99,7 +122,7 @@ func TestOwnerPinsAndRefuses(t *testing.T) {
 			return f.write("/ssh-key", a.signed(map[string]any{"nonce": nonce(28), "key": b.key()}))
 		}, http.StatusForbidden, "not the key that signed", a.key()},
 		{"the owner rotates to a key that proves itself", a.key(), func(f *fixture) (int, string) {
-			body := a.signed(map[string]any{"nonce": nonce(29), "key": b.key(), "key_signature": b.sign(nonce(29))})
+			body := a.signed(map[string]any{"nonce": nonce(29), "key": b.key(), "key_signature": b.over()})
 			if status, said := f.write("/owner", body); status != http.StatusOK {
 				return status, said
 			}
@@ -109,7 +132,7 @@ func TestOwnerPinsAndRefuses(t *testing.T) {
 			return f.write("/credentials", b.signed(deliver(nonce(31))))
 		}, http.StatusOK, "delivered", b.key()},
 		{"a rotation to a key that does not prove itself is refused", a.key(), func(f *fixture) (int, string) {
-			body := a.signed(map[string]any{"nonce": nonce(32), "key": b.key(), "key_signature": a.sign(nonce(32))})
+			body := a.signed(map[string]any{"nonce": nonce(32), "key": b.key(), "key_signature": a.over()})
 			return f.write("/owner", body)
 		}, http.StatusForbidden, "new key's signature", a.key()},
 	}
@@ -146,7 +169,7 @@ func TestTheEvidenceReportsAMismatchedOwner(t *testing.T) {
 func TestRotationLeavesTheOldOwnerForTheHeader(t *testing.T) {
 	a, b := newOperator(t), newOperator(t)
 	f, path := owned(t, a.key())
-	body := a.signed(map[string]any{"nonce": nonce(41), "key": b.key(), "key_signature": b.sign(nonce(41))})
+	body := a.signed(map[string]any{"nonce": nonce(41), "key": b.key(), "key_signature": b.over()})
 	if status, said := f.write("/owner", body); status != http.StatusOK {
 		t.Fatalf("rotate: %d %s", status, said)
 	}
@@ -157,5 +180,70 @@ func TestRotationLeavesTheOldOwnerForTheHeader(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "ssh", authorizedKeys)); !os.IsNotExist(err) {
 		t.Fatalf("a rotation wrote authorized_keys before any SSH key was taken: %v", err)
+	}
+}
+
+func TestTheFirstSignerPinsEveryVolumeNotPinnedYet(t *testing.T) {
+	a := newOperator(t)
+	f, path := owned(t, a.key())
+	second := filepath.Join(f.dir, "owner", "logs")
+	f.server.cfg.Volumes = append(f.server.cfg.Volumes, Volume{Name: "logs", Pipe: filepath.Join(f.dir, "logs.fifo"), Owner: second})
+	if status, said := f.write("/credentials", a.signed(credentials(nonce(43), map[string]string{"jwt": "v"}))); status != http.StatusOK {
+		t.Fatalf("delivery: %d %s", status, said)
+	}
+	for _, file := range []string{path, second} {
+		if got, err := owner.ReadFile(file); err != nil || got != a.key() {
+			t.Fatalf("%s names %q (%v), want the owner", file, got, err)
+		}
+	}
+}
+
+func TestATDXBootTakesALoginKeyOnlyFromAConfirmedOwner(t *testing.T) {
+	login := func(f *fixture) map[string]any {
+		keys := filepath.Join(f.dir, "authorized_keys.d")
+		f.server.cfg.LoginKeys = keys
+		f.server.cfg.Credentials = append(f.server.cfg.Credentials, Credential{Name: "ops-keys", Path: filepath.Join(keys, "ops"), Mode: "0644"})
+		return credentials(nonce(45), map[string]string{"ops-keys": "ssh-ed25519 AAAAop"})
+	}
+	a := newOperator(t)
+	cases := []struct {
+		name   string
+		mode   string
+		owner  string // "": no OperatorKey volume; "header": pinned from the header; "confirmed": by the volume's copy too
+		status int
+	}{
+		{"a simulated boot takes the first key", "simulated", "", http.StatusOK},
+		{"a TDX boot without an owner takes none", "tdx", "", http.StatusForbidden},
+		{"a boot whose gate recorded nothing takes none", "", "", http.StatusForbidden},
+		{"a TDX boot takes none from a header owner alone", "tdx", "header", http.StatusForbidden},
+		{"a TDX boot takes the owner's once the volume confirmed it", "tdx", "confirmed", http.StatusOK},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := start(t)
+			body := map[string]any{"nonce": nonce(45), "key": a.key()}
+			if c.owner != "" {
+				var path string
+				f, path = owned(t, a.key())
+				body = a.signed(body)
+				if c.owner == "confirmed" {
+					must(t, owner.WriteFile(path+owner.ConfirmedSuffix, a.key()))
+				}
+			}
+			must(t, os.WriteFile(filepath.Join(f.dir, "mode"), []byte(c.mode+"\n"), 0o644))
+			found, _ := f.evidence(f.session(), nonce(44))
+			status, said := f.write("/ssh-key", body)
+			if status != c.status || found.Accepts.SSHKey != (c.status == http.StatusOK) {
+				t.Fatalf("status %d, want %d; evidence accepts an SSH key: %v: %s", status, c.status, found.Accepts.SSHKey, said)
+			}
+			keys := login(f)
+			if c.owner != "" {
+				keys = a.signed(keys)
+			}
+			keys["nonce"] = nonce(46)
+			if status, said := f.write("/credentials", keys); status != c.status {
+				t.Fatalf("a login's keys as a credential: status %d, want %d: %s", status, c.status, said)
+			}
+		})
 	}
 }

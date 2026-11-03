@@ -98,7 +98,8 @@ def test_upgrade_runs_the_replacement_in_order(
     assert "upgraded prover-1 -> prover-2" in result.out
     steps = [line.split(" ", 1)[0] for line in result.out.splitlines() if line[:1].isdigit()]
     assert steps == ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]
-    assert order.index("gcloud create") < order.index("endpoint /ssh-key")
+    assert "endpoint /ssh-key" not in order, "a TDX boot without a confirmed owner takes no key"
+    assert order.index("gcloud create") < order.index("endpoint /credentials")
     assert order.index("endpoint /credentials") < order.index("gcloud stop")
     assert order.index("gcloud stop") < order.index("gcloud detach-disk")
     assert order.index("gcloud detach-disk") < order.index("gcloud attach-disk")

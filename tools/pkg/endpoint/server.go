@@ -89,32 +89,38 @@ type Server struct {
 
 type sessionKey struct{}
 
-// session is one TLS connection: the nonces evidence was served for on it, each good for
-// one write.
+// session is one TLS connection: the nonces evidence was served for on it, each with the
+// user data its quote bound and good for one write.
 type session struct {
 	mu     sync.Mutex
-	nonces []string
+	served []served
 }
 
-func (s *session) remember(nonce string) {
+type served struct {
+	nonce    string
+	userData []byte
+}
+
+func (s *session) remember(nonce string, userData []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.nonces = append(s.nonces, nonce)
-	if len(s.nonces) > sessionNonces {
-		s.nonces = s.nonces[len(s.nonces)-sessionNonces:]
+	s.served = append(s.served, served{nonce, userData})
+	if len(s.served) > sessionNonces {
+		s.served = s.served[len(s.served)-sessionNonces:]
 	}
 }
 
-func (s *session) take(nonce string) bool {
+// take spends nonce and returns the user data the evidence served for it bound.
+func (s *session) take(nonce string) ([]byte, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, known := range s.nonces {
-		if known == nonce {
-			s.nonces = append(s.nonces[:i], s.nonces[i+1:]...)
-			return true
+	for i, known := range s.served {
+		if known.nonce == nonce {
+			s.served = append(s.served[:i], s.served[i+1:]...)
+			return known.userData, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 // New makes the endpoint and its TLS key pair.
@@ -208,7 +214,7 @@ func sessionOf(r *http.Request) *session {
 
 func (s *Server) accepts() Accepts {
 	found := Accepts{
-		Credentials: []string{}, Volumes: []string{}, SSHKey: s.cfg.SSH != nil, Owner: s.ownerState(),
+		Credentials: []string{}, Volumes: []string{}, SSHKey: s.takesSSHKey(), Owner: s.ownerState(),
 	}
 	seen := map[string]bool{}
 	for _, c := range s.cfg.Credentials {
@@ -221,6 +227,46 @@ func (s *Server) accepts() Accepts {
 		found.Volumes = append(found.Volumes, v.Name)
 	}
 	return found
+}
+
+// mode is what the execution gate recorded, "" when it is unknown.
+func (s *Server) mode() string {
+	if s.cfg.ModeFile == "" {
+		return ""
+	}
+	data, err := os.ReadFile(s.cfg.ModeFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// takesSSHKey is whether POST /ssh-key can install a key, which logs in as root: in a
+// simulated boot the first (or the owner's); on TDX only the owner's, once a volume's
+// encrypted copy confirmed it this boot, because the host can always be first and can
+// rewrite the plaintext header that names an owner.
+func (s *Server) takesSSHKey() bool {
+	return s.cfg.SSH != nil && s.takesLoginKey()
+}
+
+// takesLoginKey is whether a key that logs in may be installed: in a simulated boot, or
+// from an owner a volume's encrypted copy confirmed this boot.
+func (s *Server) takesLoginKey() bool {
+	return s.mode() == "simulated" || s.confirmedOwner() != ""
+}
+
+// logsIn is whether a credential written to path is a key sshd logs in with.
+func (s *Server) logsIn(path string) bool {
+	dirs := []string{s.cfg.LoginKeys}
+	if s.cfg.SSH != nil {
+		dirs = append(dirs, s.cfg.SSH.Dir)
+	}
+	for _, dir := range dirs {
+		if dir != "" && strings.HasPrefix(filepath.Clean(path), filepath.Clean(dir)+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
@@ -258,14 +304,9 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	mode := ""
-	if s.cfg.ModeFile != "" {
-		if data, err := os.ReadFile(s.cfg.ModeFile); err == nil {
-			mode = strings.TrimSpace(string(data))
-		}
-	}
+	mode := s.mode()
 	if found := sessionOf(r); found != nil {
-		found.remember(hex.EncodeToString(nonce))
+		found.remember(hex.EncodeToString(nonce), userData)
 	}
 	if hostKeys == nil {
 		hostKeys = []string{}
@@ -306,23 +347,29 @@ func platformOf(document string) string {
 }
 
 // bound reads a POST body into value and takes its nonce from the session: a write is
-// accepted only on the TLS session that fetched evidence for that nonce, once.
-func (s *Server) bound(w http.ResponseWriter, r *http.Request, value any, nonce *string) bool {
+// accepted only on the TLS session that fetched evidence for that nonce, once. It returns
+// the user data that evidence's quote bound, which an owner's signature covers.
+func (s *Server) bound(w http.ResponseWriter, r *http.Request, value any, nonce *string) ([]byte, bool) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
 		fail(w, http.StatusBadRequest, "the body is unreadable or larger than %d bytes", maxBody)
-		return false
+		return nil, false
 	}
 	if err := json.Unmarshal(body, value); err != nil {
 		fail(w, http.StatusBadRequest, "the body is not the expected JSON: %v", err)
-		return false
+		return nil, false
 	}
 	found := sessionOf(r)
-	if found == nil || *nonce == "" || !found.take(strings.ToLower(*nonce)) {
+	if found == nil || *nonce == "" {
 		fail(w, http.StatusForbidden, "this session fetched no evidence for that nonce")
-		return false
+		return nil, false
 	}
-	return true
+	userData, ok := found.take(strings.ToLower(*nonce))
+	if !ok {
+		fail(w, http.StatusForbidden, "this session fetched no evidence for that nonce")
+		return nil, false
+	}
+	return userData, true
 }
 
 type credentialsRequest struct {
@@ -333,10 +380,11 @@ type credentialsRequest struct {
 
 func (s *Server) credentials(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if !s.bound(w, r, &req, &req.Nonce) {
+	userData, ok := s.bound(w, r, &req, &req.Nonce)
+	if !ok {
 		return
 	}
-	if _, ok := s.authorize(w, req.Nonce, req.Signed); !ok {
+	if _, ok := s.authorize(w, userData, req.Signed); !ok {
 		return
 	}
 	if len(req.Credentials) == 0 {
@@ -358,6 +406,14 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request) {
 		if s.delivered[name] {
 			fail(w, http.StatusConflict, "%s was delivered this boot already", name)
 			return
+		}
+		for _, target := range known[name] {
+			if s.logsIn(target.Path) && !s.takesLoginKey() {
+				fail(w, http.StatusForbidden, "%s lands in %s, a login's keys: a TDX boot takes those only "+
+					"from the owner an OperatorKey() volume's encrypted copy confirmed; unlock that volume, "+
+					"then deliver again", name, target.Path)
+				return
+			}
 		}
 		value, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
@@ -392,10 +448,11 @@ type unlockRequest struct {
 
 func (s *Server) unlock(w http.ResponseWriter, r *http.Request) {
 	var req unlockRequest
-	if !s.bound(w, r, &req, &req.Nonce) {
+	userData, ok := s.bound(w, r, &req, &req.Nonce)
+	if !ok {
 		return
 	}
-	if _, ok := s.authorize(w, req.Nonce, req.Signed); !ok {
+	if _, ok := s.authorize(w, userData, req.Signed); !ok {
 		return
 	}
 	var pipe string
@@ -436,11 +493,18 @@ type sshKeyRequest struct {
 
 func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
 	var req sshKeyRequest
-	if !s.bound(w, r, &req, &req.Nonce) {
+	userData, ok := s.bound(w, r, &req, &req.Nonce)
+	if !ok {
 		return
 	}
 	if s.cfg.SSH == nil {
 		fail(w, http.StatusNotFound, "the image takes no operator SSH key")
+		return
+	}
+	if !s.takesSSHKey() {
+		fail(w, http.StatusForbidden, "a TDX boot takes a delivered SSH key only from the owner an "+
+			"OperatorKey() volume's encrypted copy confirmed: unlock that volume, then attest again "+
+			"(an image without one bakes its keys: SshAccess(keys=))")
 		return
 	}
 	fields := strings.Fields(req.Key)
@@ -449,7 +513,7 @@ func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := fields[0] + " " + fields[1]
-	signer, ok := s.authorize(w, req.Nonce, req.Signed)
+	signer, ok := s.authorize(w, userData, req.Signed)
 	if !ok {
 		return
 	}

@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,7 +13,9 @@ import (
 
 // Signed is what every write carries in an image that pins its operator (a volume with an
 // owner file): the signer's OpenSSH public key and its SSH signature (namespace
-// tundravm-endpoint, ssh-keygen -Y sign) over the write's nonce in lower-case hex.
+// tundravm-endpoint, ssh-keygen -Y sign) over the user data of the evidence the write's
+// nonce fetched, in lower-case hex. The user data binds that nonce and this boot's TLS key,
+// so a signature another endpoint saw (the client picks the nonce) authorizes nothing here.
 type Signed struct {
 	Signer    string `json:"signer"`
 	Signature string `json:"signature"`
@@ -64,6 +67,21 @@ func (s *Server) currentOwner() (string, error) {
 	return found, nil
 }
 
+// confirmedOwner is the current owner when a volume's encrypted copy confirmed it this
+// boot, "" otherwise.
+func (s *Server) confirmedOwner() string {
+	current, err := s.currentOwner()
+	if err != nil || current == "" {
+		return ""
+	}
+	for _, path := range s.ownerFiles() {
+		if confirmed, err := owner.ReadFile(path + owner.ConfirmedSuffix); err == nil && confirmed == current {
+			return current
+		}
+	}
+	return ""
+}
+
 func (s *Server) ownerState() *OwnerState {
 	if len(s.ownerFiles()) == 0 {
 		return nil
@@ -80,10 +98,14 @@ func (s *Server) ownerState() *OwnerState {
 	return state
 }
 
+// signedOver is the message an owner signs for a write: the hex user data its nonce bound.
+func signedOver(userData []byte) []byte { return []byte(hex.EncodeToString(userData)) }
+
 // authorize lets a bound write through: anyone's in an image that pins no operator; in one
-// that does, only a write signed over its nonce by the owner, or by anyone while no one is
-// pinned, which makes the signer the owner. It answers the refusal itself.
-func (s *Server) authorize(w http.ResponseWriter, nonce string, req Signed) (string, bool) {
+// that does, only a write signed over its evidence's user data by the owner, or by anyone
+// while no one is pinned, which makes the signer the owner of every volume not pinned yet.
+// It answers the refusal itself.
+func (s *Server) authorize(w http.ResponseWriter, userData []byte, req Signed) (string, bool) {
 	paths := s.ownerFiles()
 	if len(paths) == 0 {
 		return "", true
@@ -104,22 +126,23 @@ func (s *Server) authorize(w http.ResponseWriter, nonce string, req Signed) (str
 		fail(w, http.StatusBadRequest, "signer: %v", err)
 		return "", false
 	}
-	if err := owner.Verify(signer, []byte(strings.ToLower(nonce)), req.Signature); err != nil {
-		fail(w, http.StatusForbidden, "the signature over the nonce: %v", err)
+	if err := owner.Verify(signer, signedOver(userData), req.Signature); err != nil {
+		fail(w, http.StatusForbidden, "the signature over the evidence's user data: %v", err)
 		return "", false
 	}
 	if current != "" && signer != current {
 		fail(w, http.StatusForbidden, "the volumes are owned by %s, not %s", owner.Fingerprint(current), owner.Fingerprint(signer))
 		return "", false
 	}
-	if current == "" {
-		for _, path := range paths {
-			if err := owner.WriteFile(path, signer); err != nil {
-				fail(w, http.StatusInternalServerError, "the owner is not pinned: %v", err)
-				return "", false
-			}
+	for _, path := range paths {
+		if pinned, err := owner.ReadFile(path); err != nil || pinned != "" {
+			continue
 		}
-		s.log.Info("owner pinned", "owner", owner.Fingerprint(signer))
+		if err := owner.WriteFile(path, signer); err != nil {
+			fail(w, http.StatusInternalServerError, "the owner is not pinned: %v", err)
+			return "", false
+		}
+		s.log.Info("owner pinned", "owner", owner.Fingerprint(signer), "file", path)
 	}
 	return signer, true
 }
@@ -129,7 +152,8 @@ func (s *Server) authorize(w http.ResponseWriter, nonce string, req Signed) (str
 // beside it until disk-setup has written the new one into the header) and the SSH key.
 func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 	var req ownerRequest
-	if !s.bound(w, r, &req, &req.Nonce) {
+	userData, ok := s.bound(w, r, &req, &req.Nonce)
+	if !ok {
 		return
 	}
 	if len(s.ownerFiles()) == 0 {
@@ -140,7 +164,7 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusConflict, "no one owns the volumes yet: the first signed delivery pins its key")
 		return
 	}
-	old, ok := s.authorize(w, req.Nonce, req.Signed)
+	old, ok := s.authorize(w, userData, req.Signed)
 	if !ok {
 		return
 	}
@@ -149,8 +173,8 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "key: %v", err)
 		return
 	}
-	if err := owner.Verify(key, []byte(strings.ToLower(req.Nonce)), req.KeySignature); err != nil {
-		fail(w, http.StatusForbidden, "the new key's signature over the nonce: %v", err)
+	if err := owner.Verify(key, signedOver(userData), req.KeySignature); err != nil {
+		fail(w, http.StatusForbidden, "the new key's signature over the evidence's user data: %v", err)
 		return
 	}
 	s.ownerMu.Lock()

@@ -237,6 +237,9 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 		if err := owner.WriteCopy(filepath.Join(md.Config.MountAt, owner.VolumeCopy), pinned); err != nil {
 			return fmt.Errorf("disk %q: %w", md.Name, err)
 		}
+		if err := owner.WriteFile(md.Config.Owner+owner.ConfirmedSuffix, pinned); err != nil {
+			return fmt.Errorf("disk %q: %w", md.Name, err)
+		}
 	}
 
 	dirs := md.Config.EffectiveDirs()
@@ -273,11 +276,13 @@ func (m *Manager) mountExistingEncrypted(ctx context.Context, md *ManagedDisk) e
 	}
 
 	if err := m.fs.MountDevice(ctx, md.MapperDevice, md.Config.MountAt); err != nil {
+		m.closeVolume(ctx, md, false)
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
 	if pinned != "" {
 		if err := m.checkCopy(ctx, md, pinned); err != nil {
+			m.closeVolume(ctx, md, true)
 			return err
 		}
 	}
@@ -286,11 +291,25 @@ func (m *Manager) mountExistingEncrypted(ctx context.Context, md *ManagedDisk) e
 	return nil
 }
 
+// closeVolume unmounts (when mounted) and closes md after a failure, so a volume that did
+// not pass every check is never left open.
+func (m *Manager) closeVolume(ctx context.Context, md *ManagedDisk, mounted bool) {
+	if mounted {
+		if err := m.fs.UnmountDevice(ctx, md.Config.MountAt); err != nil {
+			slog.ErrorContext(ctx, "not unmounted", "disk", md.Name, "err", err)
+		}
+	}
+	if err := m.luks.CloseLuks(ctx, md.MapperName); err != nil {
+		slog.ErrorContext(ctx, "not closed", "disk", md.Name, "err", err)
+	}
+}
+
 // checkCopy compares the header's owner with the copy inside the volume, just mounted and
 // before anything that waits for it starts: a volume without a copy (made before copies)
 // takes the header's, a copy that names the key a rotation this boot replaced takes the
-// new one, and any other difference closes the volume again, says so on the console and
-// leaves the mismatch file the endpoint and the probe report.
+// new one, and either confirms the owner for the boot (owner.ConfirmedSuffix). Any other
+// difference says so on the console and leaves the mismatch file the endpoint and the
+// probe report; the caller closes the volume again on any error.
 func (m *Manager) checkCopy(ctx context.Context, md *ManagedDisk, header string) error {
 	path := filepath.Join(md.Config.MountAt, owner.VolumeCopy)
 	copied, err := owner.ReadFile(path)
@@ -301,15 +320,19 @@ func (m *Manager) checkCopy(ctx context.Context, md *ManagedDisk, header string)
 	if err != nil {
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
+	confirmed := md.Config.Owner + owner.ConfirmedSuffix
 	switch {
 	case copied == header:
-		return nil
-	case copied == "":
-		slog.InfoContext(ctx, "the volume had no copy of its owner (made before copies): wrote the header's",
-			"disk", md.Name, "owner", owner.Fingerprint(header))
-		return owner.WriteCopy(path, header)
-	case copied == from:
-		return owner.WriteCopy(path, header)
+		return owner.WriteFile(confirmed, header)
+	case copied == "", copied == from:
+		if copied == "" {
+			slog.InfoContext(ctx, "the volume had no copy of its owner (made before copies): wrote the header's",
+				"disk", md.Name, "owner", owner.Fingerprint(header))
+		}
+		if err := owner.WriteCopy(path, header); err != nil {
+			return err
+		}
+		return owner.WriteFile(confirmed, header)
 	}
 	message := owner.MismatchMessage(md.Name)
 	slog.ErrorContext(ctx, message, "header", owner.Fingerprint(header), "volume", owner.Fingerprint(copied))
@@ -320,23 +343,21 @@ func (m *Manager) checkCopy(ctx context.Context, md *ManagedDisk, header string)
 	if err := os.WriteFile(md.Config.Owner+owner.MismatchSuffix, []byte(message+"\n"), 0o644); err != nil {
 		slog.ErrorContext(ctx, "mismatch not recorded", "disk", md.Name, "err", err)
 	}
-	if err := m.fs.UnmountDevice(ctx, md.Config.MountAt); err != nil {
-		slog.ErrorContext(ctx, "not unmounted", "disk", md.Name, "err", err)
-	}
-	if err := m.luks.CloseLuks(ctx, md.MapperName); err != nil {
-		slog.ErrorContext(ctx, "not closed", "disk", md.Name, "err", err)
-	}
 	return fmt.Errorf("%s: the header names %s, the volume %s, so it stays closed",
 		message, owner.Fingerprint(header), owner.Fingerprint(copied))
 }
 
-// rotateCopy updates the copy of a volume that is open (its copy is there) to key.
+// rotateCopy updates the copy of a volume that is open (its copy is there) to key, which
+// then confirms key for the boot.
 func rotateCopy(md *ManagedDisk, key string) error {
 	path := filepath.Join(md.Config.MountAt, owner.VolumeCopy)
 	if _, err := os.Stat(path); err != nil {
 		return nil
 	}
-	return owner.WriteCopy(path, key)
+	if err := owner.WriteCopy(path, key); err != nil {
+		return err
+	}
+	return owner.WriteFile(md.Config.Owner+owner.ConfirmedSuffix, key)
 }
 
 // setupPlainDisk handles non-encrypted disk setup.
