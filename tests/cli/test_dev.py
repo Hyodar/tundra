@@ -1,9 +1,11 @@
 """``dev``: build the dev profile (or reuse the latest build, saying why), boot it under the
-fake QEMU, probe it, follow the console, stop on Ctrl-C."""
+fake QEMU, probe it, follow the console, stop on Ctrl-C or SIGTERM."""
 
 from __future__ import annotations
 
 import json
+import os
+import signal
 from collections.abc import Callable
 from pathlib import Path
 
@@ -123,22 +125,46 @@ def test_the_latest_dev_build_is_reused_until_what_it_was_built_from_changes(
     assert (len(now) == len(built)) is (change is None)
 
 
-def test_ctrl_c_stops_the_instance_and_keeps_the_build(
-    dev_built: Build, project: Path, cli: Cli, qemu: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("sent", "inherited"),
+    [
+        (signal.SIGINT, signal.default_int_handler),
+        (signal.SIGINT, signal.SIG_IGN),
+        (signal.SIGTERM, signal.SIG_DFL),
+    ],
+    ids=["ctrl-c-from-a-terminal", "ctrl-c-to-a-background-job", "sigterm-from-a-supervisor"],
+)
+def test_ctrl_c_or_sigterm_stops_the_instance_and_keeps_the_build(
+    dev_built: Build,
+    project: Path,
+    cli: Cli,
+    qemu: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sent: signal.Signals,
+    inherited: Callable[..., object] | int,
 ) -> None:
     monkeypatch.setenv("FAKE_QEMU_CONSOLE", _probe_lines(dev_built))
     real_follow, real_alive = instances.follow, instances.alive
+    polls = iter(range(200))
+
+    def bounded(instance: instances.Instance) -> bool:
+        return next(polls, None) is not None and real_alive(instance)
 
     def follow(instance: instances.Instance, out: object, **kwargs: object) -> bool:
         def interrupted(instance: instances.Instance) -> bool:
-            monkeypatch.setattr(instances, "alive", real_alive)
-            raise KeyboardInterrupt
+            monkeypatch.setattr(instances, "alive", bounded)
+            os.kill(os.getpid(), sent)
+            return True
 
         monkeypatch.setattr(instances, "alive", interrupted)
         return real_follow(instance, out, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(instances, "follow", follow)
-    result = cli("dev")
+    before = signal.signal(sent, inherited)
+    try:
+        result = cli("dev")
+    finally:
+        signal.signal(sent, before)
     assert result.code == EXIT_OK, result.err
     assert "following the console (`tundravm run logs demo-1` has it from boot)" in result.out
     assert result.out.splitlines()[-1] == "stopped demo-1"

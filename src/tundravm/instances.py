@@ -34,6 +34,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -424,6 +425,25 @@ def launch(
     return instance
 
 
+@contextlib.contextmanager
+def _ctrl_c() -> Iterator[None]:
+    """Ctrl-C and SIGTERM raise ``KeyboardInterrupt`` inside the block, even when SIGINT
+    came in ignored, as a shell leaves it for a ``&`` job: QEMU runs in its own session,
+    so the follow loop is the only way either signal reaches the instance."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {
+        sig: signal.signal(sig, signal.default_int_handler)
+        for sig in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, signal.SIG_DFL if handler is None else handler)
+
+
 def follow(
     instance: Instance,
     out: TextIO,
@@ -431,25 +451,26 @@ def follow(
     process: subprocess.Popen[bytes] | None = None,
     tail: bool = False,
 ) -> bool:
-    """Copy the console to *out* until QEMU exits (``False``) or Ctrl-C, which stops the
-    instance (``True``). *process* is QEMU as :func:`launch` started it, whose exit status
+    """Copy the console to *out* until QEMU exits (``False``) or Ctrl-C or SIGTERM, which
+    stops the instance (``True``). *process* is QEMU as :func:`launch` started it, whose exit status
     the receipt then records; *tail* starts at the console's end rather than at boot."""
     console = instance.path / CONSOLE
     offset = console.stat().st_size if tail and console.is_file() else 0
     try:
-        while True:
-            if console.is_file():
-                with console.open("rb") as handle:
-                    handle.seek(offset)
-                    chunk = handle.read()
-                offset += len(chunk)
-                if chunk:
-                    out.write(chunk.decode("utf-8", errors="replace"))
-                    out.flush()
-            running = process.poll() is None if process is not None else alive(instance)
-            if not running:
-                break
-            time.sleep(POLL)
+        with _ctrl_c():
+            while True:
+                if console.is_file():
+                    with console.open("rb") as handle:
+                        handle.seek(offset)
+                        chunk = handle.read()
+                    offset += len(chunk)
+                    if chunk:
+                        out.write(chunk.decode("utf-8", errors="replace"))
+                        out.flush()
+                running = process.poll() is None if process is not None else alive(instance)
+                if not running:
+                    break
+                time.sleep(POLL)
     except KeyboardInterrupt:
         stop(instance)
         return True
