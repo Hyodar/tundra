@@ -72,9 +72,8 @@ RTMR3 is outside every policy: no event schema is defined for it, and each build
 under `unchecked`. MRTD and RTMR0 values carry the firmware they belong to, and an MRTD and
 an RTMR0 from different firmware never match together.
 
-Every package in the UKI comes from one pinned Debian snapshot, so the snapshot is part
-of the measured identity. A moved snapshot is a new image, whose measurements need
-approving again.
+Every package in the UKI comes from one pinned Debian snapshot: a moved snapshot is a
+new image, whose measurements need approving again.
 
 `attest` says `trusted` only when a `tdxs` validator accepted the quote's signature, the
 quote binds the fresh nonce, and MRTD, RTMR0, RTMR1 and RTMR2 each matched an accepted
@@ -116,6 +115,10 @@ sends a fresh nonce and refuses evidence for another nonce (a replay) or another
 than its session's (a relay), then judges the quote; on success it writes the bound host
 keys as `known_hosts`. `secrets deliver` and `unlock`
 verify again and write only on that session, with its nonce, once per value per boot.
+With an `OperatorKey` volume each write is also signed over its nonce by the SSH key the
+first signed write pinned in the volume's LUKS2 header, so after a reboot the endpoint
+refuses any other key. The header is plaintext, so the client also refuses a volume back
+without the owner its receipt names; a lost key means a new volume.
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|
@@ -162,7 +165,7 @@ More limits that are not platform-specific:
 ## Recovery
 
 The model is replacement, never repair: a new VM from an approved build, with the
-persistent volumes moved to it. There are no in-place package upgrades and no A/B slots.
+persistent volumes moved to it; no in-place upgrades, no A/B slots.
 State that matters lives on a `Volume`; everything else is rebuilt from the build
 directory.
 
@@ -178,13 +181,12 @@ directory.
 5. Unlock the candidate's `OperatorKey` volumes.
 6. Wait for application readiness.
 
-Downtime runs from step 3 to step 6. A stateful service cannot be ready before it owns its
-volume, so readiness comes after the move. The command refuses Azure and a build whose
+Downtime runs from step 3 to step 6: a stateful service is not ready before it owns its
+volume. The command refuses Azure and a build whose
 volumes differ from the instance's in name or unlock kind. If the candidate fails
 attestation, the old instance keeps running with its volumes. `deploy rollback INSTANCE`
-runs the same workflow back to the instance it replaced. Retiring the old policy once the
-rollback window closes is the operator's job. Schema migrations of the data stay explicit
-and are yours.
+runs the same workflow back to the instance it replaced. Retiring the old policy and
+migrating the data are yours.
 
 Approve the new build's policy before the upgrade: copy its `measurements.json` record into
 `policies/`, add the platform approvals, review `tundravm show --diff OLD NEW`, commit.
@@ -200,24 +202,24 @@ $ tundravm secrets unlock attested-node-2 data
 $ tundravm secrets deliver attested-node-2 --policy policies/attested-node-gcp.json logs-client=@logs-client.pem
 ```
 
-Make sure the old instance is stopped first: two instances must never hold one volume.
+Stop the old instance first: two instances must never hold one volume.
 
 ### When an unlock fails
 
-Never reformat. The image formats a volume only while it carries no initialisation token,
-and an unlock failure is never permission to format. A volume that does not open stays
-closed, and every service bound to it waits. That is the safe state; keep it.
+Never reformat: the image formats a volume only while it carries no initialisation
+token. A volume that does not open stays
+closed and its services wait: the safe state; keep it.
 
 1. Read why: `tundravm deploy logs INSTANCE` (or `run logs`) shows the serial console,
    including `runtime-init-keys` and `runtime-init-disks`.
 2. Check the instance runs the build you expect: `tundravm attest INSTANCE --policy FILE`.
    A different build is a deployment mistake, not a disk problem.
-3. Send the passphrase again with `tundravm secrets unlock INSTANCE VOLUME`. A typo is the
+3. Send the passphrase again (`tundravm secrets unlock INSTANCE VOLUME`): typos are the
    usual cause.
 4. If the disk is attached elsewhere, or an upgrade stopped half-way, stop the other
    instance, then reattach with `deploy --volume NAME=existing:ID`.
 5. A `TpmSeal` volume whose vTPM state is gone does not open again. Keep the disk, restore
    the data from your own backup onto a new volume, and retire the old one deliberately.
 
-Do not attach a volume to an instance you have not attested, and do not create a new
-volume over a name whose old disk you still need: `create:` makes a new, empty disk.
+Never attach a volume to an unattested instance, and never `create:` (a new, empty disk)
+over a name whose old disk you still need.

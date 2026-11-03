@@ -103,6 +103,8 @@ $ tundravm secrets deliver attested-node-1 --policy policies/attested-node-gcp.j
 
 Each command attests again on its own session and writes only on it. `unlock` reads the
 passphrase from stdin, else a prompt. Values never go on argv, in a log or in a receipt.
+An `OperatorKey` volume takes them signed by its owner's key only, the one `attest
+--identity` used first, and `run status` names its fingerprint.
 [Delivering secrets](manual.md#delivering-secrets) says what each build and mode
 releases on.
 

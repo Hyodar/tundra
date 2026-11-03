@@ -65,7 +65,10 @@ class OperatorKey(Keywords):
     stays closed, and every service bound to it waits, until it arrives. Today the image
     waits on a FIFO (``/run/tundravm/unlock/<volume>``, ``key-gen``'s pipe strategy) that
     the attested endpoint writes (``POST /unlock``) on a session a fresh quote bound. The
-    endpoint keeps nothing on the volume, so the control plane works before it opens.
+    volume's LUKS2 header pins who operates the instance: the SSH key of the first signed
+    write, whose signature over the session's nonce every later write needs, after every
+    reboot (``tundravm secrets rotate`` hands it to another key; a lost key means a new
+    volume). The control plane still answers before the volume opens.
     """
 
     def manifest(self) -> dict[str, object]:
