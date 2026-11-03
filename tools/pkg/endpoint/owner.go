@@ -202,8 +202,16 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 	answer(w, map[string]string{"owner": owner.Fingerprint(key)})
 }
 
-// writeSSHKey makes key the one authorized_keys line (and KeyPath's blob).
+// writeSSHKey makes key the one authorized_keys line: root's (and KeyPath's blob), or the
+// login's, restricted, which sshd reads as that login (0644).
 func (s *Server) writeSSHKey(key string) error {
+	if s.cfg.SSH.Login != "" {
+		path := filepath.Join(s.cfg.LoginKeys, s.cfg.SSH.Login)
+		return writeAtomic(path, []byte("restrict "+key+"\n"), 0o644, "")
+	}
+	if err := os.MkdirAll(s.cfg.SSH.Dir, 0o700); err != nil {
+		return err
+	}
 	fields := strings.Fields(key)
 	line := []byte(keyRestrictions + " " + key + "\n")
 	if err := writeAtomic(filepath.Join(s.cfg.SSH.Dir, authorizedKeys), line, 0o600, ""); err != nil {

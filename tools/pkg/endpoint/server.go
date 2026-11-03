@@ -45,6 +45,8 @@ type Accepts struct {
 	Credentials []string `json:"credentials"`
 	Volumes     []string `json:"volumes"`
 	SSHKey      bool     `json:"ssh_key"`
+	// SSHLogin is the account the SSH key logs in as when it is not root.
+	SSHLogin string `json:"ssh_login,omitempty"`
 	// Owner is there in an image that pins its operator (an OperatorKey() volume): who
 	// owns it, whose signature every write needs.
 	Owner *OwnerState `json:"owner,omitempty"`
@@ -218,7 +220,7 @@ func sessionOf(r *http.Request) *session {
 
 func (s *Server) accepts() Accepts {
 	found := Accepts{
-		Credentials: []string{}, Volumes: []string{}, SSHKey: s.takesSSHKey(), Owner: s.ownerState(),
+		Credentials: []string{}, Volumes: []string{}, SSHKey: s.takesSSHKey(), SSHLogin: s.sshLogin(), Owner: s.ownerState(),
 	}
 	seen := map[string]bool{}
 	for _, c := range s.cfg.Credentials {
@@ -251,6 +253,14 @@ func (s *Server) mode() string {
 // rewrite the plaintext header that names an owner.
 func (s *Server) takesSSHKey() bool {
 	return s.cfg.SSH != nil && s.takesLoginKey()
+}
+
+// sshLogin is the login POST /ssh-key writes the key for, "" for root or none.
+func (s *Server) sshLogin() string {
+	if s.cfg.SSH == nil {
+		return ""
+	}
+	return s.cfg.SSH.Login
 }
 
 // takesLoginKey is whether a key that logs in may be installed: in a simulated boot, or
@@ -527,10 +537,6 @@ func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.sshKey != "" {
 		fail(w, http.StatusConflict, "another operator key was taken this boot")
-		return
-	}
-	if err := os.MkdirAll(s.cfg.SSH.Dir, 0o700); err != nil {
-		fail(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 	if err := s.writeSSHKey(key); err != nil {

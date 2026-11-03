@@ -31,7 +31,8 @@ type Config struct {
 	// AttestedTLS are the attested TLS ports whose certificate key the quote binds, kept
 	// in ascending port order.
 	AttestedTLS []Listener `yaml:"attested_tls"`
-	// SSH is where POST /ssh-key writes the operator's key; nil takes none.
+	// SSH is where POST /ssh-key writes the operator's key: root's authorized_keys or one
+	// login's; nil takes none.
 	SSH *SSHConfig `yaml:"ssh"`
 	// LoginKeys is sshd's directory of each login's authorized keys: a credential landing
 	// there (or in SSH.Dir) is a key that logs in, gated as POST /ssh-key is. Default
@@ -69,15 +70,21 @@ type Volume struct {
 	Owner string `yaml:"owner"`
 }
 
-// SSHConfig is where the operator's SSH key goes.
+// SSHConfig is where the operator's SSH key goes: root's Dir, or the file of the Login
+// the owner's key logs in as (LoginKeys/<login>), never both.
 type SSHConfig struct {
-	// Dir holds authorized_keys.
+	// Dir holds root's authorized_keys.
 	Dir string `yaml:"dir"`
 	// KeyPath, when set, also receives the key's base64 blob.
 	KeyPath string `yaml:"key_path"`
+	// Login is the account the key logs in as instead of root.
+	Login string `yaml:"login"`
 }
 
-var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+var (
+	namePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+	loginPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+)
 
 // LoadConfig reads and validates the configuration at path.
 func LoadConfig(path string) (*Config, error) {
@@ -139,7 +146,11 @@ func (c *Config) Validate() error {
 	if c.LoginKeys == "" {
 		c.LoginKeys = "/etc/ssh/authorized_keys.d"
 	}
-	if c.SSH != nil && !filepath.IsAbs(c.SSH.Dir) {
+	if c.SSH != nil && c.SSH.Login != "" {
+		if c.SSH.Dir != "" || c.SSH.KeyPath != "" || !loginPattern.MatchString(c.SSH.Login) {
+			return fmt.Errorf("ssh.login %q is not an account name, or comes with dir or key_path", c.SSH.Login)
+		}
+	} else if c.SSH != nil && !filepath.IsAbs(c.SSH.Dir) {
 		return fmt.Errorf("ssh.dir %q is not absolute", c.SSH.Dir)
 	}
 	ports := map[int]bool{}

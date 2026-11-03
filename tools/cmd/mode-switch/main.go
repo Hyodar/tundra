@@ -3,6 +3,9 @@
 // the boot's log and loads the mode's nft transaction, and it closes a window once the mode
 // has lasted its time on CLOCK_BOOTTIME. It opens no network socket.
 //
+// mode-switch to MODE asks the daemon for a switch on its socket, as the endpoint does, so a
+// root caller (a Login's Sudo entry) switches locally; RTMR3 holds that switch as any other.
+//
 // mode-switch status prints the mode in force, the switches since boot and whether the
 // RTMR3 the evidence service reports is the log's replay; it exits 1 when it is not.
 package main
@@ -206,6 +209,16 @@ func status(config string) error {
 	return nil
 }
 
+// to asks the daemon on its socket to switch to mode and says what it did.
+func to(mode string) error {
+	result, err := modes.Ask(context.Background(), modes.SocketPath, mode)
+	if err != nil {
+		return err
+	}
+	announce(*result)
+	return nil
+}
+
 func main() {
 	var config string
 	root := &cobra.Command{
@@ -222,6 +235,12 @@ func main() {
 		Short: "The mode in force, the switches since boot, and whether RTMR3 replays them",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return status(config) },
+	})
+	root.AddCommand(&cobra.Command{
+		Use:   "to MODE",
+		Short: "Switch to MODE through the daemon, extended into RTMR3 like the endpoint's switches",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(_ *cobra.Command, args []string) error { return to(args[0]) },
 	})
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "mode-switch: %v\n", err)

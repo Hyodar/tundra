@@ -284,3 +284,33 @@ func TestDeliveredValuesLandWhereTheConfigSays(t *testing.T) {
 		t.Fatalf("authorized_keys is %q", keys)
 	}
 }
+
+func TestAnSSHKeyForALoginLandsInItsFileAndNotRoots(t *testing.T) {
+	f := start(t)
+	f.server.cfg.SSH = &SSHConfig{Login: "tenant"}
+	f.server.cfg.LoginKeys = filepath.Join(f.dir, "authorized_keys.d")
+	c := f.session()
+	evidence, _ := f.evidence(c, nonce(14))
+	if !evidence.Accepts.SSHKey || evidence.Accepts.SSHLogin != "tenant" {
+		t.Fatalf("accepts %+v", evidence.Accepts)
+	}
+	if status, body := f.post(c, "/ssh-key", map[string]string{"nonce": nonce(14), "key": "ssh-ed25519 AAAAop op@host"}); status != http.StatusOK {
+		t.Fatalf("ssh-key: %d %s", status, body)
+	}
+	path := filepath.Join(f.dir, "authorized_keys.d", "tenant")
+	keys, _ := os.ReadFile(path)
+	info, err := os.Stat(path)
+	must(t, err)
+	if string(keys) != "restrict ssh-ed25519 AAAAop\n" || info.Mode().Perm() != 0o644 {
+		t.Fatalf("%s is %q mode %v", path, keys, info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "ssh")); !os.IsNotExist(err) {
+		t.Fatalf("root's ssh directory was made: %v", err)
+	}
+	for _, bad := range []SSHConfig{{Login: "Root"}, {Login: "tenant", Dir: "/root/.ssh"}} {
+		cfg := Config{QuoteSocket: "/x", SSH: &bad}
+		if cfg.Validate() == nil {
+			t.Errorf("Validate accepted ssh %+v", bad)
+		}
+	}
+}

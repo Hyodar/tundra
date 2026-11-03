@@ -1,16 +1,13 @@
 package endpoint
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"net/http"
 	"slices"
-	"time"
 
 	"github.com/Hyodar/tundra/tools/pkg/modes"
 )
@@ -119,7 +116,7 @@ func (s *Server) switchMode(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.authorize(w, userData, req.Signed); !ok {
 		return
 	}
-	done, err := askSwitcher(r.Context(), s.cfg.ModeSocket, req.Mode)
+	done, err := modes.Ask(r.Context(), s.cfg.ModeSocket, req.Mode)
 	if err != nil {
 		s.log.Error("no switch", "mode", req.Mode, "error", err)
 		fail(w, http.StatusConflict, "%v", err)
@@ -127,37 +124,4 @@ func (s *Server) switchMode(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("firewall mode switched", "mode", done.Mode, "at", done.At)
 	answer(w, done)
-}
-
-// askSwitcher sends one switch to mode-switch and reads its answer.
-func askSwitcher(ctx context.Context, path, mode string) (*modes.Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "unix", path)
-	if err != nil {
-		return nil, fmt.Errorf("mode-switch %s: %w\nfix: systemctl status mode-switch.service in the guest", path, err)
-	}
-	defer conn.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
-	if err := json.NewEncoder(conn).Encode(map[string]string{"mode": mode}); err != nil {
-		return nil, err
-	}
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil && len(line) == 0 {
-		return nil, fmt.Errorf("mode-switch %s: %w", path, err)
-	}
-	var said struct {
-		Data  *modes.Result `json:"data"`
-		Error string        `json:"error"`
-	}
-	if err := json.Unmarshal(line, &said); err != nil {
-		return nil, fmt.Errorf("mode-switch answered no JSON: %w", err)
-	}
-	if said.Data == nil {
-		return nil, errors.New(said.Error)
-	}
-	return said.Data, nil
 }
