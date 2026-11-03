@@ -359,8 +359,12 @@ Cloudflare's pair by default: no target cloud's resolver speaks TLS. The firewal
 credential=, export=))` ships the journal and node metrics. Without `url=` each goes to a
 receiver in the guest (`journal-sink`, `metrics-sink`). Once `url=` is set, the delivered
 credential authenticates the export. An `http://` sink warns. Only the series on the
-`export=` keep-list leave, with the image's identity
-([a task](howto.md#keep-only-some-metrics)).
+`export=` keep-list leave, with the image's identity. `rules=[RecordingRule("box:up",
+"min(up)")]` computes series in the guest, so `export=` can name booleans in place of raw
+series ([a task](howto.md#ship-booleans-not-raw-series)). A record name has a colon, and
+`promtool check rules` checks the expressions at build time. With rules Prometheus runs in
+server mode, its query API on the loopback. `image-metrics` logs the digest and RTMR0-3 at
+boot.
 `Observability(proxy="IP:PORT")` reaches every sink through that one address.
 
 ### The firewall and its modes

@@ -1,5 +1,7 @@
 global:
   scrape_interval: 10s
+  evaluation_interval: 10s
+rule_files: [/etc/tundravm/metrics-rules.yml]
 scrape_configs:
   - job_name: node
     static_configs:
@@ -9,7 +11,7 @@ remote_write:
     proxy_url: http://127.0.0.1:19582
     write_relabel_configs:
       - source_labels: [__name__]
-        regex: "up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
+        regex: "fixture:memory_available_over_10_percent|fixture:node_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
         action: keep
     queue_config:
       capacity: 10000

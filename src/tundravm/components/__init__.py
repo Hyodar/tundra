@@ -16,8 +16,8 @@ findings, a lint rule ``tundravm check`` runs, of the codes the class declares a
 - Ways in for people: :class:`SshAccess` (root, and each non-root :class:`Login` with its
   :class:`Sudo` rules), :class:`DevAccess` (``image.dev``).
 - :class:`Container`: a program in a Debian root of its own, built with the image.
-- :class:`Observability` with :class:`JournalExport`, :class:`PrometheusRemoteWrite` and
-  :class:`Proxy` (``image.observability``).
+- :class:`Observability` with :class:`JournalExport`, :class:`PrometheusRemoteWrite` (its
+  :class:`RecordingRule` values) and :class:`Proxy` (``image.observability``).
 
 Application components are the project's own, written against this module: the
 example's Nethermind and Lighthouse live in ``examples/attested-node/components/``.
@@ -49,7 +49,13 @@ from ._base import (
     TeeBase,
 )
 from ._container import Container
-from ._observability import JournalExport, Observability, PrometheusRemoteWrite, Proxy
+from ._observability import (
+    JournalExport,
+    Observability,
+    PrometheusRemoteWrite,
+    Proxy,
+    RecordingRule,
+)
 
 __all__ = [
     "EVIDENCE",
@@ -68,6 +74,7 @@ __all__ = [
     "Observability",
     "PrometheusRemoteWrite",
     "Proxy",
+    "RecordingRule",
     "Resolved",
     "Rule",
     "ServiceReady",

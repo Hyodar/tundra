@@ -9,10 +9,12 @@ buffers, retry on their own, and are required by nothing, so an exporter that ca
 reach its sink never holds an application back. Either without a ``url`` ships to a
 receiver in the guest, so a dev boot shows the export working before the deployment's
 receiver is known. The metrics always carry the image's identity, which ``image-metrics``
-(``tools/cmd/image-metrics``) writes for the node exporter. ``proxy="IP:PORT"`` sends both
-through
-one fixed-address proxy, the only destination a filtered egress then needs, and
-``proxy=Proxy(address, port, tls_name=...)`` through one that speaks TLS itself.
+(``tools/cmd/image-metrics``) writes for the node exporter. ``rules=`` computes
+:class:`RecordingRule` series in the guest, so ``export=`` can ship derived booleans in place
+of raw series; Prometheus then runs in server mode, which evaluates rules and agent mode
+does not. ``proxy="IP:PORT"`` sends both through one fixed-address proxy, the only
+destination a filtered egress then needs, and ``proxy=Proxy(address, port, tls_name=...)``
+through one that speaks TLS itself.
 """
 
 from __future__ import annotations
@@ -36,7 +38,14 @@ from tundravm.errors import ValidationError
 
 from .._keywords import Keywords
 
-__all__ = ["EXPORT_PRESETS", "JournalExport", "Observability", "PrometheusRemoteWrite", "Proxy"]
+__all__ = [
+    "EXPORT_PRESETS",
+    "JournalExport",
+    "Observability",
+    "PrometheusRemoteWrite",
+    "Proxy",
+    "RecordingRule",
+]
 
 LOGS_SERVICE = "journal-export"
 """The journal uploader's service."""
@@ -46,6 +55,9 @@ METRICS_SERVICE = "metrics-export"
 
 METRICS_CONFIG = "/etc/tundravm/metrics-export.yml"
 """The Prometheus agent's configuration."""
+
+METRICS_RULES = "/etc/tundravm/metrics-rules.yml"
+"""The recording rules Prometheus evaluates when ``rules=`` declares some."""
 
 SINK_SERVICE = "journal-sink"
 """The in-guest receiver a :class:`JournalExport` without a URL uploads to."""
@@ -325,6 +337,37 @@ class JournalExport(Keywords):
 
 
 @dataclass(frozen=True, slots=True)
+class RecordingRule(Keywords):
+    """A series the guest computes from others: ``RecordingRule("node:up", "min(up)")``.
+
+    *record* is the new series' name, with a colon (``level:metric``) as Prometheus names
+    recorded series and no exporter does, so it never shadows a raw one. *expr* is PromQL,
+    checked by ``promtool check rules`` in the image at build time. A rule reads the series
+    the scrape collects and the rules declared before it.
+    """
+
+    record: str
+    expr: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.record, str)
+            or not _SERIES.fullmatch(self.record)
+            or ":" not in self.record
+        ):
+            raise ValidationError(
+                f"RecordingRule: record {self.record!r} is not a series name with a colon.",
+                hint="Name it level:metric, as Prometheus names recorded series: "
+                "'node:disk_free_over_10_percent'.",
+            )
+        if not isinstance(self.expr, str) or not self.expr.strip() or "\0" in self.expr:
+            raise ValidationError(
+                f"RecordingRule {self.record}: expr {self.expr!r} is not a PromQL expression.",
+                hint="Pass the expression as text: 'min(up{job=\"node\"})'.",
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class PrometheusRemoteWrite(Keywords):
     """Send node metrics to *url*, a Prometheus remote-write receiver.
 
@@ -333,13 +376,20 @@ class PrometheusRemoteWrite(Keywords):
     of samples it could not send; in memory, at most four shards of 10000 samples wait,
     retried from one second to one minute apart, a 429 included.
 
-    *export* is the keep-list: series names and the presets of :data:`EXPORT_PRESETS`
-    (``"health"``) by name, and always :data:`IDENTITY_SERIES`, so an operator tells which
-    image a series came from. The agent drops every other series before the write
-    (``write_relabel_configs``), since raw series from a TEE are a side channel;
-    ``export=[]`` sends the identity alone. Without *export* it keeps ``health``, and
-    ``observability-export-unset`` reports it: an error in a production profile that
+    *export* is the keep-list: series names, the outputs of *rules* and the presets of
+    :data:`EXPORT_PRESETS` (``"health"``) by name, and always :data:`IDENTITY_SERIES`, so an
+    operator tells which image a series came from. The agent drops every other series
+    before the write (``write_relabel_configs``), since raw series from a TEE are a side
+    channel; ``export=[]`` sends the identity alone. Without *export* it keeps ``health``,
+    and ``observability-export-unset`` reports it: an error in a production profile that
     writes to *url*, a warning where nothing leaves the VM.
+
+    *rules* are :class:`RecordingRule` values, evaluated every *interval* in their order:
+    what the guest derives, the booleans ``export=`` names in place of the raw series they
+    read. A rule not in ``export=`` stays in the guest; an ``export=`` name with a colon
+    must be a rule's. Agent mode evaluates no rules, so with *rules* Prometheus runs in
+    server mode: a local store under ``/var/lib/metrics-export`` keeps *buffer* of samples,
+    and its query API listens on the loopback only.
 
     Without *url* the receiver is in the guest: ``metrics-sink``, Prometheus with its
     remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A dev
@@ -353,6 +403,7 @@ class PrometheusRemoteWrite(Keywords):
     interval: str = "30s"
     buffer: str = "1h"
     export: str | Sequence[str] | None = None
+    rules: Sequence[RecordingRule] = ()
 
     def __post_init__(self) -> None:
         if self.url is not None:
@@ -365,17 +416,47 @@ class PrometheusRemoteWrite(Keywords):
                     f"PrometheusRemoteWrite: {what} {value!r} is not a duration such as '30s'.",
                     hint="Use a number with s, m or h: '30s', '1h'.",
                 )
+        rules = self.rules
+        hint = 'Pass rules=[RecordingRule("node:up", "min(up)")].'
+        if isinstance(rules, (str, RecordingRule)) or not isinstance(rules, Sequence):
+            raise ValidationError(
+                f"PrometheusRemoteWrite: rules= holds {rules!r}, not a list of RecordingRule.",
+                hint=hint,
+            )
+        object.__setattr__(self, "rules", tuple(rules))
+        recorded: set[str] = set()
+        for rule in self.rules:
+            if not isinstance(rule, RecordingRule):
+                raise ValidationError(
+                    f"PrometheusRemoteWrite: rules= entry {rule!r} is not a RecordingRule.",
+                    hint=hint,
+                )
+            if rule.record in recorded:
+                raise ValidationError(
+                    f"PrometheusRemoteWrite: two rules record {rule.record!r}.",
+                    hint="Give each rule its own record name.",
+                )
+            recorded.add(rule.record)
         self.kept()
 
     def kept(self) -> tuple[str, ...]:
         """The series names that leave: *export* with its presets expanded (``health``
-        without one), then :data:`IDENTITY_SERIES`, in order, once each."""
+        without one), then :data:`IDENTITY_SERIES`, in order, once each. A name with a
+        colon must be one of *rules*' records."""
         export = "health" if self.export is None else self.export
         entries: Sequence[object] = (
             [export] if isinstance(export, str) or not isinstance(export, Sequence) else export
         )
         found: list[str] = []
+        recorded = {rule.record for rule in self.rules}
         for entry in entries:
+            if isinstance(entry, str) and ":" in entry and entry not in recorded:
+                raise ValidationError(
+                    f"PrometheusRemoteWrite: export entry {entry!r} is a recorded series no "
+                    "rule records, so nothing would carry it.",
+                    hint=f'Declare it: rules=[RecordingRule("{entry}", "...")], or drop it '
+                    "from export=.",
+                )
             if isinstance(entry, str) and entry in EXPORT_PRESETS:
                 found.extend(EXPORT_PRESETS[entry])
             elif isinstance(entry, str) and _SERIES.fullmatch(entry):
@@ -417,28 +498,40 @@ class PrometheusRemoteWrite(Keywords):
             "max_backoff": "1m",
             "retry_on_http_429": True,
         }
-        return {
-            "global": {"scrape_interval": self.interval},
-            "scrape_configs": [
-                {"job_name": "node", "static_configs": [{"targets": ["127.0.0.1:9100"]}]}
-            ],
-            "remote_write": [remote],
-        }
+        timing = {"scrape_interval": self.interval}
+        if self.rules:
+            timing["evaluation_interval"] = self.interval
+        config: dict[str, object] = {"global": timing}
+        if self.rules:
+            config["rule_files"] = [METRICS_RULES]
+        config["scrape_configs"] = [
+            {"job_name": "node", "static_configs": [{"targets": ["127.0.0.1:9100"]}]}
+        ]
+        config["remote_write"] = [remote]
+        return config
+
+    def rules_file(self) -> dict[str, object]:
+        """:data:`METRICS_RULES`: *rules* as one group, in their order."""
+        rules = [{"record": rule.record, "expr": rule.expr} for rule in self.rules]
+        return {"groups": [{"name": "tundravm", "rules": rules}]}
 
     def service(self, proxy: Proxy | None = None) -> Service:
-        """The ``metrics-export`` service: Prometheus in agent mode, through *proxy*;
-        without *url*, to the in-guest :meth:`sink`, never through a proxy."""
+        """The ``metrics-export`` service: Prometheus in agent mode, in server mode with
+        *rules*, through *proxy*; without *url*, to the in-guest :meth:`sink`, never through a
+        proxy."""
         local = self.url is None
         steps = () if local else _start_steps(proxy)
         credential = None if local else self.credential
+        mode, store = ([], "tsdb") if self.rules else (["--enable-feature=agent"], "agent")
+        retention = "retention.time" if self.rules else "retention.max-time"
         return Service(
             METRICS_SERVICE,
             [
                 "/usr/bin/prometheus",
-                "--enable-feature=agent",
+                *mode,
                 f"--config.file={METRICS_CONFIG}",
-                "--storage.agent.path=/var/lib/metrics-export",
-                f"--storage.agent.retention.max-time={self.buffer}",
+                f"--storage.{store}.path=/var/lib/metrics-export",
+                f"--storage.{store}.{retention}={self.buffer}",
                 "--web.listen-address=127.0.0.1:9090",
             ],
             requires=[self.sink().endpoint(METRICS_SINK_PORT)] if local else [],
@@ -561,6 +654,10 @@ class Observability(Component):
             yield dm.Unit("prometheus.service", masked=True)
             config = self.metrics.config(proxy)
             yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
+            if self.metrics.rules:
+                yield ConfigFile.yaml(METRICS_RULES, self.metrics.rules_file(), sort_keys=False)
+                check = f"mkosi-chroot promtool check rules {METRICS_RULES}"
+                yield dm.Hook("metrics-export-rules", "postinst", check)
             yield ConfigFile.env(
                 _NODE_EXPORTER_DEFAULTS,
                 {

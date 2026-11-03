@@ -1,0 +1,9 @@
+groups:
+  - name: tundravm
+    rules:
+      - record: local:memory_available_ratio
+        expr: "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes"
+      - record: fixture:memory_available_over_10_percent
+        expr: "local:memory_available_ratio > bool 0.1"
+      - record: fixture:node_up
+        expr: "min(up{job=\"node\"})"

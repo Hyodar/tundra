@@ -107,3 +107,35 @@ func TestRender(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentityLines(t *testing.T) {
+	report := make([]byte, 1024)
+	report[rtmrOffset+3*rtmrSize] = 0x04
+	cases := []struct {
+		name string
+		id   identity
+		want []string
+	}{
+		{
+			"tdx",
+			identity{image: "fixture", digest: "sha384:bb", rtmrs: reportRTMRs(report), mode: "tdx"},
+			[]string{
+				"image fixture, digest sha384:bb, mode tdx",
+				"RTMR0 " + strings.Repeat("00", 48),
+				"RTMR1 " + strings.Repeat("00", 48),
+				"RTMR2 " + strings.Repeat("00", 48),
+				"RTMR3 04" + strings.Repeat("00", 47),
+			},
+		},
+		{
+			"simulated",
+			identity{image: "fixture", digest: "unmeasured", mode: "simulated"},
+			[]string{"image fixture, digest unmeasured, mode simulated", "RTMRs unread: no TDX report"},
+		},
+	}
+	for _, c := range cases {
+		if got := c.id.lines(); strings.Join(got, "\n") != strings.Join(c.want, "\n") {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

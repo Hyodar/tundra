@@ -10,27 +10,34 @@ ok() { passed=$((passed + 1)); say "$check ok $*"; }
 fail() { failed=$((failed + 1)); say "$check fail $*"; }
 skip() { say "$check skip $*"; }
 probe_series() {
+    sink=$1
+    keep=$2
+    shift 2
     if ! command -v promtool >/dev/null 2>&1; then
-        skip "no promtool in the image to ask the sink $1"
+        skip "no promtool in the image to ask the sink $sink"
         return
     fi
     waited=0
     while :; do
-        names=$(promtool query labels "$1" __name__ 2>/dev/null) || names=
-        printf '%s\n' "$names" | grep -qx tundravm_image_digest && break
+        names=$(promtool query labels "$sink" __name__ 2>/dev/null) || names=
+        missing=
+        for name in "$@"; do
+            printf '%s\n' "$names" | grep -qxF "$name" || missing="$missing $name"
+        done
+        [ -z "$missing" ] && break
         if [ "$waited" -ge 90 ]; then
-            fail "the sink at $1 holds no tundravm_image_digest after 90s: journalctl -u image-metrics -u metrics-export says why"
+            fail "the sink at $sink holds no$missing after 90s: a rule whose expression selects nothing records nothing; journalctl -u image-metrics -u metrics-export says why"
             return
         fi
         sleep 1
         waited=$((waited + 1))
     done
-    dropped=$(printf '%s\n' "$names" | grep -Evx "$2" | tr '\n' ' ')
+    dropped=$(printf '%s\n' "$names" | grep -Evx "$keep" | tr '\n' ' ')
     if [ -n "$dropped" ]; then
-        fail "the sink at $1 holds series the keep-list drops: $dropped"
+        fail "the sink at $sink holds series the keep-list drops: $dropped"
         return
     fi
-    ok "the sink at $1 holds tundravm_image_digest and $(printf '%s\n' "$names" | grep -c .) series, each one export= keeps"
+    ok "the sink at $sink holds only what export= keeps: $(printf '%s\n' "$names" | grep . | tr '\n' ' ')"
 }
 probe_cmdline() {
     line=" $(cat /proc/cmdline) "
@@ -392,11 +399,11 @@ probe_upload() {
 }
 probe_agent() {
     if command -v promtool >/dev/null 2>&1; then
-        if ! said=$(promtool check config --agent --syntax-only "$2" 2>&1); then
-            fail "promtool check config --agent $2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
+        if ! said=$(promtool check config ${3:-} --syntax-only "$2" 2>&1); then
+            fail "promtool check config ${3:+$3 }$2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
             return
         fi
-        parsed="promtool check config --agent accepts $2"
+        parsed="promtool check config ${3:+$3 }accepts $2"
     else
         waited=0
         while :; do
@@ -715,7 +722,7 @@ probe_upload journal-export.service 'http://127.0.0.2:19580' /var/lib/journal-ex
 check=observability:metrics-export.service
 probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
-probe_series 'http://127.0.0.2:19581' 'up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode'
+probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up'
 check=observability:no-wait
 probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-forward-8081.service sink.service token.service go-probe.service rust-probe.service
 check=observability:egress

@@ -41,6 +41,7 @@ from tundravm.components import (
     Network,
     Observability,
     PrometheusRemoteWrite,
+    RecordingRule,
     SshAccess,
     Sudo,
 )
@@ -99,15 +100,32 @@ class Programs(Component):
 LOGS_SINK = "127.0.0.2:19580"
 METRICS_SINK = "127.0.0.2:19581"
 PROXY = "127.0.0.1:19582"
+RULES = [
+    RecordingRule(
+        "local:memory_available_ratio",
+        "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes",
+    ),
+    RecordingRule(
+        "fixture:memory_available_over_10_percent", "local:memory_available_ratio > bool 0.1"
+    ),
+    RecordingRule("fixture:node_up", 'min(up{job="node"})'),
+]
 OBSERVABILITY = Observability(
     logs=JournalExport(f"http://{LOGS_SINK}"),
-    metrics=PrometheusRemoteWrite(f"http://{METRICS_SINK}/api/v1/write", interval="10s"),
+    metrics=PrometheusRemoteWrite(
+        f"http://{METRICS_SINK}/api/v1/write",
+        interval="10s",
+        rules=RULES,
+        export=["fixture:memory_available_over_10_percent", "fixture:node_up"],
+    ),
     proxy=PROXY,
 )
 """The ``dev`` profile's export path, to :data:`SINK` inside the guest through :data:`SINK`
 as its proxy too: QEMU's user network reaches nothing that would receive it. The sinks are
 on 127.0.0.2, which no client treats as the local host and sends around its proxy. Plain
-http on the loopback, which ``observability-plaintext`` reports."""
+http on the loopback, which ``observability-plaintext`` reports. Two of :data:`RULES`'
+booleans and the image's identity leave, and nothing else: the probe's
+``observability:series`` row fails on a raw series or the ``local:`` ratio at the sink."""
 
 
 DEV_SLIM = (

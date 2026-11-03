@@ -350,11 +350,11 @@ probe_upload() {
 }
 probe_agent() {
     if command -v promtool >/dev/null 2>&1; then
-        if ! said=$(promtool check config --agent --syntax-only "$2" 2>&1); then
-            fail "promtool check config --agent $2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
+        if ! said=$(promtool check config ${3:-} --syntax-only "$2" 2>&1); then
+            fail "promtool check config ${3:+$3 }$2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
             return
         fi
-        parsed="promtool check config --agent accepts $2"
+        parsed="promtool check config ${3:+$3 }accepts $2"
     else
         waited=0
         while :; do
@@ -585,7 +585,7 @@ probe_endpoint 8745 tundravm-endpoint.service
 check=observability:journal-export.service
 probe_upload journal-export.service 'https://logs.example:19532' /var/lib/journal-export/state 19532
 check=observability:metrics-export.service
-probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
+probe_agent metrics-export.service /etc/tundravm/metrics-export.yml --agent
 check=observability:no-wait
 probe_nowait journal-export.service metrics-export.service -- tdxs.service image-metrics.service app.service
 check=observability:egress

@@ -3,7 +3,7 @@ components whose exports wire into each other."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -21,6 +21,7 @@ from tundravm.components import (
     Observability,
     PrometheusRemoteWrite,
     Proxy,
+    RecordingRule,
     SshAccess,
     Tdxs,
     TeeBase,
@@ -392,6 +393,27 @@ def test_only_the_keep_list_leaves(
     assert [d.severity for d in found] == ([] if severity is None else [severity])
     with pytest.raises(ValidationError, match="neither a preset"):
         PrometheusRemoteWrite(export=["health", "node load"])
+
+
+UP = RecordingRule("node:up", "min(up)")
+
+
+@pytest.mark.parametrize(
+    ("build", "refusal"),
+    [
+        (lambda: RecordingRule("node_up", "min(up)"), "not a series name with a colon"),
+        (lambda: RecordingRule("node:up", " "), "not a PromQL expression"),
+        (lambda: PrometheusRemoteWrite(rules=UP), "not a list of RecordingRule"),  # type: ignore[arg-type]
+        (lambda: PrometheusRemoteWrite(rules=["node:up"]), "is not a RecordingRule"),  # type: ignore[list-item]
+        (lambda: PrometheusRemoteWrite(rules=[UP, UP]), "two rules record 'node:up'"),
+        (lambda: PrometheusRemoteWrite(export=["node:up"]), "no rule records"),
+    ],
+)
+def test_a_rule_records_a_colon_name_once_and_export_names_only_recorded_ones(
+    build: Callable[[], object], refusal: str
+) -> None:
+    with pytest.raises(ValidationError, match=refusal):
+        build()
 
 
 def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:

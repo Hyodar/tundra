@@ -168,21 +168,28 @@ measured payload ships it. The program runs in that root with no network but the
 Each exposed port is relayed in from the host. [Components](manual.md#components) lists
 what is refused.
 
-## Keep only some metrics
+## Ship booleans, not raw series
 
 <!-- fragment -->
 ```python
+disk = 'node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}'
+net = 'sum(rate(node_network_receive_bytes_total{device!="lo"}[5m]))'
 metrics = PrometheusRemoteWrite(
     url="https://metrics.example/api/v1/write",
     credential=Secret("metrics-token"),
-    export=["health", "node_load1"],
+    rules=[
+        RecordingRule("box:disk_free_over_10_percent", f"{disk} > bool 0.1"),
+        RecordingRule("box:network_is_up", f"{net} > bool 0"),
+        RecordingRule("box:oom_kills_count", "node_vmstat_oom_kill"),
+    ],
+    export=["box:disk_free_over_10_percent", "box:network_is_up", "box:oom_kills_count"],
 )
 ```
 
-Only the series on the `export=` keep-list leave the guest, with the image's identity
-(`tundravm_image_digest`). `"health"` is a preset: memory, disk, OOM kills, failed units
-and the like. Without `export=` the agent keeps `health`. A production profile with a `url=` and
-no `export=` fails `observability-export-unset`.
+The guest evaluates the rules; only the `export=` names leave, with the image's identity
+(`tundravm_image_digest`). A rule left out of `export=` stays in. `export=` also takes raw
+names and the `"health"` preset, its default. A production profile with a `url=` and no
+`export=` fails `observability-export-unset`.
 
 ## Open a maintenance window
 

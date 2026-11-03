@@ -751,11 +751,13 @@ def _observability(
     if metrics is not None:
         unit = metrics_unit
         config = _flag(metrics.exec_start, "--config.file")
+        argv = metrics.exec_start
+        agent = "--enable-feature=agent" in (argv.split() if isinstance(argv, str) else argv)
         checks.append(
             Check(
                 f"observability:{unit}",
                 f"{unit} is active; Prometheus takes {config} (promtool, else its log)",
-                f"probe_agent {unit} {config}",
+                f"probe_agent {unit} {config}{' --agent' if agent else ''}",
                 "agent",
                 (unit,),
             )
@@ -764,11 +766,12 @@ def _observability(
         written = None if rendered is None else _remote_write(str(rendered.content))
         if written is not None:
             sink, keep = written
+            held = ["tundravm_image_digest", *(name for name in keep.split("|") if ":" in name)]
             checks.append(
                 Check(
                     "observability:series",
-                    f"the sink at {sink} holds tundravm_image_digest and only series {keep} keeps",
-                    f"probe_series {_quote(sink)} {_quote(keep)}",
+                    f"the sink at {sink} holds {', '.join(held)} and only series {keep} keeps",
+                    " ".join(["probe_series", _quote(sink), _quote(keep), *map(_quote, held)]),
                     "series",
                     (unit,),
                 )
@@ -906,27 +909,34 @@ skip() {{ say "$check skip $*"; }}
 _HELPERS: dict[str, str] = {
     "series": f"""\
 probe_series() {{
+    sink=$1
+    keep=$2
+    shift 2
     if ! command -v promtool >/dev/null 2>&1; then
-        skip "no promtool in the image to ask the sink $1"
+        skip "no promtool in the image to ask the sink $sink"
         return
     fi
     waited=0
     while :; do
-        names=$(promtool query labels "$1" __name__ 2>/dev/null) || names=
-        printf '%s\\n' "$names" | grep -qx tundravm_image_digest && break
+        names=$(promtool query labels "$sink" __name__ 2>/dev/null) || names=
+        missing=
+        for name in "$@"; do
+            printf '%s\\n' "$names" | grep -qxF "$name" || missing="$missing $name"
+        done
+        [ -z "$missing" ] && break
         if [ "$waited" -ge {3 * WAIT_SECONDS} ]; then
-            fail "the sink at $1 holds no tundravm_image_digest after {3 * WAIT_SECONDS}s: journalctl -u image-metrics -u metrics-export says why"
+            fail "the sink at $sink holds no$missing after {3 * WAIT_SECONDS}s: a rule whose expression selects nothing records nothing; journalctl -u image-metrics -u metrics-export says why"
             return
         fi
         sleep 1
         waited=$((waited + 1))
     done
-    dropped=$(printf '%s\\n' "$names" | grep -Evx "$2" | tr '\\n' ' ')
+    dropped=$(printf '%s\\n' "$names" | grep -Evx "$keep" | tr '\\n' ' ')
     if [ -n "$dropped" ]; then
-        fail "the sink at $1 holds series the keep-list drops: $dropped"
+        fail "the sink at $sink holds series the keep-list drops: $dropped"
         return
     fi
-    ok "the sink at $1 holds tundravm_image_digest and $(printf '%s\\n' "$names" | grep -c .) series, each one export= keeps"
+    ok "the sink at $sink holds only what export= keeps: $(printf '%s\\n' "$names" | grep . | tr '\\n' ' ')"
 }}
 """,  # noqa: E501
     "cmdline": """\
@@ -1363,11 +1373,11 @@ probe_upload() {{
     "agent": f"""\
 probe_agent() {{
     if command -v promtool >/dev/null 2>&1; then
-        if ! said=$(promtool check config --agent --syntax-only "$2" 2>&1); then
-            fail "promtool check config --agent $2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
+        if ! said=$(promtool check config ${{3:-}} --syntax-only "$2" 2>&1); then
+            fail "promtool check config ${{3:+$3 }}$2: $(echo "$said" | tail -n 1): this Prometheus refuses what PrometheusRemoteWrite renders"
             return
         fi
-        parsed="promtool check config --agent accepts $2"
+        parsed="promtool check config ${{3:+$3 }}accepts $2"
     else
         waited=0
         while :; do

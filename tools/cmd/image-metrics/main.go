@@ -8,8 +8,13 @@
 //	tundravm_system_state{state="running"} 1                   systemctl is-system-running
 //	tundravm_units_failed 0                                    the units in the failed state
 //
-// The identity is read once, the state every interval. It runs as root without
-// capabilities: the event log and the TDX device are root's.
+// The identity is read once, the state every interval. At start it also prints the
+// identity to the journal, one line for the image and one per RTMR:
+//
+//	image fixture, digest sha384:HEX, mode tdx
+//	RTMR0 HEX
+//
+// It runs as root without capabilities: the event log and the TDX device are root's.
 //
 // Usage: image-metrics [-interval 30s] OUTPUT
 package main
@@ -66,6 +71,9 @@ func main() {
 	}
 	output := flag.Arg(0)
 	id := readIdentity()
+	for _, line := range id.lines() {
+		fmt.Println(line)
+	}
 	for {
 		state, failed := systemState()
 		if err := write(output, render(id, state, failed)); err != nil {
@@ -200,6 +208,19 @@ func tdReport(device string) ([]byte, error) {
 		return nil, fmt.Errorf("TDX_CMD_GET_REPORT0: %w", errno)
 	}
 	return request[64:], nil
+}
+
+// lines is the identity as the journal lines printed at start: the image, then RTMR0..3,
+// or why there are none.
+func (id identity) lines() []string {
+	found := []string{fmt.Sprintf("image %s, digest %s, mode %s", id.image, id.digest, id.mode)}
+	if len(id.rtmrs) == 0 {
+		return append(found, "RTMRs unread: no TDX report")
+	}
+	for i, value := range id.rtmrs {
+		found = append(found, fmt.Sprintf("RTMR%d %s", i, value))
+	}
+	return found
 }
 
 // reportRTMRs is RTMR0..3 of a TDREPORT, in hex.

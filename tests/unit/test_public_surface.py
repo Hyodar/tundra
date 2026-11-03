@@ -69,6 +69,7 @@ COMPONENTS = [
     "Observability",
     "PrometheusRemoteWrite",
     "Proxy",
+    "RecordingRule",
     "Resolved",
     "Rule",
     "ServiceReady",

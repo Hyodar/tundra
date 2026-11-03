@@ -989,6 +989,7 @@ PrometheusRemoteWrite(
     interval: str = '30s',
     buffer: str = '1h',
     export: str | Sequence[str] | None = None,
+    rules: Sequence[RecordingRule] = (),
 )
 ```
 
@@ -998,8 +999,9 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 |---|---|
 | `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, keep `kept`, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
 | `PrometheusRemoteWrite.identity() -> tuple[dm.Build, dm.Service]` | `image-metrics` from `tools/` and its service: as root without capabilities (the event log and the TDX device are root's), with the TDX device and AF_UNIX alone, rewriting its file in `IMAGE_METRICS_DIRECTORY` every *interval*. |
-| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave: *export* with its presets expanded (`health` without one), then `IDENTITY_SERIES`, in order, once each. |
-| `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
+| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave: *export* with its presets expanded (`health` without one), then `IDENTITY_SERIES`, in order, once each. A name with a colon must be one of *rules*' records. |
+| `PrometheusRemoteWrite.rules_file() -> dict[str, object]` | `METRICS_RULES`: *rules* as one group, in their order. |
+| `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, in server mode with *rules*, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
 | `PrometheusRemoteWrite.sink() -> Service` | `metrics-sink`: the in-guest receiver, plain HTTP on the loopback. |
 
 ### `Proxy`
@@ -1016,6 +1018,16 @@ The fixed-address proxy both exporters reach their sinks through: `Proxy("10.0.0
 |---|---|
 | `Proxy.endpoint` | `IP:PORT` (`[IPv6]:PORT`), what the firewall allows. |
 | `Proxy.url` | The URL the exporters reach the proxy at: `https://<tls_name>:<port>` or `http://<endpoint>`. |
+
+### `RecordingRule`
+
+*dataclass*
+
+```python
+RecordingRule(record: str, expr: str)
+```
+
+A series the guest computes from others: `RecordingRule("node:up", "min(up)")`.
 
 ### `Resolved`
 
