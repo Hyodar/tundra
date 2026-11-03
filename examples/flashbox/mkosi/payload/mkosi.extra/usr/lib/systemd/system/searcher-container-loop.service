@@ -1,0 +1,14 @@
+[Unit]
+Description=Load loop for searcher-container.service's root image
+After=runtime-init.service
+Requires=runtime-init.service
+ConditionPathExists=!/dev/loop-control
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modprobe loop
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=minimal.target

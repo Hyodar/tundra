@@ -1,0 +1,41 @@
+[Unit]
+Description=nethermind.service
+After=tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
+Requires=tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/nethermind/nethermind --config=mainnet --datadir=/persistent/data/nethermind --JsonRpc.Enabled=true --JsonRpc.Host=127.0.0.1 --JsonRpc.Port=8545 --JsonRpc.EngineHost=127.0.0.1 --JsonRpc.EnginePort=8551 --JsonRpc.JwtSecretFile=${CREDENTIALS_DIRECTORY}/jwt
+User=nethermind
+WorkingDirectory=/persistent/data/nethermind
+Environment=STATE_DIRECTORY=/persistent/data/nethermind
+LoadCredential=jwt:/run/tundravm/secrets/jwt
+ReadWritePaths=-/persistent/data/nethermind
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=tundravm-held.target

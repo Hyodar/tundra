@@ -1,0 +1,38 @@
+[Unit]
+Description=Wait until lighthouse.service is ready
+After=lighthouse.service
+Requires=lighthouse.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c "until curl -fsS --max-time 5 'http://127.0.0.1:5052/eth/v1/node/health' >/dev/null 2>&1; do sleep 0.5; done"
+User=lighthouse-ready
+TimeoutStartSec=10min
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=tundravm-held.target

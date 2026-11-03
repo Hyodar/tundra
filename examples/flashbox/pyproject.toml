@@ -1,0 +1,3 @@
+# flashbox is a tundravm project: its image file imports attested-node's components/ through the link here.
+[tool.tundravm]
+image = "image.py"

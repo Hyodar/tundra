@@ -1,0 +1,28 @@
+# tundravm Firewall modes: the switcher the attested endpoint hands a mode to. It extends
+# RTMR3 with the switch, logs it in /run/tundravm/firewall-events and loads the mode's nft
+# transaction; it opens no network socket.
+[Unit]
+Description=tundravm firewall mode switch
+Requires=nftables.service tdx-evidence.service
+After=nftables.service tdx-evidence.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/mode-switch --config /etc/tundravm/modes.json
+Restart=always
+RestartSec=1
+StandardOutput=journal+console
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=-/run/tundravm -/sys/class/misc/tdx_guest/measurements
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+#!/bin/sh
+# tundravm Firewall: each host name of /etc/tundravm/egress-hosts resolved through
+# systemd-resolved (DNS over TLS to the literal resolvers) into its host4_/host6_ sets,
+# which the output chain's rules for that name accept alone. A name that does not resolve
+# keeps what its sets held: nothing, before its first answer.
+set -u
+state=/run/tundravm-egress
+addresses() {
+    getent "$1" "$2" 2>/dev/null | while read -r address _; do
+        case $address in ::ffff:*) ;; *) echo "$address" ;; esac
+    done | sort -u | paste -sd, -
+}
+transaction=
+changed=
+while read -r name; do
+    [ -n "$name" ] || continue
+    four=$(addresses ahostsv4 "$name")
+    six=$(addresses ahostsv6 "$name")
+    if [ -z "$four$six" ]; then
+        if [ "$(cat "$state/$name" 2>/dev/null)" != - ]; then
+            echo "egress-resolve: $name does not resolve; its rules accept what they held"
+            echo - > "$state/$name"
+        fi
+        continue
+    fi
+    transaction="${transaction}flush set inet filter host4_$name
+flush set inet filter host6_$name
+"
+    [ -z "$four" ] || transaction="${transaction}add element inet filter host4_$name { $four }
+"
+    [ -z "$six" ] || transaction="${transaction}add element inet filter host6_$name { $six }
+"
+    held="$four${four:+${six:+,}}$six"
+    [ "$(cat "$state/$name" 2>/dev/null)" = "$held" ] || changed="$changed $name=$held"
+done < /etc/tundravm/egress-hosts
+[ -n "$transaction" ] || exit 0
+printf '%s' "$transaction" | nft -f - || exit 1
+for entry in $changed; do
+    echo "$entry" | sed 's/=/ holds /; s/,/, /g; s/^/egress-resolve: /'
+    printf '%s\n' "${entry#*=}" > "$state/${entry%%=*}"
+done

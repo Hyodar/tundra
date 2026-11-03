@@ -1,0 +1,9 @@
+[Unit]
+Description=searcher-container-endpoint-8545
+
+[Socket]
+ListenStream=127.0.0.1:8545
+Accept=no
+
+[Install]
+WantedBy=sockets.target

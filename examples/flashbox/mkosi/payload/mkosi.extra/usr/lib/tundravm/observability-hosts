@@ -1,0 +1,5 @@
+#!/bin/sh
+# tundravm Observability: names no resolver answers, mapped to the proxy, in /etc/hosts.
+while read -r line; do
+    grep -qxF "$line" /etc/hosts 2>/dev/null || echo "$line" >> /etc/hosts
+done < /etc/tundravm/hosts.d/observability-proxy

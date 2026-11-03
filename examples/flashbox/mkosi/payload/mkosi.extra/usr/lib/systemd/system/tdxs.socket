@@ -1,0 +1,11 @@
+[Unit]
+Description=TDXS
+
+[Socket]
+ListenStream=/var/tdxs.sock
+SocketMode=0660
+SocketGroup=tdx
+Accept=no
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,6 @@
+keys:
+  data-key:
+    strategy: "pipe"
+    tpm: false
+    pipe_path: "/run/tundravm/unlock/data"
+    output_path: "/run/tundravm/keys/data"

@@ -1,0 +1,9 @@
+#!/bin/bash
+set -euo pipefail
+
+# tundravm: the directories services keep on volume data
+/usr/bin/install -d -o searcher-container -g searcher-container -m 0750 /persistent/data/delayed
+/usr/bin/install -d -o searcher-container -g searcher-container -m 0755 /persistent/data/input
+/usr/bin/install -d -o lighthouse -g lighthouse -m 0750 /persistent/data/lighthouse
+/usr/bin/install -d -o nethermind -g nethermind -m 0750 /persistent/data/nethermind
+/usr/bin/install -d -o searcher-container -g searcher-container -m 0750 /persistent/data/searcher

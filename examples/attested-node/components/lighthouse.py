@@ -37,7 +37,9 @@ class Lighthouse(Component):
     runtime and zlib it links. It syncs from *checkpoint_sync_url*, a beacon node you
     trust: Lighthouse refuses to sync from genesis, so without one it exits at start.
     Its HTTP API is ready once ``/eth/v1/node/health`` answers 200 or 206 (syncing). It
-    dials peers on 9000 and 9001 and accepts none unless *expose_p2p*.
+    dials peers on 9000 and 9001 and accepts none unless *expose_p2p*. *disable_quic*
+    drops the QUIC transport (and UDP 9001 with it), *disable_optimistic_finalized_sync*
+    and *state_cache_size* pass Lighthouse's flags of those names.
     """
 
     execution: Endpoint
@@ -47,6 +49,9 @@ class Lighthouse(Component):
     state: VolumeDirectory | None = None
     http_port: int = 5052
     expose_p2p: bool = False
+    disable_quic: bool = False
+    disable_optimistic_finalized_sync: bool = False
+    state_cache_size: int | None = None
 
     def __post_init__(self) -> None:
         if self.network not in NETWORKS:
@@ -69,7 +74,10 @@ class Lighthouse(Component):
     def outbound(self) -> Egress:
         """The p2p ports and the checkpoint URL's ``HOST:PORT``."""
         url = self.checkpoint_sync_url
-        return Egress(ports=P2P, hosts=[] if url is None else [_host(url)])
+        return Egress(ports=self._p2p(), hosts=[] if url is None else [_host(url)])
+
+    def _p2p(self) -> list[TCP | UDP]:
+        return P2P[:2] if self.disable_quic else P2P
 
     def compose(self) -> Iterator[object]:
         yield Build(
@@ -95,6 +103,12 @@ class Lighthouse(Component):
             "--port=9000",
             "--disable-upnp",
         ]
+        if self.disable_quic:
+            argv.append("--disable-quic")
+        if self.disable_optimistic_finalized_sync:
+            argv.append("--disable-optimistic-finalized-sync")
+        if self.state_cache_size is not None:
+            argv.append(f"--state-cache-size={self.state_cache_size}")
         if self.checkpoint_sync_url is not None:
             argv.append(f"--checkpoint-sync-url={self.checkpoint_sync_url}")
         yield Service(
@@ -104,7 +118,7 @@ class Lighthouse(Component):
             readiness=HttpProbe(f"http://127.0.0.1:{self.http_port}{HEALTH}", timeout="10min"),
             state="lighthouse" if self.state is None else self.state,
             credentials=[self.jwt],
-            expose=P2P if self.expose_p2p else [],
+            expose=self._p2p() if self.expose_p2p else [],
             hardening="static",
             unit=DropIn(limits={"NOFILE": 65536}),
         )

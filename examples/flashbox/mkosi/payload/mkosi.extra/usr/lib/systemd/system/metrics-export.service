@@ -1,0 +1,43 @@
+[Unit]
+Description=metrics-export.service
+After=credential-metrics-aws.service tdx-evidence.service
+Requires=credential-metrics-aws.service tdx-evidence.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/prometheus --config.file=/etc/tundravm/metrics-export.yml --storage.tsdb.path=/var/lib/metrics-export --storage.tsdb.retention.time=1h --web.listen-address=127.0.0.1:9090
+User=metrics-export
+WorkingDirectory=/var/lib/metrics-export
+Environment=AWS_EC2_METADATA_DISABLED=true
+Environment=AWS_SHARED_CREDENTIALS_FILE=/run/credentials/metrics-export.service/metrics-aws
+LoadCredential=metrics-aws:/run/tundravm/credentials/metrics-aws
+StateDirectory=metrics-export
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target

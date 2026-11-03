@@ -1,0 +1,6 @@
+# tundravm Login searcher: its root commands, nothing else
+searcher ALL=(root) NOPASSWD: /usr/bin/tail ^--lines [0-9][0-9]?[0-9]?[0-9]?[0-9]? /persistent/data/delayed/output[.]log$
+searcher ALL=(root) NOPASSWD: /usr/bin/systemctl reboot
+searcher ALL=(root) NOPASSWD: /usr/bin/mode-switch status
+searcher ALL=(root) NOPASSWD: /usr/bin/mode-switch to production
+searcher ALL=(root) NOPASSWD: /usr/bin/mode-switch to maintenance

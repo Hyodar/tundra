@@ -1,0 +1,13 @@
+#!/bin/sh
+# tundravm Container searcher-container: this boot's SSH host key, owned by the container's user, and
+# the directory its delivered keys land in; its sshd binds both read-only.
+set -eu
+mkdir -p -m 0711 /run/tundravm /run/tundravm/containers /run/tundravm/containers/searcher-container
+mkdir -p -m 0755 /run/tundravm/containers/searcher-container/host /run/tundravm/containers/searcher-container/keys
+if [ ! -s /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key ] || [ ! -s /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key.pub ]; then
+    rm -f /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key.pub
+    ssh-keygen -q -t ed25519 -N '' -C searcher-container -f /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key
+fi
+chmod 0600 /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key
+chown 60632:60632 /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key
+echo "tundravm-container-ssh: searcher-container $(ssh-keygen -l -f /run/tundravm/containers/searcher-container/host/ssh_host_ed25519_key.pub | cut -d ' ' -f 2)"

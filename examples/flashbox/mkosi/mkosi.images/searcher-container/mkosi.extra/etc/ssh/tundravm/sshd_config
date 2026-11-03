@@ -1,0 +1,18 @@
+# tundravm ContainerSsh: this container's user by key only, nothing forwarded
+Port 10022
+HostKey /etc/ssh/tundravm/host/ssh_host_ed25519_key
+AuthorizedKeysFile /etc/ssh/tundravm/keys/authorized_keys
+AllowUsers searcher-container
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+DisableForwarding yes
+PermitTunnel no
+PermitUserEnvironment no
+PermitUserRC no
+UsePAM no
+PidFile none
+PrintMotd no
+StrictModes yes

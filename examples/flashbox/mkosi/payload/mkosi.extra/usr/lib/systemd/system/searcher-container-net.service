@@ -1,0 +1,25 @@
+# tundravm Container searcher-container: its network namespace, a veth the firewall forwards and IPv4 forwarding
+[Unit]
+Description=Network namespace of searcher-container.service
+DefaultDependencies=no
+Requires=nftables.service
+After=nftables.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/bin/ip link delete ve-searche-0bd8
+ExecStartPre=-/usr/bin/ip netns delete searcher-container
+ExecStart=/usr/bin/ip netns add searcher-container
+ExecStart=/usr/bin/ip -n searcher-container link set lo up
+ExecStart=/usr/bin/ip link add ve-searche-0bd8 type veth peer name host0 netns searcher-container
+ExecStart=/usr/bin/ip addr add 169.254.96.161/30 dev ve-searche-0bd8
+ExecStart=/usr/bin/ip link set ve-searche-0bd8 up
+ExecStart=/usr/bin/ip -n searcher-container addr add 169.254.96.162/30 dev host0
+ExecStart=/usr/bin/ip -n searcher-container link set host0 up
+ExecStart=/usr/bin/ip -n searcher-container route add default via 169.254.96.161
+ExecStart=/bin/sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward'
+ExecStop=-/usr/bin/ip link delete ve-searche-0bd8
+ExecStop=/usr/bin/ip netns delete searcher-container

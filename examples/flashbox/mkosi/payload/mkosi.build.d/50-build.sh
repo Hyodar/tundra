@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"tdxs","package":"./cmd/tdxs","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/tdxs","kind":"file","mode":"0755","path":"build/tdxs"}],"name":"tdxs","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build tdxs is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"configuration":"Release","env":{},"kind":"dotnet","output":"nethermind","packages":["libicu76","libssl3t64","libstdc++6"],"project":"src/Nethermind/Nethermind.Runner","properties":{"BuildTimestamp":"0","Commit":"0000000000000000000000000000000000000000","DebugType":"none","EmbedUntrackedSources":"true","IncludeAllContentForSelfExtract":"true","PublishReadyToRun":"false","PublishSingleFile":"true"},"runtime":"linux-x64"},"cache_key":"nethermind-1.32.3","install":[{"dest":"/usr/lib/nethermind/nethermind","kind":"file","mode":"0755","path":"publish/nethermind"},{"dest":"/usr/lib/nethermind/NLog.config","kind":"file","mode":"0644","path":"publish/NLog.config"},{"dest":"/usr/lib/nethermind/plugins","kind":"tree","path":"publish/plugins"}],"name":"nethermind","source":{"kind":"git","ref":"1.32.3","submodules":false,"url":"https://github.com/NethermindEth/nethermind.git"}}
+# unpinned: 1.32.3
+echo 'tundravm: source build nethermind is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"kind":"script","output":"lighthouse","packages":[],"script":"tar -xzf lighthouse-v8.3.2-x86_64-unknown-linux-gnu.tar.gz lighthouse"},"cache_key":"lighthouse-v8.3.2","install":[{"dest":"/usr/lib/lighthouse/lighthouse","kind":"file","mode":"0755","path":"lighthouse"}],"name":"lighthouse","source":{"kind":"http","sha256":"ea914e932462d6a93ad78c21377d70f995e05ac224248be0b58c2f4d6740439a","url":"https://github.com/sigp/lighthouse/releases/download/v8.3.2/lighthouse-v8.3.2-x86_64-unknown-linux-gnu.tar.gz"}}
+if ! ([ -d "${BUILDDIR:-$BUILDROOT/build}/lighthouse-v8.3.2-ae578ddb793aa43c" ] && [ "$(ls -A "${BUILDDIR:-$BUILDROOT/build}/lighthouse-v8.3.2-ae578ddb793aa43c" 2>/dev/null)" ]); then [ -f "$SRCDIR/tundravm-sources/lighthouse-ea914e932462-f5c0104d"/.tundravm-complete ] || { echo 'tundravm: lighthouse-ea914e932462-f5c0104d is not fetched: run tundravm build' >&2; exit 1; } && mkdir -p "$BUILDROOT/build/lighthouse" && cp -a --no-preserve=ownership "$SRCDIR/tundravm-sources/lighthouse-ea914e932462-f5c0104d"/. "$BUILDROOT/build/lighthouse"/ && rm -f "$BUILDROOT/build/lighthouse"/.tundravm-complete && mkosi-chroot bash -c 'cd /build/lighthouse && tar -xzf lighthouse-v8.3.2-x86_64-unknown-linux-gnu.tar.gz lighthouse' && mkdir -p "${BUILDDIR:-$BUILDROOT/build}/lighthouse-v8.3.2-ae578ddb793aa43c" && install -D -m 0755 "$BUILDROOT/build/lighthouse/lighthouse" "${BUILDDIR:-$BUILDROOT/build}/lighthouse-v8.3.2-ae578ddb793aa43c"/lighthouse; fi && install -D -m 0755 "${BUILDDIR:-$BUILDROOT/build}/lighthouse-v8.3.2-ae578ddb793aa43c"/lighthouse "$DESTDIR/usr/lib/lighthouse/lighthouse"
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"image-metrics","package":"./cmd/image-metrics","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/image-metrics","kind":"file","mode":"0755","path":"build/image-metrics"}],"name":"image-metrics","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build image-metrics is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"delay-pipe","package":"./cmd/delay-pipe","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/delay-pipe","kind":"file","mode":"0755","path":"build/delay-pipe"}],"name":"delay-pipe","source":{"kind":"local","path":"channels"}}
+# unpinned: channels
+echo 'tundravm: source build delay-pipe is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"input-proxy","package":"./cmd/input-proxy","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/input-proxy","kind":"file","mode":"0755","path":"build/input-proxy"}],"name":"input-proxy","source":{"kind":"local","path":"channels"}}
+# unpinned: channels
+echo 'tundravm: source build input-proxy is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"key-gen","package":"./cmd/key-gen","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/key-gen","kind":"artifact","mode":"0755"}],"name":"key-generation","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build key-generation is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"disk-setup","package":"./cmd/disk-setup","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/disk-setup","kind":"artifact","mode":"0755"}],"name":"disk-encryption","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build disk-encryption is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"attested-endpoint","package":"./cmd/attested-endpoint","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/attested-endpoint","kind":"artifact","mode":"0755"}],"name":"attested-endpoint","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build attested-endpoint is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"login-menu","package":"./cmd/login-menu","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/login-menu","kind":"file","mode":"0755","path":"build/login-menu"}],"name":"login-menu","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build login-menu is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"mode-switch","package":"./cmd/mode-switch","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/mode-switch","kind":"file","mode":"0755","path":"build/mode-switch"}],"name":"mode-switch","source":{"kind":"local","path":"tundravm:tools"}}
+# unpinned: tundravm:tools
+echo 'tundravm: source build mode-switch is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
