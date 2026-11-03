@@ -56,6 +56,8 @@ The checks, each only when its declaration exists (:func:`derive`):
   password, its ``sudoers.d`` file parses (``visudo -c``), sshd's effective configuration
   for it (``sshd -T -C user=NAME``) forces its command (or none) and disables forwarding,
   and each baked key in its ``authorized_keys.d`` file carries the declared options;
+- ``root``: ``/`` is ``root:root 0755`` (always: the initramfs layout's own unit makes it
+  so, :mod:`tundravm._modules.root_mode`; a verity root is read-only beneath);
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
   ``root:root 0600`` and its public key file holds its public key;
 - ``attested-tls:PORT``: the attested TLS listener on ``PORT`` serves a certificate, and
@@ -83,7 +85,7 @@ from urllib.parse import urlsplit
 
 from tundravm.models import ServiceSpec, unit_name
 
-from . import execution, instance_key
+from . import execution, instance_key, root_mode
 from .disk_encryption import OWNER_DIRECTORY
 
 if TYPE_CHECKING:
@@ -135,6 +137,7 @@ Helper = Literal[
     "modules",
     "keys",
     "instance",
+    "root",
     "login",
     "endpoint",
     "attested-tls",
@@ -362,6 +365,7 @@ def derive(
                 ("ssh-host-keys.service",),
             )
         )
+    checks.append(Check("root", "/ is root:root 0755", "probe_root", "root"))
     checks += _logins(items)
     checks.append(
         Check(
@@ -1158,6 +1162,16 @@ probe_instance_key() {{
         fail "$2 is not the public key of $1: something besides {instance_key.UNIT} wrote one; journalctl -u {instance_key.UNIT}"
     else
         ok "root:root 600, pub $pub"
+    fi
+}}
+""",  # noqa: E501
+    "root": f"""\
+probe_root() {{
+    said=$(stat -c '%U:%G %a' /)
+    if [ "$said" = "root:root 755" ]; then
+        ok "0755 root:root"
+    else
+        fail "/ is $said: it must be root:root 0755, or anyone writes beside /etc and sshd refuses every key under /etc/ssh; journalctl -u {root_mode.UNIT}"
     fi
 }}
 """,  # noqa: E501

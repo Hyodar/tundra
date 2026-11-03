@@ -1,3 +1,40 @@
+== production/mkosi.extra/usr/lib/systemd/system/tundravm-root-mode.service
+[Unit]
+Description=Make the initramfs root root:root 0755
+Before=sysinit.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/chown root:root /
+ExecStart=/usr/bin/chmod 0755 /
+TimeoutStartSec=30s
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
+PrivateNetwork=yes
+
+[Install]
+WantedBy=minimal.target
+== production/mkosi.postinst.d/50-postinst.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkosi-chroot systemctl enable tundravm-root-mode.service
+mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
+ln -sf "/etc/systemd/system/tundravm-root-mode.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 == staging/mkosi.conf
 [Output]
 ImageId=%i-staging

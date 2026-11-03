@@ -29,6 +29,7 @@ from tundravm._modules import (
     KeySpec,
     SecretDelivery,
     instance_key,
+    root_mode,
 )
 from tundravm._modules import execution as gate
 from tundravm._modules import probe as probe_module
@@ -374,6 +375,11 @@ class StateBuilder:
         _add_file(profile, instance_key.SCRIPT_PATH, instance_key.SCRIPT, "0755")
         profile.services.append(instance_key.service())
         profile.packages.add(instance_key.PACKAGE)
+
+    def root_mode(self, name: str) -> None:
+        """Give profile *name* the unit that makes the initramfs root ``root:root 0755``
+        (``tundravm._modules.root_mode``); the profiles extending it inherit it."""
+        self.state.ensure_profile(name).services.append(root_mode.service())
 
     def probe(self, name: str, probe: Probe) -> None:
         """Give profile *name* the boot probe (``tundravm._modules.probe``): its script,

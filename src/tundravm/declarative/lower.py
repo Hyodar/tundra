@@ -208,6 +208,8 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
     builder.declare(default.name, base.items, full=base.items)
     if recipe.mkosi.root_size is not None:
         builder.root_size(recipe.mkosi.root_size)
+    if recipe.mkosi.root == "initramfs":
+        builder.root_mode(default.name)
     builder.execution_gate(
         default.name, release=default.release, default=default.release, ships=True
     )

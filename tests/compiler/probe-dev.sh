@@ -369,6 +369,14 @@ probe_instance_key() {
         ok "root:root 600, pub $pub"
     fi
 }
+probe_root() {
+    said=$(stat -c '%U:%G %a' /)
+    if [ "$said" = "root:root 755" ]; then
+        ok "0755 root:root"
+    else
+        fail "/ is $said: it must be root:root 0755, or anyone writes beside /etc and sshd refuses every key under /etc/ssh; journalctl -u tundravm-root-mode.service"
+    fi
+}
 check=mode
 mode=$(cat /run/tundravm/mode 2>/dev/null || true)
 case $mode in
@@ -429,6 +437,8 @@ check=kernel:modules
 probe_modules
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
+check=root
+probe_root
 check=key:instance
 probe_instance_key /run/tundravm/instance-key.pem /run/tundravm/instance-key.pub
 say "done $passed ok $failed fail"

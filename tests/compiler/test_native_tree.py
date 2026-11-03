@@ -395,6 +395,18 @@ def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
     )
 
 
+@pytest.mark.parametrize(("root", "unit"), [("initramfs", True), ("verity", False)])
+def test_the_root_is_root_owned_0755_and_the_probe_says_so(root: str, unit: bool) -> None:
+    """The initramfs root is tmpfs's 1777 until its unit runs; a verity root is 0755 already."""
+    payload = FIXTURE / f"tree-{root}/payload"
+    service = payload / "mkosi.extra/usr/lib/systemd/system/tundravm-root-mode.service"
+    assert service.is_file() is unit
+    if unit:
+        assert "ExecStart=/usr/bin/chmod 0755 /\n" in service.read_text(encoding="utf-8")
+    probe = payload / "mkosi.profiles/dev/mkosi.extra/usr/lib/tundravm/probe"
+    assert "check=root\nprobe_root\n" in probe.read_text(encoding="utf-8")
+
+
 def test_verity_layout_splits_the_payload_and_copies_its_partitions() -> None:
     tree = FIXTURE / "tree-verity"
     data, hashes = verity_uuids("6a5f3c1e-2b7d-4e9a-8c10-5d3f2a1b9e70")

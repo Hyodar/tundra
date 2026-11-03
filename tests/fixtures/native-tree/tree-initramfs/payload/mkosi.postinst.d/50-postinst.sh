@@ -16,6 +16,7 @@ mkosi-chroot systemctl enable systemd-networkd.socket
 mkosi-chroot systemctl enable systemd-networkd-wait-online.service
 mkosi-chroot systemctl enable web.service
 mkosi-chroot systemctl enable boot-probe.service
+mkosi-chroot systemctl enable tundravm-root-mode.service
 mkosi-chroot systemctl enable tdx-evidence.service
 mkosi-chroot systemctl enable tundravm-instance-key.service
 mkosi-chroot systemctl enable runtime-init.service
@@ -30,6 +31,7 @@ ln -sf "/etc/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/sys
 ln -sf "/etc/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/boot-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-root-mode.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
