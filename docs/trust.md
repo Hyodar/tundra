@@ -42,8 +42,8 @@ How the last row works (plan 6.1):
   ships the real issuer only. `attest` reads the mode over the session: `simulated` makes
   the evidence simulated, and never the other way round.
 - Not gated: boot tasks and probes, `Unit` declarations, mounts, `runtime-init` (keys,
-  disks, secret delivery: the control plane) and the cloud glue. The console stays readable
-  and the management port still answers on a refused boot.
+  disks, secret delivery: the control plane) and the cloud glue. On a refused boot
+  console and management port still answer.
 - The gate checks that a quote path exists, not that a quote verifies: it stops a
   production build serving where TDX is missing. What keeps production secrets
   from a host you do not trust is the release rule under
@@ -69,8 +69,8 @@ the reason, and a `tundravm.policy/2` policy.
 | `azure` | no TDX register: the quote measures Azure's paravisor | everything; Azure's evidence is its vTPM |
 
 RTMR3 is outside every policy: no event schema is defined for it, and each build lists that
-under `unchecked`. MRTD and RTMR0 values carry the firmware they belong to, and an MRTD and
-an RTMR0 from different firmware never match together.
+under `unchecked`. MRTD and RTMR0 values carry the firmware they belong to, and values
+from different firmware never match.
 
 Every package in the UKI comes from one pinned Debian snapshot: a moved snapshot is a
 new image, whose measurements need approving again.
@@ -88,8 +88,8 @@ Predictions (the build), observations (`attest --output`) and the approved polic
 
 ### What `build` prints
 
-The report at the end of `build` (and at the top of `show BUILD`) mixes three kinds of
-value. Only the measurements are something a quote is checked against.
+The report `build` and `show BUILD` print mixes three kinds of value. Only the
+measurements are checked against a quote.
 
 | Printed | Kind | Comes from |
 |---|---|---|
@@ -119,6 +119,8 @@ With an `OperatorKey` volume each write is also signed over its nonce by the SSH
 first signed write pinned in the volume's LUKS2 header, so after a reboot the endpoint
 refuses any other key. The header is plaintext, so the client also refuses a volume back
 without the owner its receipt names; a lost key means a new volume.
+A `Login` reaches only its forced command or shell and listed sudo rules; it has no
+password, forwarding or other key.
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|

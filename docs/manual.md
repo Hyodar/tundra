@@ -212,9 +212,14 @@ project's.
 | `Network` | systemd-networkd, DHCP or a static address (implied) | `online` |
 | `Firewall` | nftables, inbound drop by default (implied) | none |
 | `Tdxs` | the evidence service (implied) | `EVIDENCE`, `socket`, `group` |
-| `SshAccess` | root SSH by public key, keys baked or delivered | `port` |
+| `SshAccess` | root SSH by public key, keys baked or delivered; `login=` for others | `port` |
 | `DevAccess` | debug access, only in the `dev` profile | none |
 | `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
+
+`SshAccess(login=Login("tenant", keys=[...], command="/usr/bin/app-status", sudo=[Sudo("/usr/bin/systemctl restart app")]))`
+lets an account other than root in with its own keys, baked or a delivered `Secret`, into its forced
+command (or a `shell=` the image ships), with exactly those sudo rules and no password or
+forwarding.
 
 A service that asks for quotes (`quotes=True`) joins the `tdx` group and requires
 `EVIDENCE`. The evidence service depends on no volume or secret: the evidence unlocks
