@@ -317,8 +317,10 @@ the build with both sizes. The manifest records the layout and the cap.
 ### Network and observability
 
 `network=Network(egress=Egress(ports=[TCP(443)], hosts=["10.0.0.0/8"]))` filters outbound
-traffic. It accepts what the baseline (NTS time, resolvers, cloud metadata) and each
-component's `outbound()` send. A host may be `HOST:PORT`. nftables matches no names, so
+traffic. It accepts what the baseline (NTS time, resolvers) and each component's
+`outbound()` send. `Service(egress=Egress(...))` accepts more for that service's user
+alone, and only a service's `Egress(metadata=True)` reaches the cloud metadata server and
+its identity token. A host may be `HOST:PORT`. nftables matches no names, so
 `"logs.example:443"` opens 443 to any address. A production profile without a filter
 warns `egress-unfiltered`.
 
