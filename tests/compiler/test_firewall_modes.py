@@ -16,13 +16,14 @@ from pathlib import Path
 import pytest
 
 import tundravm
-from tundravm import Image
+from tundravm import DebianConfig, Image, Kernel
 from tundravm.components import Egress, Firewall, Mode, Network
 from tundravm.declarative._network import expand_firewall
 from tundravm.declarative.model import EgressRule, FirewallMode, Port
 from tundravm.declarative.model import Firewall as Ruleset
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
+from tundravm.testing import plan
 from tundravm.testing._model import CompiledTree
 
 GOLDEN = Path(__file__).with_name("nftables-modes.conf")
@@ -93,3 +94,19 @@ def test_a_switchable_firewall_opens_ssh_in_maintenance_only(tmp_path: Path) -> 
 def test_what_a_switchable_firewall_refuses(build: Callable[[], object], problem: str) -> None:
     with pytest.raises(ValidationError, match=problem):
         build()
+
+
+@pytest.mark.parametrize(
+    ("kernel", "warned"),
+    [
+        (Kernel.default(), True),
+        (Kernel.build(base=DebianConfig("6.12.113-1")), True),
+        (Kernel.build(base=DebianConfig("6.18.15-1~bpo13+1", snapshot="20261003T143013Z")), False),
+    ],
+    ids=["debian-6.12", "built-6.12", "backports-6.18"],
+)
+def test_modes_on_a_kernel_without_rtmr3_extends_are_warned(kernel: Kernel, warned: bool) -> None:
+    modes = {"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])}
+    image = Image("modes", kernel=kernel, components=[Firewall(modes=modes)])
+    found = [d for d in plan(image).lint() if d.code == "firewall-modes-kernel"]
+    assert [d.severity for d in found] == (["warning"] if warned else [])

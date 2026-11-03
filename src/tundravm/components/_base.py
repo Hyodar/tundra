@@ -252,6 +252,26 @@ class Network(Component):
         )
 
 
+RTMR3_KERNEL = (6, 16)
+"""The first Linux whose ``tdx_guest`` lets user space extend RTMR3."""
+RTMR3_PATH = "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384"
+"""What the mode switcher writes each switch's digest to (``tools/pkg/modes``)."""
+DEBIAN_KERNEL = (6, 12)
+"""The Linux of ``Kernel.default()``: Debian trixie's ``linux-image-amd64``."""
+BACKPORTS_KERNEL = 'DebianConfig("6.18.15-1~bpo13+1", snapshot="20261003T143013Z")'
+"""A trixie-backports kernel with RTMR3, as ``firewall-modes-kernel`` names it."""
+
+
+def _kernel_version(resolved: dm.Resolved) -> tuple[int, int] | None:
+    """The major and minor of the Linux the profile boots: its built kernel's (``None``
+    when its version names none), else Debian's."""
+    for item in resolved.items:
+        if isinstance(item, dm.Kernel):
+            found = re.match(r"(\d+)\.(\d+)", item.version)
+            return None if found is None else (int(found.group(1)), int(found.group(2)))
+    return DEBIAN_KERNEL
+
+
 class Firewall(Component):
     """The inbound (and optionally outbound) packet filter, nftables in the image.
 
@@ -371,12 +391,35 @@ class Firewall(Component):
             "what the baseline sends (NTS time, resolvers) is accepted for you. A "
             "Profile(production=False) is exempt.",
         ),
+        Rule(
+            "firewall-modes-kernel",
+            "warning",
+            "The image declares firewall modes on a kernel older than Linux 6.16, which has "
+            "no RTMR3 to extend from user space, so on TDX every switch is refused. "
+            "Kernel.default() counts as Debian trixie's 6.12, whatever the image's release.",
+            f"kernel=Kernel.build(base={BACKPORTS_KERNEL}): Debian's trixie-backports "
+            "kernel, which has it.",
+        ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``firewall-ssh-open``: port 22 opened by hand instead of by ``SshAccess``;
-        ``egress-unfiltered``: a production profile that sends anywhere."""
+        ``egress-unfiltered``: a production profile that sends anywhere;
+        ``firewall-modes-kernel``: modes on a kernel whose TDX switches are all refused."""
         found: list[dm.Diagnostic] = []
+        if self.modes:
+            kernel = _kernel_version(resolved)
+            if kernel is not None and kernel < RTMR3_KERNEL:
+                found.append(
+                    dm.Diagnostic(
+                        "firewall-modes-kernel",
+                        "warning",
+                        f"Firewall(modes=) extends RTMR3 at each switch through {RTMR3_PATH}, "
+                        f"which the image's Linux {'.'.join(map(str, kernel))} lacks (6.16 has "
+                        "it): on TDX every switch is refused",
+                        hint=f"kernel=Kernel.build(base={BACKPORTS_KERNEL})",
+                    )
+                )
         if any(port.port == 22 for port in self.allow):
             found.append(
                 _diagnostic(

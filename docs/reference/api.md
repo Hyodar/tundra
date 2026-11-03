@@ -871,7 +871,7 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 
 | Member | Does |
 |---|---|
-| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere. |
+| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
 | `Firewall.lowered_modes() -> tuple[dm.FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
 
 ### `JournalExport`
