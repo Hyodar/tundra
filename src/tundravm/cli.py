@@ -332,7 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
         "Write NAME/NAME.py, stage 1 of the guide's attested node (the boot: Debian from one\n"
         "snapshot, the TEE baseline, filtered egress and a dev profile), tests/test_NAME.py,\n"
         'pyproject.toml with [tool.tundravm] image = "NAME.py", README.md and .gitignore;\n'
-        "--ci adds a GitHub workflow that runs check, lock --check and build.",
+        "--ci adds the image's GitHub workflow: check, lock --check and a production build on\n"
+        "every push; a v* tag also rebuilds on a second runner (verify --rebuild), attests\n"
+        "provenance and releases the image, manifest, measurements and SBOM.",
     )
     new.add_argument("name", metavar="NAME", help="Project directory and image name.")
     new.add_argument("--ci", action="store_true", help=f"Also write {WORKFLOW_PATH}.")
@@ -881,7 +883,7 @@ def _cmd_new(args: argparse.Namespace, out: TextIO) -> int:
         root / ".gitignore": GITIGNORE_BLOCK,
     }
     if args.ci:
-        files[root / WORKFLOW_PATH] = render_workflow(recipe=filename)
+        files[root / WORKFLOW_PATH] = render_workflow()
     for path, text in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")

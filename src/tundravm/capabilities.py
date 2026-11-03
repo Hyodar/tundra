@@ -182,7 +182,7 @@ def _linux_build(name: str, host: Host) -> Capability:
             name,
             "blocked",
             "no Debian archive keyring, which checks the tools tree's packages",
-            apt_install(["debian-archive-keyring"]),
+            apt_install([KEYRING_PACKAGE]),
         )
     privilege = _privilege(host)
     if privilege is None:
@@ -200,7 +200,17 @@ GO_PURPOSE = (
 )
 """What the host ``go`` is for, in every ``build:go`` row."""
 
-GO_FIX = "sudo apt install golang (Debian 13, Ubuntu 24.04; older: https://go.dev/dl)"
+KEYRING_PACKAGE = "debian-archive-keyring"
+"""The package holding the keyring mkosi checks its Debian tools tree against."""
+
+GO_PACKAGE = "golang"
+"""The Debian and Ubuntu package of the host ``go``."""
+
+BUILD_HOST_PACKAGES: tuple[str, ...] = (KEYRING_PACKAGE, GO_PACKAGE)
+"""What a bare Debian or Ubuntu host installs to clear the ``build:x86-64`` and ``build:go``
+fixes: the packages the workflow ``new --ci`` writes installs on its runner."""
+
+GO_FIX = f"sudo apt install {GO_PACKAGE} (Debian 13, Ubuntu 24.04; older: https://go.dev/dl)"
 """The fix of a host without ``go``: Debian 13's and Ubuntu 24.04's golang are 1.21+."""
 
 

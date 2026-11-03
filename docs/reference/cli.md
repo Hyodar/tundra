@@ -60,7 +60,9 @@ usage: tundravm new [-h] [--traceback] [--ci] NAME
 Write NAME/NAME.py, stage 1 of the guide's attested node (the boot: Debian from one
 snapshot, the TEE baseline, filtered egress and a dev profile), tests/test_NAME.py,
 pyproject.toml with [tool.tundravm] image = "NAME.py", README.md and .gitignore;
---ci adds a GitHub workflow that runs check, lock --check and build.
+--ci adds the image's GitHub workflow: check, lock --check and a production build on
+every push; a v* tag also rebuilds on a second runner (verify --rebuild), attests
+provenance and releases the image, manifest, measurements and SBOM.
 
 positional arguments:
   NAME         Project directory and image name.
@@ -68,7 +70,7 @@ positional arguments:
 options:
   -h, --help   show this help message and exit
   --traceback  Raise errors with the Python traceback.
-  --ci         Also write .github/workflows/tundravm.yml.
+  --ci         Also write .github/workflows/image.yml.
 ```
 
 ## tundravm check

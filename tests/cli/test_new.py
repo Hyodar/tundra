@@ -46,7 +46,7 @@ def test_the_ci_workflow(here: Path, cli: Cli) -> None:
     result = cli("new", "vault", "--ci")
     assert result.code == EXIT_OK, result.err
     root = here / "vault"
-    workflow = (root / ".github" / "workflows" / "tundravm.yml").read_text()
+    workflow = (root / ".github" / "workflows" / "image.yml").read_text()
     for verb in ("check", "lock", "build", "verify", "show"):
         assert f"tundravm {verb} " in workflow or f"tundravm {verb}\n" in workflow, verb
     assert "TUNDRA_TOOLS_TOKEN" not in workflow
