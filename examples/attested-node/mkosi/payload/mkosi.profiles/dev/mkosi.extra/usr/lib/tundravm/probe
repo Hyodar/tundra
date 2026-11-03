@@ -240,7 +240,8 @@ probe_volume() {
     fi
     mount=$1
     encrypted=$2
-    owned=${3:-}
+    held=$3
+    owned=${4:-}
     owner=
     if [ -n "$owned" ]; then
         owner=", owner none"
@@ -259,8 +260,10 @@ probe_volume() {
         fi
     fi
     set -- $(findmnt -n -o FSTYPE,SOURCE --mountpoint "$mount" 2>/dev/null)
-    if [ $# -lt 2 ] && [ -n "$owned" ]; then
+    if [ $# -lt 2 ] && [ "$held" = operator ]; then
         skip "locked until \`tundravm secrets unlock INSTANCE ${owned##*/}\`$owner"
+    elif [ $# -lt 2 ] && [ "$held" = broker ]; then
+        skip "locked until its broker releases the key"
     elif [ $# -lt 2 ]; then
         fail "nothing is mounted at $mount: unlock it (tundravm secrets unlock INSTANCE VOLUME) or read journalctl -u runtime-init.service"
     elif [ "$1" != ext4 ]; then
@@ -275,6 +278,14 @@ probe_volume() {
             *) fail "$mount is on $2, not a dm-crypt device: an encrypted volume mounts from its LUKS mapping; journalctl -u runtime-init.service" ;;
         esac
     fi
+}
+probe_locked() {
+    command -v findmnt >/dev/null 2>&1 || return 1
+    findmnt -n --mountpoint "$1" >/dev/null 2>&1 && return 1
+    case $3 in
+        operator) skip "locked: it starts once \`tundravm secrets unlock INSTANCE $2\` opens $1" ;;
+        *) skip "locked: it starts once the broker releases the key of $2" ;;
+    esac
 }
 probe_egress() {
     if ! command -v bash >/dev/null 2>&1; then
@@ -570,9 +581,9 @@ probe_cmdline 'mitigations=auto,nosmt' 'spec_store_bypass_disable=on'
 check=socket:tdxs.socket
 probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
 check=service:nethermind.service
-probe_service nethermind.service
+probe_locked /persistent/data data operator || probe_service nethermind.service
 check=service:lighthouse.service
-probe_service lighthouse.service
+probe_locked /persistent/data data operator || probe_service lighthouse.service
 check=service:journal-sink.service
 probe_service journal-sink.service
 check=service:image-metrics.service
@@ -588,7 +599,7 @@ probe_service attested-tls-8546.service
 check=port:8546/tcp
 probe_port tcp 8546
 check=volume:/persistent/data
-probe_volume /persistent/data yes /run/tundravm/owner/data
+probe_volume /persistent/data yes operator /run/tundravm/owner/data
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=egress:time.cloudflare.com

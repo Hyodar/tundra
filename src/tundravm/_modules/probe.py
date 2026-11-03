@@ -30,7 +30,10 @@ The checks, each only when its declaration exists (:func:`derive`):
   device when it has a key; an owned one (``OperatorKey()``) also says ``owner SHA256:...``
   (or ``owner none``), is a ``skip`` while it waits for ``tundravm secrets unlock`` (the
   probe does not wait for an operator), and fails when its header's owner is not the one
-  the volume keeps inside;
+  the volume keeps inside; a ``BrokerKey`` one is a ``skip`` while it waits for its broker.
+  The probe is ordered after nothing of a service whose state is on such a volume, and its
+  ``service:`` and ``port:`` rows are a ``skip locked`` while the volume is not mounted, so
+  a boot waiting for its operator still finishes its probe;
 - ``dns``: with ``TeeBase``'s resolver, the first resolver's TLS name resolves through the
   stub, ``systemd-resolved`` holds a connection to port 853 (DNS over TLS) and, where
   ``resolvectl`` reaches it over D-Bus, reports ``+DNSOverTLS``;
@@ -117,7 +120,7 @@ import json
 import re
 import shlex
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
@@ -210,6 +213,7 @@ Helper = Literal[
     "attested-tls",
     "owner",
     "firewall-mode",
+    "locked",
 ]
 
 
@@ -244,6 +248,8 @@ class Probe:
     def script(self) -> str:
         """:data:`SCRIPT_PATH`: ``/bin/sh``, coreutils, grep, sed and the image's own tools."""
         used = {check.helper for check in self.checks}
+        if any(check.call.startswith("probe_locked ") for check in self.checks):
+            used.add("locked")
         parts = [_HEADER]
         parts += [_HELPERS[name] for name in _HELPERS if name in used]
         parts += [_MODE, _RTMR]
@@ -373,9 +379,11 @@ def derive(
                         (unit_name(item.name),),
                     )
                 )
+    held = _held(items)
     for item in items:
         if isinstance(item, Disk):
             encrypted = item.key is not None
+            waits = item.name in held
             owned = f" {OWNER_DIRECTORY}/{item.name}" if item.owner else ""
             checks.append(
                 Check(
@@ -383,9 +391,10 @@ def derive(
                     f"{item.mount} is mounted, ext4"
                     + (", on dm-crypt" if encrypted else "")
                     + (", and who owns it" if item.owner else ""),
-                    f"probe_volume {item.mount} {'yes' if encrypted else 'no'}{owned}",
+                    f"probe_volume {item.mount} {'yes' if encrypted else 'no'} "
+                    f"{held[item.name][1] if waits else '-'}{owned}",
                     "volume",
-                    () if item.owner else ("runtime-init.service",),
+                    () if waits else ("runtime-init.service",),
                 )
             )
     for item in items:
@@ -554,7 +563,7 @@ def derive(
                 (f"runtime-init-{step}.service",),
             )
         )
-    return Probe(tuple(checks))
+    return Probe(tuple(_unheld(checks, items)))
 
 
 def _container(item: ContainerRoot, items: Sequence[Declaration], containers: str) -> list[Check]:
@@ -867,6 +876,62 @@ def _owned(items: Iterable[Declaration]) -> Iterator[tuple[str, str, str]]:
                 words = shlex.split(line)
                 if words[:1] == ["chown"]:
                     yield item.name, words[-1], words[-2]
+
+
+def _held(items: Sequence[Declaration]) -> dict[str, tuple[str, str]]:
+    """``{volume: (mount, operator|broker)}``: each volume whose key arrives over a FIFO
+    (``OperatorKey()``, ``BrokerKey``), which stays closed until someone hands it over."""
+    from tundravm.declarative.model import Disk, Key, Ref
+
+    pipes = {i.name for i in items if isinstance(i, Key) and i.strategy == "pipe"}
+    found: dict[str, tuple[str, str]] = {}
+    for item in items:
+        if not isinstance(item, Disk):
+            continue
+        key = item.key
+        name = key.identity[0] if isinstance(key, Ref) and key.identity else None
+        if isinstance(key, Key):
+            name = key.name if key.strategy == "pipe" else None
+        if item.owner or name in pipes:
+            found[item.name] = (item.mount, "operator" if item.owner else "broker")
+    return found
+
+
+def _unheld(checks: list[Check], items: Sequence[Declaration]) -> list[Check]:
+    """*checks* with each one that reads a service waiting on a held volume (:func:`_held`)
+    ordered after none of its units and run only once that volume is mounted (``hardening:``
+    reads the unit file, so it runs regardless): ordering the probe after the service would
+    hold the whole probe until someone unlocks the volume."""
+    from tundravm.declarative.model import Service
+
+    held = _held(items)
+    waiting: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, Service):
+            continue
+        for volume in held:
+            if f"runtime-init-volume-{volume}.service" in map(str, item.requires):
+                stem = unit_name(item.name).removesuffix(".service")
+                waiting[f"{stem}.service"] = waiting[f"{stem}-ready.service"] = volume
+    found: list[Check] = []
+    for check in checks:
+        on = next((waiting[unit] for unit in check.after if unit in waiting), None)
+        if on is None:
+            found.append(check)
+            continue
+        after = tuple(unit for unit in check.after if unit not in waiting)
+        if check.helper == "hardening":
+            found.append(replace(check, after=after))
+            continue
+        mount, how = held[on]
+        found.append(
+            replace(
+                check,
+                call=f"probe_locked {mount} {on} {how} || {check.call}",
+                after=after,
+            )
+        )
+    return found
 
 
 def _service(item: object) -> list[Check]:
@@ -1366,7 +1431,8 @@ probe_volume() {
     fi
     mount=$1
     encrypted=$2
-    owned=${3:-}
+    held=$3
+    owned=${4:-}
     owner=
     if [ -n "$owned" ]; then
         owner=", owner none"
@@ -1385,8 +1451,10 @@ probe_volume() {
         fi
     fi
     set -- $(findmnt -n -o FSTYPE,SOURCE --mountpoint "$mount" 2>/dev/null)
-    if [ $# -lt 2 ] && [ -n "$owned" ]; then
+    if [ $# -lt 2 ] && [ "$held" = operator ]; then
         skip "locked until \\`tundravm secrets unlock INSTANCE ${owned##*/}\\`$owner"
+    elif [ $# -lt 2 ] && [ "$held" = broker ]; then
+        skip "locked until its broker releases the key"
     elif [ $# -lt 2 ]; then
         fail "nothing is mounted at $mount: unlock it (tundravm secrets unlock INSTANCE VOLUME) or read journalctl -u runtime-init.service"
     elif [ "$1" != ext4 ]; then
@@ -1401,6 +1469,16 @@ probe_volume() {
             *) fail "$mount is on $2, not a dm-crypt device: an encrypted volume mounts from its LUKS mapping; journalctl -u runtime-init.service" ;;
         esac
     fi
+}
+""",  # noqa: E501
+    "locked": """\
+probe_locked() {
+    command -v findmnt >/dev/null 2>&1 || return 1
+    findmnt -n --mountpoint "$1" >/dev/null 2>&1 && return 1
+    case $3 in
+        operator) skip "locked: it starts once \\`tundravm secrets unlock INSTANCE $2\\` opens $1" ;;
+        *) skip "locked: it starts once the broker releases the key of $2" ;;
+    esac
 }
 """,  # noqa: E501
     "container": f"""\

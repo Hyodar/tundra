@@ -183,7 +183,8 @@ probe_volume() {
     fi
     mount=$1
     encrypted=$2
-    owned=${3:-}
+    held=$3
+    owned=${4:-}
     owner=
     if [ -n "$owned" ]; then
         owner=", owner none"
@@ -202,8 +203,10 @@ probe_volume() {
         fi
     fi
     set -- $(findmnt -n -o FSTYPE,SOURCE --mountpoint "$mount" 2>/dev/null)
-    if [ $# -lt 2 ] && [ -n "$owned" ]; then
+    if [ $# -lt 2 ] && [ "$held" = operator ]; then
         skip "locked until \`tundravm secrets unlock INSTANCE ${owned##*/}\`$owner"
+    elif [ $# -lt 2 ] && [ "$held" = broker ]; then
+        skip "locked until its broker releases the key"
     elif [ $# -lt 2 ]; then
         fail "nothing is mounted at $mount: unlock it (tundravm secrets unlock INSTANCE VOLUME) or read journalctl -u runtime-init.service"
     elif [ "$1" != ext4 ]; then
@@ -218,6 +221,14 @@ probe_volume() {
             *) fail "$mount is on $2, not a dm-crypt device: an encrypted volume mounts from its LUKS mapping; journalctl -u runtime-init.service" ;;
         esac
     fi
+}
+probe_locked() {
+    command -v findmnt >/dev/null 2>&1 || return 1
+    findmnt -n --mountpoint "$1" >/dev/null 2>&1 && return 1
+    case $3 in
+        operator) skip "locked: it starts once \`tundravm secrets unlock INSTANCE $2\` opens $1" ;;
+        *) skip "locked: it starts once the broker releases the key of $2" ;;
+    esac
 }
 probe_egress() {
     if ! command -v bash >/dev/null 2>&1; then
@@ -549,17 +560,17 @@ probe_active tdxs.socket 'the socket must listen; systemctl status names why it 
 check=service:image-metrics.service
 probe_service image-metrics.service
 check=service:app.service
-probe_service app.service
+probe_locked /persistent data operator || probe_service app.service
 check=timer:tick.timer
 probe_active tick.timer 'the timer must be enabled; systemctl status names why it is not'
 check=service:nginx.service
 probe_service nginx.service
 check=port:8080/tcp
-probe_port tcp 8080
+probe_locked /persistent data operator || probe_port tcp 8080
 check=port:5353/udp
-probe_port udp 5353
+probe_locked /persistent data operator || probe_port udp 5353
 check=volume:/persistent
-probe_volume /persistent yes /run/tundravm/owner/data
+probe_volume /persistent yes operator /run/tundravm/owner/data
 check=egress:198.51.100.1:7
 probe_egress 198.51.100.1 7
 check=egress:time.cloudflare.com

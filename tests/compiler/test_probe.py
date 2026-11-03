@@ -31,7 +31,7 @@ from tundravm.components import (
 )
 from tundravm.declarative import Git
 from tundravm.ports import TCP, UDP
-from tundravm.storage import OperatorKey, Volume
+from tundravm.storage import BrokerKey, OperatorKey, Volume
 from tundravm.systemd import Every, Hardening
 from tundravm.testing._model import CompiledTree
 
@@ -130,3 +130,59 @@ def test_the_root_check_is_what_rootfs_declared(
     for a sized one, or the volatile overlay on the verity root."""
     check = probe.derive((), modules=None, rootfs=rootfs, root_size=size).checks[2]
     assert (check.name, check.call, check.after) == (f"rootfs:{rootfs}", call, after)
+
+
+@pytest.mark.parametrize(
+    ("unlock", "how"),
+    [(OperatorKey(), "operator"), (BrokerKey("https://broker.example", audience="p"), "broker")],
+    ids=["operator", "broker"],
+)
+def test_a_service_on_a_locked_volume_never_holds_the_probe(
+    tmp_path: Path, unlock: OperatorKey | BrokerKey, how: str
+) -> None:
+    vault = Volume("vault", unlock=unlock)
+    image = Image(
+        "probe",
+        services=[Service("ledger", ["/usr/bin/ledger"], state=vault.directory("ledger"))],
+        dev=DevAccess(ssh_keys=[KEY]),
+    )
+    compiled = tundravm.compile(image)
+    compiled.write(tmp_path / "tree")
+    tree = CompiledTree(tmp_path / "tree", compiled.profiles, "production")
+    after = tree.unit(probe.UNIT, "dev").split("After=", 1)[1].splitlines()[0].split()
+    assert "ledger.service" not in after and "ledger-ready.service" not in after
+    script = tree.read(f"mkosi.extra{probe.SCRIPT_PATH}", "dev")
+    held = f"probe_locked /persistent/vault vault {how} || probe_service ledger.service\n"
+    assert held in script
+    assert f"probe_volume /persistent/vault yes {how}" in script
+
+
+@pytest.mark.parametrize(
+    ("mounted", "how", "line"),
+    [
+        (False, "operator", "skip locked: it starts once `tundravm secrets unlock INSTANCE vault`"),
+        (False, "broker", "skip locked: it starts once the broker releases the key of vault"),
+        (True, "operator", "ok checked"),
+    ],
+    ids=["operator-locked", "broker-locked", "open"],
+)
+def test_a_locked_volume_skips_its_service_checks(
+    tmp_path: Path, mounted: bool, how: str, line: str
+) -> None:
+    """Against a stand-in ``findmnt`` that finds the mount or does not."""
+    findmnt = tmp_path / "findmnt"
+    findmnt.write_text(f"#!/bin/sh\nexit {0 if mounted else 1}\n")
+    findmnt.chmod(0o755)
+    script = (
+        probe._HEADER
+        + probe._HELPERS["locked"]
+        + f"check=service:x\nprobe_locked /persistent/vault vault {how} || ok checked\n"
+    )
+    done = subprocess.run(
+        ["/bin/sh", "-c", script],
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout.startswith(f"{probe.PREFIX.strip()} service:x {line}")
