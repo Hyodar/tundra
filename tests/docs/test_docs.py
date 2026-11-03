@@ -1,6 +1,7 @@
 """The docs run as written: code blocks execute, commands parse, links resolve.
 
-Covered pages: README.md, docs/guide.md, docs/trust.md and the generated reference.
+Covered pages: the README, the four guide pages (terms, guide, how-to, manual), the trust page
+and the generated reference.
 
 - Every ```python block of the prose pages executes in a fresh namespace, and every
   ``Image`` it binds compiles. A block preceded by the line ``<!-- fragment -->`` is
@@ -40,7 +41,15 @@ from tundravm._reference import slug
 from tundravm.cli import build_parser
 
 STAGES = REPO_ROOT / "examples" / "attested-node" / "stages"
-PROSE = ("README.md", "docs/guide.md", "docs/trust.md")
+GUIDE_PAGES = (
+    "README.md",
+    "docs/terms.md",
+    "docs/guide.md",
+    "docs/howto.md",
+    "docs/manual.md",
+)
+"""The pages a new user reads in order; their words share one budget."""
+PROSE = (*GUIDE_PAGES, "docs/trust.md")
 """Pages whose code blocks run and whose commands parse."""
 LINKED = (*PROSE, "docs/reference/cli.md", "docs/reference/api.md")
 """Pages whose links must resolve."""
@@ -158,14 +167,6 @@ def test_listings_are_what_the_repository_holds(
     assert body == listing(kind, path, name), f"{page}:{line}: {kind} {path} {name or ''}"
 
 
-def test_the_guide_lists_every_stage() -> None:
-    shown = {path for _, _, _, path, name, _ in _listings()} | {
-        name for _, _, kind, _, name, _ in _listings() if kind == "diff"
-    }
-    stages = {f"examples/attested-node/stages/{p.name}" for p in STAGES.glob("*.py")}
-    assert stages <= shown
-
-
 def _commands() -> list[tuple[str, int, list[str]]]:
     found: list[tuple[str, int, list[str]]] = []
     for page in PROSE:
@@ -270,15 +271,47 @@ def test_slugs_follow_github() -> None:
 
 
 @pytest.mark.parametrize(
-    ("page", "limit"), [("README.md", 600), ("docs/guide.md", 8000), ("docs/trust.md", 2500)]
+    ("page", "limit"),
+    [
+        ("README.md", 350),
+        ("docs/terms.md", 800),
+        ("docs/guide.md", 2200),
+        ("docs/howto.md", 1100),
+        ("docs/manual.md", 6000),
+        ("docs/trust.md", 2500),
+    ],
 )
 def test_pages_stay_short(page: str, limit: int) -> None:
     assert len(_text(page).split()) <= limit
 
 
-def test_every_error_code_is_in_the_guide() -> None:
+def test_the_guide_pages_share_one_budget() -> None:
+    words = {page: len(_text(page).split()) for page in GUIDE_PAGES}
+    assert sum(words.values()) <= 9500, words
+
+
+def test_each_task_stays_under_120_words() -> None:
+    sections = re.split(r"^## ", _text("docs/howto.md"), flags=re.M)[1:]
+    long = {s.splitlines()[0]: len(s.split()) for s in sections if len(s.split()) > 120}
+    assert long == {}
+
+
+def test_the_guide_defines_its_bold_terms_on_the_terms_page() -> None:
+    terms = {t.lower() for t in re.findall(r"^\*\*([^*]+?)\.\*\*", _text("docs/terms.md"), re.M)}
+    bold = {t.lower() for t in re.findall(r"\*\*([^*]+)\*\*", _text("docs/guide.md"))}
+    assert bold - terms == set()
+
+
+def test_the_guide_walks_the_stages_in_order() -> None:
+    stages = sorted(f"examples/attested-node/stages/{p.name}" for p in STAGES.glob("*.py"))
+    guide = [found for found in _listings() if found[0] == "docs/guide.md"]
+    walked = [path if kind == "listing" else name for _, _, kind, path, name, _ in guide]
+    assert [path for path in walked if path in stages] == stages
+
+
+def test_every_error_code_is_in_the_manual() -> None:
     from tundravm.errors import ErrorCode
 
-    section = _text("docs/guide.md").split("## When something fails", 1)[1]
+    section = _text("docs/manual.md").split("## When something fails", 1)[1]
     missing = sorted(code.value for code in ErrorCode if f"`{code.value}`" not in section)
-    assert missing == [], f"ErrorCode values missing from the guide's error table: {missing}"
+    assert missing == [], f"ErrorCode values missing from the manual's error table: {missing}"

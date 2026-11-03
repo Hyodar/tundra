@@ -4,7 +4,7 @@ What a tundravm image defends against, where it stops, and what to do when somet
 breaks. Each claim is labelled **implemented** (in the code on master, with tests) or
 **proven** (also run for real in CI). What is not built says so, with the gate of
 [the v2 plan](design/plan-v2-2026-10-30.md) that builds it. The
-[guide](guide.md#what-is-proven-today) has the same split per feature.
+[manual](manual.md#what-is-proven-today) has the same split per feature.
 
 ## Threat model
 
@@ -47,7 +47,7 @@ How the last row works (plan 6.1):
 - The gate checks that a quote path exists, not that a quote verifies: it stops a
   production build serving where TDX is missing by mistake. What keeps production secrets
   from a host you do not trust is the release rule under
-  [Delivering secrets](guide.md#delivering-secrets).
+  [Delivering secrets](manual.md#delivering-secrets).
 
 The boot probe a development profile carries (`run --probe`) checks from inside the guest
 that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress

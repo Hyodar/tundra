@@ -11,88 +11,43 @@
 
 <br>
 
-tundravm is mkosi made opinionated for confidential VMs: Debian, systemd and Intel TDX,
-declared as one Python `Image`. It compiles the image to a plain mkosi 27.1 tree, builds it
-into an immutable directory with a manifest you can sign, and runs, deploys and attests the
-result.
+tundravm builds confidential VM images without making you learn mkosi. You declare the OS
+as one Python `Image`. tundravm writes a plain mkosi tree from it and builds Debian with
+systemd. The image boots as an Intel TDX VM, whose memory the host cannot read and whose
+contents a remote party can verify. tundravm is for people who know Linux and Docker and
+need a VM others can check.
 
-## Install
+## First run
 
 ```console
 $ sudo apt install debian-archive-keyring golang qemu-system-x86 ovmf
 $ uv tool install git+https://github.com/Hyodar/tundra@v2.0.0
 $ tundravm doctor
-$ tundravm new my-image
-$ cd my-image
-$ uv sync
+$ tundravm new my-image && cd my-image
+$ uv run tundravm dev
 ```
 
-On Debian 13 or Ubuntu 24.04 those four packages are all `dev` needs: mkosi comes with
-tundravm and puts every other build tool (`systemd-repart`, `mkfs.*`, `ukify`) in its
-own tools tree, `go` fetches the evidence service's toolchain, QEMU and OVMF boot the
-image. `doctor` names the command for anything missing. tundravm is not on PyPI: the tag
-pins the release and `new` pins its commit ([releases](docs/release.md)).
+The packages are for Debian 13 or Ubuntu 24.04. `doctor` names the fix for anything
+missing. `new` writes a project whose image is stage 1 of the [guide](docs/guide.md).
+`dev` builds it, boots it under QEMU without TDX and prints its boot probe.
 
-## Quickstart
+## Next
 
-`new` writes stage 1 of the one example, the attested node in
-[`examples/attested-node/`](examples/attested-node/):
-
-<!-- listing: examples/attested-node/stages/01-boot.py -->
-```python
-"""attested-node: the boot, stage 1 of the guide.
-
-Debian trixie from one snapshot, with systemd, the TEE baseline (NTS time, a volatile
-journal, sysctl hardening), DHCP, a firewall that drops inbound traffic nothing exposes,
-filtered egress, and a dev profile with a serial console and root password "tdx".
-"""
-
-from tundravm import Debian, Image
-from tundravm.components import DevAccess, Egress, Network
-
-image = Image(
-    "attested-node",
-    base=Debian("trixie", snapshot="20261018T082309Z"),
-    packages=["ca-certificates"],
-    network=Network(egress=Egress()),
-    dev=DevAccess(password="tdx"),
-)
-```
-
-```console
-$ uv run tundravm dev                           # lock, build the dev profile, boot it, probe it, follow it
-$ uv run tundravm verify latest-development     # every artifact against the manifest, offline
-```
-
-That file is the whole image. What its docstring does not list is implied too: a measured
-UKI with the TDX, virtio, NVMe, Hyper-V and gVNIC drivers, and the `tdxs` evidence
-service, whose quote `attest` checks. Each default has a typed escape hatch.
-
-The two commands build, boot, probe and verify the `dev` profile. A production build is
-the same image without `DevAccess`. It starts no service unless it runs under TDX.
-[The guide](docs/guide.md#the-attested-node-stage-by-stage) builds the node up from there
-in six stages under `examples/attested-node/stages/`: Nethermind as a component of your
-own, Lighthouse, a signing proxy built from Go source, attested TLS, and operating it.
-The last stage is `examples/attested-node/image.py`.
-
-## Documentation
-
-- [The guide](docs/guide.md): projects, images, services, components, profiles, sources,
-  the lock, testing, builds, run, deploy and attest, converting, CI.
-- [Trust, limits and recovery](docs/trust.md): what the image defends against, what is not
-  built yet, and how to recover an instance.
-- Reference, generated from the code: [commands](docs/reference/cli.md),
-  [API](docs/reference/api.md) and [check codes](docs/reference/lint.md).
+1. [Terms](docs/terms.md): the ideas, in the order the guide needs them.
+2. [The guide](docs/guide.md): one image built up in six stages.
+3. [How do I](docs/howto.md): lock, build, deploy, attest, deliver a secret, convert.
+4. [The manual](docs/manual.md): every slot, rule and file.
+5. [Trust, limits and recovery](docs/trust.md): what the image defends against.
+6. Generated from the code: [commands](docs/reference/cli.md), [API](docs/reference/api.md)
+   and [check codes](docs/reference/lint.md). [Releasing](docs/release.md) says what a tag
+   pins.
 
 ## Development
 
 ```console
 $ uv sync
-$ uv run ruff check . && uv run ruff format --check src tests examples
-$ uv run mypy .
-$ uv run pytest -q -m "not integration"
-$ uv run tundravm check examples/attested-node/image.py --tree examples/attested-node/mkosi
+$ uv run ruff check . && uv run mypy . && uv run pytest -q -m "not integration"
+$ uv run python -m tundravm._reference docs/reference
 ```
 
-After a docstring or parser change, `uv run python -m tundravm._reference docs/reference`
-regenerates the reference.
+The last command regenerates the reference after a docstring or parser change.
