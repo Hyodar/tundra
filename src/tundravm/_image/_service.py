@@ -176,7 +176,10 @@ class Service(Located):
     for anything systemd knows and no field covers is ``unit=DropIn(...)``.
 
     ``requires=[other.ready]`` is a real dependency: ``Requires=`` and ``After=`` on
-    whatever proves the other service ready (its ``Type=notify``, or its probe unit).
+    whatever proves the other service ready (its ``Type=notify``, or its probe unit). An
+    :class:`Endpoint` of another service in argv or ``environment=`` (``[app, "--db",
+    db.endpoint(5432)]``) implies it, when that service declares a readiness; lint's
+    ``requires-implied`` says what it added.
     ``requires=[setup.output("/run/app/config")]`` is the fail-safe idiom: ``After=`` and
     ``Wants=`` on the setup task, ``ConditionPathExists=`` on what it writes, so a failed
     setup skips this service instead of failing it.
@@ -230,9 +233,10 @@ class Service(Located):
     """It asks the evidence service for quotes: ``groups=["tdx"]`` and
     ``requires=[EVIDENCE]``, said once."""
     working_directory: str | None = None
-    environment: Mapping[str, str | Binding] = field(default_factory=FrozenMap)
-    """Each value one line of text, or a :class:`Secret` (or :class:`Credential`), which
-    binds it and renders as the path the service reads it at."""
+    environment: Mapping[str, str | Binding | Endpoint] = field(default_factory=FrozenMap)
+    """Each value one line of text, a :class:`Secret` (or :class:`Credential`), which
+    binds it and renders as the path the service reads it at, or an :class:`Endpoint`,
+    which renders as its URL and waits for its service as in argv."""
     logs: str | None = None
     runtime: str | None = None
     package: str | None = None
@@ -554,13 +558,14 @@ class Service(Located):
                     hint='Use letters, digits and "_", not starting with a digit: '
                     'environment={"APP_PORT": "8080"}.',
                 )
-            if isinstance(value, (Secret, Credential)):
+            if isinstance(value, (Secret, Credential, Endpoint)):
                 continue
             if not isinstance(key, str) or not isinstance(value, str) or "\n" in value:
                 raise _fail(
                     self,
                     f"environment[{key!r}] must be one line of text.",
-                    hint="Pass a string, or a Secret to name the path it is read at.",
+                    hint="Pass a string, a Secret to name the path it is read at, or an "
+                    "Endpoint for its URL.",
                 )
         if self.timer is not None:
             self._check_timer()
@@ -696,9 +701,13 @@ class Service(Located):
 
     def variables(self) -> dict[str, str]:
         """``environment=`` as text: a credential becomes ``%d/<name>``, systemd's
-        specifier for the directory the service reads it in."""
+        specifier for the directory the service reads it in, an endpoint its URL."""
         return {
-            key: f"%d/{value.name}" if isinstance(value, (Secret, Credential)) else value
+            key: f"%d/{value.name}"
+            if isinstance(value, (Secret, Credential))
+            else value.url
+            if isinstance(value, Endpoint)
+            else value
             for key, value in self.environment.items()
         }
 

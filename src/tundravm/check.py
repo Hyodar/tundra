@@ -1299,6 +1299,15 @@ _REGISTRY: tuple[Rule, ...] = (
         "edit the service's argv in the same profile.",
     ),
     Rule(
+        "requires-implied",
+        "info",
+        "A service's argv or environment names another service's endpoint, so it waits for "
+        "that service's readiness (Requires= and After= on what proves it), which its "
+        "requires= does not say.",
+        "Nothing to fix; requires=[upstream.ready] says it in the image file and silences "
+        "this. An upstream without a readiness adds no wait.",
+    ),
+    Rule(
         "volume-tpm-on-cloud",
         "info",
         "A Volume(unlock=TpmSeal(...)) seals its key to a cloud's vTPM (Azure's paravisor, "

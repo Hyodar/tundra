@@ -25,7 +25,7 @@ from tundravm._modules.execution import GATE_UNIT
 from tundravm._modules.init import OWNERS_STEP
 from tundravm._platforms.gcp import KERNEL_PATCH as GCP_KERNEL_PATCH
 from tundravm.declarative import model as dm
-from tundravm.declarative.systemd import Hardening
+from tundravm.declarative.systemd import Hardening, target_unit
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
 from tundravm.errors import ValidationError
 from tundravm.models import inrelease_variable
@@ -68,6 +68,9 @@ from ._values import (
 )
 
 __all__ = ["OWNERS_STEP", "VERITY_KERNEL", "component_classes", "kernel_of", "recipe_of"]
+
+IMPLIED_FRAGMENT = "tundravm-requires"
+"""The fragment whose check reports ``requires-implied``; it declares nothing."""
 
 VERITY_KERNEL = KernelFragment(
     {
@@ -131,6 +134,10 @@ class _Lowering:
     sends: tuple[tuple[str, Egress], ...] | None = None
     owned_rules: tuple[dm.EgressRule, ...] = ()
     """The rules a packaged daemon's user owns (chrony's NTP), beside what *sends* asks."""
+    implied: dict[str, dict[str, tuple[str, str, str]]] = field(default_factory=dict)
+    """Unit -> the ready unit an :class:`Endpoint` in its argv or environment added to its
+    ``requires=``, with where it named it, the URL and the upstream's unit (for
+    ``requires-implied``)."""
     runtime: Runtime = field(init=False)
     baseline_types: tuple[type, ...] = field(init=False)
     declared: frozenset[str] = field(init=False)
@@ -246,6 +253,7 @@ class _Lowering:
                     RUNTIME_FRAGMENT, items=tuple(runtime), checks=(self.runtime.check,)
                 )
             )
+        body.append(dm.Fragment(IMPLIED_FRAGMENT, checks=(self.implied_check,)))
         if image.kernel.built:
             body.append(self.kernel())
         body.extend(self.repositories())
@@ -942,7 +950,74 @@ class _Lowering:
                     )
                 _declared(item, handle, self.declared)
                 units.append(_ready_unit(item, handle))
+        for where, endpoint, handle in self.endpoint_waits(item):
+            ready = _ready_unit(item, handle)
+            if ready not in units:
+                units.append(ready)
+                waits = self.implied.setdefault(item.unit_name, {})
+                waits[ready] = (where, endpoint.url, handle.unit)
         return tuple(dict.fromkeys(units))
+
+    def endpoint_waits(self, item: Service) -> Iterator[tuple[str, Endpoint, Readied]]:
+        """``(where, endpoint, handle)`` of each :class:`Endpoint` of another service in
+        *item*'s argv or environment whose readiness ``requires=`` does not already name:
+        the readiness *item* waits for without saying it. An upstream without one adds
+        nothing (nothing proves it ready)."""
+        named = {
+            handle.unit
+            for requirement in item.requires
+            if not isinstance(requirement, dm.UnitOutput)
+            for handle in _handles(requirement, self.world)
+        }
+        values = [("argv", word) for word in item.argv[1:]]
+        values += [(f"environment {key}", value) for key, value in item.environment.items()]
+        for where, value in values:
+            if not isinstance(value, Endpoint) or value.ready is None:
+                continue
+            (handle,) = _handles(value, self.world)
+            if not isinstance(handle, ServiceReady) or handle.probe is None:
+                continue
+            if handle.unit in (item.unit_name, *named):
+                continue
+            if handle.unit in self.removed:
+                raise ValidationError(
+                    f"Service {item.name!r} reads {value.url} in its {where}, the endpoint of "
+                    f"{handle.unit!r}, which the profile removes.",
+                    hint=f"Remove {item.name!r} too, or edit its {where.split()[0]} in the "
+                    "profile.",
+                )
+            named.add(handle.unit)
+            yield where, value, handle
+
+    def implied_check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
+        """``requires-implied``: what an endpoint in a service's argv or environment added
+        to the ``requires=`` of each unit the profile holds."""
+        found: list[dm.Diagnostic] = []
+        for item in resolved.items:
+            if not isinstance(item, (dm.Service, dm.Task)):
+                continue
+            unit = item.unit if isinstance(item, dm.Task) else _unit_of(item.name)
+            requires = {target_unit(target) for target in item.requires}
+            for ready, (where, url, upstream) in self.implied.get(unit, {}).items():
+                if ready not in requires:
+                    continue
+                stem = upstream.removesuffix(".service")
+                found.append(
+                    dm.Diagnostic(
+                        "requires-implied",
+                        "info",
+                        f"{unit} waits for {ready}: its {where} reads {url}, {stem}'s endpoint",
+                        subject=item.name,
+                        location=display_location(declared_at(item)),
+                        hint=f"Nothing to fix; requires=[{stem}.ready] says it in the image "
+                        "file and silences this.",
+                    )
+                )
+        return tuple(found)
+
+
+def _unit_of(name: str) -> str:
+    return name if name.endswith(".service") else f"{name}.service"
 
 
 def _removed_unit(change: Remove, units: set[str]) -> str | None:

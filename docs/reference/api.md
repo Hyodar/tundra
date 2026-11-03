@@ -363,7 +363,7 @@ Service(
     groups: Sequence[str] = (),
     quotes: bool = False,
     working_directory: str | None = None,
-    environment: Mapping[str, str | Binding] = FrozenMap(),
+    environment: Mapping[str, str | Binding | Endpoint] = FrozenMap(),
     logs: str | None = None,
     runtime: str | None = None,
     package: str | None = None,
@@ -387,7 +387,7 @@ A program the image runs, as its own user, in a tested sandbox.
 | `Service.state_directory` | The working directory a `state=` implies. |
 | `Service.stem` | The unit name without its suffix: the generated user's name. |
 | `Service.unit_name` | The `.service` unit this lowers to. |
-| `Service.variables() -> dict[str, str]` | `environment=` as text: a credential becomes `%d/<name>`, systemd's specifier for the directory the service reads it in. |
+| `Service.variables() -> dict[str, str]` | `environment=` as text: a credential becomes `%d/<name>`, systemd's specifier for the directory the service reads it in, an endpoint its URL. |
 
 ### `Tree`
 

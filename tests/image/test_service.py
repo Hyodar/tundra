@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tundravm import Image, Service
+from tundravm import Image, Profile, Service
 from tundravm.components import EVIDENCE, Component, Endpoint
 from tundravm.declarative import Root, Task
 from tundravm.declarative.systemd import PRESETS
@@ -53,6 +53,32 @@ def test_a_tcp_probe_becomes_a_bounded_unit_the_dependent_requires() -> None:
     unit = planned.service("app")
     assert unit.get("Unit", "Requires") == "db-ready.service tdx-evidence.service"
     assert unit.get("Unit", "After") == "db-ready.service tdx-evidence.service"
+
+
+DB = Service("db", ["/usr/bin/db"], readiness=TcpProbe(5432))
+URL = DB.endpoint(5432)
+
+
+@pytest.mark.parametrize(
+    ("app", "profile", "named"),
+    [
+        (Service("app", ["/usr/bin/app", "--db", URL]), None, "argv"),
+        (Service("app", ["/usr/bin/app"], environment={"DB_URL": URL}), None, "environment DB_URL"),
+        (Service("app", ["/usr/bin/app", "--db", URL], requires=[DB.ready]), None, None),
+        (Service("app", ["/usr/bin/app", "--db", URL]), "dev", "argv"),
+    ],
+)
+def test_an_endpoint_in_argv_or_environment_waits_for_its_service(
+    app: Service, profile: str | None, named: str | None
+) -> None:
+    profiles = {} if profile is None else {profile: Profile(add=[app], production=False)}
+    services = [DB] if profile else [DB, app]
+    planned = plan(Image("app", services=services, profiles=profiles), profile or "production")
+    unit = planned.service("app")
+    assert unit.get("Unit", "Requires") == "db-ready.service tdx-evidence.service"
+    notes = [d.message for d in planned.lint() if d.code == "requires-implied"]
+    reads = f"app.service waits for db-ready.service: its {named} reads {URL.url}, db's endpoint"
+    assert notes == ([] if named is None else [reads])
 
 
 def test_an_http_probe_polls_the_url_and_brings_curl_in() -> None:
