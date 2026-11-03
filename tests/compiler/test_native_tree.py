@@ -187,6 +187,7 @@ def test_tree_has_the_native_shape() -> None:
         "mkosi.images/azure/mkosi.repart/00-esp.conf",
         "mkosi.images/box/mkosi.conf",
         "mkosi.images/box/mkosi.postinst.d/10-mount-points.sh",
+        "mkosi.images/box/mkosi.postinst.d/20-accounts.sh",
         "mkosi.images/gcp/mkosi.conf",
         "mkosi.images/gcp/mkosi.postoutput.d/tar",
         "mkosi.images/gcp/mkosi.repart/00-esp.conf",
@@ -386,7 +387,8 @@ def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
         "[Config]\nDependencies=box\n\n[Output]\nImageId=%i-dev\n\n[Content]\n"
         + "KernelModules=\n    erofs\n    loop\n"
         + "    nft_chain_nat\n    nft_masq\n    nft_nat\n    veth\n"
-        + "Packages=\n    prometheus\n    prometheus-node-exporter\n    systemd-journal-remote\n"
+        + "Packages=\n    openssh-client\n    prometheus\n    prometheus-node-exporter\n"
+        + "    systemd-journal-remote\n"
         + "ExtraTrees=%O/box.raw:/usr/lib/tundravm/containers/box.raw\n"
     )
     assert not list((FIXTURE / "tree-initramfs").rglob("authorized_keys.d/root"))

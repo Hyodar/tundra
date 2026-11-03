@@ -1,6 +1,6 @@
 [Unit]
 Description=tundravm attested endpoint
-After=network-online.target tdx-evidence.service tdxs.socket ssh-host-keys.service tundravm-instance-key.service attested-tls-8443-key.service
+After=network-online.target tdx-evidence.service tdxs.socket ssh-host-keys.service tundravm-instance-key.service attested-tls-8443-key.service box-ssh-keys.service
 Wants=network-online.target tdxs.socket
 
 [Service]

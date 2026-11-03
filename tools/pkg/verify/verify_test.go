@@ -84,7 +84,7 @@ func (f *fakeEndpoint) evidence(w http.ResponseWriter, r *http.Request) {
 	if f.replay != nil {
 		nonce = f.replay
 	}
-	userData := endpoint.Binding(nonce, f.spki, nil, nil, f.keys)
+	userData := endpoint.Binding(nonce, f.spki, nil, nil, nil, f.keys)
 	simulator := issuer.NewSimulatorIssuer()
 	issued := userData
 	if f.caller != "" {

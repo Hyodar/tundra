@@ -94,7 +94,7 @@ def test_the_endpoint_check_passes_only_on_evidence_for_its_nonce(
     curl.write_text(
         "#!/bin/sh\n"
         "for arg; do case $arg in *nonce=*) nonce=${arg##*nonce=} ;; esac; done\n"
-        f'printf \'{{"purpose":"tundravm-endpoint/1","nonce":"%s",'
+        f'printf \'{{"purpose":"tundravm-endpoint/2","nonce":"%s",'
         f'"document":"{document.encode().hex()}"}}\' "{answer}"\n'
     )
     curl.chmod(0o755)

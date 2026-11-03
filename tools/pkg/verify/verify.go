@@ -313,7 +313,8 @@ func bound(evidence endpoint.Evidence, nonce, sessionKey []byte) ([]byte, []endp
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("the evidence is malformed: user_data: %w", err)
 	}
-	if !bytes.Equal(endpoint.Binding(nonce, sessionKey, evidence.SSHHostKeys, instanceKey, keys), userData) {
+	containers := endpoint.ContainerLines(evidence.Containers)
+	if !bytes.Equal(endpoint.Binding(nonce, sessionKey, evidence.SSHHostKeys, instanceKey, containers, keys), userData) {
 		return nil, nil, nil, errors.New("refused: the bound material does not hash to the quote's user data" + hint)
 	}
 	return userData, listeners, keys, nil

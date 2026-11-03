@@ -44,6 +44,10 @@ The checks, each only when its declaration exists (:func:`derive`):
   reaches each port it serves at its veth address; ``container:NAME:udp:PORT``: a datagram
   sent from a namespace of the probe's to the host's port reaches a socket in the
   container (its ``Udp InDatagrams``), for each exposed UDP port no firewall mode names;
+- ``container-ssh:NAME``: each ``Container`` with ``ssh=``: its sshd runs as the uid the
+  root's ``passwd`` names for its user, listens on its port inside its namespace, its host
+  key is owned by that uid, and the evidence on the management port binds that key under
+  the container's name;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
   ``egress:HOST``: each host name a rule accepts holds addresses in its sets, which it
@@ -118,6 +122,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
+from tundravm._modules import container_ssh
 from tundravm.attestation import ENDPOINT_CALLER, tagged
 from tundravm.models import ServiceSpec, unit_name
 
@@ -182,6 +187,7 @@ Helper = Literal[
     "container-endpoint",
     "container-serves",
     "container-udp",
+    "container-ssh",
     "egress",
     "hostset",
     "time",
@@ -385,6 +391,22 @@ def derive(
     for item in items:
         if isinstance(item, ContainerRoot):
             checks += _container(item, items, CONTAINERS_PATH)
+    endpoint_ports = [item.port for item in items if isinstance(item, Secrets)]
+    for item in items:
+        if isinstance(item, ContainerRoot) and item.ssh_port is not None:
+            assert item.account is not None
+            management = str(endpoint_ports[0]) if endpoint_ports else "-"
+            call = f"probe_container_ssh {item.name} {item.account.name} {item.ssh_port}"
+            checks.append(
+                Check(
+                    f"container-ssh:{item.name}",
+                    f"{item.name}'s sshd runs as the uid its root names {item.account.name}, "
+                    f"listens on {item.ssh_port}, and the evidence binds its host key",
+                    f"{call} {management}",
+                    "container-ssh",
+                    (unit_name(item.name),),
+                )
+            )
     if firewall is not None:
         denied = _denied(firewall.egress_rules)
         if denied is not None:
@@ -1530,6 +1552,65 @@ probe_container_udp() {
         fail "no datagram to the host's $2/udp reached a socket in it in 10s: nft list chain inet filter prerouting; is its program listening?"
     fi
 }
+""",  # noqa: E501
+    "container-ssh": f"""\
+probe_container_ssh() {{
+    unit=$1-ssh.service
+    [ "$(systemctl show -P LoadState "$unit")" = loaded ] || unit=$1.service
+    dir={container_ssh.DIRECTORY}/$1/host
+    if ! want=$(id -u "$2" 2>/dev/null); then
+        fail "no user $2 on the host: the image's useradd for it did not run; read the build log"
+        return
+    fi
+    hex=$(printf '%04X' "$3")
+    waited=0
+    while :; do
+        pid=$(systemctl show -P MainPID "$unit")
+        listening=
+        if [ "$pid" -gt 0 ]; then
+            for table in /proc/"$pid"/net/tcp /proc/"$pid"/net/tcp6; do
+                [ -r "$table" ] || continue
+                while read -r _ local _ state _; do
+                    [ "$state" = 0A ] && [ "${{local##*:}}" = "$hex" ] && listening=yes
+                done <"$table"
+            done
+        fi
+        [ -n "$listening" ] && break
+        if [ "$waited" -ge {WAIT_SECONDS} ]; then
+            fail "$unit does not listen on $3 in its namespace after {WAIT_SECONDS}s: journalctl -u $unit -u $1-ssh-keys"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    running=$(sed -n 's/^Uid:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/"$pid"/status)
+    if [ "$running" != "$want" ]; then
+        fail "$unit runs as uid $running, not $2's $want"
+        return
+    fi
+    named=$(grep "^$2:" /proc/"$pid"/root/etc/passwd | cut -d: -f3)
+    if [ "$named" != "$want" ]; then
+        fail "its root's passwd gives $2 uid ${{named:-none}}, the host $want: sshd would not find its own account"
+        return
+    fi
+    if [ "$(stat -c %u "$dir/{container_ssh.KEY}" 2>/dev/null)" != "$want" ]; then
+        fail "no host key in $dir owned by uid $want: journalctl -u $1-ssh-keys"
+        return
+    fi
+    key=$(cut -d ' ' -f 1,2 "$dir/{container_ssh.KEY}.pub")
+    print=$(ssh-keygen -l -f "$dir/{container_ssh.KEY}.pub" | cut -d ' ' -f 2)
+    if [ "$4" = - ]; then
+        ok "uid $want ($2 in its root), sshd on :$3, host key $print; no endpoint to bind it"
+        return
+    fi
+    nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+    said=$(curl -ksS --max-time 10 "https://127.0.0.1:$4/evidence?nonce=$nonce" 2>&1) || true
+    case $said in
+        *"\\"name\\":\\"$1\\",\\"port\\":$3,\\"ssh_host_keys\\":[\\"$key\\"]"*)
+            ok "uid $want ($2 in its root), sshd on :$3, host key $print bound by the evidence on :$4" ;;
+        *) fail "the evidence on :$4 does not bind $1's host key $print: journalctl -u tundravm-endpoint; ${{said:-no answer}}" ;;
+    esac
+}}
 """,  # noqa: E501
     "egress": """\
 probe_egress() {

@@ -130,6 +130,7 @@ from .model import (
     UnitOutput,
     UnitReady,
     User,
+    account_clash,
     recorded_local,
 )
 from .resolve import CLOUD_TARGETS, builtin_steps, order_hooks, step_nodes
@@ -261,7 +262,7 @@ class StateBuilder:
         steps = {step for step, _, _ in step_nodes(full)}
         hooks = iter(order_hooks([item for item in items if isinstance(item, Hook)]))
         units = declared_units(full)
-        users = {item.name for item in full if isinstance(item, User)}
+        users = {item.name: item.owner for item in full if isinstance(item, User)}
         mounts = {item.mount for item in full if isinstance(item, Disk)}
         mounts |= {item.where for item in full if isinstance(item, Mount)}
         runtime_done = False
@@ -521,6 +522,7 @@ class StateBuilder:
                 volumes=_unlocked_volumes(disks, keys),
                 attested_tls=entry.attested_tls,
                 owners=tuple(disk.name for disk in disks if disk.owner),
+                containers=entry.containers,
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary
@@ -722,10 +724,27 @@ def _group(profile: ProfileState, group: Group) -> None:
 
 
 def _user(profile: ProfileState, user: User) -> None:
-    if any(u.name == user.name for u in profile.users):
+    known = next((u for u in profile.users if u.name == user.name), None)
+    if known is not None:
+        clash = account_clash(user.name, known.owner, user.owner)
+        if clash is not None:
+            raise ValidationError(
+                f"{clash[0]}, in profile {profile.name!r}.",
+                hint=clash[1],
+                context={"user": user.name, "profile": profile.name},
+            )
         raise ValidationError(
             f"Duplicate user name '{user.name}' in profile '{profile.name}'.",
             hint="User names must be unique within a profile.",
+            context={"user": user.name, "profile": profile.name},
+        )
+    same = next((u for u in profile.users if user.uid is not None and u.uid == user.uid), None)
+    if same is not None:
+        raise ValidationError(
+            f"Users {same.name!r} and {user.name!r} both take uid {user.uid} in profile "
+            f"{profile.name!r}, so useradd refuses the second.",
+            hint="Rename one of them (a container's uid follows its user's name), or give "
+            "one another uid=.",
             context={"user": user.name, "profile": profile.name},
         )
     profile.users.append(
@@ -737,6 +756,7 @@ def _user(profile: ProfileState, user: User) -> None:
             uid=user.uid,
             gid=user.primary_group,
             groups=tuple(user.groups),
+            owner=user.owner,
         )
     )
 
@@ -814,11 +834,20 @@ def _container(item: ContainerRoot) -> ContainerSpec:
     shipped = ProfileState(name=item.name)
     for entry in item.files:
         _file(shipped, entry)
+    user = item.account
+    passwd: tuple[str, ...] = ()
+    group: tuple[str, ...] = ()
+    if user is not None:
+        gid = user.primary_group
+        passwd = (f"{user.name}:x:{user.uid}:{gid}::{user.home or '/'}:{user.shell}",)
+        group = (f"{user.name}:x:{gid}:",)
     return ContainerSpec(
         name=item.name,
         packages=tuple(sorted(set(item.packages))),
         files=tuple(shipped.files),
         directories=tuple(dict.fromkeys(item.directories)),
+        passwd=passwd,
+        group=group,
     )
 
 
@@ -1042,7 +1071,9 @@ def _service(
     command = service.exec_start
     fields = _unit_fields(name, service, units)
     if service.user is None:
-        fields["user"] = _system_user(profile, service.default_user, users)
+        fields["user"] = _system_user(profile, service.default_user, users, f"Service {name!r}")
+    elif isinstance(service.user, str):
+        _login_user(profile, service.user, users, f"Service {name!r}")
     if service.state and not service.working_dir:
         fields["working_dir"] = f"/var/lib/{service.state}"
     on_mounts = _mounted_paths(service, mounts)
@@ -1539,12 +1570,41 @@ def _gate(profile: ProfileState, name: str) -> None:
     profile.services[index] = gate.gated(profile.services[index])
 
 
-def _system_user(profile: ProfileState, name: str, users: Collection[str]) -> str:
+def _owner(profile: ProfileState, name: str, users: Collection[str]) -> str | None:
+    """Who owns the account *name* (``User(owner=)``), from *users* (a name-to-owner
+    mapping) or the profile's accounts so far."""
+    found = users.get(name) if isinstance(users, Mapping) else None
+    known = next((u.owner for u in profile.users if u.name == name), None)
+    return found or known
+
+
+def _system_user(profile: ProfileState, name: str, users: Collection[str], unit: str) -> str:
     """*name*, declared as a system user (``User(name)``) unless *users* or the profile
-    already has it: what a ``Service``/``Task`` without ``user=`` runs as."""
+    already has it: what a ``Service``/``Task`` without ``user=`` runs as. An account a
+    ``Login`` or a ``Container`` owns is refused: the unit would run as it."""
+    owner = _owner(profile, name, users)
+    if owner is not None:
+        raise ValidationError(
+            f"{unit} would run as {name!r}, the account {owner} declares: it would hold "
+            "that account's keys, sudo rules and files.",
+            hint=f"Rename the unit, or pass user= an account of its own; {owner} keeps {name!r}.",
+            context={"unit": unit, "user": name, "profile": profile.name},
+        )
     if name not in users and not any(u.name == name for u in profile.users):
         _user(profile, User(name))
     return name
+
+
+def _login_user(profile: ProfileState, name: str, users: Collection[str], unit: str) -> None:
+    """Refuse *unit*'s ``user=`` *name* when a ``Login`` owns that account."""
+    owner = _owner(profile, name, users)
+    if owner is not None and owner.startswith("Login("):
+        raise ValidationError(
+            f"{unit} runs as {name!r}, the account {owner} declares: whoever logs in as it "
+            "could change the unit's process, and the unit holds the login's sudo rules.",
+            hint="Run the unit as its own user (drop user=), and keep the login for people.",
+            context={"unit": unit, "user": name, "profile": profile.name},
+        )
 
 
 def _task(
@@ -1565,7 +1625,9 @@ def _task(
         )
     user = task.user
     if user is None:
-        user = _system_user(profile, stem, users)
+        user = _system_user(profile, stem, users, f"Task {stem!r}")
+    elif isinstance(user, str):
+        _login_user(profile, user, users, f"Task {stem!r}")
     command = task.command
     boot = task.schedule is None
     wants = _merged(output_units(task.needs), _targets(name, "wants", task.wants, units))

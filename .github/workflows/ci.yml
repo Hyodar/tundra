@@ -303,6 +303,47 @@ jobs:
           done
           grep -F 'name=greeting-token' .tundravm/instances/fixture-1/console.log
 
+      - name: Log in to the container's sshd with its delivered key
+        # ContainerSsh: box's own sshd, run as box in its root, on 10022 through the host's
+        # forward. attest pinned the host key the quote binds for box in known_hosts; the
+        # key ssh-keyscan sees must be that one. Only box logs in, by key: root and a
+        # password are refused. Success first, once each: OpenSSH 10 penalises failures.
+        run: |
+          policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
+          receipt=.tundravm/instances/fixture-1/instance.json
+          known=.tundravm/instances/fixture-1/known_hosts
+          probe=.tundravm/instances/fixture-1/probe.json
+          console=.tundravm/instances/fixture-1/console.log
+          jq -r '.results[] | select(.check == "container-ssh:box") | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          jq -e '.results[] | select(.check == "container-ssh:box") | .verdict == "ok"' "$probe"
+          grep -E 'tundravm-container-ssh: box SHA256:[A-Za-z0-9+/]{43}' "$console"
+          port=$(jq -r '.ports["10022"]' "$receipt")
+          pinned=$(grep -F "[127.0.0.1]:$port " "$known" | cut -d ' ' -f 2,3)
+          echo "pinned for box: $pinned"
+          test -n "$pinned"
+          seen=$(ssh-keyscan -p "$port" -t ed25519 127.0.0.1 2>/dev/null | cut -d ' ' -f 2,3)
+          echo "box's sshd shows: $seen"
+          test "$seen" = "$pinned"
+          uv run tundravm secrets deliver fixture-1 --policy "$policy" \
+            "box-keys=@$RUNNER_TEMP/operator.pub"
+          as() {
+            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes "$@"
+          }
+          as box@127.0.0.1 'true && id -un' | tee "$RUNNER_TEMP/box-ssh.txt"
+          grep -Fx box "$RUNNER_TEMP/box-ssh.txt"
+          if as root@127.0.0.1 true 2>"$RUNNER_TEMP/box-root.txt"; then
+            echo "root logged in to box's sshd"; exit 1
+          fi
+          cat "$RUNNER_TEMP/box-root.txt"
+          grep -F 'Permission denied (publickey)' "$RUNNER_TEMP/box-root.txt"
+          if as -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive \
+            box@127.0.0.1 true 2>"$RUNNER_TEMP/box-password.txt"; then
+            echo "box's sshd let a login in without a key"; exit 1
+          fi
+          cat "$RUNNER_TEMP/box-password.txt"
+          grep -F 'Permission denied (publickey)' "$RUNNER_TEMP/box-password.txt"
+
       - name: Open a maintenance window on the dev instance
         # Firewall(modes=): the dev profile's SSH answers only in maintenance. `run switch`
         # rides the attested endpoint's bound session and mode-switch extends RTMR3 before

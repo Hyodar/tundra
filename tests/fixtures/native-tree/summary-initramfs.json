@@ -318,6 +318,7 @@
           "linux-image-amd64",
           "nftables",
           "nvme-cli",
+          "openssh-client",
           "openssh-server",
           "openssl",
           "passwd",

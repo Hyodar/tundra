@@ -1389,7 +1389,8 @@ class Login(Keywords):
     def declarations(self) -> Iterator[Declaration]:
         """The account, its sshd block, its keys, its menu and its sudo lines."""
         home = f"/home/{self.name}" if self.home else None
-        yield User(self.name, system=False, home=home, shell=self.account_shell)
+        owner = f"Login({self.name!r})"
+        yield User(self.name, system=False, home=home, shell=self.account_shell, owner=owner)
         if home is not None:
             chown = shlex.join(["chown", "-R", f"{self.name}:{self.name}", home])
             yield BootStep(f"{OWNERS_STEP}-login-{self.name}", f"{chown}\n")

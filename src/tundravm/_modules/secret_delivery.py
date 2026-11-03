@@ -1,7 +1,8 @@
 """Secret delivery: the attested endpoint (``tools/cmd/attested-endpoint``) of a ``Secrets``.
 
 The endpoint serves ``GET /evidence`` (a quote binding the nonce, its TLS key, the SSH host
-keys, the instance public key and each attested TLS port's certificate key) and takes
+keys, the instance public key, each container's SSH host keys and each attested TLS port's
+certificate key) and takes
 ``POST /credentials``, ``/unlock`` and ``/ssh-key`` only on the TLS session that fetched
 that evidence (plan section 6.3).
 """
@@ -15,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from tundravm._modules import attested_tls
+from tundravm._modules import attested_tls, container_ssh
 from tundravm._modules.base import Module, tools_source
 from tundravm._modules.disk_encryption import (
     OWNER_DIRECTORY,
@@ -104,7 +105,10 @@ class SecretDelivery(Module):
     *owners* name the volumes whose header pins the operator's key: with one, every write
     must be signed by it (the first signed one pins its signer). The operator's SSH key goes
     to root's *ssh_dir*, or to the ``authorized_keys.d`` file of *ssh_login*; with neither
-    the endpoint takes none.
+    the endpoint takes none. *containers* are
+    ``(name, port)`` pairs: the containers whose sshd host keys
+    (:func:`tundravm._modules.container_ssh.host_keys`) the quote binds, labelled by name,
+    and whose keys directory takes a login's key.
     """
 
     secrets: tuple[SecretSpec, ...] = ()
@@ -124,9 +128,11 @@ class SecretDelivery(Module):
     volumes: tuple[tuple[str, str], ...] = ()
     attested_tls: tuple[int, ...] = ()
     owners: tuple[str, ...] = ()
+    containers: tuple[tuple[str, int], ...] = ()
 
     def __post_init__(self) -> None:
         self.secrets = tuple(self.secrets)
+        self.containers = tuple(sorted(self.containers))
         self.attested_tls = tuple(sorted(self.attested_tls))
         for spec in self.secrets:
             if not spec.name:
@@ -233,6 +239,7 @@ class SecretDelivery(Module):
                 "ssh-host-keys.service",
                 "tundravm-instance-key.service",
                 *(attested_tls.unit(port) for port in self.attested_tls),
+                *(container_ssh.unit(name) for name, _ in self.containers),
                 *owners,
             ),
             wants=("network-online.target", "tdxs.socket", *owners),
@@ -310,6 +317,17 @@ class SecretDelivery(Module):
         for port in self.attested_tls:
             lines.extend(
                 (f"  - port: {port}", f'    certificate: "{attested_tls.certificate(port)}"')
+            )
+        if self.containers:
+            lines.append("containers:")
+        for name, port in self.containers:
+            lines.extend(
+                (
+                    f'  - name: "{name}"',
+                    f"    port: {port}",
+                    f'    host_keys: "{container_ssh.host_keys(name)}"',
+                    f'    keys: "{container_ssh.keys_directory(name)}"',
+                )
             )
         return "\n".join(lines) + "\n"
 

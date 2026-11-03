@@ -5,15 +5,17 @@ An image with a volume, a secret or an attested TLS ingress runs ``attested-endp
 TLS key pair at start and serves ``GET /evidence?nonce=``: a quote whose ``report_data`` is
 ``SHA-256(binding || nonce)``, where ``binding`` (the quote's user data) is
 ``SHA-512(purpose, nonce, the TLS key, the SSH host keys, the instance public key, each
-attested TLS port's certificate key)``, each part length-prefixed (:func:`binding`).
+container's SSH host keys, each attested TLS port's certificate key)``, each part
+length-prefixed (:func:`binding`).
 
 - :func:`attest` opens one TLS session, sends a fresh nonce, and refuses evidence that does
   not answer that nonce (a replay), that binds another TLS key than this session's (a
   relayed quote, or the wrong key), or whose bound material does not hash to the quote's
   user data. Then :func:`tundravm.attestation.attest` judges the quote against the policy
-  (a simulator's structurally, ``simulated`` at best). On success the bound SSH host keys
-  become the instance's ``known_hosts`` and, when the image takes one, the operator's SSH
-  public key goes over the same session (``POST /ssh-key``).
+  (a simulator's structurally, ``simulated`` at best). On success the bound SSH host keys,
+  the host's and each container's on its own port, become the instance's ``known_hosts``
+  and, when the image takes one, the operator's SSH public key goes over the same session
+  (``POST /ssh-key``).
 - :func:`deliver` and :func:`unlock` verify again on a session of their own, apply
   :func:`release_predicate`, then write on that session only: ``POST /credentials``,
   ``POST /unlock``. Each write carries the nonce of the evidence the session fetched, which
@@ -59,7 +61,7 @@ from .attestation import connect as connect_issuer
 from .errors import AttestationError, StateError, ValidationError
 from .instances import MANAGEMENT_PORT, SSH_PORT, Instance, known_hosts
 
-PURPOSE = "tundravm-endpoint/1"
+PURPOSE = "tundravm-endpoint/2"
 """What the endpoint's quotes are for: the first part of every binding."""
 CHANNEL = "attested endpoint: a TLS session whose key the quote binds"
 """How ``attest``, ``secrets deliver`` and ``secrets unlock`` reach the instance."""
@@ -77,17 +79,37 @@ def binding(
     host_keys: Sequence[str],
     instance_key: bytes,
     ingress_keys: Sequence[bytes] = (),
+    containers: Sequence[ContainerKeys] = (),
 ) -> bytes:
     """The 64-byte user data a quote of the endpoint carries (``tools/pkg/endpoint``):
     SHA-512 over :data:`PURPOSE`, *nonce*, *tls_key* (DER SubjectPublicKeyInfo), the sorted
-    ``type base64`` *host_keys* joined by newlines, *instance_key* and each of
-    *ingress_keys* (the DER SubjectPublicKeyInfo of an attested TLS port's certificate key,
-    in port order), each part prefixed with its length as a big-endian uint32."""
+    ``type base64`` *host_keys* joined by newlines, *instance_key*, the sorted
+    ``name port type base64`` lines of the *containers*' host keys joined by newlines, and
+    each of *ingress_keys* (the DER SubjectPublicKeyInfo of an attested TLS port's
+    certificate key, in port order), each part prefixed with its length as a big-endian
+    uint32."""
     digest = hashlib.sha512()
-    parts = (PURPOSE.encode(), nonce, tls_key, "\n".join(host_keys).encode(), instance_key)
+    lines = sorted(f"{c.name} {c.port} {key}" for c in containers for key in c.host_keys)
+    parts = (
+        PURPOSE.encode(),
+        nonce,
+        tls_key,
+        "\n".join(host_keys).encode(),
+        instance_key,
+        "\n".join(lines).encode(),
+    )
     for part in (*parts, *ingress_keys):
         digest.update(struct.pack(">I", len(part)) + part)
     return digest.digest()
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerKeys:
+    """One container's sshd host keys, as the evidence binds them: by name, on *port*."""
+
+    name: str
+    port: int
+    host_keys: tuple[str, ...]
 
 
 class Channel(Protocol):
@@ -273,6 +295,8 @@ class Evidence:
     firewall: Mapping[str, Any] | None = None
     """The firewall's ``mode``, ``modes`` and switch ``events`` since boot, in an image with
     modes; the quote's RTMR3 is their replay."""
+    containers: tuple[ContainerKeys, ...] = ()
+    """Each container's sshd host keys the quote binds, labelled by its name and port."""
 
     @property
     def mode_events(self) -> tuple[str, ...]:
@@ -371,6 +395,14 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
                 for item in said.get("attested_tls") or ()
             )
         )
+        containers = tuple(
+            ContainerKeys(
+                str(item["name"]),
+                int(item["port"]),
+                tuple(str(k) for k in item.get("ssh_host_keys") or ()),
+            )
+            for item in said.get("containers") or ()
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise AttestationError(f"The evidence from {where} is malformed: {exc}.", hint="") from exc
     hint = "Something between this host and the instance answered for it; attest again."
@@ -388,7 +420,8 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
             "Refused: the quote binds another TLS key than this session's (a relayed quote).",
             hint=hint,
         )
-    if binding(nonce, key, host_keys, instance_bytes, [k for _, k in listeners]) != user_data:
+    ingress = [k for _, k in listeners]
+    if binding(nonce, key, host_keys, instance_bytes, ingress, containers) != user_data:
         raise AttestationError(
             "Refused: the bound material does not hash to the quote's user data.", hint=hint
         )
@@ -407,6 +440,7 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
         accepts=accepts if isinstance(accepts, Mapping) else {},
         attested_tls=listeners,
         firewall=firewall if isinstance(firewall, Mapping) else None,
+        containers=containers,
     )
 
 
@@ -651,11 +685,17 @@ def verify(
     return result, evidence
 
 
-def _known_hosts(instance: Instance, host_keys: Sequence[str]) -> None:
-    port = instance.port(SSH_PORT) or SSH_PORT
-    name = instance.host if port == SSH_PORT else f"[{instance.host}]:{port}"
-    lines = "".join(f"{name} {key}\n" for key in host_keys)
-    known_hosts(instance).write_text(lines, encoding="utf-8")
+def _known_hosts(instance: Instance, evidence: Evidence) -> None:
+    """The bound host keys as ``known_hosts``: the host's on its SSH port, each
+    container's on the host port that reaches its sshd."""
+
+    def name(guest: int) -> str:
+        port = instance.port(guest) or guest
+        return instance.host if port == SSH_PORT else f"[{instance.host}]:{port}"
+
+    lines = [f"{name(SSH_PORT)} {key}\n" for key in evidence.host_keys]
+    lines += [f"{name(c.port)} {key}\n" for c in evidence.containers for key in c.host_keys]
+    known_hosts(instance).write_text("".join(lines), encoding="utf-8")
 
 
 def attest(
@@ -712,7 +752,7 @@ def attest(
             result = replace(result, instance_key=evidence.instance_key)
             instance.data["instance_key"] = evidence.instance_key
         if result.passed:
-            _known_hosts(instance, evidence.host_keys)
+            _known_hosts(instance, evidence)
             key = _operator(identity)
             sent_key = _hand_ssh_key(instance, channel, evidence, key)
     instance.event(

@@ -15,7 +15,8 @@ findings, a lint rule ``tundravm check`` runs, of the codes the class declares a
   evidence service; :data:`EVIDENCE` is its readiness).
 - Ways in for people: :class:`SshAccess` (root, and each non-root :class:`Login` with its
   :class:`Sudo` rules), :class:`DevAccess` (``image.dev``).
-- :class:`Container`: a program in a Debian root of its own, built with the image.
+- :class:`Container`: a program in a Debian root of its own, built with the image, and
+  :class:`ContainerSsh`, its own sshd.
 - :class:`Observability` with :class:`JournalExport`, :class:`PrometheusRemoteWrite` (its
   :class:`RecordingRule` values, a :class:`SigV4` credential) and :class:`Proxy`
   (``image.observability``).
@@ -49,7 +50,7 @@ from ._base import (
     Tdxs,
     TeeBase,
 )
-from ._container import Container
+from ._container import Container, ContainerSsh
 from ._observability import (
     JournalExport,
     Observability,
@@ -64,6 +65,7 @@ __all__ = [
     "Component",
     "ComponentReady",
     "Container",
+    "ContainerSsh",
     "DevAccess",
     "Diagnostic",
     "Egress",

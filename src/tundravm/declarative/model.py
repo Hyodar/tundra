@@ -1117,6 +1117,10 @@ class Group(Declared):
 
 @dataclass(frozen=True, slots=True)
 class User(Declared):
+    """An account ``useradd`` creates at build. *owner* names the declaration it belongs to
+    (``Login('ops')``, ``Container('web')``): no other declares it again, and no service
+    runs as it by default."""
+
     name: str
     system: bool = True
     home: str | None = None
@@ -1124,6 +1128,7 @@ class User(Declared):
     uid: int | None = None
     primary_group: str | int | None = None
     groups: Sequence[str] = ()
+    owner: str | None = None
 
     def __post_init__(self) -> None:
         _freeze(self, "groups")
@@ -1151,6 +1156,20 @@ class User(Declared):
                 hint=f'User("{self.name}", primary_group="{self.name}"), or a gid of 0 or more.',
             )
         _require_names(self, self.groups, "group")
+
+
+def account_clash(name: str, first: str | None, second: str | None) -> tuple[str, str] | None:
+    """The problem and the fix when two declarations whose owners are *first* and *second*
+    (``User(owner=)``) both declare the account *name*; ``None`` when neither owns it."""
+    owners = [owner or "a User" for owner in (first, second)]
+    if first is None and second is None:
+        return None
+    return (
+        f"{owners[0]} and {owners[1]} both declare the account {name!r}: one would run as "
+        "the other, with its keys, sudo rules and files",
+        'Give each its own name: Container(..., user="<name>-container"), or a Login of '
+        "another name.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2202,7 +2221,9 @@ class Secrets(Declared):
     whose certificate key, made at boot under ``/run/tundravm/attested-tls/<port>``, every
     quote binds after the instance key, in port order. The operator's SSH key goes to
     root's *ssh_directory*, or to the ``authorized_keys.d`` file of *ssh_login* instead;
-    with neither the endpoint takes none.
+    with neither the endpoint takes none. *containers* are the
+    ``(name, port)`` of each container's sshd, whose host keys, made at boot under
+    ``/run/tundravm/containers/<name>``, every quote binds before the attested TLS keys.
     """
 
     name: str = "secrets"
@@ -2216,10 +2237,12 @@ class Secrets(Declared):
     ssh_login: str | None = None
     delivery: ExternalDelivery | None = None
     attested_tls: tuple[int, ...] = ()
+    containers: tuple[tuple[str, int], ...] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "entries")
         _freeze(self, "attested_tls")
+        _freeze(self, "containers")
         _require_name(self, self.name)
         for port in self.attested_tls:
             if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
@@ -3308,7 +3331,9 @@ class ContainerRoot(Declared):
     ``/usr/lib/tundravm/containers/<name>.raw`` (``Container`` composes it).
 
     *network* is its veth, which the variant's ``Firewall`` forwards (``None``: its namespace
-    holds ``lo`` only); *endpoints* the host's loopback ``host:port`` its namespace relays."""
+    holds ``lo`` only); *endpoints* the host's loopback ``host:port`` its namespace relays;
+    *account* the user it runs as, with the uid and gid the host pins for it, written into
+    the root's ``passwd`` and ``group``; *ssh_port* the port its sshd listens on, if any."""
 
     name: str
     packages: tuple[str, ...]
@@ -3317,6 +3342,8 @@ class ContainerRoot(Declared):
     directories: tuple[str, ...] = ()
     network: ContainerNetwork | None = None
     endpoints: tuple[str, ...] = ()
+    account: User | None = None
+    ssh_port: int | None = None
 
     @property
     def ports(self) -> tuple[Port, ...]:
@@ -3360,6 +3387,17 @@ class ContainerRoot(Declared):
                 )
         for path in self.directories:
             _require_absolute(self, path, "directory")
+        account = self.account
+        if account is not None and (
+            not isinstance(account, User)
+            or account.uid is None
+            or not isinstance(account.primary_group, int)
+        ):
+            raise _fail(
+                self,
+                f"account= holds {account!r}, not a User with a pinned uid and gid.",
+                hint='account=User("web", uid=60600, primary_group=60600)',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3886,6 +3924,7 @@ __all__ = [
     "Cargo",
     "ContainerNetwork",
     "ContainerRoot",
+    "account_clash",
     "VariantChange",
     "Check",
     "Debloat",

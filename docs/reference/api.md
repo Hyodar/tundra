@@ -422,8 +422,11 @@ User(
     uid: int | None = None,
     primary_group: str | int | None = None,
     groups: Sequence[str] = (),
+    owner: str | None = None,
 )
 ```
+
+An account `useradd` creates at build. *owner* names the declaration it belongs to (`Login('ops')`, `Container('web')`): no other declares it again, and no service runs as it by default.
 
 ## tundravm.ports
 
@@ -749,7 +752,7 @@ ComponentReady(component: Component)
 ```python
 Container(
     name: str,
-    argv: Sequence[str],
+    argv: Sequence[str] = (),
     *,
     packages: Sequence[str] = (),
     files: Sequence[File] = (),
@@ -761,6 +764,7 @@ Container(
     modes: Mapping[str, Egress] | None = FrozenMap(),
     serves: Sequence[PortValue] = (),
     probe: TcpProbe | None = None,
+    ssh: ContainerSsh | None = None,
 )
 ```
 
@@ -770,14 +774,31 @@ Container(
 |---|---|
 | `Container.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `container-shell`: a production container whose program is a shell. |
 | `Container.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where the container answers the host on *port*, a port of *serves*: its veth address, which nothing outside the host reaches, ready once *probe* connects (`lighthouse = Lighthouse(execution=searcher.endpoint(8551))`). |
+| `Container.exposed` | The ports DNATed to it: *expose*'s, and its sshd's. |
 | `Container.image` | Where the payload ships its root image. |
 | `Container.kernel() -> tuple[KernelFragment, ...]` | With a veth, what a built kernel needs for it: veth and the firewall's nat. |
 | `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there. |
 | `Container.namespace` | The `<name>-net.service` that makes its namespace, `None` when it holds `lo` only (`PrivateNetwork=yes`). |
 | `Container.network() -> dm.ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
 | `Container.relay(endpoint: Endpoint) -> str` | The socket in its namespace that relays *endpoint*. |
+| `Container.run_user` | The account the program runs as: *user*, else the container's name. |
+| `Container.sshd_unit` | The unit running sshd: the container's own without *argv*, `<name>-ssh` beside it with one; `None` without *ssh*. |
 | `Container.unit` | The container's `.service`. |
 | `Container.veth` | Whether its namespace has a veth: it exposes a port or sends something. |
+
+### `ContainerSsh`
+
+*dataclass*
+
+```python
+ContainerSsh(port: int, keys: Secret | Sequence[str])
+```
+
+The container's own sshd on *port*, letting its user in with *keys* and with nothing else: `Container("searcher", ssh=ContainerSsh(port=10022, keys=Secret("searcher-keys")))`.
+
+| Member | Does |
+|---|---|
+| `ContainerSsh.delivered` | Whether the keys arrive after attestation (a `Secret`) rather than baked in. |
 
 ### `DevAccess`
 

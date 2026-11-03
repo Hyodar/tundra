@@ -50,7 +50,8 @@ from ._runtime import (
     Runtime,
     RuntimeFragment,
     check_owner_login,
-    login_key_files,
+    container_ports,
+    key_files,
     services_of,
 )
 from ._secrets import InstanceKey, Secret
@@ -190,7 +191,8 @@ class _Lowering:
                 )
             ),
             tools=Tdxs().source if evidence is None else evidence.source,
-            key_files=login_key_files(image),
+            key_files=key_files(image),
+            containers=container_ports(image),
             ssh=self.explicit(SshAccess),
             rootfs=image.rootfs.layout,
             switchable=bool(getattr(self.explicit(Firewall), "modes", None)),

@@ -57,6 +57,7 @@ COMPONENTS = [
     "Component",
     "ComponentReady",
     "Container",
+    "ContainerSsh",
     "DevAccess",
     "Diagnostic",
     "Egress",

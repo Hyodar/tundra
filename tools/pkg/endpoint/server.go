@@ -69,9 +69,11 @@ type Evidence struct {
 	TLSPublicKey      string          `json:"tls_public_key"`
 	SSHHostKeys       []string        `json:"ssh_host_keys"`
 	InstancePublicKey string          `json:"instance_public_key"`
-	AttestedTLS       []ListenerKey   `json:"attested_tls"`
-	Mode              string          `json:"mode"`
-	Accepts           Accepts         `json:"accepts"`
+	// Containers are each container's sshd host keys, which the quote binds by name.
+	Containers  []ContainerKeys `json:"containers"`
+	AttestedTLS []ListenerKey   `json:"attested_tls"`
+	Mode        string          `json:"mode"`
+	Accepts     Accepts         `json:"accepts"`
 	// Firewall is the firewall's mode and the switches since boot that RTMR3 holds, in an
 	// image with modes.
 	Firewall *FirewallState `json:"firewall,omitempty"`
@@ -275,6 +277,9 @@ func (s *Server) logsIn(path string) bool {
 	if s.cfg.SSH != nil {
 		dirs = append(dirs, s.cfg.SSH.Dir)
 	}
+	for _, c := range s.cfg.Containers {
+		dirs = append(dirs, c.Keys)
+	}
 	for _, dir := range dirs {
 		if dir != "" && strings.HasPrefix(filepath.Clean(path), filepath.Clean(dir)+"/") {
 			return true
@@ -304,7 +309,12 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	userData := Binding(nonce, s.spki, hostKeys, instanceKey, ingressKeys)
+	containers, err := ReadContainerKeys(s.cfg.Containers)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	userData := Binding(nonce, s.spki, hostKeys, instanceKey, ContainerLines(containers), ingressKeys)
 	document, metadata, firewall, err := s.quote(r.Context(), userData, nonce)
 	if err != nil {
 		s.log.Error("no quote", "error", err)
@@ -333,6 +343,7 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 		TLSPublicKey:      base64.StdEncoding.EncodeToString(s.spki),
 		SSHHostKeys:       hostKeys,
 		InstancePublicKey: hex.EncodeToString(instanceKey),
+		Containers:        containers,
 		AttestedTLS:       listeners,
 		Mode:              mode,
 		Accepts:           s.accepts(),

@@ -34,6 +34,7 @@ from tundravm import Debian, File, Image, Mkosi, Package, Profile, RootFS, Servi
 from tundravm.components import (
     Component,
     Container,
+    ContainerSsh,
     Egress,
     Firewall,
     JournalExport,
@@ -187,6 +188,7 @@ checks it from the host with ``attest --tls`` and ``tools/cmd/attested-client``.
 BOX_PORT = 8081
 BOX_WINDOW_PORT = 8082
 BOX_UDP_PORT = 9999
+BOX_SSH_PORT = 10022
 BOX_PAGE = "<!doctype html>\n<title>box</title>\n<h1>box</h1>\n"
 BOX_PROGRAM = (
     f"/usr/bin/busybox httpd -p {BOX_WINDOW_PORT} -h {WWW}; "
@@ -204,6 +206,7 @@ BOX = Container(
     requires=[LOOPBACK_WEB.endpoint(LOOPBACK_PORT)],
     serves=[TCP(BOX_PORT)],
     probe=TcpProbe(BOX_PORT),
+    ssh=ContainerSsh(port=BOX_SSH_PORT, keys=Secret("box-keys", required=False)),
 )
 """The ``dev`` profile's container: busybox httpd in a Debian root of its own, built as the
 ``mkosi.images/box/`` subimage, serving the page shipped in that root on :data:`BOX_PORT`
@@ -212,7 +215,9 @@ opens, and socat taking datagrams on :data:`BOX_UDP_PORT`. Through its veth it r
 first resolver's TLS port, the second's only in maintenance, and on its loopback
 :data:`LOOPBACK_WEB`, a host endpoint; the host reaches its :data:`BOX_PORT` at its veth
 address. The probe's ``container:box`` rows print its root's digest, which CI compares
-with the manifest's, and each of those paths."""
+with the manifest's, and each of those paths. Its own sshd on :data:`BOX_SSH_PORT` lets
+``box`` in with the key CI delivers; ``container-ssh:box`` reads the account and the bound
+host key back."""
 
 
 class Web(Component):

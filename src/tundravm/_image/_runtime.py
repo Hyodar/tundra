@@ -35,9 +35,10 @@ import json
 import shlex
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from tundravm._location import declared_at, display_location
-from tundravm._modules import attested_tls
+from tundravm._modules import attested_tls, container_ssh
 from tundravm._platforms import azure
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
@@ -57,6 +58,9 @@ from ._service import Service
 from ._storage import TPM_PLATFORMS, OperatorKey, TpmSeal, Volume, VolumeDirectory
 from ._values import MANAGEMENT_PORT
 
+if TYPE_CHECKING:
+    from tundravm.components import Container
+
 __all__ = [
     "CONTROL_PLANE",
     "RUNTIME_FRAGMENT",
@@ -66,7 +70,8 @@ __all__ = [
     "bound",
     "check_bindings",
     "check_owner_login",
-    "login_key_files",
+    "container_ports",
+    "key_files",
     "services_of",
 ]
 
@@ -130,16 +135,45 @@ def _logins(items: Iterable[object]) -> Iterator[du.Login]:
             yield from _logins(composed(item))
 
 
-def login_key_files(image: object) -> tuple[tuple[str, str], ...]:
-    """``(secret, path)`` for each ``Login(keys=Secret(...))``: the attested endpoint also
-    writes that secret, a public key list, to the login's ``authorized_keys.d`` file."""
-    return tuple(
-        dict.fromkeys(
-            (login.keys.name, login.key_file)
-            for login in _logins(_image_items(image))
-            if isinstance(login.keys, Secret)
-        )
-    )
+def _containers(items: Iterable[object]) -> Iterator[Container]:
+    """Every ``Container`` running an sshd (``ssh=``) in *items*, components expanded."""
+    from tundravm.components import Container
+
+    for item in items:
+        if isinstance(item, Container):
+            if item.ssh is not None:
+                yield item
+        elif isinstance(item, Component):
+            yield from _containers(composed(item))
+
+
+def key_files(image: object) -> tuple[tuple[str, str], ...]:
+    """``(secret, path)`` for each ``Login(keys=Secret(...))`` and
+    ``ContainerSsh(keys=Secret(...))``: the attested endpoint also writes that secret, a
+    public key list, to the login's ``authorized_keys.d`` file or the container's keys
+    directory."""
+    items = _image_items(image)
+    logins = [
+        (login.keys.name, login.key_file)
+        for login in _logins(items)
+        if isinstance(login.keys, Secret)
+    ]
+    containers = [
+        (container.ssh.keys.name, container_ssh.authorized_keys(container.name))
+        for container in _containers(items)
+        if container.ssh is not None and isinstance(container.ssh.keys, Secret)
+    ]
+    return tuple(dict.fromkeys((*logins, *containers)))
+
+
+def container_ports(image: object) -> tuple[tuple[str, int], ...]:
+    """``(name, port)`` of each container's sshd, whose host keys every quote binds."""
+    found = {
+        container.name: container.ssh.port
+        for container in _containers(_image_items(image))
+        if container.ssh is not None
+    }
+    return tuple(sorted(found.items()))
 
 
 def check_owner_login(image: object, ssh: object) -> None:
@@ -187,6 +221,9 @@ def bound(image: object) -> tuple[tuple[Volume, ...], tuple[Secret, ...]]:
     for login in _logins(_image_items(image)):
         if isinstance(login.keys, Secret):
             _first("secret", secrets, login.keys)
+    for container in _containers(_image_items(image)):
+        if container.ssh is not None and isinstance(container.ssh.keys, Secret):
+            _first("secret", secrets, container.ssh.keys)
     for way in image.ingress:
         if isinstance(way, TLS):
             _first("secret", secrets, way.certificate)
@@ -243,8 +280,11 @@ class Runtime:
     tools: dm.Git | dm.Local
     rootfs: str
     key_files: tuple[tuple[str, str], ...] = ()
-    """``(secret, path)``: a login's delivered keys, written to its ``authorized_keys.d``
-    file (``0644``: sshd reads it as the login) beside the secret's own location."""
+    """``(secret, path)``: a login's or a container's delivered keys, written to its
+    ``authorized_keys`` file (``0644``: sshd reads it as the login) beside the secret's own
+    location."""
+    containers: tuple[tuple[str, int], ...] = ()
+    """``(name, port)`` of each container's sshd, whose host keys the quote binds."""
     ssh: Component | None = None
     """The image's own ``SshAccess``, which the control plane runs with ``from_delivery``
     on instead of a second one."""
@@ -452,6 +492,7 @@ class Runtime:
             ssh_key_path=None,
             ssh_login=self.owner_login,
             attested_tls=tuple(way.port for way in self.attested),
+            containers=self.containers,
         )
         if isinstance(self.ssh, SshAccess):
             yield dataclasses.replace(self.ssh, from_delivery=self.root_delivery)

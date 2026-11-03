@@ -44,6 +44,18 @@ type Config struct {
 	ModeSocket string `yaml:"mode_socket"`
 	// ModeEvents is the boot's log of switches the evidence carries.
 	ModeEvents string `yaml:"mode_events"`
+	// Containers are the containers running an sshd: the quote binds their host keys, and
+	// a credential landing in one's Keys directory is a key that logs in.
+	Containers []Container `yaml:"containers"`
+}
+
+// Container is one container's sshd: its name, its port, the glob of the host public keys
+// its host-side unit makes each boot, and the directory its delivered keys land in.
+type Container struct {
+	Name     string `yaml:"name"`
+	Port     int    `yaml:"port"`
+	HostKeys string `yaml:"host_keys"`
+	Keys     string `yaml:"keys"`
 }
 
 // Listener is one attested TLS port and the PEM certificate its key unit writes at boot.
@@ -161,6 +173,15 @@ func (c *Config) Validate() error {
 		ports[l.Port] = true
 	}
 	sort.Slice(c.AttestedTLS, func(i, j int) bool { return c.AttestedTLS[i].Port < c.AttestedTLS[j].Port })
+	containers := map[string]bool{}
+	for _, ct := range c.Containers {
+		if !namePattern.MatchString(ct.Name) || containers[ct.Name] || ct.Port < 1 || ct.Port > 65535 ||
+			!filepath.IsAbs(ct.HostKeys) || !filepath.IsAbs(ct.Keys) {
+			return fmt.Errorf("container %q is invalid, repeated, or has no port or absolute paths", ct.Name)
+		}
+		containers[ct.Name] = true
+	}
+	sort.Slice(c.Containers, func(i, j int) bool { return c.Containers[i].Name < c.Containers[j].Name })
 	return nil
 }
 

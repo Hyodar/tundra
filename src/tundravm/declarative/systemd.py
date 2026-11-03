@@ -56,9 +56,10 @@ _WORD = re.compile(r"~?@?[A-Za-z0-9_:-]+")
 
 _UNSET: Any = type("_Unset", (), {"__slots__": (), "__repr__": lambda self: "<strict>"})()
 """A :class:`Hardening` field's default: the :data:`_STRICT` value, not passed."""
-_CAPABILITY_SYSCALLS = {"CAP_SYS_TIME": "@clock"}
+_CAPABILITY_SYSCALLS = {"CAP_SYS_TIME": "@clock", "CAP_CHOWN": "@chown"}
 """The system call group a granted capability exists for: allowed back after the deny list
-(``@privileged`` holds ``@clock``), and ``ProtectClock=`` goes, so the grant takes effect."""
+(``@privileged`` holds ``@clock`` and ``@chown``), so the grant takes effect; for
+``CAP_SYS_TIME`` ``ProtectClock=`` goes too."""
 _STRICT: dict[str, object] = {
     "protect_system": "strict",
     "protect_home": True,

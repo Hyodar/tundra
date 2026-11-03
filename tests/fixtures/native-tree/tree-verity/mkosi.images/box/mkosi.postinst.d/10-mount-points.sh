@@ -9,3 +9,5 @@ mkdir -p "$BUILDROOT"/tmp
 mkdir -p "$BUILDROOT"/var/tmp
 chmod 1777 "$BUILDROOT"/tmp
 chmod 1777 "$BUILDROOT"/var/tmp
+mkdir -p "$BUILDROOT"/etc/ssh/tundravm/host
+mkdir -p "$BUILDROOT"/etc/ssh/tundravm/keys

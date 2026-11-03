@@ -21,7 +21,13 @@ from tundravm._ssh_sig import fingerprint as fingerprint_of
 from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.testing import FakeEndpoint
-from tundravm.testing._endpoint import HOST_KEY, INSTANCE_KEY, der_certificate, listener_key
+from tundravm.testing._endpoint import (
+    CONTAINER_KEY,
+    HOST_KEY,
+    INSTANCE_KEY,
+    der_certificate,
+    listener_key,
+)
 
 SIMULATED = policy(RTMR0=bytes(48), RTMR1=bytes(48), RTMR2=bytes(48))
 TOKEN = b"s3cret-token-value"
@@ -99,7 +105,7 @@ def test_attest_deliver_and_unlock_over_the_bound_session(
     assert json.loads((instance.path / "instance.json").read_text())["instance_key"] == INSTANCE_KEY
     assert endpoint.ssh_keys == [" ".join(key.with_name("operator.pub").read_text().split()[:2])]
     known = instances.known_hosts(instance).read_text()
-    assert known == f"[127.0.0.1]:2222 {HOST_KEY}\n"
+    assert known == f"[127.0.0.1]:2222 {HOST_KEY}\n[127.0.0.1]:10022 {CONTAINER_KEY}\n"
 
     token = _file(tmp_path, "token.txt", TOKEN)
     delivered = cli("secrets", "deliver", instance.id, "--policy", simulated, f"api-token=@{token}")

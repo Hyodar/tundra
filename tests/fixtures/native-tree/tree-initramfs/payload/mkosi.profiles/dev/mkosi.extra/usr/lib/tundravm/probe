@@ -373,6 +373,63 @@ probe_container_udp() {
         fail "no datagram to the host's $2/udp reached a socket in it in 10s: nft list chain inet filter prerouting; is its program listening?"
     fi
 }
+probe_container_ssh() {
+    unit=$1-ssh.service
+    [ "$(systemctl show -P LoadState "$unit")" = loaded ] || unit=$1.service
+    dir=/run/tundravm/containers/$1/host
+    if ! want=$(id -u "$2" 2>/dev/null); then
+        fail "no user $2 on the host: the image's useradd for it did not run; read the build log"
+        return
+    fi
+    hex=$(printf '%04X' "$3")
+    waited=0
+    while :; do
+        pid=$(systemctl show -P MainPID "$unit")
+        listening=
+        if [ "$pid" -gt 0 ]; then
+            for table in /proc/"$pid"/net/tcp /proc/"$pid"/net/tcp6; do
+                [ -r "$table" ] || continue
+                while read -r _ local _ state _; do
+                    [ "$state" = 0A ] && [ "${local##*:}" = "$hex" ] && listening=yes
+                done <"$table"
+            done
+        fi
+        [ -n "$listening" ] && break
+        if [ "$waited" -ge 30 ]; then
+            fail "$unit does not listen on $3 in its namespace after 30s: journalctl -u $unit -u $1-ssh-keys"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    running=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/"$pid"/status)
+    if [ "$running" != "$want" ]; then
+        fail "$unit runs as uid $running, not $2's $want"
+        return
+    fi
+    named=$(grep "^$2:" /proc/"$pid"/root/etc/passwd | cut -d: -f3)
+    if [ "$named" != "$want" ]; then
+        fail "its root's passwd gives $2 uid ${named:-none}, the host $want: sshd would not find its own account"
+        return
+    fi
+    if [ "$(stat -c %u "$dir/ssh_host_ed25519_key" 2>/dev/null)" != "$want" ]; then
+        fail "no host key in $dir owned by uid $want: journalctl -u $1-ssh-keys"
+        return
+    fi
+    key=$(cut -d ' ' -f 1,2 "$dir/ssh_host_ed25519_key.pub")
+    print=$(ssh-keygen -l -f "$dir/ssh_host_ed25519_key.pub" | cut -d ' ' -f 2)
+    if [ "$4" = - ]; then
+        ok "uid $want ($2 in its root), sshd on :$3, host key $print; no endpoint to bind it"
+        return
+    fi
+    nonce=$(tr -d '-' </proc/sys/kernel/random/uuid)
+    said=$(curl -ksS --max-time 10 "https://127.0.0.1:$4/evidence?nonce=$nonce" 2>&1) || true
+    case $said in
+        *"\"name\":\"$1\",\"port\":$3,\"ssh_host_keys\":[\"$key\"]"*)
+            ok "uid $want ($2 in its root), sshd on :$3, host key $print bound by the evidence on :$4" ;;
+        *) fail "the evidence on :$4 does not bind $1's host key $print: journalctl -u tundravm-endpoint; ${said:-no answer}" ;;
+    esac
+}
 probe_egress() {
     if ! command -v bash >/dev/null 2>&1; then
         skip "no bash to send a datagram with"
@@ -814,6 +871,8 @@ check=service:image-metrics.service
 probe_service image-metrics.service
 check=service:box.service
 probe_service box.service
+check=service:box-ssh.service
+probe_service box-ssh.service
 check=socket:box-endpoint-8090.socket
 probe_active box-endpoint-8090.socket 'the socket must listen; systemctl status names why it does not'
 check=service:sink.service
@@ -838,6 +897,8 @@ check=container:box:serves:8081
 probe_container_serves 169.254.136.254 8081
 check=container:box:udp:9999
 probe_container_udp box.service 9999
+check=container-ssh:box
+probe_container_ssh box box 10022 8745
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=egress:time.cloudflare.com
@@ -891,7 +952,7 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|fixture:box_alive|fixture:box_cpu_under_80_percent|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up' 'fixture:box_alive' 'fixture:box_cpu_under_80_percent'
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-endpoint-8090.service sink.service token.service go-probe.service rust-probe.service
+probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-ssh.service box-endpoint-8090.service sink.service token.service go-probe.service rust-probe.service
 check=observability:egress
 probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:web.service

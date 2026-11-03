@@ -21,6 +21,13 @@
       "units": [
         "token.service"
       ]
+    },
+    {
+      "location": "/run/tundravm/credentials/box-keys",
+      "name": "box-keys",
+      "required": false,
+      "source": null,
+      "units": []
     }
   ],
   "volumes": []

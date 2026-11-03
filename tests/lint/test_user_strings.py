@@ -211,7 +211,7 @@ INTERNAL_MODEL = {
     "UnitReady, Ready(, Root(), Dynamic()": re.compile(
         r"\bUnitReady\b|(?<![\w.])Ready\(|\bRoot\(\)|\bDynamic\(\)"
     ),
-    "Firewall(collect=, ssh=)": re.compile(r"\b(?:collect|ssh)=(?!=)"),
+    "Firewall(collect=, ssh=)": re.compile(r"\bcollect=(?!=)|\bFirewall\([^)]*\bssh="),
     "File(stage, path), Package(name, role)": re.compile(
         r"\bFile(?:Tree)?\(\w+, /|\bPackage\([\w.+-]+, \w+\)"
     ),

@@ -15,10 +15,12 @@ import hashlib
 import ipaddress
 import posixpath
 import re
+import zlib
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import field, replace
+from dataclasses import dataclass, field, replace
 
 from tundravm._image._component import Component, Endpoint, ServiceReady
+from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
 from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import (
@@ -30,9 +32,12 @@ from tundravm._image._values import (
     PortValue,
     TcpProbe,
 )
+from tundravm._location import Located
+from tundravm._modules import container_ssh
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.declarative.systemd import Condition, Hardening, Root
+from tundravm.declarative.utils import _SSH_PUBLIC_KEY as SSH_PUBLIC_KEY
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import CONTAINER_NETWORK_PATH
@@ -40,7 +45,7 @@ from tundravm.models import CONTAINERS_PATH
 
 from ._base import egress_rules
 
-__all__ = ["Container"]
+__all__ = ["Container", "ContainerSsh"]
 
 PROXY = "/usr/lib/systemd/systemd-socket-proxyd"
 """What relays a socket in the container's namespace to a host endpoint (the ``systemd``
@@ -67,12 +72,85 @@ warning, so the unit would still run ``modprobe``."""
 SHELLS = frozenset({"sh", "bash", "dash", "ash"})
 """The program names ``container-shell`` reads as a shell."""
 
+UIDS = range(60578, 61184)
+"""The ids a container's user takes: systemd's unused range, between the users nspawn maps
+into containers and the dynamic ones, so no ``useradd --system`` and no Debian package
+takes one (:func:`uid`)."""
+SSHD_SANDBOX = Hardening.strict(deny_syscalls=["@privileged"])
+"""The ``static`` sandbox with ``@resources`` allowed back: sshd's preauth sandbox calls
+``setrlimit`` and exits when it fails."""
+
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+_USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+")
 
 
 def _fail(message: str, *, hint: str) -> ValidationError:
     return ValidationError(f"Container: {message}", hint=hint)
+
+
+_KEYS_HINT = 'keys=Secret("searcher-keys") for keys delivered after attestation.'
+
+
+def uid(user: str) -> int:
+    """The uid and gid of a container's *user*, the same on the host and in its root
+    (``PrivateUsers=yes`` maps the unit's own ids to themselves): a hash of the name into
+    :data:`UIDS`, so it survives a rebuild and the files it owns on a volume stay its."""
+    return UIDS.start + zlib.crc32(user.encode()) % len(UIDS)
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerSsh(Located):
+    """The container's own sshd on *port*, letting its user in with *keys* and with
+    nothing else: ``Container("searcher", ssh=ContainerSsh(port=10022,
+    keys=Secret("searcher-keys")))``.
+
+    *keys* is a ``Secret`` (a public key list delivered after attestation) or public key
+    lines baked into the root, as on a ``Login``. tundravm supplies the rest: an sshd
+    config allowing that one user by key only (no password, no root, no forwarding), and a
+    host key the host makes each boot, owned by the container's user and read-only to it,
+    which the attested endpoint binds into every quote, labelled by the container's name,
+    so ``tundravm attest`` pins it for ``ssh -p PORT``. *port* is 1024 or more: sshd runs
+    as the container's user, unprivileged in its namespace.
+    """
+
+    port: int
+    keys: Secret | Sequence[str]
+
+    def __post_init__(self) -> None:
+        if isinstance(self.port, bool) or not isinstance(self.port, int):
+            raise ValidationError(
+                f"ContainerSsh: port must be a number, got {self.port!r}.",
+                hint='ContainerSsh(port=10022, keys=Secret("searcher-keys"))',
+            )
+        if not 1024 <= self.port <= 65535:
+            raise ValidationError(
+                f"ContainerSsh: port {self.port} is not one the container's user may bind: "
+                "sshd runs as that user, and only root binds below 1024.",
+                hint="Pick a port from 1024 to 65535: ContainerSsh(port=10022, ...).",
+            )
+        if isinstance(self.keys, Secret):
+            return
+        if isinstance(self.keys, str) or not isinstance(self.keys, Sequence):
+            raise ValidationError(
+                "ContainerSsh: keys= takes a Secret or a list of public keys.", hint=_KEYS_HINT
+            )
+        object.__setattr__(self, "keys", tuple(self.keys))
+        for key in self.keys:
+            if not isinstance(key, str) or not SSH_PUBLIC_KEY.fullmatch(key.strip()):
+                raise ValidationError(
+                    f"ContainerSsh: {key!r} is not one OpenSSH public key line.",
+                    hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
+                )
+        if not self.keys:
+            raise ValidationError(
+                "ContainerSsh has no key to accept, so nobody could log in.", hint=_KEYS_HINT
+            )
+
+    @property
+    def delivered(self) -> bool:
+        """Whether the keys arrive after attestation (a ``Secret``) rather than baked in."""
+        return isinstance(self.keys, Secret)
 
 
 class Container(Component):
@@ -82,8 +160,9 @@ class Container(Component):
 
     ``Container("web", ["/usr/bin/busybox", "httpd", "-f", "-p", "8081"],
     packages=["busybox"], expose=[TCP(8081)])``. The keywords mean what they mean on a
-    :class:`~tundravm.Service`: the program runs as *user* (default: a system user named
-    after the container), under the ``static`` sandbox, in a user namespace
+    :class:`~tundravm.Service`: the program runs as *user* (default: the container's name),
+    an account of its own with ids pinned from its name (:func:`uid`), which the root's
+    ``passwd`` and ``group`` name too, under the ``static`` sandbox, in a user namespace
     (``PrivateUsers=yes``) and a network namespace of its own; *state* is one volume
     directory, which it sees at the same path. Each port of *expose* (``TCP`` or ``UDP``)
     is DNATed from the host to the container through its veth, and a firewall mode naming
@@ -96,11 +175,14 @@ class Container(Component):
     once it is ready. Each port of *serves* is one the host reaches it on, at its veth
     address only (:meth:`endpoint`), and *probe* (a ``TcpProbe`` of one of them) is
     what a host service that requires that endpoint waits for. With none of these its
-    namespace holds ``lo`` only. Component name: *name*, which names its unit too.
+    namespace holds ``lo`` only. *ssh* (:class:`ContainerSsh`) runs an sshd in it letting
+    *user* in by key: as its program without *argv*, else beside it as
+    ``<name>-ssh.service`` in its network namespace; its port is exposed as *expose*'s are.
+    Component name: *name*, which names its unit too.
     """
 
     name: str
-    argv: Sequence[str]
+    argv: Sequence[str] = ()
     packages: Sequence[str] = ()
     files: Sequence[File] = ()
     state: VolumeDirectory | None = None
@@ -111,11 +193,12 @@ class Container(Component):
     modes: Mapping[str, Egress] = field(default_factory=FrozenMap)
     serves: Sequence[PortValue] = ()
     probe: TcpProbe | None = None
+    ssh: ContainerSsh | None = None
 
     def __init__(
         self,
         name: str,
-        argv: Sequence[str],
+        argv: Sequence[str] = (),
         *,
         packages: Sequence[str] = (),
         files: Sequence[File] = (),
@@ -127,6 +210,7 @@ class Container(Component):
         modes: Mapping[str, Egress] | None = None,
         serves: Sequence[PortValue] = (),
         probe: TcpProbe | None = None,
+        ssh: ContainerSsh | None = None,
     ) -> None:
         given = {
             "name": name,
@@ -141,6 +225,7 @@ class Container(Component):
             "modes": FrozenMap() if modes is None else modes,
             "serves": serves,
             "probe": probe,
+            "ssh": ssh,
         }
         for keyword, value in given.items():
             object.__setattr__(self, keyword, value)
@@ -158,6 +243,11 @@ class Container(Component):
             raise _fail(
                 f"{self.name!r} is not a container name.",
                 hint='Use lower-case letters, digits and "-": Container("web", [...]).',
+            )
+        if self.ssh is not None and not isinstance(self.ssh, ContainerSsh):
+            raise _fail(
+                f"ssh= holds {self.ssh!r}, not a ContainerSsh.",
+                hint='ssh=ContainerSsh(port=10022, keys=Secret("web-keys"))',
             )
         self._check_argv()
         self._check_packages()
@@ -177,11 +267,7 @@ class Container(Component):
                 f"state= holds {self.state!r}, not a volume directory.",
                 hint='state=data.directory("web"): a container root keeps nothing across boots.',
             )
-        if self.user == "root":
-            raise _fail(
-                'user="root" runs the program as root, which owns every file it binds.',
-                hint="Leave user= out: the program runs as a system user named after it.",
-            )
+        self._check_user()
         self._check_network()
 
     def _check_network(self) -> None:
@@ -196,6 +282,13 @@ class Container(Component):
                 if (port.port, port.protocol) in seen:
                     raise _fail(f"{keyword}= names {port!r} twice.", hint="Name each port once.")
                 seen.add((port.port, port.protocol))
+        if self.ssh is not None and (self.ssh.port, "tcp") in {
+            (p.port, p.protocol) for p in self.expose
+        }:
+            raise _fail(
+                f"expose= names port {self.ssh.port}, which ssh= exposes already.",
+                hint=f"Drop TCP({self.ssh.port}) from expose=.",
+            )
         if not isinstance(self.egress, Egress):
             raise _fail(f"egress= holds {self.egress!r}, not an Egress.", hint="egress=Egress()")
         self._check_modes()
@@ -245,6 +338,8 @@ class Container(Component):
 
     def _check_argv(self) -> None:
         if not self.argv:
+            if self.ssh is not None:
+                return
             raise _fail("argv= is empty, so nothing runs.", hint='argv=["/usr/bin/app", "--flag"]')
         for word in self.argv:
             if not isinstance(word, str) or "\n" in word:
@@ -253,6 +348,25 @@ class Container(Component):
             raise _fail(
                 f"argv= starts with {self.argv[0]!r}, which is not a program path.",
                 hint=f'argv=["/usr/bin/{self.argv[0]}", ...]: systemd searches no $PATH.',
+            )
+
+    def _check_user(self) -> None:
+        if self.user == "root":
+            raise _fail(
+                'user="root" runs the program as root, which owns every file it binds.',
+                hint="Leave user= out: the program runs as an account named after it.",
+            )
+        if self.user is not None and (
+            not isinstance(self.user, str) or not _USER.fullmatch(self.user)
+        ):
+            raise _fail(
+                f"user={self.user!r} is not a user name.",
+                hint='user="web": lower-case letters, digits, "-" and "_", at most 32.',
+            )
+        if self.user is None and len(self.name) > 32:
+            raise _fail(
+                f"the container's user would be {self.name!r}, longer than a user name.",
+                hint='Pass user= a name of at most 32 characters: user="web".',
             )
 
     def _check_packages(self) -> None:
@@ -334,11 +448,17 @@ class Container(Component):
         return f"{self.name}-net.service"
 
     @property
+    def exposed(self) -> tuple[PortValue, ...]:
+        """The ports DNATed to it: *expose*'s, and its sshd's."""
+        ssh = () if self.ssh is None else (TCP(self.ssh.port),)
+        return (*self.expose, *ssh)
+
+    @property
     def veth(self) -> bool:
         """Whether its namespace has a veth: it exposes a port or sends something."""
         egress = self.egress
         return (
-            bool(self.expose or self.serves or self.modes or egress.ports or egress.hosts)
+            bool(self.exposed or self.serves or self.modes or egress.ports or egress.hosts)
             or egress.metadata
         )
 
@@ -358,13 +478,52 @@ class Container(Component):
             f"{base}.{quad + 1}",
             f"{base}.{quad + 2}",
             egress_rules=egress_rules(((self.name, self.egress),)),
-            expose=tuple(dm.Port(port.port, port.protocol) for port in self.expose),
+            expose=tuple(dm.Port(port.port, port.protocol) for port in self.exposed),
             modes=tuple(
                 (mode, rule)
                 for mode, egress in self.modes.items()
                 for rule in egress_rules(((f"{self.name}: {mode}", egress),))
             ),
             serves=tuple(dm.Port(port.port, port.protocol) for port in self.serves),
+        )
+
+    @property
+    def run_user(self) -> str:
+        """The account the program runs as: *user*, else the container's name."""
+        return self.user or self.name
+
+    @property
+    def sshd_unit(self) -> str | None:
+        """The unit running sshd: the container's own without *argv*, ``<name>-ssh``
+        beside it with one; ``None`` without *ssh*."""
+        if self.ssh is None:
+            return None
+        return f"{self.name}-ssh.service" if self.argv else self.unit
+
+    def _account(self) -> Iterator[dm.Declaration]:
+        """The container's own group and user on the host, their ids pinned."""
+        user = self.run_user
+        yield dm.Group(user, gid=uid(user))
+        owner = f"Container({self.name!r})"
+        yield dm.User(user, uid=uid(user), primary_group=user, owner=owner)
+
+    def _host_key(self) -> Iterator[dm.Declaration]:
+        """``ssh-keygen`` and the root oneshot making this boot's host key."""
+        ids = uid(self.run_user)
+        path = container_ssh.script_path(self.name)
+        yield dm.Package(container_ssh.HOST_PACKAGE)
+        yield dm.File(path, container_ssh.script(self.name, ids, ids), mode=0o755)
+        yield dm.Task(
+            container_ssh.unit(self.name).removesuffix(".service"),
+            ("/bin/sh", path),
+            description=f"Generate this boot's SSH host key for {self.unit}",
+            user=Root(),
+            timeout="60s",
+            needs=(),
+            hardening=Hardening.strict(
+                protect_system="full", network="none", capabilities=["CAP_CHOWN"]
+            ),
+            directives={"Service": {"StandardOutput": "journal+console"}},
         )
 
     def kernel(self) -> tuple[KernelFragment, ...]:
@@ -392,46 +551,36 @@ class Container(Component):
             hardening=Hardening.none(),
             conditions=(LOOP_PRESENT,),
         )
-        mounts = () if self.state is None else (self.state.path,)
+        yield from self._account()
         network = self.network()
-        yield dm.ContainerRoot(
-            self.name,
-            tuple(self.packages),
-            files=tuple(dm.File(item.path, item.content, item.mode) for item in self.files),
-            directories=mounts,
-            network=network,
-            endpoints=tuple(endpoint.address for endpoint in self.requires),
-        )
-        directives: dict[str, str | tuple[str, ...]] = {
-            "RootImage": self.image,
-            "MountAPIVFS": "yes",
-            "PrivateUsers": "yes",
-        }
+        yield self._root(network)
         units = [self.loader]
-        if self.namespace is None:
-            directives["PrivateNetwork"] = "yes"
-        else:
-            directives["NetworkNamespacePath"] = f"{NETNS}/{self.name}"
+        if self.namespace is not None:
             units += [self.namespace, *(self.relay(endpoint) for endpoint in self.requires)]
             yield from self._namespace(network)
-        if mounts:
-            directives["BindPaths"] = tuple(f"{path}:{path}" for path in mounts)
+        sshd = list(container_ssh.SSHD)
         yield Service(
             self.name,
-            list(self.argv),
+            list(self.argv) or sshd,
             state=self.state,
-            user=self.user,
+            user=self.run_user,
+            hardening="static" if self.argv else SSHD_SANDBOX,
             requires=list(self.requires),
             readiness=None
             if self.probe is None or network is None
             else replace(self.probe, host=network.address),
-            unit=dm.DropIn(
-                "20-container",
-                requires=tuple(units),
-                after=tuple(units),
-                extra={"Service": directives},
-            ),
+            unit=self._dropin(self.unit, units),
         )
+        if self.ssh is not None:
+            yield from self._host_key()
+            if self.argv:
+                yield Service(
+                    f"{self.name}-ssh",
+                    sshd,
+                    user=self.run_user,
+                    hardening=SSHD_SANDBOX,
+                    unit=self._dropin(f"{self.name}-ssh.service", units),
+                )
         for endpoint in self.requires:
             relay = self.relay(endpoint)
             yield Service(
@@ -446,6 +595,64 @@ class Container(Component):
                 f"[Unit]\nRequires={self.namespace}\nAfter={self.namespace}\n\n"
                 f"[Socket]\nNetworkNamespacePath={NETNS}/{self.name}\n",
             )
+
+    def _root(self, network: dm.ContainerNetwork | None) -> dm.ContainerRoot:
+        """The root image: its packages and files, sshd's with *ssh*, its network, and the
+        user with the ids the host pins."""
+        mounts: tuple[str, ...] = () if self.state is None else (self.state.path,)
+        files = [dm.File(item.path, item.content, item.mode) for item in self.files]
+        packages = list(self.packages)
+        ssh = self.ssh
+        if ssh is not None:
+            packages.append(container_ssh.PACKAGE)
+            config = container_ssh.config(self.run_user, ssh.port)
+            files.append(dm.File(container_ssh.CONFIG, config, 0o644))
+            mounts += (container_ssh.HOST_KEYS,)
+            if isinstance(ssh.keys, Secret):
+                mounts += (container_ssh.AUTHORIZED_KEYS,)
+            else:
+                keys = "".join(f"{key.strip()}\n" for key in ssh.keys)
+                files.append(dm.File(f"{container_ssh.AUTHORIZED_KEYS}/authorized_keys", keys))
+        ids = uid(self.run_user)
+        home = "/" if self.state is None else self.state.path
+        account = dm.User(
+            self.run_user, uid=ids, primary_group=ids, home=home, shell=container_ssh.SHELL
+        )
+        return dm.ContainerRoot(
+            self.name,
+            tuple(dict.fromkeys(packages)),
+            files=tuple(files),
+            directories=mounts,
+            network=network,
+            endpoints=tuple(endpoint.address for endpoint in self.requires),
+            account=account,
+            ssh_port=None if ssh is None else ssh.port,
+        )
+
+    def _dropin(self, unit: str, units: Sequence[str]) -> dm.DropIn:
+        """The drop-in running *unit* in the root image after *units*: its namespaces, its
+        state bound, and for sshd the host key (and the delivered keys) read-only."""
+        directives: dict[str, str | tuple[str, ...]] = {
+            "RootImage": self.image,
+            "MountAPIVFS": "yes",
+            "PrivateUsers": "yes",
+        }
+        extra: dict[str, dict[str, str | tuple[str, ...]]] = {}
+        needs = list(units)
+        if self.namespace is None:
+            directives["PrivateNetwork"] = "yes"
+        else:
+            directives["NetworkNamespacePath"] = f"{NETNS}/{self.name}"
+        if self.state is not None:
+            directives["BindPaths"] = (f"{self.state.path}:{self.state.path}",)
+        if self.ssh is not None and unit == self.sshd_unit:
+            binds = container_ssh.binds(self.name, delivered=self.ssh.delivered)
+            directives["BindReadOnlyPaths"] = binds
+            needs.append(container_ssh.unit(self.name))
+            if unit != self.unit:
+                needs.append(self.unit)
+        extra["Service"] = directives
+        return dm.DropIn("20-container", requires=tuple(needs), after=tuple(needs), extra=extra)
 
     def _namespace(self, network: dm.ContainerNetwork | None) -> Iterator[object]:
         """``<name>-net.service``, ``iproute2`` and, with a veth, the networkd file that
@@ -508,6 +715,8 @@ class Container(Component):
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``container-shell``: a production container whose program is a shell."""
+        if not self.argv:
+            return ()
         program = posixpath.basename(self.argv[0])
         shell = program in SHELLS or (
             program == "busybox" and len(self.argv) > 1 and self.argv[1] in SHELLS

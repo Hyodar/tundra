@@ -28,7 +28,7 @@ from tundravm.attestation import (
     report_data_for,
     tagged,
 )
-from tundravm.bootstrap import PURPOSE, SIGNATURE_NAMESPACE, binding
+from tundravm.bootstrap import PURPOSE, SIGNATURE_NAMESPACE, ContainerKeys, binding
 
 Misbehaviour = Literal[
     "relay", "replay", "wrong-key", "wrong-certificate", "mode-log", "service-quote"
@@ -42,6 +42,9 @@ tdxs issued the quote to a ``tdx``-group service (tag ``signer``), not to the en
 
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeEndpointHostKeyFakeEndpointHostKey00"
 INSTANCE_KEY = "02" + "ab" * 32
+CONTAINER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeEndpointContainerKeyFakeEndpointCont0"
+CONTAINER = ContainerKeys("box", 10022, (CONTAINER_KEY,))
+"""The container whose sshd host key every fake quote binds."""
 
 
 def _der(tag: int, content: bytes) -> bytes:
@@ -167,6 +170,7 @@ class FakeEndpoint:
             [HOST_KEY],
             bytes.fromhex(INSTANCE_KEY),
             [self.listeners[port] for port in bound_ports],
+            (CONTAINER,),
         )
         caller = "signer" if self.misbehave == "service-quote" else ENDPOINT_CALLER
         issued = tagged(caller, user_data)
@@ -200,6 +204,9 @@ class FakeEndpoint:
             "tls_public_key": base64.b64encode(key).decode(),
             "ssh_host_keys": [HOST_KEY],
             "instance_public_key": INSTANCE_KEY,
+            "containers": [
+                {"name": CONTAINER.name, "port": CONTAINER.port, "ssh_host_keys": [CONTAINER_KEY]}
+            ],
             "attested_tls": [
                 {"port": port, "public_key": base64.b64encode(self.listeners[port]).decode()}
                 for port in bound_ports

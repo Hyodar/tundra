@@ -71,6 +71,8 @@ func start(t *testing.T) *fixture {
 	must(t, os.WriteFile(filepath.Join(dir, "instance-key.pub"), []byte("02"+strings.Repeat("ab", 32)+"\n"), 0o644))
 	must(t, os.WriteFile(filepath.Join(dir, "mode"), []byte("simulated\n"), 0o644))
 	must(t, syscall.Mkfifo(filepath.Join(dir, "data.fifo"), 0o600))
+	must(t, os.MkdirAll(filepath.Join(dir, "box", "host"), 0o755))
+	must(t, os.WriteFile(filepath.Join(dir, "box", "host", "ssh_host_ed25519_key.pub"), []byte("ssh-ed25519 AAAAbox box\n"), 0o644))
 	spki := certificate(t, filepath.Join(dir, "cert.pem"))
 	cfg := &Config{
 		Listen:      "127.0.0.1:0",
@@ -82,6 +84,10 @@ func start(t *testing.T) *fixture {
 		Volumes:     []Volume{{Name: "data", Pipe: filepath.Join(dir, "data.fifo")}},
 		AttestedTLS: []Listener{{Port: 8546, Certificate: filepath.Join(dir, "cert.pem")}},
 		SSH:         &SSHConfig{Dir: filepath.Join(dir, "ssh")},
+		Containers: []Container{{
+			Name: "box", Port: 10022, HostKeys: filepath.Join(dir, "box", "host", "ssh_host_*_key.pub"),
+			Keys: filepath.Join(dir, "box", "keys"),
+		}},
 	}
 	must(t, cfg.Validate())
 	quoter := &fakeQuoter{}
@@ -144,11 +150,12 @@ func TestBindingSeparatesItsParts(t *testing.T) {
 		name string
 		a, b []byte
 	}{
-		{"nonce against key", Binding([]byte("ab"), []byte("c"), nil, nil, nil), Binding([]byte("a"), []byte("bc"), nil, nil, nil)},
-		{"host keys", Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 A"}, nil, nil), Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 B"}, nil, nil)},
-		{"instance key", Binding([]byte("n"), []byte("k"), nil, []byte{2}, nil), Binding([]byte("n"), []byte("k"), nil, []byte{3}, nil)},
-		{"ingress key against none", Binding([]byte("n"), []byte("k"), nil, nil, one), Binding([]byte("n"), []byte("k"), nil, nil, nil)},
-		{"ingress key order", Binding([]byte("n"), []byte("k"), nil, nil, [][]byte{one[0], two[0]}), Binding([]byte("n"), []byte("k"), nil, nil, [][]byte{two[0], one[0]})},
+		{"nonce against key", Binding([]byte("ab"), []byte("c"), nil, nil, nil, nil), Binding([]byte("a"), []byte("bc"), nil, nil, nil, nil)},
+		{"host keys", Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 A"}, nil, nil, nil), Binding([]byte("n"), []byte("k"), []string{"ssh-ed25519 B"}, nil, nil, nil)},
+		{"instance key", Binding([]byte("n"), []byte("k"), nil, []byte{2}, nil, nil), Binding([]byte("n"), []byte("k"), nil, []byte{3}, nil, nil)},
+		{"container keys", Binding([]byte("n"), []byte("k"), nil, nil, []string{"box 10022 ssh-ed25519 A"}, nil), Binding([]byte("n"), []byte("k"), nil, nil, nil, nil)},
+		{"ingress key against none", Binding([]byte("n"), []byte("k"), nil, nil, nil, one), Binding([]byte("n"), []byte("k"), nil, nil, nil, nil)},
+		{"ingress key order", Binding([]byte("n"), []byte("k"), nil, nil, nil, [][]byte{one[0], two[0]}), Binding([]byte("n"), []byte("k"), nil, nil, nil, [][]byte{two[0], one[0]})},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -165,7 +172,8 @@ func TestEvidenceBindsTheSessionKey(t *testing.T) {
 	peer, err := x509.MarshalPKIXPublicKey(state.PeerCertificates[0].PublicKey)
 	must(t, err)
 	instance, _ := hex.DecodeString("02" + strings.Repeat("ab", 32))
-	want := Binding(bytes.Repeat([]byte{1}, 32), peer, []string{"ssh-ed25519 AAAAhost"}, instance, [][]byte{f.listener})
+	containers := []string{"box 10022 ssh-ed25519 AAAAbox"}
+	want := Binding(bytes.Repeat([]byte{1}, 32), peer, []string{"ssh-ed25519 AAAAhost"}, instance, containers, [][]byte{f.listener})
 	checks := []struct {
 		name string
 		ok   bool
@@ -176,6 +184,8 @@ func TestEvidenceBindsTheSessionKey(t *testing.T) {
 		{"the key is the session's", found.TLSPublicKey == base64.StdEncoding.EncodeToString(peer)},
 		{"the attested TLS port's key is bound", len(found.AttestedTLS) == 1 && found.AttestedTLS[0].Port == 8546 &&
 			found.AttestedTLS[0].PublicKey == base64.StdEncoding.EncodeToString(f.listener)},
+		{"the container's host key is bound by name", len(found.Containers) == 1 && found.Containers[0].Name == "box" &&
+			found.Containers[0].Port == 10022 && len(found.Containers[0].SSHHostKeys) == 1},
 		{"the mode is the gate's", found.Mode == "simulated"},
 		{"simulator metadata is attached", string(found.Metadata) != ""},
 		{"accepts names the credentials", len(found.Accepts.Credentials) == 1 && found.Accepts.SSHKey},

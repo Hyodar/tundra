@@ -53,7 +53,9 @@ from .model import (
     Task,
     Unit,
     UnitReady,
+    User,
     Variant,
+    account_clash,
 )
 from .systemd import target_unit
 
@@ -267,6 +269,14 @@ class _Resolution:
             if existing is None:
                 self.items[key] = item
                 self.declared.setdefault(key, item)
+            elif (
+                isinstance(item, User)
+                and isinstance(existing, User)
+                and (clash := account_clash(item.name, existing.owner, item.owner))
+            ):
+                self.report(
+                    "identity-collision", clash[0], subject=describe(key), at=item, hint=clash[1]
+                )
             elif existing != item:
                 first = display_location(existing.declared_at)
                 self.report(

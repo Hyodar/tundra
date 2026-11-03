@@ -256,6 +256,12 @@ SplitName=root-verity
 Minimize=best
 """
 
+CONTAINER_NO_HOST_KEYS = (
+    'rm -f "$BUILDROOT"/etc/ssh/ssh_host_*_key "$BUILDROOT"/etc/ssh/ssh_host_*_key.pub'
+)
+"""What leaves a container root without the SSH host keys ``openssh-server``'s postinst
+made: they would be every instance's, and differ between two builds."""
+
 # Finalize: account databases in a fixed order, without the "-" backups.
 ACCOUNTS_FINALIZE = textwrap.dedent("""\
     # Deterministic accounts (Debian #963788): passwd and group by numeric id, then name;
@@ -1393,8 +1399,10 @@ class DeterministicMkosiEmitter:
         """``mkosi.images/<name>/``: a container's root, an erofs root partition in a GPT
         image (mkosi's unsigned portable layout), from the image's snapshot and tools tree
         (universal settings); its files in ``mkosi.extra/``, the API mount points
-        (:data:`CONTAINER_API_DIRECTORIES`) and its bind mount points made at postinst. It runs
-        no script of the recipe's, so apt is all it fetches."""
+        (:data:`CONTAINER_API_DIRECTORIES`) and its bind mount points made at postinst, then
+        its user's ``passwd`` and ``group`` lines, and no SSH host key (a package's postinst
+        makes them, the same in every instance). It runs no script of the recipe's, so apt
+        is all it fetches."""
         sections = {
             "Output": [
                 "Format=portable",
@@ -1417,6 +1425,13 @@ class DeterministicMkosiEmitter:
         lines += [f'mkdir -p "$BUILDROOT"{shlex.quote(p)}' for p in container.directories]
         text = "\n".join(lines) + "\n"
         _write(directory / "mkosi.postinst.d" / "10-mount-points.sh", text, EXEC_MODE)
+        lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
+        for database, entries in (("passwd", container.passwd), ("group", container.group)):
+            append = f'>>"$BUILDROOT"/etc/{database}'
+            lines += [f'printf "%s\\n" {shlex.quote(entry)} {append}' for entry in entries]
+        lines.append(CONTAINER_NO_HOST_KEYS)
+        text = "\n".join(lines) + "\n"
+        _write(directory / "mkosi.postinst.d" / "20-accounts.sh", text, EXEC_MODE)
 
     # ── the payload ─────────────────────────────────────────────────────
 

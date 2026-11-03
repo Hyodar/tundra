@@ -188,6 +188,10 @@ class ContainerSpec:
     files: tuple[FileEntry, ...] = ()
     directories: tuple[str, ...] = ()
     """Mount points the root must hold for the unit's bind mounts (it is read-only)."""
+    passwd: tuple[str, ...] = ()
+    """``/etc/passwd`` lines the root gains: its user, with the uid the host pins."""
+    group: tuple[str, ...] = ()
+    """``/etc/group`` lines the root gains: its user's group, with the pinned gid."""
 
     @property
     def image(self) -> str:
@@ -217,6 +221,8 @@ class UserSpec:
     uid: int | None = None
     gid: int | str | None = None
     groups: tuple[str, ...] = ()
+    owner: str | None = None
+    """The declaration the account belongs to (``User(owner=)``), for clash messages."""
 
 
 @dataclass(frozen=True, slots=True)

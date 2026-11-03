@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mkosi-chroot groupadd --system --gid 60852 box
 mkosi-chroot useradd --system --shell /usr/sbin/nologin tick
 mkosi-chroot useradd --system --shell /usr/sbin/nologin journal-export
 mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
-mkosi-chroot useradd --system --shell /usr/sbin/nologin box
+mkosi-chroot useradd --system --shell /usr/sbin/nologin --uid 60852 --gid box box
 mkosi-chroot useradd --system --shell /usr/sbin/nologin box-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin box-endpoint-8090
 mkosi-chroot useradd --system --shell /usr/sbin/nologin token
@@ -18,6 +19,8 @@ mkosi-chroot systemctl enable metrics-export.service
 mkosi-chroot systemctl enable box-loop.service
 mkosi-chroot systemctl enable box.service
 mkosi-chroot systemctl enable box-ready.service
+mkosi-chroot systemctl enable box-ssh-keys.service
+mkosi-chroot systemctl enable box-ssh.service
 mkosi-chroot systemctl enable box-endpoint-8090.socket
 mkosi-chroot systemctl enable sink.service
 mkosi-chroot systemctl enable token.service
@@ -33,6 +36,8 @@ ln -sf "/etc/systemd/system/metrics-export.service" "$BUILDROOT/etc/systemd/syst
 ln -sf "/etc/systemd/system/box-loop.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/box.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/box-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/box-ssh-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/box-ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/box-endpoint-8090.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/token.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,16 +15,20 @@ from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
 from tundravm.components import (
     Container,
+    ContainerSsh,
     DevAccess,
     Egress,
     Endpoint,
     Firewall,
+    Login,
     Mode,
     Network,
+    SshAccess,
 )
 from tundravm.errors import ValidationError
 from tundravm.models import ContainerSpec
 from tundravm.ports import TCP, UDP
+from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import HttpProbe, TcpProbe
 from tundravm.testing import plan
@@ -72,6 +77,9 @@ def read(out: Path, path: str) -> str:
         (lambda: web(files=[File.text("/srv/a", "a", owner="web")]), "every file in it is root's"),
         (lambda: Container("web", ["busybox", "httpd"], packages=["busybox"]), "program path"),
         (lambda: Container("Web", HTTPD, packages=["busybox"]), "not a container name"),
+        (lambda: ContainerSsh(port=22, keys=Secret("web-keys")), "only root binds below 1024"),
+        (lambda: web(ssh=ContainerSsh(port=8081, keys=Secret("k"))), "ssh= exposes already"),
+        (lambda: Container("web", packages=["busybox"]), "argv= is empty"),
     ],
 )
 def test_a_container_refuses_what_would_fetch_or_leak(
@@ -296,3 +304,31 @@ def test_the_manifest_records_each_container_root(tmp_path: Path) -> None:
     assert found["web"]["packages"] == "containers/web.manifest"
     assert found["web"]["size"] == 4
     assert (out / "containers/web.raw").read_bytes() == b"root"
+
+
+SEARCHER = Login(
+    "searcher", keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0 me@host"], shell="/bin/sh"
+)
+
+
+@pytest.mark.parametrize(
+    ("beside", "message"),
+    [
+        (
+            Container("searcher", HTTPD, packages=["busybox"]),
+            "Login('searcher') and Container('searcher')",
+        ),
+        (web(user="searcher"), "both declare the account 'searcher'"),
+        (Service("searcher", ["/usr/bin/true"]), "the account Login('searcher') declares"),
+        (Service("app", ["/usr/bin/true"], user="searcher"), "could change the unit's process"),
+        (Service("api", ["/usr/bin/true"]), "the account Container('web') declares"),
+    ],
+)
+def test_an_account_belongs_to_one_declaration(beside: Any, message: str) -> None:
+    owned = message.endswith("Container('web') declares")
+    first = web(user="api") if owned else SshAccess(login=SEARCHER)
+    services = [beside] if isinstance(beside, Service) else []
+    components = [first] if services else [first, beside]
+    with pytest.raises(ValidationError, match=re.escape(message)) as raised:
+        compile_image(Image("box", components=components, services=services))
+    assert raised.value.hint
