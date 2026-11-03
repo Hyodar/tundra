@@ -528,6 +528,9 @@ class InitScriptEntry:
     name: str
     after: tuple[str, ...] = ()
     before: tuple[str, ...] = ()
+    waits: bool = False
+    """The step waits for a key someone hands over (an operator, a broker), so it and every
+    step after it stay off the boot target's path (``tundravm._modules.init.HELD_TARGET``)."""
 
 
 @dataclass(slots=True)

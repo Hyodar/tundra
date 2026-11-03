@@ -45,7 +45,6 @@ ln -sf "/etc/systemd/system/sink.service" "$BUILDROOT/etc/systemd/system/minimal
 ln -sf "/etc/systemd/system/token.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/go-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/rust-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/ledger.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkosi-chroot promtool check rules /etc/tundravm/metrics-rules.yml
 mkosi-chroot systemctl mask systemd-journal-upload.service prometheus.service

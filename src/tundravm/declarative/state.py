@@ -486,7 +486,8 @@ class StateBuilder:
             if any(spec.tpm_enabled() for spec in keygen.keys):
                 profile.packages.update(TPM_PROGRAMS.values())
             _add_file(profile, keygen.config_path, keygen.render_config())
-            _runtime_init(profile, keygen.init_script(), "keys", after)
+            handed = any(key.strategy == "pipe" for key in keys)
+            _runtime_init(profile, keygen.init_script(), "keys", after, waits=handed)
             applied.append(keygen)
         if disks:
             setup = DiskEncryption(
@@ -617,9 +618,16 @@ def _delivery_wait(delivery: ExternalDelivery) -> str:
 
 
 def _runtime_init(
-    profile: ProfileState, script: str, step: str, after: Mapping[str, tuple[str, ...]]
+    profile: ProfileState,
+    script: str,
+    step: str,
+    after: Mapping[str, tuple[str, ...]],
+    *,
+    waits: bool = False,
 ) -> None:
-    profile.init_scripts.append(InitScriptEntry(script=script, name=step, after=after[step]))
+    profile.init_scripts.append(
+        InitScriptEntry(script=script, name=step, after=after[step], waits=waits)
+    )
 
 
 def _add_file(profile: ProfileState, path: str, content: str | bytes, mode: str = "0644") -> None:

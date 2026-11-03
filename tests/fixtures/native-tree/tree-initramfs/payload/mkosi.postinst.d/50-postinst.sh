@@ -39,6 +39,7 @@ mkosi-chroot systemctl enable tdx-evidence.service
 mkosi-chroot systemctl enable tundravm-instance-key.service
 mkosi-chroot systemctl enable tundravm-power-button.service
 mkosi-chroot systemctl enable runtime-init.service
+mkosi-chroot systemctl enable tundravm-held.target
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-hostname.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -67,6 +68,7 @@ ln -sf "/etc/systemd/system/tdx-evidence.service" "$BUILDROOT/etc/systemd/system
 ln -sf "/etc/systemd/system/tundravm-instance-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-power-button.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/runtime-init.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-held.target" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 # resolv.conf is systemd-resolved's stub file, which forwards every lookup over TLS
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "$BUILDROOT/etc/resolv.conf"
 

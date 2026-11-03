@@ -140,6 +140,38 @@ def test_a_profile_service_keeps_its_state_on_the_volume_too() -> None:
     assert "runtime-init-volume-data.service" in _after(plan(image, "debug"), "debug.service")
 
 
+@pytest.mark.parametrize(
+    ("unlock", "held"),
+    [
+        (OperatorKey(), True),
+        (BrokerKey("https://broker.example", audience="x"), True),
+        (TpmSeal(platform="azure", pcrs=[7], recovery="none"), False),
+    ],
+    ids=["operator", "broker", "tpm"],
+)
+def test_a_volume_waiting_for_its_key_never_holds_the_boot_target(
+    unlock: OperatorKey | BrokerKey | TpmSeal, held: bool
+) -> None:
+    vault = Volume("vault", unlock=unlock)
+    image = Image(
+        "x",
+        services=[Service("ledger", ["/usr/bin/ledger"], state=vault.directory("ledger"))],
+        targets=("azure",),
+    )
+    planned = plan(image, "production")
+    steps = ["runtime-init-keys.service", "runtime-init-disks.service"]
+    steps.append("runtime-init-volume-vault.service")
+    required = " ".join(planned.unit("runtime-init.service").values("Unit", "Requires")).split()
+    assert all((step not in required) is held for step in steps)
+    ledger = planned.unit("ledger.service")
+    assert (ledger.get("Install", "WantedBy") == "tundravm-held.target") is held
+    if held:
+        target = planned.unit("tundravm-held.target")
+        assert target.get("Unit", "DefaultDependencies") == "no"
+        assert target.values("Unit", "Wants") == (" ".join(steps),)
+        assert target.get("Install", "WantedBy") == "minimal.target"
+
+
 def test_a_tpm_sealed_volume_is_a_vtpm_key_and_no_operator_bootstrap() -> None:
     seal = TpmSeal(platform="azure", pcrs=[7], recovery="none")
     cache = Volume("cache", mount="/var/cache/app", unlock=seal)

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Literal, get_args
 from urllib.parse import urlparse
 
+from tundravm._modules.init import HELD_TARGET
 from tundravm._options import RootLayout
 from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
 from tundravm._units import v1
@@ -1681,7 +1682,8 @@ class DeterministicMkosiEmitter:
                 commands.append(
                     CommandSpec(argv=(f"mkosi-chroot systemctl enable {shlex.quote(unit_name)}",))
                 )
-                enabled_units.append(unit_name)
+                if svc.wanted_by != HELD_TARGET:
+                    enabled_units.append(unit_name)
         if enabled_units:
             commands.append(
                 CommandSpec(argv=('mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"',))

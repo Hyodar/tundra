@@ -1,7 +1,7 @@
 [Unit]
 Description=Runtime Init
-After=runtime-init-keys.service runtime-init-disks.service runtime-init-secrets.service runtime-init-volume-data.service
-Requires=runtime-init-keys.service runtime-init-disks.service runtime-init-secrets.service runtime-init-volume-data.service
+After=runtime-init-secrets.service
+Requires=runtime-init-secrets.service
 
 [Service]
 Type=oneshot

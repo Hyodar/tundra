@@ -88,6 +88,11 @@ SCRIPT_HEADER = "#!/bin/bash\nset -euo pipefail\n"
 STEP_DIRECTORY = "/usr/lib/runtime-init"
 """Where the per-step scripts live (one executable per step)."""
 INIT_SERVICE = "runtime-init.service"
+HELD_TARGET = "tundravm-held.target"
+"""What waits for a volume key someone hands over (``OperatorKey()``, ``BrokerKey``): the
+held steps (:func:`held_steps`) and the units that need them. ``minimal.target`` wants it,
+and with ``DefaultDependencies=no`` neither orders after it, so the boot target is reached
+while they wait and they start once the key arrives."""
 UNIT_DIRECTORY = "/usr/lib/systemd/system"
 
 
@@ -110,10 +115,41 @@ def wait_units(needs: Iterable[str], *, steps: Collection[str]) -> tuple[str, ..
     return tuple(step_unit(step) for step in needs)
 
 
+def held_steps(entries: Iterable[InitScriptEntry]) -> frozenset[str]:
+    """The steps that wait for a handed-over key: each one that ``waits``, and every step
+    running after one of those."""
+    entries = list(entries)
+    nodes = [(e.name, e.after, e.before) for e in entries]
+    names = list(dict.fromkeys(e.name for e in entries))
+    held = {e.name for e in entries if e.waits}
+    grown = True
+    while grown:
+        grown = False
+        for name in names:
+            if name not in held and held & set(_direct_deps(name, nodes, names)):
+                held.add(name)
+                grown = True
+    return frozenset(held)
+
+
+def _held_target(units: Sequence[str]) -> str:
+    """:data:`HELD_TARGET`, wanting the held step *units* so their key waits start at boot."""
+    return (
+        "[Unit]\n"
+        "Description=What waits for a volume key someone hands over\n"
+        "DefaultDependencies=no\n"
+        f"Wants={' '.join(units)}\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=minimal.target\n"
+    )
+
+
 def is_init_path(path: str) -> bool:
     """Whether *path* is a file runtime-init generation writes."""
     return (
         path in ("/usr/bin/runtime-init", f"{UNIT_DIRECTORY}/{INIT_SERVICE}")
+        or path == f"{UNIT_DIRECTORY}/{HELD_TARGET}"
         or path.startswith(f"{STEP_DIRECTORY}/")
         or (path.startswith(f"{UNIT_DIRECTORY}/runtime-init-") and path.endswith(".service"))
     )
@@ -126,7 +162,8 @@ class Init:
     Holds no fragments itself; ``apply()`` renders the ones it is given: each step is
     its own oneshot unit (``runtime-init-<step>.service`` running
     ``/usr/lib/runtime-init/<step>``, ``After=``/``Requires=`` the steps it runs after)
-    and ``runtime-init.service`` requires them all.
+    and ``runtime-init.service`` requires them all but the held ones
+    (:func:`held_steps`), which :data:`HELD_TARGET` wants instead.
     """
 
     @property
@@ -163,8 +200,12 @@ class Init:
             local = step.partition("-")[0] == OWNERS_STEP
             unit = _step_unit_text(step, _LOCAL if local else network, deps)
             self._add(profile, f"{UNIT_DIRECTORY}/{step_unit(step)}", unit, "0644")
-        units = " ".join(step_unit(step) for step in steps)
-        aggregate = f"After={units}\nRequires={units}"
+        held = held_steps(ordered)
+        units = " ".join(step_unit(step) for step in steps if step not in held)
+        aggregate = f"After={units}\nRequires={units}" if units else ""
+        if held:
+            waiting = [step_unit(step) for step in steps if step in held]
+            self._add(profile, f"{UNIT_DIRECTORY}/{HELD_TARGET}", _held_target(waiting), "0644")
         self._add(
             profile, f"{UNIT_DIRECTORY}/{INIT_SERVICE}", _aggregate(aggregate, "/bin/true"), "0644"
         )

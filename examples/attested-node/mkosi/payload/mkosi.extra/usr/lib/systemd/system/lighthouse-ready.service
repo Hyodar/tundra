@@ -35,4 +35,4 @@ CapabilityBoundingSet=
 UMask=0077
 
 [Install]
-WantedBy=minimal.target
+WantedBy=tundravm-held.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=What waits for a volume key someone hands over
+DefaultDependencies=no
+Wants=runtime-init-keys.service runtime-init-disks.service runtime-init-volume-vault.service
+
+[Install]
+WantedBy=minimal.target

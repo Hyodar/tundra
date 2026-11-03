@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from tundravm._modules.init import Init, wait_units
+from tundravm._modules.init import HELD_TARGET, Init, held_steps, step_unit, wait_units
 from tundravm.compiler import EmitConfig, MkosiEmission, emit_mkosi_tree
 from tundravm.errors import PolicyError
 from tundravm.lockfile import LockedFetch
@@ -26,6 +26,7 @@ from tundravm.models import (
     ServiceSpec,
     enable_unit,
     ships_unit,
+    unit_name,
 )
 from tundravm.project import lock_command
 
@@ -92,7 +93,8 @@ def _with_init(lowered: Lowered) -> Lowered:
         generators.append(profile)
     service = init.service_name
     for profile in targets:
-        steps = {entry.name for entry in copied.init_scripts(profile.name)}
+        entries = copied.init_scripts(profile.name)
+        steps = {entry.name for entry in entries}
         patched: list[ServiceSpec] = []
         for svc in profile.services:
             waits = wait_units(svc.needs, steps=steps)
@@ -102,12 +104,40 @@ def _with_init(lowered: Lowered) -> Lowered:
             after = (*(unit for unit in waits if unit not in svc.after), *svc.after)
             requires = (*(unit for unit in waits if unit not in svc.requires), *svc.requires)
             patched.append(replace(svc, after=after, requires=requires))
-        profile.services = patched
-    # Enable runtime-init (systemctl enable + minimal.target.wants) where it is generated.
+        profile.services = _held(patched, {step_unit(step) for step in held_steps(entries)})
+    # Enable runtime-init (systemctl enable + minimal.target.wants) where it is generated,
+    # and the held target where a step waits for a handed-over key.
     for profile in generators:
         if not any(s.name == service for s in profile.services):
             enable_unit(profile, service)
+        if held_steps(copied.init_scripts(profile.name)):
+            enable_unit(profile, HELD_TARGET)
     return copied
+
+
+def _held(services: list[ServiceSpec], held: set[str]) -> list[ServiceSpec]:
+    """*services* with each enabled unit that requires or runs after a *held* unit (a held
+    step, or a unit held that way) installed into :data:`HELD_TARGET` instead of the boot
+    target, so it starts once the key arrives and the boot completes without it."""
+    if not held:
+        return services
+    held = set(held)
+    moved: set[str] = set()
+    grown = True
+    while grown:
+        grown = False
+        for svc in services:
+            name = unit_name(svc.name)
+            if name in moved or not svc.enabled or svc.name.endswith(".target"):
+                continue
+            if held & {unit_name(unit) for unit in (*svc.requires, *svc.after)}:
+                held.add(name)
+                moved.add(name)
+                grown = True
+    return [
+        replace(svc, wanted_by=HELD_TARGET) if unit_name(svc.name) in moved else svc
+        for svc in services
+    ]
 
 
 def _needs_network_setup(lowered: Lowered, profile: str) -> bool:
