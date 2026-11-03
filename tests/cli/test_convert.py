@@ -79,7 +79,9 @@ ROWS = {
             "# kept: OutputDirectory=mkosi.output",
             "# defaulted: Distribution: the tree names none, so mkosi would build the host's",
             "# defaulted: Autologin=yes: a production image has no console login",
-            "# defaulted: Incremental=yes: tundravm build runs mkosi in its own build directory",
+            "# defaulted: Incremental=yes: tundravm build runs mkosi in its own build directory, "
+            "with the caches it manages: a development build is incremental, a production "
+            "build starts from the snapshot",
             "# refused: Format=directory: tundravm builds the payload as a UKI inside a disk",
             "# refused: RAM=4294967296: a `mkosi vm` setting",
             "# refused: mkosi.conf.d/centos.conf: mkosi did not read it (Distribution=|centos ",

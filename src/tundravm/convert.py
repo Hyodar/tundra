@@ -356,8 +356,8 @@ _MEASURED = (
     "signs the manifest, and no Secure Boot or verity key signs anything"
 )
 _BUILD_DIR = (
-    "tundravm build runs mkosi in its own build directory, with the caches it manages, and "
-    "never incrementally"
+    "tundravm build runs mkosi in its own build directory, with the caches it manages: a "
+    "development build is incremental, a production build starts from the snapshot"
 )
 _TOOLS = "the tools tree is the image's Debian from the locked snapshot, with mkosi's defaults"
 _HOST = "nothing of the host enters the build: the lock names every source and the snapshot"
