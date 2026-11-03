@@ -710,17 +710,24 @@ def build_parser() -> argparse.ArgumentParser:
         "    /run/tundravm/credentials/NAME, 0600); a production build needs `trusted`.\n"
         "tundravm secrets unlock INSTANCE VOLUME\n"
         "    verify again with the policy of the last `attest`, then hand the passphrase\n"
-        "    (typed, or piped on stdin) to the OperatorKey() volume.\n\n"
+        "    (typed, or piped on stdin) to the OperatorKey() volume.\n"
+        "tundravm secrets rotate INSTANCE --identity KEY\n"
+        "    hand the OperatorKey() volumes to another SSH key, signed by the owner's.\n\n"
         + _wrapped(
             f"Channel: {bootstrap.CHANNEL}, verified afresh by each command. Values travel in "
             "that session's request bodies only: never on argv, in a log, a tree, a manifest "
-            "or a receipt."
+            "or a receipt. An image with an OperatorKey() volume takes writes signed by one "
+            "SSH key, its owner, pinned in the volume's header by the first signed write: "
+            "each command signs with the key the last `attest` used (--identity)."
         ),
     )
-    verbs = secrets.add_subparsers(dest="secrets_command", required=True, metavar="deliver|unlock")
+    verbs = secrets.add_subparsers(
+        dest="secrets_command", required=True, metavar="deliver|unlock|rotate"
+    )
     for name, help_text in (
         ("deliver", "Deliver NAME=@FILE credentials."),
         ("unlock", "Unlock an OperatorKey() volume."),
+        ("rotate", "Hand the OperatorKey() volumes to another SSH key."),
     ):
         action = verbs.add_parser(
             name,
@@ -737,9 +744,18 @@ def build_parser() -> argparse.ArgumentParser:
             action.add_argument(
                 "values", nargs="+", metavar="NAME=@FILE", help="A secret and the file holding it."
             )
-        else:
+        elif name == "unlock":
             action.set_defaults(handler=_cmd_unlock)
             action.add_argument("volume", metavar="VOLUME")
+        else:
+            action.set_defaults(handler=_cmd_rotate)
+            action.add_argument(
+                "--identity",
+                type=Path,
+                required=True,
+                metavar="KEY",
+                help="The new owner's SSH private key (KEY.pub beside it).",
+            )
         action.add_argument(
             "--validator", default=None, metavar="ENDPOINT", help="A tdxs validator."
         )
@@ -1459,7 +1475,7 @@ def _run_action(
             print(json_report("run", report), file=out)
         else:
             shown = ("id", "mode", "state", "services", "control_plane", "application")
-            for key in (*shown, "instance_key"):
+            for key in (*shown, "instance_key", "owner", "operator"):
                 if key in report:
                     print(f"{key:<14} {report[key]}", file=out)
             build = cast(Mapping[str, object], report["build"])
@@ -1701,15 +1717,29 @@ def _cmd_attest(args: argparse.Namespace, out: TextIO) -> int:
         print(render_attestation(result, "text"), file=out)
         if args.issuer is None:
             print(f"channel: {bootstrap.CHANNEL}", file=out)
+        owner = _owner_line(instance)
+        if owner is not None:
+            print(owner, file=out)
     if args.output is not None:
         result.save(args.output)
         _err(f"wrote {args.output}")
     return EXIT_OK if result.passed else EXIT_FAILURE
 
 
+def _owner_line(instance: instances.Instance) -> str | None:
+    """``owner: SHA256:...`` once the instance's volumes are owned, else the key that signs."""
+    owner = instance.data.get("owner")
+    if isinstance(owner, str):
+        return f"owner: {owner} (pinned in the OperatorKey() volume's header)"
+    recorded = instance.data.get("operator")
+    if isinstance(recorded, dict):
+        return f"operator: {recorded['fingerprint']} ({recorded['identity']}) signs the writes"
+    return None
+
+
 def _cmd_secrets_help(args: argparse.Namespace, out: TextIO) -> int:
     del args
-    print("tundravm secrets deliver|unlock: see `tundravm secrets --help`", file=out)
+    print("tundravm secrets deliver|unlock|rotate: see `tundravm secrets --help`", file=out)
     return EXIT_ERROR
 
 
@@ -1732,6 +1762,18 @@ def _cmd_unlock(args: argparse.Namespace, out: TextIO) -> int:
         validator=args.validator,
     )
     print(f"unlocked {args.volume} on {instance.id} (verdict {result.verdict})", file=out)
+    print(f"channel: {bootstrap.CHANNEL}", file=out)
+    owner = _owner_line(instance)
+    if owner is not None:
+        print(owner, file=out)
+    return EXIT_OK
+
+
+def _cmd_rotate(args: argparse.Namespace, out: TextIO) -> int:
+    found = settings(None)
+    instance = instances.open_instance(found.instances, args.instance)
+    result, owner = bootstrap.rotate(instance, args.identity, validator=args.validator)
+    print(f"{instance.id} is owned by {owner} (verdict {result.verdict})", file=out)
     print(f"channel: {bootstrap.CHANNEL}", file=out)
     return EXIT_OK
 

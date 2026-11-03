@@ -477,6 +477,9 @@ class StateBuilder:
             profile.packages.add("cryptsetup")
             _add_file(profile, setup.config_path, setup.render_config())
             _runtime_init(profile, setup.render_init_script(), "disks", after)
+            owners = setup.owner_service()
+            if owners is not None:
+                profile.services.append(owners)
             applied.append(setup)
         waited: set[str] = set()
         for entry, (config_path, manifest_path) in zip(secrets, secret_paths, strict=True):
@@ -495,6 +498,7 @@ class StateBuilder:
                 provider_supports=() if entry.delivery is None else entry.delivery.supports,
                 volumes=_unlocked_volumes(disks, keys),
                 attested_tls=entry.attested_tls,
+                owners=tuple(disk.name for disk in disks if disk.owner),
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary
@@ -1326,6 +1330,7 @@ def _disk_spec(disk: Disk, keys: Sequence[Key]) -> DiskSpec:
         "mount_at": disk.mount,
         "format_policy": disk.format,
         "dirs": disk.directories,
+        "owner": disk.owner,
     }
     if isinstance(key, Key) and key.output is None:
         return DiskSpec(disk.name, key_name=key.name, **common)  # type: ignore[arg-type]

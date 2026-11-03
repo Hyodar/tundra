@@ -396,7 +396,7 @@ options:
 Deliver credentials or unlock a volume after a fresh attestation.
 
 ```text
-usage: tundravm secrets [-h] [--traceback] deliver|unlock ...
+usage: tundravm secrets [-h] [--traceback] deliver|unlock|rotate ...
 
 tundravm secrets deliver INSTANCE --policy FILE NAME=@FILE...
     verify again, then write each value where the image declares it (a Secret:
@@ -404,19 +404,24 @@ tundravm secrets deliver INSTANCE --policy FILE NAME=@FILE...
 tundravm secrets unlock INSTANCE VOLUME
     verify again with the policy of the last `attest`, then hand the passphrase
     (typed, or piped on stdin) to the OperatorKey() volume.
+tundravm secrets rotate INSTANCE --identity KEY
+    hand the OperatorKey() volumes to another SSH key, signed by the owner's.
 
 Channel: attested endpoint: a TLS session whose key the quote binds, verified afresh
 by each command. Values travel in that session's request bodies only: never on argv,
-in a log, a tree, a manifest or a receipt.
+in a log, a tree, a manifest or a receipt. An image with an OperatorKey() volume takes
+writes signed by one SSH key, its owner, pinned in the volume's header by the first
+signed write: each command signs with the key the last `attest` used (--identity).
 
 positional arguments:
-  deliver|unlock
-    deliver       Deliver NAME=@FILE credentials.
-    unlock        Unlock an OperatorKey() volume.
+  deliver|unlock|rotate
+    deliver             Deliver NAME=@FILE credentials.
+    unlock              Unlock an OperatorKey() volume.
+    rotate              Hand the OperatorKey() volumes to another SSH key.
 
 options:
-  -h, --help      show this help message and exit
-  --traceback     Raise errors with the Python traceback.
+  -h, --help            show this help message and exit
+  --traceback           Raise errors with the Python traceback.
 ```
 
 ### tundravm secrets deliver
@@ -458,6 +463,26 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --traceback           Raise errors with the Python traceback.
+  --validator ENDPOINT  A tdxs validator.
+```
+
+### tundravm secrets rotate
+
+Hand the OperatorKey() volumes to another SSH key.
+
+```text
+usage: tundravm secrets rotate [-h] [--traceback] --identity KEY [--validator ENDPOINT] INSTANCE
+
+Hand the OperatorKey() volumes to another SSH key. Channel: attested endpoint: a TLS session whose
+key the quote binds.
+
+positional arguments:
+  INSTANCE
+
+options:
+  -h, --help            show this help message and exit
+  --traceback           Raise errors with the Python traceback.
+  --identity KEY        The new owner's SSH private key (KEY.pub beside it).
   --validator ENDPOINT  A tdxs validator.
 ```
 

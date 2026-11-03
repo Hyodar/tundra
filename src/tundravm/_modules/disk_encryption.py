@@ -14,6 +14,7 @@ from tundravm._modules.key_generation import KeyGeneration, KeySpec, validate_en
 from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm.diagnostics import Diagnostic, tundravm_sets
 from tundravm.errors import ValidationError
+from tundravm.models import ServiceSpec
 
 if TYPE_CHECKING:
     from tundravm.declarative._lowered import Lowered
@@ -25,7 +26,27 @@ DISK_ENCRYPTION_BUILD_PACKAGES = (
 )
 
 DISK_ENCRYPTION_DEFAULT_CONFIG_PATH = "/etc/tdx/disk-setup.yaml"
+OWNER_DIRECTORY = "/run/tundravm/owner"
+"""Where each owned volume's owner key is for the boot (``<volume>``, ``type base64
+SHA256:...``): ``disk-setup owner`` copies it from the header, the endpoint pins it."""
+OWNER_UNIT = "tundravm-volume-owner.service"
+"""``disk-setup owner``: ready once the headers' owners are the boot's, before the attested
+endpoint starts, then writing each pin or rotation the endpoint makes into the header."""
 DEFAULT_DISK_DIRS = ("ssh", "data", "logs")
+_OWNER_HARDENING: tuple[tuple[str, str], ...] = (
+    ("PrivateNetwork", "yes"),
+    ("ProtectHome", "yes"),
+    ("NoNewPrivileges", "yes"),
+    ("ProtectKernelModules", "yes"),
+    ("ProtectKernelTunables", "yes"),
+    ("ProtectControlGroups", "yes"),
+    ("RestrictAddressFamilies", "AF_UNIX"),
+    ("RestrictNamespaces", "yes"),
+    ("LockPersonality", "yes"),
+    ("SystemCallArchitectures", "native"),
+)
+"""Root with the volumes' devices (it reads and writes their headers) and no network; no
+``ProtectClock``, which would limit the devices to the clock's."""
 _KERNEL_NAME = re.compile(r"/dev/sd[a-z]+[0-9]*")
 """A SCSI/SATA kernel disk name: assigned in probe order, so not stable across boots."""
 
@@ -42,7 +63,8 @@ class DiskSpec:
     formats on every boot, ``on_initialize`` while ``disk-setup`` has not initialised
     the disk (an encrypted disk without its init token), ``on_fail`` when an
     encrypted disk is not LUKS yet; both format a plain disk that does not mount.
-    ``never`` does not format.
+    ``never`` does not format. With *owner* its LUKS2 header pins the operator's SSH key
+    (``tools/pkg/owner``): it is created and opened only for the boot's owner.
     """
 
     name: str
@@ -56,6 +78,7 @@ class DiskSpec:
         default="on_fail", kw_only=True
     )
     dirs: tuple[str, ...] = field(default=DEFAULT_DISK_DIRS, kw_only=True)
+    owner: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
         validate_entry_name(self.name, kind="disk")
@@ -91,6 +114,11 @@ class DiskSpec:
     def encrypted(self) -> bool:
         """True when the disk has a key (``key_name`` or ``key_path``)."""
         return self.key_name is not None or self.key_path is not None
+
+    @property
+    def owner_path(self) -> str:
+        """The boot's owner file of an owned disk."""
+        return f"{OWNER_DIRECTORY}/{self.name}"
 
     @property
     def generated_mapper_name(self) -> str:
@@ -256,7 +284,25 @@ class DiskEncryption(Module):
                 lines.append(f'    encryption_key: "{spec.key_name}"')
             if spec.key_path is not None:
                 lines.append(f'    encryption_key_path: "{spec.key_path}"')
+            if spec.owner:
+                lines.append(f'    owner: "{spec.owner_path}"')
         return "\n".join(lines) + "\n"
+
+    def owner_service(self) -> ServiceSpec | None:
+        """:data:`OWNER_UNIT` when a disk is owned: root, with the devices and no network,
+        waiting for no runtime-init step (the endpoint it comes before waits for none)."""
+        if not any(spec.owner for spec in self.disks):
+            return None
+        return ServiceSpec(
+            name=OWNER_UNIT,
+            command=("/usr/bin/disk-setup", "owner", self.config_path),
+            description="tundravm volume owners",
+            before=("tundravm-endpoint.service",),
+            type="notify",
+            restart="on-failure",
+            hardening=_OWNER_HARDENING,
+            needs=(),
+        )
 
     def _strategy_lines(self, spec: DiskSpec) -> tuple[str, ...]:
         if spec.device is not None:

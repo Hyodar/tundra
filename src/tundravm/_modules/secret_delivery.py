@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING, Literal
 
 from tundravm._modules import attested_tls
 from tundravm._modules.base import Module, tools_source
-from tundravm._modules.disk_encryption import DiskEncryption, DiskSpec
+from tundravm._modules.disk_encryption import (
+    OWNER_DIRECTORY,
+    OWNER_UNIT,
+    DiskEncryption,
+    DiskSpec,
+)
 from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm._units.render import render
 from tundravm.diagnostics import Diagnostic, tundravm_sets
@@ -117,6 +122,8 @@ class SecretDelivery(Module):
     *volumes* are ``(name, pipe)`` pairs: the volumes whose passphrase ``POST /unlock``
     hands to ``key-gen``'s FIFO. *attested_tls* are the attested TLS ports whose
     certificate (:func:`tundravm._modules.attested_tls.certificate`) the quote binds.
+    *owners* name the volumes whose header pins the operator's key: with one, every write
+    must be signed by it (the first signed one pins its signer).
     """
 
     secrets: tuple[SecretSpec, ...] = ()
@@ -134,6 +141,7 @@ class SecretDelivery(Module):
     provider_supports: tuple[str, ...] = ()
     volumes: tuple[tuple[str, str], ...] = ()
     attested_tls: tuple[int, ...] = ()
+    owners: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.secrets = tuple(self.secrets)
@@ -304,6 +312,7 @@ class SecretDelivery(Module):
     def service(self) -> ServiceSpec:
         """The endpoint: started at boot, after the evidence socket and the keys it binds,
         waiting for no runtime-init step (the control plane must answer before them)."""
+        owners = (OWNER_UNIT,) if self.owners else ()
         return ServiceSpec(
             name=self.unit,
             command=("/usr/bin/attested-endpoint", "--config", self.config_path),
@@ -315,8 +324,9 @@ class SecretDelivery(Module):
                 "ssh-host-keys.service",
                 "tundravm-instance-key.service",
                 *(attested_tls.unit(port) for port in self.attested_tls),
+                *owners,
             ),
-            wants=("network-online.target", "tdxs.socket"),
+            wants=("network-online.target", "tdxs.socket", *owners),
             type="notify",
             restart="on-failure",
             hardening=(*_HARDENING, ("ReadWritePaths", " ".join(self.write_paths()))),
@@ -378,6 +388,8 @@ class SecretDelivery(Module):
         lines.append("volumes:" if self.volumes else "volumes: []")
         for name, pipe in self.volumes:
             lines.extend((f'  - name: "{name}"', f'    pipe: "{pipe}"'))
+            if name in self.owners:
+                lines.append(f'    owner: "{OWNER_DIRECTORY}/{name}"')
         lines.append("attested_tls:" if self.attested_tls else "attested_tls: []")
         for port in self.attested_tls:
             lines.extend(

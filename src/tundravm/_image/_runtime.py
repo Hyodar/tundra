@@ -304,6 +304,7 @@ class Runtime:
             key=key,
             format="on_initialize",
             directories=(),
+            owner=isinstance(unlock, OperatorKey),
         )
         lines = [f"# tundravm: the directories services keep on volume {volume.name}"]
         for path, (owner, group, mode) in sorted(self.directories(volume).items()):

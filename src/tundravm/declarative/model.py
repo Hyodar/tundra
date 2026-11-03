@@ -1950,9 +1950,18 @@ class Disk(Declared):
     mapper: str | None = None
     format: Literal["always", "on_initialize", "on_fail", "never"] = "never"
     directories: tuple[str, ...] = ("ssh", "data", "logs")
+    owner: bool = False
+    """Whether its LUKS2 header pins the operator's SSH key (an ``OperatorKey()`` volume):
+    the attested endpoint then takes deliveries signed by that key only."""
 
     def __post_init__(self) -> None:
         _freeze(self, "directories")
+        if self.owner and self.key is None:
+            raise _fail(
+                self,
+                f"disk {self.name!r}: a plain disk has no header to pin an owner in.",
+                hint="Give the volume unlock=OperatorKey().",
+            )
         if not isinstance(self.name, str) or not _ENTRY_NAME.fullmatch(self.name):
             raise _fail(
                 self,

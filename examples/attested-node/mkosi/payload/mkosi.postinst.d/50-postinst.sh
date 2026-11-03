@@ -44,6 +44,7 @@ mkosi-chroot systemctl enable metrics-export.service
 mkosi-chroot systemctl enable signer.service
 mkosi-chroot systemctl enable signer-ready.service
 mkosi-chroot systemctl enable sync-status.timer
+mkosi-chroot systemctl enable tundravm-volume-owner.service
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
@@ -79,6 +80,7 @@ ln -sf "/etc/systemd/system/metrics-export.service" "$BUILDROOT/etc/systemd/syst
 ln -sf "/etc/systemd/system/signer.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/signer-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/sync-status.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/tundravm-volume-owner.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

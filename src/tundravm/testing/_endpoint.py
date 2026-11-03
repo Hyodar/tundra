@@ -83,7 +83,11 @@ class FakeEndpoint:
     *registers* and *debug*. *mode* is the guest gate's recorded mode. *listeners* maps
     each attested TLS port to the DER SubjectPublicKeyInfo of its certificate key, which the
     evidence binds. :attr:`received`, :attr:`unlocked` and :attr:`ssh_keys` hold what was
-    written, one per name per boot."""
+    written, one per name per boot. With *pins* the image pins its operator (an
+    ``OperatorKey()`` volume): every write must name a ``signer`` and carry a ``signature``,
+    the first signed one pins :attr:`owner` (a public key line), and a write by another key
+    is refused (403); :attr:`signers` holds who signed each write. The fake checks who
+    signed, not the signature (``tools/pkg/owner`` verifies it)."""
 
     platform: Literal["simulator", "tdx"] = "simulator"
     registers: Mapping[str, bytes] = field(default_factory=dict)
@@ -99,6 +103,10 @@ class FakeEndpoint:
     ssh_keys: list[str] = field(default_factory=list)
     sessions: list[FakeSession] = field(default_factory=list)
     first_nonce: bytes | None = None
+    pins: bool = False
+    owner: str | None = None
+    mismatch: str | None = None
+    signers: list[str] = field(default_factory=list)
 
     def connect(self, host: str, port: int) -> FakeSession:
         """A new TLS session (the ``connect=`` the operator commands take)."""
@@ -166,14 +174,36 @@ class FakeEndpoint:
                 "credentials": list(self.credentials),
                 "volumes": list(self.volumes),
                 "ssh_key": self.ssh_key,
+                **(
+                    {"owner": {"fingerprint": self._fingerprint(), "mismatch": self.mismatch}}
+                    if self.pins
+                    else {}
+                ),
             },
         }
+
+    def _fingerprint(self) -> str:
+        if self.owner is None:
+            return ""
+        blob = base64.b64decode(self.owner.split()[1])
+        return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
     def write(self, session: FakeSession, path: str, body: Mapping[str, object]) -> int:
         nonce = str(body.get("nonce") or "")
         if nonce not in session.nonces:
             return 403
         session.nonces.remove(nonce)
+        if self.pins:
+            signer = str(body.get("signer") or "")
+            if not signer or not body.get("signature"):
+                return 403
+            if self.owner is not None and signer != self.owner:
+                return 403
+            self.owner = self.owner or signer
+            self.signers.append(signer)
+            if path == "/owner":
+                self.owner = str(body.get("key"))
+                return 200
         if path == "/credentials":
             values = body.get("credentials")
             assert isinstance(values, Mapping)

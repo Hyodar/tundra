@@ -81,8 +81,28 @@ probe_volume() {
     fi
     mount=$1
     encrypted=$2
+    owned=${3:-}
+    owner=
+    if [ -n "$owned" ]; then
+        owner=", owner none"
+        waited=0
+        until findmnt -n --mountpoint "$mount" >/dev/null 2>&1 || [ "$waited" -ge 30 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if [ -r "$owned" ]; then
+            read -r _ _ fingerprint _ <"$owned" || true
+            owner=", owner ${fingerprint:-none}"
+        fi
+        if [ -r "$owned.mismatch" ]; then
+            fail "$(cat "$owned.mismatch"): the host rewrote its header, so it stays closed; keep the disk and attach it to an instance you attested"
+            return
+        fi
+    fi
     set -- $(findmnt -n -o FSTYPE,SOURCE --mountpoint "$mount" 2>/dev/null)
-    if [ $# -lt 2 ]; then
+    if [ $# -lt 2 ] && [ -n "$owned" ]; then
+        skip "locked until \`tundravm secrets unlock INSTANCE ${owned##*/}\`$owner"
+    elif [ $# -lt 2 ]; then
         fail "nothing is mounted at $mount: unlock it (tundravm secrets unlock INSTANCE VOLUME) or read journalctl -u runtime-init.service"
     elif [ "$1" != ext4 ]; then
         fail "$mount is $1 on $2, not ext4: disk-setup formats ext4, so this is not the volume"
@@ -92,7 +112,7 @@ probe_volume() {
         device=$(readlink -f "$2")
         uuid=$(cat "/sys/class/block/${device##*/}/dm/uuid" 2>/dev/null || true)
         case $uuid in
-            CRYPT-*) ok "ext4 on $2, dm-crypt" ;;
+            CRYPT-*) ok "ext4 on $2, dm-crypt$owner" ;;
             *) fail "$mount is on $2, not a dm-crypt device: an encrypted volume mounts from its LUKS mapping; journalctl -u runtime-init.service" ;;
         esac
     fi
@@ -376,7 +396,7 @@ probe_port tcp 8080
 check=port:5353/udp
 probe_port udp 5353
 check=volume:/persistent
-probe_volume /persistent yes
+probe_volume /persistent yes /run/tundravm/owner/data
 check=egress:198.51.100.1:7
 probe_egress 198.51.100.1 7
 check=egress:metadata:tdxs

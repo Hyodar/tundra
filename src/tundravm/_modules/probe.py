@@ -21,7 +21,10 @@ The checks, each only when its declaration exists (:func:`derive`):
 - ``port:N/PROTO``: each port a service exposes has a listener in ``/proc/net`` (what
   ``ss -lnt``/``-lnu`` reads; ``iproute2`` is not in a minimal image);
 - ``volume:PATH``: each ``Disk`` (a ``Volume``) is mounted there, ext4, and on a dm-crypt
-  device when it has a key;
+  device when it has a key; an owned one (``OperatorKey()``) also says ``owner SHA256:...``
+  (or ``owner none``), is a ``skip`` while it waits for ``tundravm secrets unlock`` (the
+  probe does not wait for an operator), and fails when its header's owner is not the one
+  the volume keeps inside;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
   ``egress:metadata:OWNER``: with a firewall, a datagram to the cloud metadata server sent
@@ -77,6 +80,7 @@ from urllib.parse import urlsplit
 from tundravm.models import ServiceSpec, unit_name
 
 from . import execution, instance_key
+from .disk_encryption import OWNER_DIRECTORY
 
 if TYPE_CHECKING:
     from tundravm.declarative.model import Declaration, EgressRule, Firewall
@@ -267,13 +271,16 @@ def derive(
     for item in items:
         if isinstance(item, Disk):
             encrypted = item.key is not None
+            owned = f" {OWNER_DIRECTORY}/{item.name}" if item.owner else ""
             checks.append(
                 Check(
                     f"volume:{item.mount}",
-                    f"{item.mount} is mounted, ext4" + (", on dm-crypt" if encrypted else ""),
-                    f"probe_volume {item.mount} {'yes' if encrypted else 'no'}",
+                    f"{item.mount} is mounted, ext4"
+                    + (", on dm-crypt" if encrypted else "")
+                    + (", and who owns it" if item.owner else ""),
+                    f"probe_volume {item.mount} {'yes' if encrypted else 'no'}{owned}",
                     "volume",
-                    ("runtime-init.service",),
+                    () if item.owner else ("runtime-init.service",),
                 )
             )
     if firewall is not None:
@@ -791,8 +798,28 @@ probe_volume() {
     fi
     mount=$1
     encrypted=$2
+    owned=${3:-}
+    owner=
+    if [ -n "$owned" ]; then
+        owner=", owner none"
+        waited=0
+        until findmnt -n --mountpoint "$mount" >/dev/null 2>&1 || [ "$waited" -ge 30 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if [ -r "$owned" ]; then
+            read -r _ _ fingerprint _ <"$owned" || true
+            owner=", owner ${fingerprint:-none}"
+        fi
+        if [ -r "$owned.mismatch" ]; then
+            fail "$(cat "$owned.mismatch"): the host rewrote its header, so it stays closed; keep the disk and attach it to an instance you attested"
+            return
+        fi
+    fi
     set -- $(findmnt -n -o FSTYPE,SOURCE --mountpoint "$mount" 2>/dev/null)
-    if [ $# -lt 2 ]; then
+    if [ $# -lt 2 ] && [ -n "$owned" ]; then
+        skip "locked until \\`tundravm secrets unlock INSTANCE ${owned##*/}\\`$owner"
+    elif [ $# -lt 2 ]; then
         fail "nothing is mounted at $mount: unlock it (tundravm secrets unlock INSTANCE VOLUME) or read journalctl -u runtime-init.service"
     elif [ "$1" != ext4 ]; then
         fail "$mount is $1 on $2, not ext4: disk-setup formats ext4, so this is not the volume"
@@ -802,7 +829,7 @@ probe_volume() {
         device=$(readlink -f "$2")
         uuid=$(cat "/sys/class/block/${device##*/}/dm/uuid" 2>/dev/null || true)
         case $uuid in
-            CRYPT-*) ok "ext4 on $2, dm-crypt" ;;
+            CRYPT-*) ok "ext4 on $2, dm-crypt$owner" ;;
             *) fail "$mount is on $2, not a dm-crypt device: an encrypted volume mounts from its LUKS mapping; journalctl -u runtime-init.service" ;;
         esac
     fi

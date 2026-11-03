@@ -590,6 +590,12 @@ def status(instance: Instance) -> dict[str, object]:
     key = instance_key(instance)
     if key is not None:
         report["instance_key"] = key
+    owner = instance.data.get("owner")
+    if isinstance(owner, str):
+        report["owner"] = owner
+    operator = instance.data.get("operator")
+    if isinstance(operator, dict):
+        report["operator"] = operator["fingerprint"]
     if running:
         report.update(readiness(instance))
     return report

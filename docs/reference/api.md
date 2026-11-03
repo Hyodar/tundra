@@ -1752,6 +1752,10 @@ FakeEndpoint(
     ssh_keys: list[str] = list(),
     sessions: list[FakeSession] = list(),
     first_nonce: bytes | None = None,
+    pins: bool = False,
+    owner: str | None = None,
+    mismatch: str | None = None,
+    signers: list[str] = list(),
 )
 ```
 

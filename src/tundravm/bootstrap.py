@@ -20,6 +20,12 @@ attested TLS port's certificate key)``, each part length-prefixed (:func:`bindin
   the endpoint takes once, and the client refuses to send it if the session's TLS key is no
   longer the bound one. Both refuse a production build in a simulated instance before
   anything is sent (:func:`fail_closed`).
+- An image with an ``OperatorKey()`` volume pins its operator: the volume's LUKS2 header
+  holds the owner's SSH key and every write carries the owner's SSH signature over its
+  nonce (:func:`signed`, namespace :data:`SIGNATURE_NAMESPACE`); the first signed one pins
+  its signer. The key is the one ``attest`` used (``--identity``), recorded in the receipt
+  so ``secrets deliver`` and ``secrets unlock`` sign with it; :func:`rotate` hands the
+  volumes to another key.
 
 Values travel in the TLS session's request bodies only: never on an argv, in a log, a
 tree, a manifest or a receipt (receipts name what was delivered, not what it was).
@@ -44,6 +50,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from . import _ssh_sig
 from . import manifest as mf
 from .attestation import Attestation, Transport
 from .attestation import attest as check_quote
@@ -57,6 +64,8 @@ CHANNEL = "attested endpoint: a TLS session whose key the quote binds"
 """How ``attest``, ``secrets deliver`` and ``secrets unlock`` reach the instance."""
 CREDENTIALS = "/run/tundravm/credentials"
 DEFAULT_IDENTITY = Path("~/.ssh/id_ed25519")
+SIGNATURE_NAMESPACE = "tundravm-endpoint"
+"""The SSH signature namespace of a write to an endpoint that pins its operator."""
 TIMEOUT_S = 60.0
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
@@ -273,6 +282,28 @@ class Evidence:
     def takes_ssh_key(self) -> bool:
         return self.accepts.get("ssh_key") is True
 
+    @property
+    def pins_owner(self) -> bool:
+        """Whether the image pins its operator (an ``OperatorKey()`` volume)."""
+        return isinstance(self.accepts.get("owner"), Mapping)
+
+    @property
+    def owner(self) -> str | None:
+        """The owner's fingerprint, ``None`` while no one is pinned."""
+        found = self.accepts.get("owner")
+        if not isinstance(found, Mapping):
+            return None
+        return str(found.get("fingerprint") or "") or None
+
+    @property
+    def owner_mismatch(self) -> str | None:
+        """``volume NAME: owner token does not match the volume's owner`` when ``disk-setup``
+        found the header naming another key than the volume's encrypted copy."""
+        found = self.accepts.get("owner")
+        if not isinstance(found, Mapping):
+            return None
+        return str(found.get("mismatch") or "") or None
+
     def transport(self) -> Transport:
         """The quote, as tdxs would answer the issue and metadata requests for it."""
 
@@ -403,6 +434,84 @@ def identity_path(identity: Path | None) -> Path:
             "TUNDRAVM_SSH_KEY.",
         )
     return path
+
+
+@dataclass(frozen=True, slots=True)
+class Operator:
+    """The operator's SSH key pair: the private key that signs, its public line and its
+    fingerprint."""
+
+    path: Path
+    public: str
+    fingerprint: str
+
+
+def operator(identity: Path | None) -> Operator:
+    """The key pair :func:`identity_path` finds."""
+    path = identity_path(identity)
+    words = path.with_name(path.name + ".pub").read_text(encoding="utf-8").split()
+    public = " ".join(words[:2])
+    try:
+        found = _ssh_sig.fingerprint(public)
+    except ValidationError as exc:
+        raise ValidationError(
+            f"{path}.pub is not an OpenSSH public key line.", hint="ssh-keygen -y -f KEY"
+        ) from exc
+    return Operator(path, public, found)
+
+
+def recorded_operator(instance: Instance) -> Operator | None:
+    """The key the last passing ``attest`` used, else the default key pair; ``None`` without
+    one."""
+    recorded = instance.data.get("operator")
+    identity = Path(recorded["identity"]) if isinstance(recorded, dict) else None
+    try:
+        return operator(identity)
+    except ValidationError:
+        if identity is not None:
+            raise
+        return None
+
+
+def signed(instance: Instance, evidence: Evidence, key: Operator | None) -> dict[str, str]:
+    """The ``signer`` and ``signature`` a write to *instance* carries when its image pins its
+    operator (nothing when it does not), refusing before anything is sent a write the
+    endpoint would refuse, and a volume that came back without the owner the receipt names."""
+    if not evidence.pins_owner:
+        return {}
+    if key is None:
+        raise ValidationError(
+            f"{instance.id} takes writes signed by its operator's SSH key, and there is none.",
+            hint=f"Attest with your key first: `tundravm attest {instance.id} --policy FILE "
+            "--identity KEY`.",
+        )
+    if evidence.owner_mismatch is not None:
+        raise AttestationError(
+            f"Refused: {evidence.owner_mismatch} on {instance.id}: its header was rewritten "
+            "outside the instance, and the volume stays closed; nothing was sent.",
+            hint="Stop the instance and keep the disk; attach it to an instance you attested, "
+            "whose owner is the key the volume itself names.",
+        )
+    owner = evidence.owner
+    if owner is not None and owner != key.fingerprint:
+        raise AttestationError(
+            f"Refused: {instance.id} is owned by {owner}, not {key.fingerprint} ({key.path}); "
+            "nothing was sent.",
+            hint=f"Use the owner's key: `tundravm attest {instance.id} --policy FILE --identity "
+            "OWNER_KEY` (a lost key means a new volume).",
+        )
+    recorded = instance.data.get("owner")
+    if owner is None and isinstance(recorded, str):
+        raise AttestationError(
+            f"Refused: {instance.id} is owned by {recorded}, but its volume came back without an "
+            "owner (a replaced header or another disk); nothing was sent.",
+            hint=f"Attach the instance's own volume; to start over on a new one, launch a new "
+            f"instance instead of reusing {instance.id}.",
+        )
+    signature = _ssh_sig.sign(
+        evidence.nonce.hex().encode(), key.path, namespace=SIGNATURE_NAMESPACE
+    )
+    return {"signer": key.public, "signature": signature.decode()}
 
 
 def ssh_argv(instance: Instance, identity: Path) -> list[str]:
@@ -536,6 +645,7 @@ def attest(
             "--issuer does not fetch.",
             hint="Drop --issuer: `tundravm attest INSTANCE --policy FILE --tls PORT`.",
         )
+    key: Operator | None = None
     if issuer is not None:
         result = check_quote(
             issuer,
@@ -558,7 +668,8 @@ def attest(
             instance.data["instance_key"] = evidence.instance_key
         if result.passed:
             _known_hosts(instance, evidence.host_keys)
-            sent_key = _hand_ssh_key(channel, evidence, identity)
+            key = _operator(identity)
+            sent_key = _hand_ssh_key(instance, channel, evidence, key)
     instance.event(
         "attested",
         verdict=result.verdict,
@@ -571,6 +682,7 @@ def attest(
         instance_key=result.instance_key,
         certificate=result.certificate,
         ssh_key=sent_key,
+        owner=None if evidence is None else evidence.owner,
     )
     if result.passed:
         instance.data["attested"] = {
@@ -579,31 +691,35 @@ def attest(
             "verdict": result.verdict,
             "at": result.observed_at,
         }
+        if key is not None and evidence is not None and evidence.pins_owner:
+            instance.data["operator"] = {
+                "identity": str(key.path),
+                "fingerprint": key.fingerprint,
+            }
     if result.passed or result.instance_key is not None:
         instance.save()
     return result
 
 
-def _hand_ssh_key(channel: Channel, evidence: Evidence, identity: Path | None) -> str | None:
-    """POST the operator's SSH public key when the image takes one; its fingerprint."""
-    if not evidence.takes_ssh_key:
-        return None
+def _operator(identity: Path | None) -> Operator | None:
+    """*identity*'s key pair (which must exist), else the default one when there is one."""
     try:
-        key = identity_path(identity)
+        return operator(identity)
     except ValidationError:
         if identity is not None:
             raise
         return None
-    public = key.with_name(key.name + ".pub").read_text(encoding="utf-8").split()
-    try:
-        blob = base64.b64decode(public[1], validate=True)
-    except (IndexError, ValueError) as exc:
-        raise ValidationError(
-            f"{key}.pub is not an OpenSSH public key line.", hint="ssh-keygen -y -f KEY"
-        ) from exc
-    post(channel, evidence, "/ssh-key", {"key": " ".join(public[:2])})
-    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode()
-    return "SHA256:" + digest.rstrip("=")
+
+
+def _hand_ssh_key(
+    instance: Instance, channel: Channel, evidence: Evidence, key: Operator | None
+) -> str | None:
+    """POST the operator's SSH public key when the image takes one, signed when it pins its
+    operator; its fingerprint."""
+    if not evidence.takes_ssh_key or key is None:
+        return None
+    post(channel, evidence, "/ssh-key", {"key": key.public, **signed(instance, evidence, key)})
+    return key.fingerprint
 
 
 def fail_closed(instance: Instance) -> str | None:
@@ -701,9 +817,16 @@ def deliver(
     result, evidence, channel = _released(instance, policy, "delivery-refused", validator, connect)
     _known(values, set(evidence.credentials), every=True)
     encoded = {name: base64.b64encode(value).decode() for name, value in values}
-    post(channel, evidence, "/credentials", {"credentials": encoded})
+    signature = signed(instance, evidence, recorded_operator(instance))
+    post(channel, evidence, "/credentials", {"credentials": encoded, **signature})
     names = tuple(name for name, _ in values)
-    instance.event("delivered", secrets=list(names), verdict=result.verdict, channel=CHANNEL)
+    instance.event(
+        "delivered",
+        secrets=list(names),
+        verdict=result.verdict,
+        channel=CHANNEL,
+        owner=evidence.owner or _fingerprint_of(signature),
+    )
     return result, names
 
 
@@ -778,13 +901,73 @@ def unlock(
             f"The image declares no volume {volume!r}.",
             hint=f"Volumes: {', '.join(evidence.volumes) or 'none'}.",
         )
+    signature = signed(instance, evidence, recorded_operator(instance))
     value = passphrase() if callable(passphrase) else passphrase
     if not value:
         raise ValidationError("An empty passphrase.", hint="Type it, or pipe it on stdin.")
     passphrase_b64 = base64.b64encode(value).decode()
-    post(channel, evidence, "/unlock", {"volume": volume, "passphrase": passphrase_b64})
-    instance.event("unlocked", volume=volume, verdict=result.verdict, channel=CHANNEL)
+    post(
+        channel, evidence, "/unlock", {"volume": volume, "passphrase": passphrase_b64, **signature}
+    )
+    owner = evidence.owner or _fingerprint_of(signature)
+    if owner is not None:
+        instance.data["owner"] = owner
+        instance.save()
+    instance.event("unlocked", volume=volume, verdict=result.verdict, channel=CHANNEL, owner=owner)
     return result
+
+
+def _fingerprint_of(signature: Mapping[str, str]) -> str | None:
+    """The signer's fingerprint of a :func:`signed` write, ``None`` for an unsigned one."""
+    signer = signature.get("signer")
+    return None if signer is None else _ssh_sig.fingerprint(signer)
+
+
+def rotate(
+    instance: Instance,
+    identity: Path,
+    *,
+    validator: str | None = None,
+    connect: Connector | None = None,
+) -> tuple[Attestation, str]:
+    """Verify again with the last approved policy, then hand *instance*'s volumes to the key
+    pair at *identity* (``POST /owner``): signed by the recorded owner's key, carrying the
+    new key and its own signature over the same nonce. The receipt then records the new
+    key; its fingerprint is returned."""
+    new = operator(identity)
+    approved = instance.data.get("attested")
+    if not isinstance(approved, dict):
+        raise StateError(
+            f"{instance.id} has not passed an attestation yet.",
+            hint=f"Run `tundravm attest {instance.id} --policy FILE --identity KEY` first.",
+        )
+    result, evidence, channel = _released(
+        instance, Path(approved["policy"]), "rotate-refused", validator, connect
+    )
+    if not evidence.pins_owner:
+        raise ValidationError(
+            f"{instance.id} pins no operator: its image has no OperatorKey() volume.",
+            hint="Only an OperatorKey() volume's owner rotates.",
+        )
+    if evidence.owner is None:
+        raise ValidationError(
+            f"No one owns {instance.id}'s volumes yet: nothing to rotate.",
+            hint=f"Attest with the key you want: `tundravm attest {instance.id} --policy FILE "
+            "--identity KEY` (its first signed write pins it).",
+        )
+    old = signed(instance, evidence, recorded_operator(instance))
+    proof = _ssh_sig.sign(evidence.nonce.hex().encode(), new.path, namespace=SIGNATURE_NAMESPACE)
+    post(
+        channel,
+        evidence,
+        "/owner",
+        {"key": new.public, "key_signature": proof.decode(), **old},
+    )
+    instance.data["operator"] = {"identity": str(new.path), "fingerprint": new.fingerprint}
+    instance.data["owner"] = new.fingerprint
+    instance.save()
+    instance.event("rotated", owner=new.fingerprint, previous=evidence.owner, channel=CHANNEL)
+    return result, new.fingerprint
 
 
 __all__ = [
@@ -806,6 +989,10 @@ __all__ = [
     "fetch_evidence",
     "identity_path",
     "key_name",
+    "operator",
+    "recorded_operator",
+    "rotate",
+    "signed",
     "post",
     "read_passphrase",
     "read_policy",

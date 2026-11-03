@@ -7,6 +7,8 @@ import base64
 import hashlib
 import io
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +17,7 @@ import pytest
 from tests.cli.conftest import Cli
 from tests.cli.test_attest import MRTD, PEER, R0, R1, R2, R3, policy
 from tundravm import bootstrap, instances
+from tundravm._ssh_sig import fingerprint as fingerprint_of
 from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 from tundravm.testing import FakeEndpoint
@@ -287,3 +290,74 @@ def test_help_names_the_bound_channel(cli: Cli, capsys: pytest.CaptureFixture[st
             cli(*argv)
         said = " ".join(capsys.readouterr().out.split())
         assert "a TLS session whose key the quote binds" in said
+
+
+def _keypair(tmp_path: Path, name: str) -> tuple[Path, str]:
+    """A real ed25519 key pair (``ssh-keygen`` signs with it) and its public line."""
+    path = tmp_path / name
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True)
+    return path, " ".join(path.with_name(f"{name}.pub").read_text().split()[:2])
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="no ssh-keygen")
+@pytest.mark.parametrize(
+    ("case", "owner", "recorded", "refusal"),
+    [
+        ("the first signed write pins its signer", None, None, None),
+        ("the owner's key", "a", "a", None),
+        ("another key is refused before anything is sent", "b", None, "is owned by SHA256:"),
+        ("a volume back without its owner", None, "a", "came back without an owner"),
+        ("a header the volume's own copy contradicts", "a", None, "owner token does not match"),
+    ],
+)
+def test_an_operator_key_volume_takes_its_owners_writes_only(
+    instance: instances.Instance,
+    cli: Cli,
+    endpoint: FakeEndpoint,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    owner: str | None,
+    recorded: str | None,
+    refusal: str | None,
+) -> None:
+    keys = {name: _keypair(tmp_path, name) for name in ("a", "b")}
+    endpoint.pins = True
+    endpoint.owner = None if owner is None else keys[owner][1]
+    if "contradicts" in case:
+        endpoint.mismatch = "volume data: owner token does not match the volume's owner"
+    if recorded is not None:
+        instance.data["owner"] = fingerprint_of(keys[recorded][1])
+        instance.save()
+    simulated = _file(tmp_path, "policy.json", json.dumps(SIMULATED))
+    attested = cli("attest", instance.id, "--policy", simulated, "--identity", keys["a"][0])
+    if refusal is not None:
+        assert attested.code == EXIT_ERROR and refusal in attested.err, case
+        assert "fix: " in attested.err and endpoint.signers == []
+        return
+    assert attested.code == EXIT_OK, attested.err
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(PASSPHRASE + b"\n")))
+    unlocked = cli("secrets", "unlock", instance.id, "data")
+    assert unlocked.code == EXIT_OK, unlocked.err
+    assert endpoint.signers == [keys["a"][1]] * 2 and endpoint.owner == keys["a"][1]
+    fingerprint = fingerprint_of(keys["a"][1])
+    assert f"owner: {fingerprint}" in unlocked.out
+    status = json.loads(cli("run", "status", instance.id, "--json").out)
+    assert status["owner"] == fingerprint
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="no ssh-keygen")
+def test_rotate_hands_the_volumes_to_a_key_that_proves_itself(
+    instance: instances.Instance, cli: Cli, endpoint: FakeEndpoint, tmp_path: Path
+) -> None:
+    (old, old_public), (new, new_public) = (_keypair(tmp_path, n) for n in ("old", "new"))
+    endpoint.pins, endpoint.owner = True, old_public
+    simulated = _file(tmp_path, "policy.json", json.dumps(SIMULATED))
+    assert cli("attest", instance.id, "--policy", simulated, "--identity", old).code == EXIT_OK
+    rotated = cli("secrets", "rotate", instance.id, "--identity", new)
+    assert rotated.code == EXIT_OK, rotated.err
+    fingerprint = fingerprint_of(new_public)
+    assert endpoint.owner == new_public and endpoint.signers[-1] == old_public
+    assert f"is owned by {fingerprint}" in rotated.out
+    receipt = json.loads((instance.path / "instance.json").read_text())
+    assert receipt["owner"] == fingerprint and receipt["operator"]["identity"] == str(new)
