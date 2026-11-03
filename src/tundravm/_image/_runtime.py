@@ -289,8 +289,10 @@ class Runtime:
         return tuple(units)
 
     def optional(self, service: Service) -> tuple[str, ...]:
-        """``SetCredential=`` lines: an optional secret reads as empty until it arrives."""
-        return tuple(f"{s.name}:" for s in service.secrets if not s.required)
+        """``SetCredential=`` lines: an optional secret reads as one newline until it
+        arrives. systemd refuses an empty ``SetCredential=`` value (``Invalid syntax``), and
+        without the fallback a missing ``LoadCredential=`` file fails the start."""
+        return tuple(f"{s.name}:\\n" for s in service.secrets if not s.required)
 
     # ── The image ────────────────────────────────────────────────────
 
@@ -375,7 +377,8 @@ class Runtime:
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:
-        """The control plane: the attested endpoint, root SSH, and the credential waits."""
+        """The control plane: the attested endpoint, root SSH, and the credential waits of
+        the required secrets; an optional secret has none, so the boot completes without it."""
         from tundravm.components import SshAccess
 
         entries = tuple(
@@ -401,6 +404,8 @@ class Runtime:
         else:
             yield SshAccess(from_delivery=True)
         for secret in self.secrets:
+            if not secret.required:
+                continue
             yield _wait(
                 secret.ready.unit,
                 f"Wait for secret {secret.name}",

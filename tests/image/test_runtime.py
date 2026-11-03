@@ -256,12 +256,18 @@ def test_an_optional_secret_starts_the_service_without_it() -> None:
     image = prover(services=[service])
     planned = plan(image, "production")
     unit = planned.service("app")
-    assert unit.values("Service", "SetCredential") == ("flags:",)
+    assert unit.values("Service", "SetCredential") == ("flags:\\n",)
     assert "credential-flags.service" not in _after(planned, "app.service")
     manifest = json.loads(planned.file("/etc/tundravm/runtime.json").text)
     entries = {entry["name"]: entry for entry in manifest["secrets"]}
     assert not entries["flags"]["required"] and "rotation" not in entries["flags"]
     assert entries["api-token"]["units"] == ["app.service"]
+    # no wait unit holds the boot target until it arrives: only a required secret has one
+    paths = set(planned.files)
+    assert "/usr/lib/systemd/system/credential-api-token.service" in paths
+    assert "/usr/lib/systemd/system/credential-flags.service" not in paths
+    with pytest.raises(ValidationError, match="optional"):
+        flags.ready  # noqa: B018
 
 
 @pytest.mark.parametrize(

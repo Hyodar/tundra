@@ -34,7 +34,7 @@ SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 UMask=0077
-SetCredential=greeting-token:
+SetCredential=greeting-token:\n
 
 [Install]
 WantedBy=minimal.target

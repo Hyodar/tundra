@@ -26,8 +26,6 @@ mkosi-chroot systemctl enable greeter.service
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
-mkosi-chroot systemctl enable credential-greeting-token.service
-mkosi-chroot systemctl enable credential-tenant-keys.service
 mkosi-chroot systemctl enable attested-tls-8443-key.service
 mkosi-chroot systemctl enable attested-tls-8443.service
 mkosi-chroot systemctl enable nftables.service
@@ -52,8 +50,6 @@ ln -sf "/etc/systemd/system/greeter.service" "$BUILDROOT/etc/systemd/system/mini
 ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/credential-greeting-token.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/credential-tenant-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-8443-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/attested-tls-8443.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
