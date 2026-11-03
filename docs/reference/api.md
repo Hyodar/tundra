@@ -832,7 +832,12 @@ EVIDENCE = ServiceReady(unit='tdxs.service')
 *dataclass*
 
 ```python
-Firewall(*, allow: Sequence[PortValue] = (), egress: Egress | None = None)
+Firewall(
+    *,
+    allow: Sequence[PortValue] = (),
+    egress: Egress | None = None,
+    modes: Mapping[str, Mode] = FrozenMap({}),
+)
 ```
 
 The inbound (and optionally outbound) packet filter, nftables in the image.
@@ -840,6 +845,7 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 | Member | Does |
 |---|---|
 | `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere. |
+| `Firewall.lowered_modes() -> tuple[dm.FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
 
 ### `JournalExport`
 
@@ -883,6 +889,24 @@ An account other than root that logs in over SSH into exactly what the image all
 | `Login.options` | The `authorized_keys` options every baked key carries. |
 | `Login.sudoers() -> str` | The `sudoers.d` file: exactly the *sudo* rules. |
 | `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without *sudo*. |
+
+### `Mode`
+
+*dataclass*
+
+```python
+Mode(
+    ingress: Sequence[PortValue] = (),
+    egress: Egress | None = None,
+    lasts: str | None = None,
+)
+```
+
+One mode of `Firewall(modes={...})`: the ports it opens (*ingress*), what it may send beyond the image's `Egress` (*egress*) and how long it lasts once an operator switched to it (*lasts*, a systemd time span; `"30m"` unless given, and never on `production`, which the image boots into and returns to).
+
+| Member | Does |
+|---|---|
+| `Mode.seconds` | *lasts* in whole seconds, 30 minutes when it is not given. |
 
 ### `Network`
 

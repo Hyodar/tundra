@@ -229,14 +229,18 @@ class Runtime:
     ssh: Component | None = None
     """The image's own ``SshAccess``, which the control plane runs with ``from_delivery``
     on instead of a second one."""
+    switchable: bool = False
+    """The firewall has modes, which an operator switches over the attested endpoint."""
 
     @property
     def control_plane(self) -> bool:
         """Whether the image runs the attested endpoint: a secret, a volume an operator
-        unlocks, or an attested TLS ingress whose certificate its quotes bind."""
+        unlocks, an attested TLS ingress whose certificate its quotes bind, or firewall
+        modes to switch."""
         return (
             bool(self.secrets)
             or bool(self.attested)
+            or self.switchable
             or any(isinstance(volume.unlock, (OperatorKey, BrokerKey)) for volume in self.volumes)
         )
 

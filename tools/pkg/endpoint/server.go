@@ -70,6 +70,9 @@ type Evidence struct {
 	AttestedTLS       []ListenerKey   `json:"attested_tls"`
 	Mode              string          `json:"mode"`
 	Accepts           Accepts         `json:"accepts"`
+	// Firewall is the firewall's mode and the switches since boot that RTMR3 holds, in an
+	// image with modes.
+	Firewall *FirewallState `json:"firewall,omitempty"`
 }
 
 // Server is one boot's endpoint: its TLS key exists only in memory.
@@ -175,6 +178,7 @@ func (s *Server) HTTPServer() *http.Server {
 	mux.HandleFunc("POST /unlock", s.unlock)
 	mux.HandleFunc("POST /ssh-key", s.sshKeyHandler)
 	mux.HandleFunc("POST /owner", s.rotate)
+	mux.HandleFunc("POST /mode", s.switchMode)
 	return &http.Server{
 		Handler: mux,
 		TLSConfig: &tls.Config{
@@ -291,18 +295,11 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userData := Binding(nonce, s.spki, hostKeys, instanceKey, ingressKeys)
-	document, err := s.quoter.Issue(r.Context(), userData, nonce)
+	document, metadata, firewall, err := s.quote(r.Context(), userData, nonce)
 	if err != nil {
 		s.log.Error("no quote", "error", err)
-		fail(w, http.StatusServiceUnavailable, "no quote: %v", err)
+		fail(w, http.StatusServiceUnavailable, "%v", err)
 		return
-	}
-	var metadata json.RawMessage
-	if platformOf(document) == "simulator" {
-		if metadata, err = s.quoter.Metadata(r.Context()); err != nil {
-			fail(w, http.StatusServiceUnavailable, "no simulator metadata: %v", err)
-			return
-		}
 	}
 	mode := s.mode()
 	if found := sessionOf(r); found != nil {
@@ -329,6 +326,7 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 		AttestedTLS:       listeners,
 		Mode:              mode,
 		Accepts:           s.accepts(),
+		Firewall:          firewall,
 	})
 }
 

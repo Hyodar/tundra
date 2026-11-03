@@ -612,7 +612,7 @@ def _run(recipe: Recipe, name: str) -> tuple[Resolved, _Resolution]:
                 state.expand(variant.add), where=f"profile {variant.name!r}", level=variant.name
             )
     _check_targets(state, chain)
-    _expand_firewall(state, metadata_units(recipe_targets(recipe)))
+    _expand_firewall(state, metadata_units(recipe_targets(recipe)), production=chain[-1].release)
     items = tuple(state.items.values())
     _check_unit_files(state, items)
     _check_network(state, items)
@@ -683,7 +683,7 @@ def _check_unit_files(state: _Resolution, items: Sequence[Declaration]) -> None:
             )
 
 
-def _expand_firewall(state: _Resolution, glue: Sequence[Declaration]) -> None:
+def _expand_firewall(state: _Resolution, glue: Sequence[Declaration], *, production: bool) -> None:
     """Replace the variant's :class:`Firewall` with what it renders, now that the services whose
     ports it opens are final; the rendered declarations keep its location and provenance.
     *glue* are the cloud units lowering adds later, whose own egress the ruleset accepts."""
@@ -703,7 +703,8 @@ def _expand_firewall(state: _Resolution, glue: Sequence[Declaration]) -> None:
                 hint=f"Open it with the service's expose=[{_spelled(port)}], or "
                 f"Firewall(allow=[{_spelled(port)}]) for a program no Service runs.",
             )
-    for item in expand_firewall(firewall, (*state.items.values(), *glue)):
+    expanded = expand_firewall(firewall, (*state.items.values(), *glue), production=production)
+    for item in expanded:
         rendered = located(item, firewall.declared_at)
         ident = identity(rendered)
         existing = state.items.get(ident)

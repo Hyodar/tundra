@@ -3149,6 +3149,11 @@ class Firewall(Declared):
     A ``Service``'s or ``Task``'s own *egress* accepts what it sends beyond them, matched
     by its user. Either way the cloud metadata servers (:data:`CLOUD_METADATA`) are
     reachable only by the units whose *egress* names them.
+
+    *modes* (:class:`FirewallMode`, ``production`` first) make the ruleset switchable: a port
+    a mode names opens in that mode only, whatever listens on it, a mode's *egress_rules*
+    accept in that mode only, and ``mode-switch`` (``tools/``) changes the mode at run time,
+    each switch extended into RTMR3. The image boots into ``production``.
     """
 
     allow: tuple[Port | int, ...] = ()
@@ -3158,6 +3163,7 @@ class Firewall(Declared):
     collect: bool = True
     egress: Literal["unfiltered", "filter"] = "unfiltered"
     egress_rules: tuple[EgressRule, ...] = ()
+    modes: tuple[FirewallMode, ...] = ()
 
     def __post_init__(self) -> None:
         _require_ports(self, "allow")
@@ -3188,6 +3194,84 @@ class Firewall(Declared):
                     hint="Give it to the one service that reads it: "
                     "Service(..., egress=Egress(metadata=True)).",
                 )
+        _freeze(self, "modes")
+        _check_modes(self)
+
+
+MODE_RESERVED = ("tdx", "simulated")
+"""The security mode's words (``run mode``, the evidence's ``mode``), which never name a
+firewall mode."""
+PRODUCTION_MODE = "production"
+"""The firewall mode an image with modes boots into."""
+_MODE_NAME = re.compile(r"[a-z][a-z0-9]{0,23}")
+
+
+@dataclass(frozen=True, slots=True)
+class FirewallMode:
+    """One mode of a switchable :class:`Firewall`: the ports it opens (*ingress*), what it
+    may send beyond the image's egress (*egress_rules*) and how many seconds it lasts once
+    switched to (*lasts*; ``0``, production's alone, until the next switch)."""
+
+    name: str
+    ingress: tuple[Port | int, ...] = ()
+    egress_rules: tuple[EgressRule, ...] = ()
+    lasts: int = 0
+
+    def __post_init__(self) -> None:
+        _require_ports(self, "ingress")
+        _freeze(self, "egress_rules")
+        if not isinstance(self.name, str) or not _MODE_NAME.fullmatch(self.name):
+            raise _fail(
+                self,
+                f"mode name {self.name!r} is not lower-case letters and digits.",
+                hint='Name it like "maintenance".',
+            )
+        if self.name in MODE_RESERVED:
+            raise _fail(
+                self,
+                f"mode {self.name!r} is a word of the security mode (`run mode`), not a "
+                "firewall mode.",
+                hint='Name it for what it opens: "maintenance", "debug".',
+            )
+        if isinstance(self.lasts, bool) or not isinstance(self.lasts, int) or self.lasts < 0:
+            raise _fail(self, f"lasts {self.lasts!r} is not seconds.", hint="lasts=1800")
+
+
+def _check_modes(firewall: Firewall) -> None:
+    """``production`` first and lasting, the others closing, no SSH in production (a
+    mode's egress where the output chain filters nothing is refused when it renders, once
+    the image's egress is final)."""
+    if not firewall.modes:
+        return
+    names = [mode.name for mode in firewall.modes]
+    if names[0] != PRODUCTION_MODE or len(set(names)) != len(names):
+        raise _fail(
+            firewall,
+            f"modes {names} must start with {PRODUCTION_MODE!r}, each name once.",
+            hint='modes={"production": Mode(...), "maintenance": Mode(ingress=[TCP(22)])}',
+        )
+    production = firewall.modes[0]
+    if production.lasts:
+        raise _fail(
+            firewall,
+            "the production mode closes after lasts=, but the image boots into it and returns "
+            "to it.",
+            hint="Drop lasts= from production.",
+        )
+    if any(isinstance(port, Port) and port.number == 22 for port in production.ingress):
+        raise _fail(
+            firewall,
+            "the production mode opens port 22: production is what a verifier's policy "
+            "trusts, and SSH belongs in a window that closes.",
+            hint='Open it in another mode: "maintenance": Mode(ingress=[TCP(22)]).',
+        )
+    for mode in firewall.modes[1:]:
+        if not mode.lasts:
+            raise _fail(
+                firewall,
+                f"mode {mode.name!r} never closes: every mode but production lasts a while.",
+                hint=f'{mode.name}: Mode(..., lasts="30m").',
+            )
 
 
 CLOUD_METADATA = ("169.254.169.254", "168.63.129.16", "fd20:ce::254")
@@ -3662,6 +3746,7 @@ __all__ = [
     "File",
     "FileTree",
     "Firewall",
+    "FirewallMode",
     "Fragment",
     "Git",
     "Go",

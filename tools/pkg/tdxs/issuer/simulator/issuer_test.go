@@ -2,10 +2,15 @@ package simulator
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Hyodar/tundra/tools/pkg/attestation"
+	"github.com/Hyodar/tundra/tools/pkg/modes"
 
 	"github.com/Hyodar/tundra/tools/pkg/tdxs/api"
 )
@@ -80,5 +85,26 @@ func TestSimulatorIssuer_Start(t *testing.T) {
 	issuer := NewSimulatorIssuer(nopLogger{})
 	if err := issuer.Start(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSimulatorIssuer_RTMR3ReplaysTheModeLog(t *testing.T) {
+	issuer := NewSimulatorIssuer(nopLogger{})
+	issuer.events = filepath.Join(t.TempDir(), "firewall-events")
+	lines := []string{"tundravm:mode:maintenance:412", "tundravm:mode:production:530"}
+	for _, tc := range []struct {
+		name string
+		log  []string
+	}{{"no switch", nil}, {"two switches", lines}} {
+		if tc.log != nil {
+			if err := os.WriteFile(issuer.events, []byte(strings.Join(tc.log, "\n")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resp := issuer.Metadata(context.Background(), &api.MetadataRequest{})
+		got := resp.Metadata.(*attestation.TDXMeasurements).Rtmr3
+		if want := hex.EncodeToString(modes.Replay(tc.log)); got != want {
+			t.Errorf("%s: rtmr3 %s, want %s", tc.name, got, want)
+		}
 	}
 }

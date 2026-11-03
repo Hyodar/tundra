@@ -45,6 +45,7 @@ __all__ = [
     "KernelFragment",
     "KernelPatch",
     "Mkosi",
+    "Mode",
     "Notify",
     "Package",
     "Resources",
@@ -973,6 +974,55 @@ class Egress(Keywords):
             raise _fail(
                 self, f"metadata= holds {self.metadata!r}.", hint="Pass metadata=True or drop it."
             )
+
+
+@dataclass(frozen=True, slots=True)
+class Mode(Keywords):
+    """One mode of ``Firewall(modes={...})``: the ports it opens (*ingress*), what it may
+    send beyond the image's ``Egress`` (*egress*) and how long it lasts once an operator
+    switched to it (*lasts*, a systemd time span; ``"30m"`` unless given, and never on
+    ``production``, which the image boots into and returns to).
+
+    A port a mode names opens in that mode only, whatever listens on it:
+    ``Mode(ingress=[TCP(22)])`` keeps ``SshAccess``'s port closed until a switch.
+    """
+
+    ingress: Sequence[PortValue] = ()
+    egress: Egress | None = None
+    lasts: str | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.ingress, (TCP, UDP)):
+            raise _fail(self, "ingress= takes a list of ports.", hint="Pass ingress=[TCP(22)].")
+        object.__setattr__(self, "ingress", tuple(self.ingress))
+        for port in self.ingress:
+            if not isinstance(port, (TCP, UDP)):
+                raise _fail(
+                    self,
+                    f"ingress= holds {shown(port)}, not TCP(...) or UDP(...).",
+                    hint="Mode(ingress=[TCP(22)])",
+                )
+        if self.egress is not None and not isinstance(self.egress, Egress):
+            raise _fail(self, "egress= must be an Egress.", hint="egress=Egress(ports=[TCP(443)])")
+        if self.egress is not None and self.egress.metadata:
+            raise _fail(
+                self,
+                "egress=Egress(metadata=True) would open the cloud metadata server to every "
+                "process for the whole window.",
+                hint="Give it to the one service that reads it: "
+                "Service(..., egress=Egress(metadata=True)).",
+            )
+        if self.lasts is not None and not (_seconds(self.lasts) or 0) >= 1:
+            raise _fail(
+                self,
+                f"lasts= {self.lasts!r} is not a systemd time span of a second or more.",
+                hint='Mode(..., lasts="30m")',
+            )
+
+    @property
+    def seconds(self) -> int:
+        """*lasts* in whole seconds, 30 minutes when it is not given."""
+        return int(_seconds(self.lasts or "30m") or 0)
 
 
 _HOST_NAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?)+")

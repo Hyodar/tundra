@@ -164,6 +164,7 @@ class _Lowering:
             key_files=login_key_files(image),
             ssh=self.explicit(SshAccess),
             rootfs=image.rootfs.layout,
+            switchable=bool(getattr(self.explicit(Firewall), "modes", None)),
         )
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
         self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev))
@@ -273,7 +274,7 @@ class _Lowering:
         if firewall is None:
             firewall = Firewall(egress=egress)
         elif egress is not None:
-            firewall = Firewall(allow=firewall.allow, egress=egress)
+            firewall = Firewall(allow=firewall.allow, egress=egress, modes=firewall.modes)
         filtering = self.component(firewall)
         if egress is not None:
             self.sends = tuple(self.outbound(egress, (tee, tdxs, network)))

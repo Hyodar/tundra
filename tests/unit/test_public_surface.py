@@ -63,6 +63,7 @@ COMPONENTS = [
     "Firewall",
     "JournalExport",
     "Login",
+    "Mode",
     "Network",
     "Observability",
     "PrometheusRemoteWrite",

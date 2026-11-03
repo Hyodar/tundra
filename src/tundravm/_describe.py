@@ -462,7 +462,8 @@ def _describe_firewall(profile_state: ProfileState) -> dict[str, object] | None:
     for line in conf.data.decode("utf-8", errors="replace").splitlines():
         words = line.split()
         if words[:1] == ["chain"] and len(words) > 1:
-            chain = words[1]
+            # a firewall mode's chain (maintenance_input) holds what that mode accepts
+            chain = words[1].rpartition("_")[2] if "_" in words[1] else words[1]
             continue
         if chain == "output" and "policy" in words and "drop;" in words:
             filtered = True

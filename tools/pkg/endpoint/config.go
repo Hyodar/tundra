@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 
+	"github.com/Hyodar/tundra/tools/pkg/modes"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,6 +37,12 @@ type Config struct {
 	// there (or in SSH.Dir) is a key that logs in, gated as POST /ssh-key is. Default
 	// /etc/ssh/authorized_keys.d.
 	LoginKeys string `yaml:"login_keys"`
+	// ModesConfig is the firewall modes' configuration; an image without it has no modes.
+	ModesConfig string `yaml:"modes_config"`
+	// ModeSocket is where mode-switch takes a switch.
+	ModeSocket string `yaml:"mode_socket"`
+	// ModeEvents is the boot's log of switches the evidence carries.
+	ModeEvents string `yaml:"mode_events"`
 }
 
 // Listener is one attested TLS port and the PEM certificate its key unit writes at boot.
@@ -89,6 +96,15 @@ func LoadConfig(path string) (*Config, error) {
 func (c *Config) Validate() error {
 	if c.Listen == "" {
 		c.Listen = "0.0.0.0:8745"
+	}
+	if c.ModesConfig == "" {
+		c.ModesConfig = modes.ConfigPath
+	}
+	if c.ModeSocket == "" {
+		c.ModeSocket = modes.SocketPath
+	}
+	if c.ModeEvents == "" {
+		c.ModeEvents = modes.EventsPath
 	}
 	if c.QuoteSocket == "" {
 		return fmt.Errorf("quote_socket is required")

@@ -10,7 +10,8 @@ findings, a lint rule ``tundravm check`` runs, of the codes the class declares a
 
 - Baseline, implied by every image and replaced by passing one in ``components=``:
   :class:`TeeBase`, :class:`Network` (also ``image.network``, configured with
-  :class:`StaticAddress` and :class:`Egress`), :class:`Firewall`, :class:`Tdxs` (the
+  :class:`StaticAddress` and :class:`Egress`), :class:`Firewall` (switchable with
+  :class:`Mode`), :class:`Tdxs` (the
   evidence service; :data:`EVIDENCE` is its readiness).
 - Ways in for people: :class:`SshAccess` (root, and each non-root :class:`Login` with its
   :class:`Sudo` rules), :class:`DevAccess` (``image.dev``).
@@ -34,7 +35,18 @@ from tundravm._image._values import Egress, StaticAddress
 from tundravm.declarative.model import Diagnostic, Resolved
 from tundravm.diagnostics import Rule
 
-from ._base import EVIDENCE, DevAccess, Firewall, Login, Network, SshAccess, Sudo, Tdxs, TeeBase
+from ._base import (
+    EVIDENCE,
+    DevAccess,
+    Firewall,
+    Login,
+    Mode,
+    Network,
+    SshAccess,
+    Sudo,
+    Tdxs,
+    TeeBase,
+)
 from ._observability import JournalExport, Observability, PrometheusRemoteWrite, Proxy
 
 __all__ = [
@@ -48,6 +60,7 @@ __all__ = [
     "Firewall",
     "JournalExport",
     "Login",
+    "Mode",
     "Network",
     "Observability",
     "PrometheusRemoteWrite",

@@ -21,6 +21,7 @@ from tundravm._image._values import (
     TCP,
     UDP,
     Egress,
+    Mode,
     Notify,
     PortValue,
     StaticAddress,
@@ -40,6 +41,7 @@ __all__ = [
     "DevAccess",
     "Firewall",
     "Login",
+    "Mode",
     "Network",
     "SshAccess",
     "Sudo",
@@ -263,12 +265,20 @@ class Firewall(Component):
     ``Service(egress=...)`` is accepted for its user alone. Filtered or not, the cloud
     metadata servers take only what the services declaring ``Egress(metadata=True)`` and
     tundravm's cloud glue send. The image holds ``Firewall()`` by default;
-    ``network=Network(egress=...)`` is the usual way to set *egress*. Component name:
+    ``network=Network(egress=...)`` is the usual way to set *egress*.
+
+    *modes* make it switchable at run time: ``modes={"production": Mode(...),
+    "maintenance": Mode(ingress=[TCP(22)], lasts="30m")}``. ``production`` is required and
+    the image boots into it; ``tundravm run switch INSTANCE maintenance`` opens the window
+    over the attested endpoint, each switch is extended into RTMR3 so ``attest`` shows the
+    history, and the window closes itself after *lasts*. Refused: SSH in production, a
+    mode named ``tdx`` or ``simulated``, ``lasts`` on production. Component name:
     ``firewall``.
     """
 
     allow: Sequence[PortValue] = ()
     egress: Egress | None = None
+    modes: Mapping[str, Mode] = FrozenMap()
 
     def __post_init__(self) -> None:
         if isinstance(self.allow, (TCP, UDP)):
@@ -289,14 +299,58 @@ class Firewall(Component):
                 hint="Pass egress=Egress(...), or set it on the Network.",
             )
         _whole_image("Firewall", self.egress)
+        if not isinstance(self.modes, Mapping):
+            raise ValidationError(
+                "Firewall: modes= maps each mode's name to a Mode.",
+                hint='modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])}',
+            )
+        object.__setattr__(self, "modes", FrozenMap(dict(self.modes)))
+        for name, mode in self.modes.items():
+            if not isinstance(mode, Mode):
+                raise ValidationError(
+                    f"Firewall: modes[{name!r}] is not a Mode.",
+                    hint=f'"{name}": Mode(ingress=[TCP(22)])',
+                )
+        if self.modes and "production" not in self.modes:
+            raise ValidationError(
+                "Firewall: modes= has no production mode, the one the image boots into and "
+                "a verifier trusts.",
+                hint='Add "production": Mode() (what every mode opens stays open in it).',
+            )
+        if self.modes and self.modes["production"].lasts is not None:
+            raise ValidationError(
+                "Firewall: the production mode closes after lasts=, but the image boots into "
+                "it and returns to it.",
+                hint='Drop lasts= from "production".',
+            )
+        self.lowered_modes()
+
+    def lowered_modes(self) -> tuple[dm.FirewallMode, ...]:
+        """*modes* as the ruleset takes them, production first."""
+        ordered = sorted(self.modes.items(), key=lambda entry: entry[0] != "production")
+        return tuple(
+            dm.FirewallMode(
+                name,
+                ingress=tuple(dm.Port(p.port, p.protocol) for p in mode.ingress),
+                egress_rules=()
+                if mode.egress is None
+                else egress_rules(((f"{name} mode", mode.egress),)),
+                lasts=0 if name == "production" else mode.seconds,
+            )
+            for name, mode in ordered
+        )
 
     def compose(self) -> Iterator[object]:
         allow = tuple(dm.Port(p.port, p.protocol) for p in self.allow)
+        modes = self.lowered_modes()
         if self.egress is None:
-            yield dm.Firewall(allow=allow)
+            yield dm.Firewall(allow=allow, modes=modes)
             return
         yield dm.Firewall(
-            allow=allow, egress="filter", egress_rules=egress_rules((("image", self.egress),))
+            allow=allow,
+            egress="filter",
+            egress_rules=egress_rules((("image", self.egress),)),
+            modes=modes,
         )
 
     rules = (
