@@ -3,13 +3,15 @@
 ``tests/fixtures/kernel/recipe.py`` builds its payload's kernel from source (Debian's
 ``cloud-amd64`` config, ``CONFIG_MODULES=n``), ``tests/fixtures/kernel/example.py`` one
 from its own config; the build's drivers check already asserted
-every target's drivers ``=y``. This boots ``qemu.raw`` through its ESP under QEMU with OVMF
-and reads what the fixture's ``boot-probe`` task printed: the release, no module file, the
-drivers registered and the file systems the root layouts and volumes mount.
+every target's drivers ``=y``. This boots the ``dev`` profile's ``qemu.raw`` through its
+ESP under QEMU with OVMF and reads what the fixture's ``boot-probe`` service printed: the
+release, no module file, the drivers registered and the file systems the root layouts and
+volumes mount.
 
-CI's ``kernel`` workflow builds one with ``tundravm build``, points ``TUNDRAVM_KERNEL_BUILD``
-at the build directory and names the fixture in ``TUNDRAVM_KERNEL_FIXTURE`` (``recipe`` or
-``example``); the test needs a build (a kernel build is too slow to bake here). Run with:
+CI's ``kernel`` workflow builds one with ``tundravm build --dev``, points
+``TUNDRAVM_KERNEL_BUILD`` at the build directory and names the fixture in
+``TUNDRAVM_KERNEL_FIXTURE`` (``recipe`` or ``example``); the test needs a build (a kernel
+build is too slow to bake here). Run with:
 uv run pytest tests/integration/test_kernel_boot.py -m boot
 """
 
@@ -32,7 +34,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.boot]
 BOOT_TIMEOUT = float(os.environ.get("TUNDRAVM_BOOT_TIMEOUT", "900"))
 LOG_DIR = os.environ.get("TUNDRAVM_BOOT_LOGS")
 BUILD = os.environ.get("TUNDRAVM_KERNEL_BUILD")
-"""The build directory ``tundravm build tests/fixtures/kernel/<fixture>.py`` published."""
+"""The build directory ``tundravm build tests/fixtures/kernel/<fixture>.py --dev``
+published."""
 FIXTURE = os.environ.get("TUNDRAVM_KERNEL_FIXTURE", "recipe")
 
 

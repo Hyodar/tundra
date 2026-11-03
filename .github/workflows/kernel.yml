@@ -4,8 +4,8 @@
 # config. Each build's drivers check asserts
 # every driver the qemu, azure and gcp targets need is built in (=y) and the denied ones are
 # off; each job uploads the config before and after olddefconfig, the check's report and the
-# diff summary, then boots qemu.raw under QEMU with OVMF until the fixture's probe has
-# printed what the kernel registered. Weekly, and by hand:
+# diff summary, then boots the dev profile's qemu.raw under QEMU with OVMF until the
+# fixture's probe service has printed what the kernel registered. Weekly, and by hand:
 #   gh workflow run kernel.yml --ref BRANCH
 name: kernel
 
@@ -43,7 +43,7 @@ jobs:
       - name: Put the build root under the runner's temp
         run: |
           echo "TUNDRAVM_BUILD=$RUNNER_TEMP/kernel" >> "$GITHUB_ENV"
-          echo "BUILD_DIR=$RUNNER_TEMP/kernel/${{ matrix.image }}/latest-production" >> "$GITHUB_ENV"
+          echo "BUILD_DIR=$RUNNER_TEMP/kernel/${{ matrix.image }}/latest-development" >> "$GITHUB_ENV"
           echo "RECORDS=$RUNNER_TEMP/kernel-records" >> "$GITHUB_ENV"
 
       - name: Set up the build host, QEMU and OVMF
@@ -55,8 +55,8 @@ jobs:
       - name: Lock and build the fixture
         run: |
           uv run tundravm lock "$FIXTURE"
-          uv run tundravm build "$FIXTURE"
-          uv run tundravm verify latest
+          uv run tundravm build "$FIXTURE" --dev
+          uv run tundravm verify latest-development
           ls -lL "$BUILD_DIR/" "$BUILD_DIR/kernel/"
           df -h /
 
@@ -90,7 +90,7 @@ jobs:
           TUNDRAVM_BOOT_REQUIRED: "1"
           TUNDRAVM_BOOT_TIMEOUT: "1500"
           TUNDRAVM_BOOT_LOGS: ${{ runner.temp }}/kernel-records/boot-logs
-          TUNDRAVM_KERNEL_BUILD: ${{ runner.temp }}/kernel/${{ matrix.image }}/latest-production
+          TUNDRAVM_KERNEL_BUILD: ${{ runner.temp }}/kernel/${{ matrix.image }}/latest-development
           TUNDRAVM_KERNEL_FIXTURE: ${{ matrix.fixture }}
         run: uv run pytest tests/integration/test_kernel_boot.py -m boot -v -rsP
 

@@ -9,7 +9,8 @@ unsandboxed root task was added: the boot probe's root checks are the platform p
 `fixture-boot` and `verity` jobs, and the sink is a root `Service` under the relaxed sandbox.
 The production boots assert what the kernel's and systemd's own console lines say;
 `verity-cloud` and `reproduce` build `--target azure,gcp` of the one production profile.
-`tests/fixtures/kernel/recipe.py` (the manual `kernel` workflow) is still a Recipe file.
+`tests/fixtures/kernel/recipe.py` and `example.py` (the weekly `kernel` workflow) are `Image`
+files whose dev profile runs the probe as a service, which a production boot never starts.
 
 Date: 2026-11-01. Base: master at `24f09c8`, then `leftovers-8`. Franco: "you do not need
 to support the previous syntax". `check`, `build`, `lock`, `dev` and the rest still load a
