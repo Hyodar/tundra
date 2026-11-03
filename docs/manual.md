@@ -347,7 +347,7 @@ alone. The cloud metadata server and its identity token take only tundravm's clo
 and a service with `Egress(metadata=True)` (`service-metadata` warns). A host may be
 `HOST:PORT`. `"logs.example:443"` opens 443 only to the addresses the name resolves to,
 which `egress-resolve` asks over DNS over TLS at boot and every 30s; until then it is
-unreachable.
+unreachable. A service whose own egress names a host starts after the first resolution.
 A production profile without a filter warns `egress-unfiltered`.
 
 `TeeBase` resolves through `systemd-resolved` over strict DNS over TLS, with no fallback,

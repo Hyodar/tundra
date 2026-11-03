@@ -497,6 +497,17 @@ def test_a_host_name_is_reached_only_at_the_addresses_it_resolves_to() -> None:
     assert "host4_" not in unfiltered.file("/etc/nftables.conf").text
 
 
+@pytest.mark.parametrize(("host", "waits"), [("api.example:443", True), ("10.0.0.5:443", False)])
+def test_a_service_whose_egress_names_a_host_starts_after_the_first_resolution(
+    host: str, waits: bool
+) -> None:
+    app = Service("app", ["/usr/bin/app"], egress=Egress(hosts=[host]))
+    unit = plan(Image("x", services=[app], network=Network(egress=Egress())), "production")
+    wants, after = (unit.service("app").get("Unit", key) or "" for key in ("Wants", "After"))
+    assert ("egress-resolve.service" in wants) == waits == ("egress-resolve.service" in after)
+    assert "egress-resolve.service" not in (unit.service("app").get("Unit", "Requires") or "")
+
+
 @pytest.mark.parametrize(
     ("host", "message"),
     [

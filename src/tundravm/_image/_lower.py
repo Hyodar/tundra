@@ -25,6 +25,7 @@ from tundravm._modules.execution import GATE_UNIT
 from tundravm._modules.init import OWNERS_STEP
 from tundravm._platforms.gcp import KERNEL_PATCH as GCP_KERNEL_PATCH
 from tundravm.declarative import model as dm
+from tundravm.declarative._network import EGRESS_RESOLVE_UNIT
 from tundravm.declarative.systemd import Hardening, target_unit
 from tundravm.declarative.utils import SSH_AUTHORIZED_KEYS_DIR, Backports
 from tundravm.errors import ValidationError
@@ -64,6 +65,7 @@ from ._values import (
     Notify,
     Package,
     Tree,
+    egress_host,
     mkosi_section,
 )
 
@@ -833,6 +835,7 @@ class _Lowering:
         return dm.Service(
             item.unit_name,
             item.command(),
+            wants=self.resolution(item),
             type="notify" if isinstance(item.readiness, Notify) else "exec",
             user=item.user,
             groups=tuple(groups),
@@ -909,6 +912,22 @@ class _Lowering:
                 groups.append(state.group)
         return directives, requires, environment, groups, working, write
 
+    def resolution(self, item: Service) -> tuple[str, ...]:
+        """``egress-resolve.service`` when *item*'s own egress names a host the image's
+        filter resolves: ``Wants=`` and ``After=`` it, so the service starts once the first
+        resolution filled the name's sets, and starts anyway when it finds nothing."""
+        from tundravm.components import Firewall, Network
+
+        egress = item.egress
+        if egress is None or not any(egress_host(egress, host)[2] for host in egress.hosts):
+            return ()
+        network = self.image.network or self.explicit(Network)
+        firewall = self.explicit(Firewall)
+        filtered = (network is not None and network.egress is not None) or (
+            firewall is not None and firewall.egress is not None
+        )
+        return (EGRESS_RESOLVE_UNIT,) if filtered else ()
+
     def timer_task(self, item: Service) -> dm.Task:
         """A ``Service(timer=...)`` as the scheduled oneshot it is, every keyword kept: its
         secrets and its volume are waited for as a long-lived service's are."""
@@ -918,6 +937,7 @@ class _Lowering:
         return dm.Task(
             item.unit_name,
             item.command(),
+            wants=self.resolution(item),
             schedule=item.timer,
             user=item.user,
             groups=tuple(groups),
