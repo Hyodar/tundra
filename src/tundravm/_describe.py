@@ -163,6 +163,7 @@ def _service(service: Service, owner: str | None) -> dict[str, object]:
         "probe": service.probe_unit is not None,
         "readiness": None if service.readiness is None else call(service.readiness),
         "timer": None if service.timer is None else call(service.timer),
+        "quotes": service.quotes,
     }
 
 
@@ -670,6 +671,8 @@ def _service_row(row: Mapping[str, Any]) -> Row:
     if row["readiness"] and not row["probe"]:
         probe = f"no, {row['readiness']} says when it is ready"
     items.append(("probe", probe))
+    if row.get("quotes"):
+        items.append(("quotes", "yes"))
     head = row["name"] + (f"  {row['component']}" if row["component"] else "")
     return Row(head, tuple(items))
 

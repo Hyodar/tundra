@@ -48,6 +48,32 @@ def test_show_reads_like_the_image_file(
         assert internal not in result.out, internal
 
 
+@pytest.mark.parametrize(
+    ("keywords", "block"),
+    [
+        ("", "  app\n    program    /usr/bin/app\n    hardening  static\n    probe      no\n"),
+        (
+            ", quotes=True",
+            "  app\n    program    /usr/bin/app\n    hardening  static\n    probe      no\n"
+            "    quotes     yes\n",
+        ),
+    ],
+    ids=["plain", "quotes"],
+)
+def test_show_says_which_service_asks_for_quotes(
+    keywords: str, block: str, tmp_path: Path, cli: Cli
+) -> None:
+    image = tmp_path / "q.py"
+    image.write_text(
+        "from tundravm import Image, Service\n"
+        f'image = Image("q", services=[Service("app", ["/usr/bin/app"]{keywords})])\n',
+        encoding="utf-8",
+    )
+    result = cli("show", image)
+    assert result.code == EXIT_OK, result.err
+    assert f"Services (1):\n{block}\n" in result.out
+
+
 def test_show_selects_profiles(project: Path, cli: Cli) -> None:
     """--profile P picks some, --dev the dev profile, each shown whole."""
     dev = cli("show", "demo.py", "--dev")
