@@ -65,6 +65,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Mkosi(settings=)` writes each key in its mkosi section, and a key tundravm writes is refused with the public slot that sets it.
 - **Breaking:** every error is one shape in the image file's words: what is wrong, naming the public object and keyword (`Service("app"): argv= is empty`), then a `fix:` line; `tundravm` prints it as one block with the image file's line and exits 2, as a crash or a usage error does, while a failed check exits 1; a misspelt keyword, a missing argument or a positional too many is a `ValidationError` with the closest keyword, and two services exposing one port and two services with one name are refused.
 - `tundravm.testing`: `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe`, `run_cli`, and `FakeEndpoint`, which plays the endpoint, presenting each listener's certificate, with `relay`, `replay`, `wrong-key` and `wrong-certificate` misbehaviours.
+- A `Volume` installs `e2fsprogs` and `mount` beside `cryptsetup`: `disk-setup` formats with `mkfs.ext4`, which no image had. Each `tools/` command's programs and their packages are one table that a test reads from the Go code.
 
 ### CLI
 

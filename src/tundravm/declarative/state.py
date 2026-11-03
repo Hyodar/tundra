@@ -34,7 +34,7 @@ from tundravm._modules import (
 from tundravm._modules import execution as gate
 from tundravm._modules import probe as probe_module
 from tundravm._modules import tdxs as _tdxs
-from tundravm._modules.base import Module, tools_source
+from tundravm._modules.base import TPM_PROGRAMS, Module, tools_source
 from tundravm._modules.disk_encryption import (
     DISK_ENCRYPTION_BUILD_PACKAGES,
 )
@@ -472,7 +472,7 @@ class StateBuilder:
             profile.build_packages.update(KEY_GENERATION_BUILD_PACKAGES)
             self._build_from(profile, keygen.source_spec())
             if any(spec.tpm_enabled() for spec in keygen.keys):
-                profile.packages.add("tpm2-tools")
+                profile.packages.update(TPM_PROGRAMS.values())
             _add_file(profile, keygen.config_path, keygen.render_config())
             _runtime_init(profile, keygen.init_script(), "keys", after)
             applied.append(keygen)
@@ -484,7 +484,7 @@ class StateBuilder:
             )
             profile.build_packages.update(DISK_ENCRYPTION_BUILD_PACKAGES)
             self._build_from(profile, setup.source_spec())
-            profile.packages.add("cryptsetup")
+            profile.packages.update(setup.packages())
             _add_file(profile, setup.config_path, setup.render_config())
             _runtime_init(profile, setup.render_init_script(), "disks", after)
             owners = setup.owner_service()

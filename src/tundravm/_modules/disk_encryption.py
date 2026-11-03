@@ -7,7 +7,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Literal
 
-from tundravm._modules.base import Module, tools_source
+from tundravm._modules.base import Module, tool_packages, tools_source
 from tundravm._modules.key_generation import KeySpec, validate_entry_name
 from tundravm._source import GitSource, GoBuild, Install, LocalSource, SourceBuild
 from tundravm.errors import ValidationError
@@ -189,6 +189,12 @@ class DiskEncryption(Module):
             build=GoBuild(package="./cmd/disk-setup", output="disk-setup"),
             install=(Install.artifact("/usr/bin/disk-setup"),),
         )
+
+    def packages(self) -> tuple[str, ...]:
+        """What the image installs for ``disk-setup`` and the step's mapper renames: the
+        packages of the programs it runs (:data:`~tundravm._modules.base.TOOL_PROGRAMS`),
+        ``e2fsprogs`` for the ``mkfs.ext4`` it formats with among them."""
+        return tool_packages("disk-setup")
 
     def render_config(self) -> str:
         """The aggregate ``disk-setup`` config: one entry per disk."""

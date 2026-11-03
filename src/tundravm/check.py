@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._modules.base import TPM_PROGRAMS
 from ._modules.init import is_init_path
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
@@ -209,9 +210,12 @@ _PACKAGE_BINARIES: Mapping[str, frozenset[str]] = {
     "iproute2": frozenset({"bridge", "ip", "ss", "tc"}),
     "iputils-ping": frozenset({"ping"}),
     "kmod": frozenset({"insmod", "lsmod", "modprobe", "rmmod"}),
+    "mount": frozenset({"mount", "umount"}),
     "net-tools": frozenset({"ifconfig", "netstat", "route"}),
     "netcat-openbsd": frozenset({"nc"}),
+    "nftables": frozenset({"nft"}),
     "nodejs": frozenset({"node", "nodejs"}),
+    "nvme-cli": frozenset({"nvme"}),
     "openssh-client": frozenset({"scp", "ssh", "ssh-keygen"}),
     "openssh-server": frozenset({"scp", "ssh", "ssh-keygen", "sshd"}),
     "procps": frozenset({"free", "pgrep", "pkill", "ps", "sysctl", "top"}),
@@ -232,6 +236,7 @@ _PACKAGE_BINARIES: Mapping[str, frozenset[str]] = {
             "systemd-tmpfiles",
         }
     ),
+    "tpm2-tools": frozenset(TPM_PROGRAMS),
     "udev": frozenset({"udevadm"}),
 }
 """The programs a package ships under a name other than its own, beside the interpreters
