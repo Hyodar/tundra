@@ -111,6 +111,30 @@ probe_egress() {
         *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
     esac
 }
+probe_metadata() {
+    if ! command -v setpriv >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "no setpriv or bash to send a datagram as $1"
+        return
+    fi
+    group=$2
+    [ "$group" = - ] && group=$(id -g "$1" 2>/dev/null)
+    if [ -z "$group" ]; then
+        fail "no user $1 in the image: the service runs as a user lowering declares; journalctl -u nftables.service"
+        return
+    fi
+    if said=$(setpriv --reuid "$1" --regid "$group" --clear-groups bash -c 'printf x >"/dev/udp/$0/80"' "$3" 2>&1); then
+        verdict=sent
+    else
+        case $said in *"not permitted"*) verdict=refused ;; *) verdict=failed ;; esac
+    fi
+    case $4/$verdict in
+        no/refused) ok "refused for $1:$group (Operation not permitted): it declares no Egress(metadata=True)" ;;
+        no/sent) fail "a datagram from $1:$group to $3 left the guest: the output chain must drop the metadata server for a service that does not declare it; systemctl status nftables.service" ;;
+        yes/sent) ok "a datagram from $1:$group to $3 left the guest: its egress names the metadata server" ;;
+        yes/refused) fail "refused for $1:$group, whose egress names $3: the ruleset lacks its rule, or the user or group differs; nft list chain inet filter output" ;;
+        *) skip "a datagram to $3 failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the rule is untested" ;;
+    esac
+}
 probe_upload() {
     hex=$(printf '%04X' "$4")
     waited=0
@@ -355,6 +379,14 @@ check=volume:/persistent
 probe_volume /persistent yes
 check=egress:198.51.100.1:7
 probe_egress 198.51.100.1 7
+check=egress:metadata:tdxs
+probe_metadata tdxs - 169.254.169.254 no
+check=egress:metadata:journal-export
+probe_metadata journal-export - 169.254.169.254 no
+check=egress:metadata:metrics-export
+probe_metadata metrics-export - 169.254.169.254 no
+check=egress:metadata:app
+probe_metadata app - 169.254.169.254 no
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=observability:journal-export.service

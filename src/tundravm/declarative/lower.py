@@ -36,6 +36,7 @@ from tundravm._location import display_location
 from tundravm._modules import probe as probe_module
 from tundravm._modules.probe import Probe
 from tundravm._options import MkosiOptions
+from tundravm._platforms import metadata_units
 from tundravm._source import DebFile, HttpSource
 from tundravm.check import CONFIGURE_SCRIPT_HINT, ENVIRONMENT_HINT
 from tundravm.compiler.emit_mkosi import PHASE_TO_MKOSI_KEY
@@ -326,7 +327,8 @@ def _probes(
         firewall = declared_firewall(recipe, variant)
         if firewall is not None:
             items = (*items, firewall)
-        probe = probe_module.derive(items, modules=modules, kernel_off=off)
+        glue = metadata_units(recipe_targets(recipe))
+        probe = probe_module.derive(items, modules=modules, kernel_off=off, glue=glue)
         builder.probe(name, probe)
         found[name] = probe
     return found

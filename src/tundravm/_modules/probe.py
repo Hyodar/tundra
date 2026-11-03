@@ -24,6 +24,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   device when it has a key;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
+  ``egress:metadata:OWNER``: with a firewall, a datagram to the cloud metadata server sent
+  as each service's user (``setpriv``; root with its group for the cloud glue) is refused
+  unless that service's ``egress`` names it, and leaves the guest when it does;
 - ``observability:UNIT``: with an ``Observability``, ``journal-export.service`` active and
   connected to its sink's port (the proxy's with one: the upload streams while it follows
   the journal) or with an upload's cursor saved, or restarting after an upload its journal
@@ -113,6 +116,7 @@ Helper = Literal[
     "port",
     "volume",
     "egress",
+    "metadata",
     "upload",
     "agent",
     "series",
@@ -196,12 +200,14 @@ def derive(
     *,
     modules: Sequence[str] | None,
     kernel_off: Iterable[str] = (),
+    glue: Sequence[Declaration] = (),
 ) -> Probe:
     """The probe *items* (a variant's resolved declarations) imply.
 
     *modules* is the curated module set the profile keeps (``None``: no module check, the
     image keeps every module); *kernel_off* the options a built kernel turns off (empty for
-    a distribution kernel)."""
+    a distribution kernel); *glue* the cloud units lowering adds that read the metadata
+    servers (``tundravm._platforms.metadata_units``), checked for their egress only."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
     from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task, Unit
     from tundravm.declarative.systemd import ceiling
@@ -283,6 +289,8 @@ def derive(
                     ("nftables.service",),
                 )
             )
+    if any(isinstance(item, Firewall) for item in items):
+        checks += _metadata(items, glue)
     endpoints = [item for item in items if isinstance(item, Secrets)]
     for item in endpoints:
         unit = ENDPOINT_UNIT if len(endpoints) == 1 else f"tundravm-endpoint-{item.name}.service"
@@ -365,6 +373,43 @@ def derive(
             )
         )
     return Probe(tuple(checks))
+
+
+def _metadata(items: Sequence[Declaration], glue: Sequence[Declaration]) -> list[Check]:
+    """One ``egress:metadata:OWNER`` check per user a service runs as (a task counts when
+    its egress names a server; root counts with the group of a unit whose egress does): the
+    metadata server refused unless one of its units' egress names it."""
+    from tundravm.declarative.model import CLOUD_METADATA, Service, Task, egress_owner
+    from tundravm.declarative.systemd import Dynamic, Root
+
+    owners: dict[tuple[str, str | None], str | None] = {}
+    for item in (*items, *glue):
+        if not isinstance(item, (Service, Task)) or item.name.endswith("@"):
+            continue
+        if (not item.enabled) if isinstance(item, Service) else not item.egress:
+            continue
+        if not item.egress and (isinstance(item.user, (Dynamic, Root)) or item.user == "root"):
+            continue
+        owner = egress_owner(item)
+        declared = next((r.host for r in item.egress if r.host in CLOUD_METADATA), None)
+        if owners.get(owner) is None:
+            owners[owner] = declared
+    checks: list[Check] = []
+    for (user, group), host in owners.items():
+        name = user if group is None else group
+        address = host or CLOUD_METADATA[0]
+        what = "leaves the guest" if host else "is refused"
+        checks.append(
+            Check(
+                f"egress:metadata:{name}",
+                f"a datagram from {user} to {address} {what}"
+                + (" (its egress names it)" if host else " (no egress of its names it)"),
+                f"probe_metadata {user} {group or '-'} {address} {'yes' if host else 'no'}",
+                "metadata",
+                ("nftables.service",),
+            )
+        )
+    return checks
 
 
 def _owned(items: Iterable[Declaration]) -> Iterator[tuple[str, str, str]]:
@@ -776,6 +821,32 @@ probe_egress() {
     case $said in
         *"not permitted"*) ok "refused by the output chain (Operation not permitted)" ;;
         *) skip "a datagram to $1:$2/udp failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the deny is untested" ;;
+    esac
+}
+""",  # noqa: E501
+    "metadata": """\
+probe_metadata() {
+    if ! command -v setpriv >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "no setpriv or bash to send a datagram as $1"
+        return
+    fi
+    group=$2
+    [ "$group" = - ] && group=$(id -g "$1" 2>/dev/null)
+    if [ -z "$group" ]; then
+        fail "no user $1 in the image: the service runs as a user lowering declares; journalctl -u nftables.service"
+        return
+    fi
+    if said=$(setpriv --reuid "$1" --regid "$group" --clear-groups bash -c 'printf x >"/dev/udp/$0/80"' "$3" 2>&1); then
+        verdict=sent
+    else
+        case $said in *"not permitted"*) verdict=refused ;; *) verdict=failed ;; esac
+    fi
+    case $4/$verdict in
+        no/refused) ok "refused for $1:$group (Operation not permitted): it declares no Egress(metadata=True)" ;;
+        no/sent) fail "a datagram from $1:$group to $3 left the guest: the output chain must drop the metadata server for a service that does not declare it; systemctl status nftables.service" ;;
+        yes/sent) ok "a datagram from $1:$group to $3 left the guest: its egress names the metadata server" ;;
+        yes/refused) fail "refused for $1:$group, whose egress names $3: the ruleset lacks its rule, or the user or group differs; nft list chain inet filter output" ;;
+        *) skip "a datagram to $3 failed before the firewall ($(echo "$said" | tail -n 1)): no route, so the rule is untested" ;;
     esac
 }
 """,  # noqa: E501

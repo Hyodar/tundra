@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from tundravm import Image, Service
-from tundravm.components import Egress, Network
+from tundravm.components import DevAccess, Egress, Network
 from tundravm.declarative import Dynamic, Task
 from tundravm.declarative.model import EgressRule
 from tundravm.errors import ValidationError
@@ -86,4 +86,20 @@ def test_a_service_reading_the_metadata_server_is_linted() -> None:
     found = plan(Image("x", services=[READER, PLAIN])).lint()
     assert [(d.code, d.subject) for d in found if d.code == "service-metadata"] == [
         ("service-metadata", "reader.service")
+    ]
+
+
+def test_the_probe_sends_to_the_metadata_server_as_each_service_user() -> None:
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEgressEgressEgressEgressEgressEgressEgr dev@x"
+    image = Image(
+        "x", services=[READER, PLAIN], targets=("qemu", "gcp"), dev=DevAccess(ssh_keys=[key])
+    )
+    script = plan(image, "dev").file("/usr/lib/tundravm/probe").text
+    calls = [line for line in script.splitlines() if line.startswith("probe_metadata ")]
+    assert calls == [
+        "probe_metadata tdxs - 169.254.169.254 no",
+        "probe_metadata reader - 169.254.169.254 yes",
+        "probe_metadata plain - 169.254.169.254 no",
+        "probe_metadata root gcp-hostname 169.254.169.254 yes",
+        "probe_metadata root gcp-forwarded-ips 169.254.169.254 yes",
     ]
