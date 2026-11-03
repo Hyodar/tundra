@@ -184,6 +184,8 @@ def test_tree_has_the_native_shape() -> None:
         "mkosi.images/azure/mkosi.conf",
         "mkosi.images/azure/mkosi.postoutput.d/vhd",
         "mkosi.images/azure/mkosi.repart/00-esp.conf",
+        "mkosi.images/box/mkosi.conf",
+        "mkosi.images/box/mkosi.postinst.d/10-mount-points.sh",
         "mkosi.images/gcp/mkosi.conf",
         "mkosi.images/gcp/mkosi.postoutput.d/tar",
         "mkosi.images/gcp/mkosi.repart/00-esp.conf",
@@ -374,16 +376,19 @@ def test_wrappers_depend_on_the_payload_and_convert_it() -> None:
 
 def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
     """The overlay adds SSH, the egress-filtering firewall with its modules, the export
-    path's packages, the attested TLS relay's and the tenant login's sudo."""
+    path's packages, the attested TLS relay's, the tenant login's sudo and the container's
+    subimage and root."""
     dev = FIXTURE / "tree-initramfs/payload/mkosi.profiles/dev"
     modules = "".join(
-        f"    {m}\n" for m in ("crc32c_generic", "nf_tables", "nft_ct", "nft_reject_inet")
+        f"    {m}\n"
+        for m in ("crc32c_generic", "erofs", "loop", "nf_tables", "nft_ct", "nft_reject_inet")
     )
     assert (dev / "mkosi.conf").read_text(encoding="utf-8") == (
-        "[Output]\nImageId=%i-dev\n\n[Content]\nKernelModules=\n"
+        "[Config]\nDependencies=box\n\n[Output]\nImageId=%i-dev\n\n[Content]\nKernelModules=\n"
         + modules
         + "Packages=\n    nftables\n    openssh-server\n    prometheus\n"
         + "    prometheus-node-exporter\n    socat\n    sudo\n    systemd-journal-remote\n"
+        + "ExtraTrees=%O/box.raw:/usr/lib/tundravm/containers/box.raw\n"
     )
     keys = (dev / "mkosi.extra/etc/ssh/authorized_keys.d/root").read_text(encoding="utf-8")
     assert keys.startswith("ssh-ed25519 ")
@@ -455,7 +460,7 @@ def test_summary_resolves_the_selection_mkosi_argv_names() -> None:
         ("default", ["payload", "main"], []),
         ("azure", ["payload", "azure", "main"], []),
         ("gcp", ["payload", "gcp", "main"], []),
-        ("dev", ["payload", "main"], ["dev"]),
+        ("dev", ["box", "payload", "main"], ["dev"]),
     ):
         summary = mkosi_summary(tree, *mkosi_argv(lowered, variant))
         assert [image["Image"] for image in summary["Images"]] == images, variant

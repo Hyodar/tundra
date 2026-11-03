@@ -1,0 +1,13 @@
+[Unit]
+Description=Load loop for box.service's root image
+After=runtime-init.service
+Requires=runtime-init.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modprobe loop
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=minimal.target

@@ -124,6 +124,41 @@ probe_port() {
     done
     fail "nothing listens on $2/$1 after 30s: the service must bind every port expose= names, or drop it from expose="
 }
+probe_container() {
+    state=$(systemctl show -P ActiveState "$1")
+    waited=0
+    while [ "$state" != active ] && [ "$waited" -lt 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+        state=$(systemctl show -P ActiveState "$1")
+    done
+    if [ "$state" != active ]; then
+        fail "$state: journalctl -u $1 says why"
+        return
+    fi
+    if [ "$(systemctl show -P RootImage "$1")" != "$2" ]; then
+        fail "$1 does not run in $2: its drop-in is missing; systemctl cat $1"
+        return
+    fi
+    if ! digest=$(sha256sum "$2" 2>/dev/null); then
+        fail "no root image at $2"
+        return
+    fi
+    digest=sha256:${digest%% *}
+    if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "active, root $digest; no nsenter or bash to send a datagram from its namespace"
+        return
+    fi
+    pid=$(systemctl show -P MainPID "$1")
+    if said=$(nsenter -t "$pid" -n bash -c 'printf x >"/dev/udp/$0/$1"' "$3" "$4" 2>&1); then
+        fail "root $digest, but a datagram to $3:$4/udp left its namespace: it must hold lo only; cat /proc/$pid/net/dev"
+        return
+    fi
+    case $said in
+        *unreachable*) ok "active, root $digest, no route out of its namespace" ;;
+        *) fail "root $digest, a datagram to $3:$4/udp failed with $(echo "$said" | tail -n 1), not for want of a route" ;;
+    esac
+}
 probe_egress() {
     if ! command -v bash >/dev/null 2>&1; then
         skip "no bash to send a datagram with"
@@ -454,10 +489,18 @@ check=socket:tdxs.socket
 probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
 check=service:attested-tls-8443.service
 probe_service attested-tls-8443.service
+check=service:box.service
+probe_service box.service
+check=socket:box-forward-8081.socket
+probe_active box-forward-8081.socket 'the socket must listen; systemctl status names why it does not'
 check=port:8080/tcp
 probe_port tcp 8080
 check=port:8443/tcp
 probe_port tcp 8443
+check=port:8081/tcp
+probe_port tcp 8081
+check=container:box
+probe_container box.service /usr/lib/tundravm/containers/box.raw 192.0.2.1 9
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=egress:metadata:greeter
@@ -472,6 +515,10 @@ check=egress:metadata:tdxs
 probe_metadata tdxs - 169.254.169.254 no
 check=egress:metadata:attested-tls-8443
 probe_metadata attested-tls-8443 - 169.254.169.254 no
+check=egress:metadata:box
+probe_metadata box - 169.254.169.254 no
+check=egress:metadata:box-forward-8081
+probe_metadata box-forward-8081 - 169.254.169.254 no
 check=egress:metadata:azure-complete-provisioning
 probe_metadata root azure-complete-provisioning 168.63.129.16 yes
 check=egress:metadata:gcp-hostname
@@ -491,7 +538,7 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.2:19581' 'up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode'
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- greeter.service web.service image-metrics.service sink.service tdxs.service attested-tls-8443.service
+probe_nowait journal-export.service metrics-export.service -- greeter.service web.service image-metrics.service sink.service tdxs.service attested-tls-8443.service box.service box-forward-8081.service
 check=observability:egress
 probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:greeter.service
@@ -504,8 +551,12 @@ check=hardening:metrics-export.service
 probe_hardening metrics-export.service 2.5 static
 check=hardening:attested-tls-8443.service
 probe_hardening attested-tls-8443.service 2.5 static
+check=hardening:box.service
+probe_hardening box.service 2.5 static
+check=hardening:box-forward-8081.service
+probe_hardening box-forward-8081.service 2.5 static
 check=kernel:modules
-probe_modules crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
+probe_modules crc32c_generic efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root

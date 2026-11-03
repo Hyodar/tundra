@@ -240,6 +240,21 @@ jobs:
             .tundravm/instances/fixture-1/probe.json
           curl -fsS "http://127.0.0.1:$port/" | grep -q '<h1>fixture</h1>'
 
+      - name: Fetch the container's page and match its root against the manifest
+        # The dev profile's Container runs busybox httpd in a root image built as the
+        # mkosi.images/box/ subimage, with no network of its own; the probe prints that
+        # image's digest from inside the guest, which must be the one the manifest records.
+        run: |
+          probe=.tundravm/instances/fixture-1/probe.json
+          receipt=.tundravm/instances/fixture-1/instance.json
+          row=$(jq -r '.results[] | select(.check == "container:box") | "\(.check) \(.verdict) \(.detail)"' "$probe")
+          echo "$row"
+          want=$(uv run tundravm show latest-development --json | jq -r '.manifest.containers.box.sha256')
+          grep -E "^container:box ok active, root sha256:$want, no route out of its namespace$" <<<"$row"
+          port=$(jq -r '.ports["8081"]' "$receipt")
+          curl -fsS "http://127.0.0.1:$port/" | tee "$RUNNER_TEMP/box.html"
+          grep -q '<h1>box</h1>' "$RUNNER_TEMP/box.html"
+
       - name: Attest the dev instance and deliver a secret over its attested endpoint
         # Plan 6.3 under QEMU: the simulator issuer the dev profile picked at boot binds the
         # nonce, the endpoint's TLS key, the SSH host keys, the instance key and the attested

@@ -19,7 +19,8 @@ the built programs). The ``dev`` profile's derived probe checks the rest (``web`
 ``greeter`` active and sandboxed, :data:`WEB_PORT` bound, the curated modules, the SSH host
 key, a refused egress datagram, the ``tick`` timer, the exporters running on the
 configuration they took, nothing waiting on them and their sinks' egress loaded, ``web``
-owning its private page) and CI's
+owning its private page, the ``box`` container running in its own root with no route out)
+and CI's
 ``fixture-boot`` job runs it with ``tundravm run --probe``.
 """
 
@@ -34,7 +35,13 @@ from tundravm._image import recipe_of
 from tundravm._image._lower import OWNERS_STEP
 from tundravm._image._runtime import Runtime
 from tundravm._modules import attested_tls
-from tundravm.components import Endpoint, JournalExport, Observability, PrometheusRemoteWrite
+from tundravm.components import (
+    Container,
+    Endpoint,
+    JournalExport,
+    Observability,
+    PrometheusRemoteWrite,
+)
 from tundravm.components._base import egress_rules
 from tundravm.declarative import (
     BootStep,
@@ -72,7 +79,7 @@ from tundravm.declarative.utils import (
     Sudo,
     Tdxs,
 )
-from tundravm.ports import AttestedTLS
+from tundravm.ports import TCP, AttestedTLS
 from tundravm.secrets import Secret as Delivered
 
 SNAPSHOT = "20261018T082309Z"
@@ -148,6 +155,29 @@ def lowered(observability: Observability) -> Fragment:
     and packages its exporters run with."""
     items = recipe_of(Image("fixture", observability=observability)).items
     return next(i for i in items if isinstance(i, Fragment) and i.name == observability.name)
+
+
+BOX_PORT = 8081
+BOX_PAGE = "<!doctype html>\n<title>box</title>\n<h1>box</h1>\n"
+BOX = Container(
+    "box",
+    ["/usr/bin/busybox", "httpd", "-f", "-p", str(BOX_PORT), "-h", "/srv/www"],
+    packages=["busybox"],
+    files=[tundravm.File.text("/srv/www/index.html", BOX_PAGE)],
+    expose=[TCP(BOX_PORT)],
+)
+"""The ``dev`` profile's container: busybox httpd in a Debian root of its own, built as the
+``mkosi.images/box/`` subimage, serving the page shipped in that root on :data:`BOX_PORT`
+through the host's forward, with no network of its own (egress to nothing). The probe's
+``container:box`` row prints its root's digest, which CI compares with the manifest's. Its
+page is in its root, not on a volume: ``run`` attaches no disk to this plain ``Recipe``."""
+
+
+def contained(container: Container) -> Fragment:
+    """*container* as the fragment an ``Image`` lowers it to: its root, its units and its
+    forwards."""
+    items = recipe_of(Image("fixture", components=[container])).items
+    return next(i for i in items if isinstance(i, Fragment) and i.name == container.name)
 
 
 WWW = "/srv/www"
@@ -316,6 +346,7 @@ DEV = Fragment(
             attested_tls=(ATTESTED_PORT,),
         ),
         *relayed(ATTESTED),
+        contained(BOX),
     ),
 )
 """What the ``dev`` variant adds: SSH by public key for root and :data:`TENANT` in the
@@ -327,7 +358,8 @@ its ``egress:``, ``timer:`` and ``observability:`` checks, and the console shows
 attested endpoint on :data:`MANAGEMENT_PORT` taking :data:`DEV_SECRET` give the probe its
 ``endpoint:`` check and CI its simulated ``attest`` and ``secrets deliver``
 (:data:`TENANT_KEYS` among them, then an SSH login as :data:`TENANT`); :data:`ATTESTED` in
-front of the page gives it the ``attested-tls:`` check and CI its ``attest --tls``.
+front of the page gives it the ``attested-tls:`` check and CI its ``attest --tls``;
+:data:`BOX` the ``container:`` check and a page fetched from inside a container.
 :data:`SINK` runs as root, unsandboxed, to write to ``/dev/console``. No ``Volume``: ``run``
 attaches disks only for an ``Image``'s runtime manifest, which this plain ``Recipe`` has
 none of."""

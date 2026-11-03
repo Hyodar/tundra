@@ -218,6 +218,15 @@
       {
         "Dependencies": [],
         "Distribution": "debian",
+        "Format": "portable",
+        "Image": "box",
+        "Output": "box",
+        "Release": "trixie",
+        "Snapshot": "20261018T082309Z"
+      },
+      {
+        "Dependencies": [],
+        "Distribution": "debian",
         "Format": "cpio",
         "Image": "default-initrd",
         "Output": "initrd",
@@ -249,6 +258,7 @@
         "CleanScripts": [],
         "ConfigureScripts": [],
         "Dependencies": [
+          "box",
           "default-initrd"
         ],
         "Distribution": "debian",
@@ -261,6 +271,10 @@
           {
             "Source": "<tree>/payload/mkosi.profiles/dev/mkosi.extra",
             "Target": null
+          },
+          {
+            "Source": "<tree>/mkosi.output/box.raw",
+            "Target": "/usr/lib/tundravm/containers/box.raw"
           }
         ],
         "FinalizeScripts": [
@@ -297,6 +311,7 @@
           "virtio_blk",
           "virtio_net",
           "virtio_scsi",
+          "loop",
           "nf_tables",
           "nft_ct",
           "nft_reject_inet"

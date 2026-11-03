@@ -99,6 +99,12 @@ def _expected(shared: Mapping[str, Any], tree: Path, name: str, default: str) ->
     for key in ("Packages", "BuildPackages"):
         found[key] = sorted({*found[key], *conf.get(key, [])})
     found["KernelModules"] = [*found["KernelModules"], *conf.get("KernelModules", [])]
+    # a container's root image: its subimage comes before the default initrd mkosi adds
+    found["Dependencies"] = [*conf.get("Dependencies", []), *found["Dependencies"]]
+    for value in conf.get("ExtraTrees", []):
+        source, _, target = value.partition(":")
+        output = source.replace("%O", "<tree>/mkosi.output")
+        found["ExtraTrees"] = [*found["ExtraTrees"], {"Source": output, "Target": target}]
     if name != default:
         found["ImageId"] = f"{shared['ImageId']}-{name}"
         found["Profiles"] = [name]

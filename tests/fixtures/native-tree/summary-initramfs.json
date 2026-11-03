@@ -187,6 +187,15 @@
   "every-node": {
     "Images": [
       {
+        "Dependencies": [],
+        "Distribution": "debian",
+        "Format": "portable",
+        "Image": "box",
+        "Output": "box",
+        "Release": "trixie",
+        "Snapshot": "20261018T082309Z"
+      },
+      {
         "Architecture": "x86-64",
         "Bootable": "auto",
         "Bootloader": "systemd-boot",
@@ -210,7 +219,9 @@
         "CleanPackageMetadata": "enabled",
         "CleanScripts": [],
         "ConfigureScripts": [],
-        "Dependencies": [],
+        "Dependencies": [
+          "box"
+        ],
         "Distribution": "debian",
         "Environment": {},
         "ExtraTrees": [
@@ -221,6 +232,10 @@
           {
             "Source": "<tree>/payload/mkosi.profiles/dev/mkosi.extra",
             "Target": null
+          },
+          {
+            "Source": "<tree>/mkosi.output/box.raw",
+            "Target": "/usr/lib/tundravm/containers/box.raw"
           }
         ],
         "FinalizeScripts": [
@@ -249,6 +264,8 @@
           "virtio_net",
           "virtio_scsi",
           "crc32c_generic",
+          "erofs",
+          "loop",
           "nf_tables",
           "nft_ct",
           "nft_reject_inet"
