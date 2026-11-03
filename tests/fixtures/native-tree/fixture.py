@@ -46,10 +46,10 @@ from tundravm.components import (
     SshAccess,
     Sudo,
 )
-from tundravm.ports import TCP, AttestedTLS
+from tundravm.ports import TCP, UDP, AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.sources import CargoBinary, Git, GoBinary, Local
-from tundravm.systemd import DropIn, Every
+from tundravm.systemd import DropIn, Every, TcpProbe
 
 SNAPSHOT = "20261018T082309Z"
 
@@ -173,9 +173,11 @@ LOOPBACK_PORT = 8090
 LOOPBACK_WEB = Service(
     "web-loopback",
     ["/usr/bin/busybox", "httpd", "-f", "-p", f"127.0.0.1:{LOOPBACK_PORT}", "-h", WWW],
+    readiness=TcpProbe(LOOPBACK_PORT),
 )
 """The same pages on the loopback only, the upstream :data:`ATTESTED` fronts: an ingress
-must be the only path to its upstream, so ``web``'s exposed port cannot be it."""
+must be the only path to its upstream, so ``web``'s exposed port cannot be it. :data:`BOX`
+requires it as a host endpoint, so it declares readiness."""
 ATTESTED = AttestedTLS(ATTESTED_PORT, upstream=LOOPBACK_WEB.endpoint(LOOPBACK_PORT))
 """Attested TLS in front of :data:`LOOPBACK_WEB`, whose certificate key the endpoint's
 evidence binds: the dev probe's ``attested-tls:`` row reads the certificate back, and CI
@@ -183,18 +185,34 @@ checks it from the host with ``attest --tls`` and ``tools/cmd/attested-client``.
 
 
 BOX_PORT = 8081
+BOX_WINDOW_PORT = 8082
+BOX_UDP_PORT = 9999
 BOX_PAGE = "<!doctype html>\n<title>box</title>\n<h1>box</h1>\n"
+BOX_PROGRAM = (
+    f"/usr/bin/busybox httpd -p {BOX_WINDOW_PORT} -h {WWW}; "
+    f"/usr/bin/socat -u UDP-RECV:{BOX_UDP_PORT} - & "
+    f"exec /usr/bin/busybox httpd -f -p {BOX_PORT} -h {WWW}"
+)
 BOX = Container(
     "box",
-    ["/usr/bin/busybox", "httpd", "-f", "-p", str(BOX_PORT), "-h", WWW],
-    packages=["busybox"],
+    ["/usr/bin/busybox", "sh", "-c", BOX_PROGRAM],
+    packages=["busybox", "socat"],
     files=[File.text(f"{WWW}/index.html", BOX_PAGE)],
-    expose=[TCP(BOX_PORT)],
+    expose=[TCP(BOX_PORT), TCP(BOX_WINDOW_PORT), UDP(BOX_UDP_PORT)],
+    egress=Egress(hosts=["1.1.1.1:853"]),
+    modes={"maintenance": Egress(hosts=["1.0.0.1:853"])},
+    requires=[LOOPBACK_WEB.endpoint(LOOPBACK_PORT)],
+    serves=[TCP(BOX_PORT)],
+    probe=TcpProbe(BOX_PORT),
 )
 """The ``dev`` profile's container: busybox httpd in a Debian root of its own, built as the
 ``mkosi.images/box/`` subimage, serving the page shipped in that root on :data:`BOX_PORT`
-through the host's forward, with no network of its own (egress to nothing). The probe's
-``container:box`` row prints its root's digest, which CI compares with the manifest's."""
+(DNATed from the host) and on :data:`BOX_WINDOW_PORT`, which only the ``maintenance`` mode
+opens, and socat taking datagrams on :data:`BOX_UDP_PORT`. Through its veth it reaches the
+first resolver's TLS port, the second's only in maintenance, and on its loopback
+:data:`LOOPBACK_WEB`, a host endpoint; the host reaches its :data:`BOX_PORT` at its veth
+address. The probe's ``container:box`` rows print its root's digest, which CI compares
+with the manifest's, and each of those paths."""
 
 
 class Web(Component):
@@ -247,12 +265,16 @@ greeter's last lines and a local firewall switch, which RTMR3 holds like the end
 probe's ``login:tenant``, ``menu:tenant`` and ``ssh:root`` rows read it back; CI logs in."""
 
 FIREWALL = Firewall(
-    modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(22)], lasts="30m")}
+    modes={
+        "production": Mode(),
+        "maintenance": Mode(ingress=[TCP(22), TCP(BOX_WINDOW_PORT)], lasts="30m"),
+    }
 )
-"""SSH answers only in the ``maintenance`` mode, which CI's ``fixture-boot`` switches to
-with ``run switch``, logs in as :data:`TENANT`, and switches back from, the quote's RTMR3
-holding both switches; every profile boots into ``production``, port 22 closed. A menu login
-that must answer in every mode leaves 22 out of the modes."""
+"""SSH and :data:`BOX`'s :data:`BOX_WINDOW_PORT` answer only in the ``maintenance`` mode,
+which CI's ``fixture-boot`` switches to with ``run switch``, logs in as :data:`TENANT`, and
+switches back from, the quote's RTMR3 holding both switches; every profile boots into
+``production``, both ports closed. A menu login that must answer in every mode leaves 22
+out of the modes."""
 
 CONSOLE = DropIn(extra={"Service": {"StandardOutput": "journal+console"}})
 """What a service that prints for the boot tests says: its output on the serial console."""

@@ -1,0 +1,6 @@
+# tundravm Container box: ve-box is box-net.service's
+[Match]
+Name=ve-box
+
+[Link]
+Unmanaged=yes

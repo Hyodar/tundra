@@ -248,18 +248,26 @@ jobs:
 
       - name: Fetch the container's page and match its root against the manifest
         # The dev profile's Container runs busybox httpd in a root image built as the
-        # mkosi.images/box/ subimage, with no network of its own; the probe prints that
-        # image's digest from inside the guest, which must be the one the manifest records.
+        # mkosi.images/box/ subimage, on a veth the firewall forwards; the probe prints that
+        # image's digest from inside the guest, which must be the one the manifest records,
+        # and proves its egress, host endpoint, served port and UDP port from the guest. The
+        # page comes through the QEMU forward and the firewall's DNAT.
         run: |
           probe=.tundravm/instances/fixture-1/probe.json
           receipt=.tundravm/instances/fixture-1/instance.json
+          jq -r '.results[] | select(.check | startswith("container:box")) | "\(.check) \(.verdict) \(.detail)"' "$probe"
           row=$(jq -r '.results[] | select(.check == "container:box") | "\(.check) \(.verdict) \(.detail)"' "$probe")
-          echo "$row"
           want=$(uv run tundravm show latest-development --json | jq -r '.manifest.containers.box.sha256')
-          grep -E "^container:box ok active, root sha256:$want, no route out of its namespace$" <<<"$row"
+          grep -E "^container:box ok active, root sha256:$want, at 169\.254\.[0-9.]+ on its veth$" <<<"$row"
+          jq -e '[.results[] | select(.check | startswith("container:box:")) | .verdict == "ok"]
+            == [true, true, true, true]' "$probe"
           port=$(jq -r '.ports["8081"]' "$receipt")
           curl -fsS "http://127.0.0.1:$port/" | tee "$RUNNER_TEMP/box.html"
           grep -q '<h1>box</h1>' "$RUNNER_TEMP/box.html"
+          window=$(jq -r '.ports["8082"]' "$receipt")
+          if curl -fsS -m 5 "http://127.0.0.1:$window/"; then
+            echo "the container's maintenance port answered in production"; exit 1
+          fi
 
       - name: Attest the dev instance and deliver a secret over its attested endpoint
         # Plan 6.3 under QEMU: the simulator issuer the dev profile picked at boot binds the
@@ -311,6 +319,9 @@ jobs:
           uv run tundravm run switch fixture-1 maintenance | tee "$RUNNER_TEMP/switch.txt"
           timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && head -c 4 <&3" | grep -q SSH-
           echo "ssh answered in maintenance"
+          window=$(jq -r '.ports["8082"]' .tundravm/instances/fixture-1/instance.json)
+          curl -fsS -m 10 "http://127.0.0.1:$window/" | grep -q '<h1>box</h1>'
+          echo "the container's maintenance port answered in maintenance"
           sleep 2
 
       - name: Log in as the tenant into its menu, refuse root, close the window from it
@@ -373,6 +384,11 @@ jobs:
             echo "port 22 answered after the window closed"; exit 1
           fi
           echo "port 22 refused after the window closed"
+          window=$(jq -r '.ports["8082"]' "$receipt")
+          if curl -fsS -m 5 "http://127.0.0.1:$window/"; then
+            echo "the container's maintenance port answered after the window closed"; exit 1
+          fi
+          echo "the container's maintenance port refused after the window closed"
           uv run tundravm attest fixture-1 --policy "$policy" | tee "$RUNNER_TEMP/attest-modes.txt"
           grep -E '^modes  production; 2 switches since boot: maintenance at [0-9]+s, production at [0-9]+s \(RTMR3 replays them\)$' \
             "$RUNNER_TEMP/attest-modes.txt"

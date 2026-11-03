@@ -36,7 +36,14 @@ The checks, each only when its declaration exists (:func:`derive`):
   ``resolvectl`` reaches it over D-Bus, reports ``+DNSOverTLS``;
 - ``container:NAME``: each ``Container``'s unit is active in its root image, whose
   ``sha256:`` it prints (``fixture-boot`` compares it with the manifest's), and a datagram
-  sent from inside its network namespace finds no route out;
+  sent from inside its network namespace finds no route out, or with a veth its namespace
+  holds its address; ``container:NAME:egress``: from its namespace an allowed TCP
+  destination connects, while one no rule of its accepts in the mode the probe boots in
+  and the metadata server are refused (TCP reset); ``container:NAME:endpoint:PORT``: each
+  host endpoint answers inside its namespace; ``container:NAME:serves:PORT``: the host
+  reaches each port it serves at its veth address; ``container:NAME:udp:PORT``: a datagram
+  sent from a namespace of the probe's to the host's port reaches a socket in the
+  container (its ``Udp InDatagrams``), for each exposed UDP port no firewall mode names;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
   ``egress:HOST``: each host name a rule accepts holds addresses in its sets, which it
@@ -118,7 +125,13 @@ from . import execution, instance_key, root_mode
 from .disk_encryption import OWNER_DIRECTORY
 
 if TYPE_CHECKING:
-    from tundravm.declarative.model import Declaration, EgressRule, Firewall
+    from tundravm.declarative.model import (
+        ContainerNetwork,
+        ContainerRoot,
+        Declaration,
+        EgressRule,
+        Firewall,
+    )
 
 UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
@@ -165,6 +178,10 @@ Helper = Literal[
     "port",
     "volume",
     "container",
+    "container-egress",
+    "container-endpoint",
+    "container-serves",
+    "container-udp",
     "egress",
     "hostset",
     "time",
@@ -367,18 +384,7 @@ def derive(
             )
     for item in items:
         if isinstance(item, ContainerRoot):
-            unit = unit_name(item.name)
-            address, number = DENIED_ADDRESSES[0], DENIED_PORTS[0]
-            checks.append(
-                Check(
-                    f"container:{item.name}",
-                    f"{unit} is active in its root image, and a datagram to {address}:{number}"
-                    "/udp from its network namespace finds no route",
-                    f"probe_container {unit} {CONTAINERS_PATH}/{item.name}.raw {address} {number}",
-                    "container",
-                    (unit,),
-                )
-            )
+            checks += _container(item, items, CONTAINERS_PATH)
     if firewall is not None:
         denied = _denied(firewall.egress_rules)
         if denied is not None:
@@ -527,6 +533,132 @@ def derive(
             )
         )
     return Probe(tuple(checks))
+
+
+def _container(item: ContainerRoot, items: Sequence[Declaration], containers: str) -> list[Check]:
+    """``container:NAME`` and, with a veth or host endpoints, the rows of its network."""
+    from tundravm.declarative.model import CLOUD_METADATA, Firewall, Port
+
+    unit = unit_name(item.name)
+    image = f"{containers}/{item.name}.raw"
+    network = item.network
+    if network is None:
+        address, number = DENIED_ADDRESSES[0], DENIED_PORTS[0]
+        checks = [
+            Check(
+                f"container:{item.name}",
+                f"{unit} is active in its root image, and a datagram to {address}:{number}"
+                "/udp from its network namespace finds no route",
+                f"probe_container {unit} {image} {address} {number}",
+                "container",
+                (unit,),
+            )
+        ]
+    else:
+        checks = [
+            Check(
+                f"container:{item.name}",
+                f"{unit} is active in its root image, at {network.address} on its veth",
+                f"probe_container {unit} {image} veth {network.address}",
+                "container",
+                (unit,),
+            ),
+            Check(
+                f"container:{item.name}:egress",
+                f"from its namespace what its egress allows connects, the rest and "
+                f"{CLOUD_METADATA[0]} are refused",
+                " ".join(["probe_container_egress", unit, *_container_targets(network)]),
+                "container-egress",
+                (unit, "nftables.service"),
+            ),
+        ]
+    for endpoint in item.endpoints:
+        host, _, port = endpoint.rpartition(":")
+        relay = f"{item.name}-endpoint-{port}.socket"
+        checks.append(
+            Check(
+                f"container:{item.name}:endpoint:{port}",
+                f"{endpoint} answers inside its namespace",
+                f"probe_container_endpoint {unit} {host} {port} {relay}",
+                "container-endpoint",
+                (unit, relay),
+            )
+        )
+    if network is None:
+        return checks
+    for served in network.serves:
+        if served.protocol == "tcp":
+            checks.append(
+                Check(
+                    f"container:{item.name}:serves:{served.number}",
+                    f"the host reaches {network.address}:{served.number} on its veth",
+                    f"probe_container_serves {network.address} {served.number}",
+                    "container-serves",
+                    (unit, "nftables.service"),
+                )
+            )
+    firewall = next((i for i in items if isinstance(i, Firewall)), None)
+    moded = {port for mode in (firewall.modes if firewall else ()) for port in mode.ingress}
+    for exposed in network.expose:
+        if isinstance(exposed, Port) and exposed.protocol == "udp" and exposed not in moded:
+            checks.append(
+                Check(
+                    f"container:{item.name}:udp:{exposed.number}",
+                    f"a datagram to the host's {exposed.number}/udp reaches a socket in it",
+                    f"probe_container_udp {unit} {exposed.number}",
+                    "container-udp",
+                    (unit, "nftables.service"),
+                )
+            )
+    return checks
+
+
+def _container_targets(network: ContainerNetwork) -> tuple[str, str, str]:
+    """``(allowed, denied, metadata)`` TCP ``HOST:PORT`` the egress row connects to: an
+    address its egress names, one it refuses in production (a mode's own, when one has
+    one) and the metadata server unless it reaches it; ``-`` for none."""
+    from tundravm.declarative.model import CLOUD_METADATA
+
+    def single(host: str | None) -> bool:
+        return host is not None and "/" not in host and ":" not in host
+
+    rules = network.egress_rules
+    allowed = next(
+        (
+            f"{r.host}:{r.port.number}"
+            for r in rules
+            if single(r.host) and r.port is not None and r.port.protocol == "tcp"
+        ),
+        "-",
+    )
+    always = {(r.host, r.port) for r in rules}
+    moded = next(
+        (
+            f"{r.host}:{r.port.number}"
+            for mode, r in network.modes
+            if mode != "production"
+            and single(r.host)
+            and r.port is not None
+            and r.port.protocol == "tcp"
+            and (r.host, r.port) not in always
+        ),
+        None,
+    )
+    if moded is None:
+        networks = [ipaddress.ip_network(r.host, strict=False) for r in rules if r.host]
+        open_ports = {r.port.number for r in rules if r.host is None and r.name is None and r.port}
+        address = next(
+            (
+                a
+                for a in DENIED_ADDRESSES
+                if not any(ipaddress.ip_address(a) in n for n in networks)
+            ),
+            None,
+        )
+        number = next((n for n in DENIED_PORTS if n not in open_ports), None)
+        moded = "-" if address is None or number is None else f"{address}:{number}"
+    reaches = any(r.host in CLOUD_METADATA for r in rules)
+    return allowed, moded, "-" if reaches else f"{CLOUD_METADATA[0]}:80"
 
 
 def _metadata(items: Sequence[Declaration], glue: Sequence[Declaration]) -> list[Check]:
@@ -1250,6 +1382,13 @@ probe_volume() {
 }
 """,  # noqa: E501
     "container": f"""\
+container_connect() {{
+    if said=$(timeout 10 nsenter -t "$1" -n bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$2" "$3" 2>&1); then
+        return 0
+    fi
+    echo "${{said:-no answer in 10s}}" | tail -n 1
+    return 1
+}}
 probe_container() {{
     state=$(systemctl show -P ActiveState "$1")
     waited=0
@@ -1271,11 +1410,19 @@ probe_container() {{
         return
     fi
     digest=sha256:${{digest%% *}}
+    pid=$(systemctl show -P MainPID "$1")
+    if [ "$3" = veth ]; then
+        if grep -qF -- "$4" "/proc/$pid/net/fib_trie" 2>/dev/null; then
+            ok "active, root $digest, at $4 on its veth"
+        else
+            fail "root $digest, but its namespace holds no $4: journalctl -u ${{1%.service}}-net.service"
+        fi
+        return
+    fi
     if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
         skip "active, root $digest; no nsenter or bash to send a datagram from its namespace"
         return
     fi
-    pid=$(systemctl show -P MainPID "$1")
     if said=$(nsenter -t "$pid" -n bash -c 'printf x >"/dev/udp/$0/$1"' "$3" "$4" 2>&1); then
         fail "root $digest, but a datagram to $3:$4/udp left its namespace: it must hold lo only; cat /proc/$pid/net/dev"
         return
@@ -1285,6 +1432,104 @@ probe_container() {{
         *) fail "root $digest, a datagram to $3:$4/udp failed with $(echo "$said" | tail -n 1), not for want of a route" ;;
     esac
 }}
+""",  # noqa: E501
+    "container-egress": """\
+probe_container_egress() {
+    if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "no nsenter or bash to connect from its namespace"
+        return
+    fi
+    pid=$(systemctl show -P MainPID "$1")
+    shown=
+    if [ "$2" != - ]; then
+        if ! said=$(container_connect "$pid" "${2%:*}" "${2##*:}"); then
+            fail "$2/tcp, which its egress allows, did not connect ($said): nft list chain inet filter forward"
+            return
+        fi
+        shown="reaches $2/tcp, "
+    fi
+    for denied in "$3" "$4"; do
+        [ "$denied" = - ] && continue
+        if said=$(container_connect "$pid" "${denied%:*}" "${denied##*:}"); then
+            fail "$denied/tcp connected, but no egress rule of its accepts it: nft list chain inet filter forward"
+            return
+        fi
+        case $said in
+            *refused*) shown="$shown$denied/tcp refused, " ;;
+            *) fail "$denied/tcp failed with $said, not a reset from the forward chain"; return ;;
+        esac
+    done
+    ok "${shown%, }"
+}
+""",  # noqa: E501
+    "container-endpoint": """\
+probe_container_endpoint() {
+    if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "no nsenter or bash to connect from its namespace"
+        return
+    fi
+    pid=$(systemctl show -P MainPID "$1")
+    if said=$(container_connect "$pid" "$2" "$3"); then
+        ok "$2:$3 answers inside its namespace"
+    else
+        fail "$2:$3 does not answer inside its namespace ($said): systemctl status $4"
+    fi
+}
+""",
+    "container-serves": """\
+probe_container_serves() {
+    if ! command -v bash >/dev/null 2>&1; then
+        skip "no bash to connect with"
+        return
+    fi
+    if said=$(timeout 10 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$1" "$2" 2>&1); then
+        ok "the host reaches $1:$2 on its veth"
+    else
+        fail "the host does not reach $1:$2 (${said:-no answer in 10s}): nft list chain inet filter output"
+    fi
+}
+""",  # noqa: E501
+    "container-udp": """\
+udp_in() {
+    set -- $(grep '^Udp:' "/proc/$1/net/snmp" | sed -n 2p)
+    echo "${2:-0}"
+}
+probe_container_udp() {
+    for tool in ip nsenter bash; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            skip "no $tool to send a datagram from a namespace of the probe's"
+            return
+        fi
+    done
+    pid=$(systemctl show -P MainPID "$1")
+    ip link delete vp-probe >/dev/null 2>&1
+    ip netns delete tundravm-probe >/dev/null 2>&1
+    if ! { ip netns add tundravm-probe &&
+        ip link add vp-probe type veth peer name probe0 netns tundravm-probe &&
+        ip addr add 169.254.255.1/30 dev vp-probe && ip link set vp-probe up &&
+        ip -n tundravm-probe addr add 169.254.255.2/30 dev probe0 &&
+        ip -n tundravm-probe link set probe0 up; } >/dev/null 2>&1; then
+        fail "the probe could not make its namespace and veth: is veth among the curated modules?"
+        ip netns delete tundravm-probe >/dev/null 2>&1
+        return
+    fi
+    before=$(udp_in "$pid")
+    after=$before
+    waited=0
+    while [ "$after" -le "$before" ] && [ "$waited" -lt 10 ]; do
+        nsenter --net=/run/netns/tundravm-probe bash -c 'printf tundravm-probe >"/dev/udp/$0/$1"' 169.254.255.1 "$2" 2>/dev/null
+        sleep 1
+        waited=$((waited + 1))
+        after=$(udp_in "$pid")
+    done
+    ip link delete vp-probe >/dev/null 2>&1
+    ip netns delete tundravm-probe >/dev/null 2>&1
+    if [ "$after" -gt "$before" ]; then
+        ok "a datagram to the host's $2/udp reached a socket in it (Udp InDatagrams $before -> $after)"
+    else
+        fail "no datagram to the host's $2/udp reached a socket in it in 10s: nft list chain inet filter prerouting; is its program listening?"
+    fi
+}
 """,  # noqa: E501
     "egress": """\
 probe_egress() {

@@ -11,6 +11,7 @@ from tundravm.declarative.model import Target
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
     CONTAINER_MODULES,
+    CONTAINER_NETWORK_MODULES,
     DISK_MODULES,
     FIREWALL_MODULES,
     MODULE_OPTIONS,
@@ -135,6 +136,7 @@ def test_cloud_drivers_derive_from_the_module_tables(
         *FIREWALL_MODULES,
         *VERITY_MODULES,
         *CONTAINER_MODULES,
+        *CONTAINER_NETWORK_MODULES,
     }
     curated.update(*TARGET_MODULES.values())
     assert set(MODULE_OPTIONS) == curated

@@ -138,11 +138,13 @@ GATED = (
     "web.service",
     "greeter.service",
     "web-loopback.service",
+    "web-loopback-ready.service",
     "attested-tls-8443.service",
     "mode-switch.service",
 )
-"""The fixture's units made from a ``Service``, its attested TLS relay and its firewall's
-mode switch: each requires the execution gate."""
+"""The fixture's units made from a ``Service``, the readiness probe of the one a container
+requires, its attested TLS relay and its firewall's mode switch: each requires the execution
+gate, the probe through its service."""
 FAIL_CLOSED_MARKERS = (*DEFAULT_MARKERS, execution.REFUSED, instance_key.CONSOLE)
 """What a production boot of the fixture without TDX prints: the target is reached, the
 gate refused, and the instance key (made before the gate) printed its public key."""

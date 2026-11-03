@@ -1,12 +1,12 @@
 [Unit]
-Description=box-forward-8081.service
-After=runtime-init-owners.service box-forward-8081.socket tdx-evidence.service
-Requires=runtime-init-owners.service box-forward-8081.socket tdx-evidence.service
+Description=box-endpoint-8090.service
+After=runtime-init-owners.service box-endpoint-8090.socket web-loopback-ready.service tdx-evidence.service
+Requires=runtime-init-owners.service box-endpoint-8090.socket web-loopback-ready.service tdx-evidence.service
 
 [Service]
 Type=exec
-ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:8081
-User=box-forward-8081
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:8090
+User=box-endpoint-8090
 Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict

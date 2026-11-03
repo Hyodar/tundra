@@ -8,6 +8,7 @@ mkosi-chroot groupadd --system gcp-forwarded-ips
 mkosi-chroot useradd --system --home-dir /home/tdxs --create-home --shell /usr/sbin/nologin --gid tdx tdxs
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web-loopback
+mkosi-chroot useradd --system --shell /usr/sbin/nologin web-loopback-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin greeter
 mkosi-chroot useradd --home-dir /home/tenant --create-home --shell /usr/bin/login-menu tenant
 mkosi-chroot useradd --system --shell /usr/sbin/nologin attested-tls-8443
@@ -22,6 +23,7 @@ mkosi-chroot systemctl enable systemd-networkd.socket
 mkosi-chroot systemctl enable systemd-networkd-wait-online.service
 mkosi-chroot systemctl enable web.service
 mkosi-chroot systemctl enable web-loopback.service
+mkosi-chroot systemctl enable web-loopback-ready.service
 mkosi-chroot systemctl enable greeter.service
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable ssh-host-keys.service
@@ -48,6 +50,7 @@ ln -sf "/etc/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/sys
 ln -sf "/etc/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web-loopback.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/web-loopback-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/greeter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

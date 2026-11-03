@@ -17,6 +17,8 @@ from tundravm.models import unit_name
 from .model import (
     CLOUD_METADATA,
     Build,
+    ContainerNetwork,
+    ContainerRoot,
     Declaration,
     EgressRule,
     File,
@@ -125,6 +127,123 @@ def listening(items: Iterable[Declaration]) -> dict[Port, list[str]]:
     return found
 
 
+def container_networks(items: Iterable[Declaration]) -> list[tuple[str, ContainerNetwork]]:
+    """``(container, veth)`` of each container in *items* with a veth, checked: no two on
+    one /30 or veth name, and no exposed port that another container or a service takes."""
+    found: list[tuple[str, ContainerNetwork]] = []
+    items = tuple(items)
+    taken = {port: units[0] for port, units in listening(items).items()}
+    for item in items:
+        if not isinstance(item, ContainerRoot) or item.network is None:
+            continue
+        network = item.network
+        for name, other in found:
+            if network.host == other.host or network.interface == other.interface:
+                raise ValidationError(
+                    f"Container({item.name!r}): its veth {network.interface} on "
+                    f"{network.host}/30 is Container({name!r})'s too.",
+                    hint="Rename one of them: the name picks the veth and its addresses.",
+                )
+        for port in network.expose:
+            if port in taken:
+                raise ValidationError(
+                    f"Container({item.name!r}): expose= takes {port}, which {taken[port]} "
+                    "takes too, and the host's port goes to one of them.",
+                    hint="Expose another port from one of them.",
+                )
+            taken[port] = f"Container({item.name!r})"
+        found.append((item.name, network))
+    return found
+
+
+def _refuse(match: str, why: str) -> list[str]:
+    """Refuse what *match* matches: a TCP reset, an ICMP admin-prohibited otherwise."""
+    return [
+        f'{match} meta l4proto tcp reject with tcp reset comment "{why}"',
+        f'{match} reject with icmpx type admin-prohibited comment "{why}"',
+    ]
+
+
+def _container_input(networks: list[tuple[str, ContainerNetwork]]) -> list[str]:
+    """The host is no container's destination: its endpoints are relayed in its namespace."""
+    rules: list[str] = []
+    for name, network in networks:
+        rules += _refuse(f'iifname "{network.interface}"', f"{name}: not the host")
+    return rules
+
+
+def _container_forward(
+    firewall: Firewall, networks: list[tuple[str, ContainerNetwork]]
+) -> list[str]:
+    """The forward chain: what each container sends (its egress, the metadata servers only
+    when it names them, the rest refused), then each port DNATed to it, a moded one through
+    ``mode_input``."""
+    if not networks:
+        return []
+    rules = [*_established(firewall), "ct state invalid drop"]
+    marks = mode_marks(firewall)
+    for name, network in networks:
+        sent = f'iifname "{network.interface}"'
+        own = network.egress_rules
+        for rule in own:
+            if rule.host in CLOUD_METADATA:
+                rules += [f'{sent} {m} accept comment "{name}"' for m in egress_matches(rule)]
+        for family in ("ip", "ip6"):
+            servers = sorted(host for host in CLOUD_METADATA if _family(host) == family)
+            spelled = servers[0] if len(servers) == 1 else "{ " + ", ".join(servers) + " }"
+            rules += _refuse(f"{sent} {family} daddr {spelled}", f"{name}: cloud metadata")
+        for rule in own:
+            if rule.host not in CLOUD_METADATA:
+                why = _comment([rule.comment])
+                rules += [f'{sent} {m} accept comment "{why}"' for m in egress_matches(rule)]
+        for mode, rule in network.modes:
+            if mode not in marks:
+                raise ValidationError(
+                    f"Container({name!r}): modes= names {mode!r}, which the image's Firewall "
+                    f"does not declare ({', '.join(marks) or 'it has no modes'}).",
+                    hint='Firewall(modes={"production": Mode(), "' + mode + '": Mode(...)})',
+                )
+            rules += [
+                f"{sent} {m} meta mark set {_mark(marks[mode])} meta mark @current_mode "
+                f'ct mark set meta mark accept comment "{_comment([rule.comment])}"'
+                for m in egress_matches(rule)
+            ]
+        rules += _refuse(sent, f"{name}: no egress rule")
+    moded = moded_ports(firewall)
+    for name, network in networks:
+        into = f'oifname "{network.interface}" ct status dnat'
+        for port in network.expose:
+            if port not in moded:
+                rules.append(f'{into} {port.protocol} dport {port.number} accept comment "{name}"')
+        if any(port in moded for port in network.expose):
+            rules.append(f"{into} jump mode_input")
+    return rules
+
+
+def _nat_chains(networks: list[tuple[str, ContainerNetwork]]) -> str:
+    """``prerouting`` DNATs each exposed port to its container; ``postrouting`` masquerades
+    what a container with egress sends."""
+    into = [
+        f'{port.protocol} dport {port.number} dnat ip to {network.address} comment "{name}"'
+        for name, network in networks
+        for port in network.expose
+    ]
+    out = [
+        f'ip saddr {network.address} oifname != "{network.interface}" masquerade comment "{name}"'
+        for name, network in networks
+        if network.egress_rules or network.modes
+    ]
+    text = ""
+    for chain, priority, rules in (("prerouting", "dstnat", into), ("postrouting", "srcnat", out)):
+        if rules:
+            body = "".join(f"\t\t{rule}\n" for rule in rules)
+            text += (
+                f"\tchain {chain} {{\n\t\ttype nat hook {chain} priority {priority}; "
+                f"policy accept;\n{body}\t}}\n"
+            )
+    return text
+
+
 def allowed_ports(firewall: Firewall, items: Iterable[Declaration]) -> dict[Port, list[str]]:
     """Port -> why *firewall* opens it (``allow``, ``ssh``, the listening units)."""
     opened: dict[Port, list[str]] = {}
@@ -210,7 +329,11 @@ def _mode_chains(
 ) -> str:
     """Each mode's own chain, then the dispatch chain the switcher rewrites (production at
     boot), each declared before what jumps to it."""
+    items = tuple(items)
     listeners = listening(items)
+    for name, network in container_networks(items):
+        for port in network.expose:
+            listeners.setdefault(port, []).append(name)
     marks = mode_marks(firewall)
     text = ""
     for mode in firewall.modes:
@@ -243,10 +366,12 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
     swaps."""
     items = tuple(items)
     moded = moded_ports(firewall)
+    networks = container_networks(items)
     rules = [
         *_established(firewall),
         "ct state invalid drop",
         'iifname "lo" accept',
+        *_container_input(networks),
         f"icmpv6 type {{ {', '.join(ICMPV6_ESSENTIAL)} }} accept",
         'udp sport 67 udp dport 68 accept comment "DHCPv4 replies"',
         'ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept comment "DHCPv6 replies"',
@@ -264,12 +389,13 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
             "reject with icmpx type port-unreachable",
         ]
     body = "".join(f"\t\t{rule}\n" for rule in rules)
+    forward = "".join(f"\t\t{rule}\n" for rule in _container_forward(firewall, networks))
     filtered = firewall.egress == "filter"
     outbound = "".join(f"\t\t{rule}\n" for rule in _output_rules(firewall, items))
     sets = ""
     if firewall.modes:
         sets = f"\tset current_mode {{\n\t\ttype mark\n\t\telements = {{ {_mark(1)} }}\n\t}}\n"
-    names = host_names(firewall, items) if filtered else ()
+    names = host_names(firewall, items)
     for name in names:
         for family, table in zip(("ipv4_addr", "ipv6_addr"), host_sets(name), strict=True):
             sets += f"\tset {table} {{\n\t\ttype {family}\n\t}}\n"
@@ -304,7 +430,9 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
         "\t}\n"
         "\tchain forward {\n"
         "\t\ttype filter hook forward priority filter; policy drop;\n"
+        f"{forward}"
         "\t}\n"
+        f"{_nat_chains(networks)}"
         + (_mode_chains(firewall, items, "output") if firewall.modes and filtered else "")
         + "\tchain output {\n"
         f"\t\ttype filter hook output priority filter; policy {'drop' if filtered else 'accept'};\n"
@@ -366,6 +494,12 @@ def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]
     for unit, owner, rule in own:
         if rule.host not in CLOUD_METADATA:
             rules += [f'{owner} {m} accept comment "{unit}"' for m in egress_matches(rule)]
+    for name, network in container_networks(items):
+        for port in network.serves:
+            rules.append(
+                f'oifname "{network.interface}" ip daddr {network.address} '
+                f'{port.protocol} dport {port.number} accept comment "{name}: serves"'
+            )
     anywhere = [rule for rule in firewall.egress_rules if rule.host is None and rule.name is None]
     hosts = [rule for rule in firewall.egress_rules if rule not in anywhere]
     for rule in [*sorted(anywhere, key=_port_order), *hosts]:
@@ -392,12 +526,20 @@ def egress_matches(rule: EgressRule) -> tuple[str, ...]:
 
 
 def host_names(firewall: Firewall, items: Iterable[Declaration]) -> tuple[str, ...]:
-    """The host names the rules of *firewall*, its modes and the units of *items* accept,
-    in the order they appear: each has its sets."""
+    """The host names the rules of *firewall*, its modes and the units of *items* accept
+    when it filters egress, and those of each container's veth, in the order they appear:
+    each has its sets."""
+    items = tuple(items)
+    filtered = firewall.egress == "filter"
     rules = [
-        *firewall.egress_rules,
-        *(rule for mode in firewall.modes for rule in mode.egress_rules),
-        *(rule for _unit, _owner, rule in unit_egress(items)),
+        *(firewall.egress_rules if filtered else ()),
+        *(rule for mode in firewall.modes if filtered for rule in mode.egress_rules),
+        *(rule for _unit, _owner, rule in (unit_egress(items) if filtered else ())),
+        *(
+            rule
+            for _name, network in container_networks(items)
+            for rule in (*network.egress_rules, *(r for _mode, r in network.modes))
+        ),
     ]
     return tuple(dict.fromkeys(rule.name for rule in rules if rule.name is not None))
 
@@ -584,7 +726,7 @@ def expand_firewall(
         )
     if firewall.modes:
         rendered += _switcher(firewall, items, production)
-    names = host_names(firewall, items) if firewall.egress == "filter" else ()
+    names = host_names(firewall, items)
     if names:
         rendered += _resolver(names, items)
     networkd = any(

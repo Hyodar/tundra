@@ -130,6 +130,22 @@ CONTAINER_MODULES: tuple[str, ...] = (
 """A variant that ships a ``Container``, on top of its outputs' sets; a built kernel needs
 each built in."""
 
+CONTAINER_NETWORK_MODULES: tuple[str, ...] = (
+    # A container's veth, and the one the probe sends a datagram into it through.
+    "veth",
+    # The firewall's prerouting and postrouting nat chains (pull nf_nat).
+    "nft_chain_nat",
+    # Their dnat to the container's address and masquerade of what it sends.
+    "nft_nat",
+    "nft_masq",
+)
+"""A variant whose ``Container`` has a veth (``expose=``, ``egress=``, ``serves=``), on top of
+:data:`CONTAINER_MODULES`; ``Container.kernel()`` asks a built kernel for each."""
+
+CONTAINER_NETWORK_PATH = "/etc/systemd/network/10-tundravm-ve-"
+"""The prefix of the networkd file a container's veth ships, which selects
+:data:`CONTAINER_NETWORK_MODULES`."""
+
 TARGET_MODULES: dict[str, tuple[str, ...]] = {
     "qemu": (),
     "azure": AZURE_MODULES,
@@ -168,6 +184,10 @@ MODULE_OPTIONS: dict[str, str] = {
     "erofs": "CONFIG_EROFS_FS",
     "overlay": "CONFIG_OVERLAY_FS",
     "loop": "CONFIG_BLK_DEV_LOOP",
+    "veth": "CONFIG_VETH",
+    "nft_chain_nat": "CONFIG_NFT_NAT",
+    "nft_nat": "CONFIG_NFT_NAT",
+    "nft_masq": "CONFIG_NFT_MASQ",
 }
 """Each curated module and the ``CONFIG_*`` option that builds it: a built kernel loads no
 module, so it needs every one ``=y``.
@@ -308,6 +328,7 @@ def curated_modules(
     disks: bool = False,
     firewall: bool = False,
     containers: bool = False,
+    container_network: bool = False,
 ) -> tuple[str, ...]:
     """The curated set for an image booting on every one of *targets* (sorted, unique)."""
     selected = set(TDX_GUEST_MODULES)
@@ -319,6 +340,8 @@ def curated_modules(
         selected.update(FIREWALL_MODULES)
     if containers:
         selected.update(CONTAINER_MODULES)
+    if container_network:
+        selected.update(CONTAINER_NETWORK_MODULES)
     return tuple(sorted(selected))
 
 
@@ -345,6 +368,7 @@ def module_selection(
         disks=disks,
         firewall=firewall,
         containers=bool(profile.containers),
+        container_network=any(f.path.startswith(CONTAINER_NETWORK_PATH) for f in profile.files),
     )
     return ModuleSelection(modular=True, modules=tuple(sorted({*curated, *spec})))
 
@@ -388,6 +412,8 @@ __all__ = [
     "TDX_GUEST_MODULES",
     "VERITY_MODULES",
     "CONTAINER_MODULES",
+    "CONTAINER_NETWORK_MODULES",
+    "CONTAINER_NETWORK_PATH",
     "CloudDrivers",
     "KernelModules",
     "ModuleSelection",

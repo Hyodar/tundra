@@ -385,6 +385,7 @@ def test_dev_profile_is_an_overlay_with_public_keys_only() -> None:
     assert (dev / "mkosi.conf").read_text(encoding="utf-8") == (
         "[Config]\nDependencies=box\n\n[Output]\nImageId=%i-dev\n\n[Content]\n"
         + "KernelModules=\n    erofs\n    loop\n"
+        + "    nft_chain_nat\n    nft_masq\n    nft_nat\n    veth\n"
         + "Packages=\n    prometheus\n    prometheus-node-exporter\n    systemd-journal-remote\n"
         + "ExtraTrees=%O/box.raw:/usr/lib/tundravm/containers/box.raw\n"
     )

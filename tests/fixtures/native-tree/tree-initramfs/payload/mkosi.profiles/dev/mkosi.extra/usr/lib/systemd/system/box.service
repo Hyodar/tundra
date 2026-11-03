@@ -1,11 +1,11 @@
 [Unit]
 Description=box.service
-After=runtime-init-owners.service tdx-evidence.service
-Requires=runtime-init-owners.service tdx-evidence.service
+After=runtime-init-owners.service web-loopback-ready.service tdx-evidence.service
+Requires=runtime-init-owners.service web-loopback-ready.service tdx-evidence.service
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/busybox httpd -f -p 8081 -h /srv/www
+ExecStart=/usr/bin/busybox sh -c "/usr/bin/busybox httpd -p 8082 -h /srv/www; /usr/bin/socat -u UDP-RECV:9999 - & exec /usr/bin/busybox httpd -f -p 8081 -h /srv/www"
 User=box
 Restart=on-failure
 RestartSec=5s

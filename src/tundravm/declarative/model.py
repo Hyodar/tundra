@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import ipaddress
 import posixpath
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -3304,16 +3305,32 @@ class ContainerRoot(Declared):
     """A container's read-only root, built as the subimage ``mkosi.images/<name>/`` from the
     image's snapshot: *packages* from its repositories, *files* copied in, and empty
     *directories* the unit binds onto. The payload ships it at
-    ``/usr/lib/tundravm/containers/<name>.raw`` (``Container`` composes it)."""
+    ``/usr/lib/tundravm/containers/<name>.raw`` (``Container`` composes it).
+
+    *network* is its veth, which the variant's ``Firewall`` forwards (``None``: its namespace
+    holds ``lo`` only); *endpoints* the host's loopback ``host:port`` its namespace relays."""
 
     name: str
     packages: tuple[str, ...]
     _: KW_ONLY
     files: tuple[File, ...] = ()
     directories: tuple[str, ...] = ()
+    network: ContainerNetwork | None = None
+    endpoints: tuple[str, ...] = ()
+
+    @property
+    def ports(self) -> tuple[Port, ...]:
+        """The host ports DNATed to it: what the cloud firewall and ``tundravm run`` open."""
+        return () if self.network is None else self.network.expose
 
     def __post_init__(self) -> None:
-        _freeze(self, "packages", "files", "directories")
+        _freeze(self, "packages", "files", "directories", "endpoints")
+        if self.network is not None and not isinstance(self.network, ContainerNetwork):
+            raise _fail(
+                self,
+                f"network= holds {self.network!r}, not a ContainerNetwork.",
+                hint="Let Container compose it.",
+            )
         if not isinstance(self.name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", self.name):
             raise _fail(
                 self,
@@ -3343,6 +3360,43 @@ class ContainerRoot(Declared):
                 )
         for path in self.directories:
             _require_absolute(self, path, "directory")
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerNetwork:
+    """A container's veth: *interface* on the host at *host*, the container at *address*,
+    both on one /30 of 169.254.0.0/16; *egress_rules* are what it may send (the forward
+    chain refuses the rest), *modes* ``(mode, rule)`` what it may send in that firewall mode
+    only, *expose* the host ports DNATed to *address* and *serves* the ports host processes
+    reach at *address*."""
+
+    interface: str
+    host: str
+    address: str
+    egress_rules: tuple[EgressRule, ...] = ()
+    expose: tuple[Port, ...] = ()
+    modes: tuple[tuple[str, EgressRule], ...] = ()
+    serves: tuple[Port, ...] = ()
+
+    def __post_init__(self) -> None:
+        _freeze(self, "egress_rules", "expose", "modes", "serves")
+        if not isinstance(self.interface, str) or not re.fullmatch(
+            r"ve-[a-z0-9-]{1,12}", self.interface
+        ):
+            raise _fail(
+                self,
+                f"interface {self.interface!r} is not ve- and at most 12 characters.",
+                hint="Let Container name it.",
+            )
+        for address in (self.host, self.address):
+            if not isinstance(address, str) or not ipaddress.ip_address(address).is_link_local:
+                raise _fail(self, f"{address!r} is not a link-local address.", hint="169.254.1.1")
+        for port in self.expose:
+            if not isinstance(port, Port):
+                raise _fail(self, f"expose holds {port!r}, not a Port.", hint="Port(8081)")
+        for rule in self.egress_rules:
+            if not isinstance(rule, EgressRule):
+                raise _fail(self, f"egress rule {rule!r} is not an EgressRule.", hint="Egress()")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3830,6 +3884,7 @@ __all__ = [
     "BootStep",
     "Build",
     "Cargo",
+    "ContainerNetwork",
     "ContainerRoot",
     "VariantChange",
     "Check",

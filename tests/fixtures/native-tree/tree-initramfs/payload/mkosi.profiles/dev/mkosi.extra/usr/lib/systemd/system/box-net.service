@@ -1,0 +1,25 @@
+# tundravm Container box: its network namespace, a veth the firewall forwards and IPv4 forwarding
+[Unit]
+Description=Network namespace of box.service
+DefaultDependencies=no
+Requires=nftables.service
+After=nftables.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/bin/ip link delete ve-box
+ExecStartPre=-/usr/bin/ip netns delete box
+ExecStart=/usr/bin/ip netns add box
+ExecStart=/usr/bin/ip -n box link set lo up
+ExecStart=/usr/bin/ip link add ve-box type veth peer name host0 netns box
+ExecStart=/usr/bin/ip addr add 169.254.136.253/30 dev ve-box
+ExecStart=/usr/bin/ip link set ve-box up
+ExecStart=/usr/bin/ip -n box addr add 169.254.136.254/30 dev host0
+ExecStart=/usr/bin/ip -n box link set host0 up
+ExecStart=/usr/bin/ip -n box route add default via 169.254.136.253
+ExecStart=/bin/sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward'
+ExecStop=-/usr/bin/ip link delete ve-box
+ExecStop=/usr/bin/ip netns delete box

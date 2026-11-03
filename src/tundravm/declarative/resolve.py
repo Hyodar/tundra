@@ -32,6 +32,7 @@ from .model import (
     TARGETS,
     BootStep,
     Build,
+    ContainerRoot,
     Declaration,
     Declared,
     Diagnostic,
@@ -593,6 +594,14 @@ def _expand_firewall(state: _Resolution, glue: Sequence[Declaration], *, product
     key = ("Firewall",)
     firewall = state.items.get(key)
     if not isinstance(firewall, Firewall):
+        for item in state.items.values():
+            if isinstance(item, ContainerRoot) and item.network is not None:
+                raise ValidationError(
+                    f"Container({item.name!r}): its veth forwards through the firewall, and "
+                    "this profile has none, so nothing would filter what it sends.",
+                    hint="Keep the image's Firewall(), or drop the container's expose= and "
+                    "egress=.",
+                )
         return
     del state.items[key]
     expanded = expand_firewall(firewall, (*state.items.values(), *glue), production=production)

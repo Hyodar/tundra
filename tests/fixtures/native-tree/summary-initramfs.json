@@ -291,7 +291,11 @@
           "virtio_net",
           "virtio_scsi",
           "erofs",
-          "loop"
+          "loop",
+          "nft_chain_nat",
+          "nft_masq",
+          "nft_nat",
+          "veth"
         ],
         "MachineId": null,
         "ManifestFormat": [

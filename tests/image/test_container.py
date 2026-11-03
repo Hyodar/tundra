@@ -12,11 +12,20 @@ import pytest
 from tundravm import File, Image, Profile, Service
 from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
-from tundravm.components import Container, DevAccess, Egress
+from tundravm.components import (
+    Container,
+    DevAccess,
+    Egress,
+    Endpoint,
+    Firewall,
+    Mode,
+    Network,
+)
 from tundravm.errors import ValidationError
 from tundravm.models import ContainerSpec
 from tundravm.ports import TCP, UDP
 from tundravm.storage import OperatorKey, Volume
+from tundravm.systemd import HttpProbe, TcpProbe
 from tundravm.testing import plan
 
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
@@ -24,6 +33,11 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 data = Volume("data", unlock=OperatorKey())
 HTTPD = ["/usr/bin/busybox", "httpd", "-f", "-p", "8081", "-h", "/srv/www"]
 PAGE = File.text("/srv/www/index.html", "<h1>web</h1>\n")
+RPC = Service(
+    "rpc", ["/usr/bin/busybox", "httpd", "-f", "-p", "127.0.0.1:8545"], readiness=TcpProbe(8545)
+)
+ROOT = "/usr/lib/tundravm/containers/web.raw"
+WINDOW = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(8082)])})
 
 
 def web(**changes: object) -> Container:
@@ -47,8 +61,13 @@ def read(out: Path, path: str) -> str:
         (lambda: web(packages=["ubuntu:24.04"]), "an OCI image reference"),
         (lambda: web(packages=["docker.io/library/debian@sha256:ab"]), "an OCI image reference"),
         (lambda: web(packages=[]), "packages= is empty"),
-        (lambda: web(egress=Egress(hosts=["10.0.0.5:443"])), "a non-empty egress= needs a veth"),
-        (lambda: web(expose=[UDP(53)]), "carries TCP only"),
+        (lambda: web(expose=[UDP(53), UDP(53)]), "names UDP"),
+        (lambda: web(requires=[Service("a", ["/usr/bin/a"]).endpoint(80)]), "no readiness"),
+        (lambda: web(requires=[Endpoint("10.0.0.5", 8545, ready=RPC.ready)]), "not the host's"),
+        (lambda: web(probe=TcpProbe(8551)), "serves= does not name"),
+        (lambda: web(serves=[TCP(80)], probe=HttpProbe("http://127.0.0.1/")), "TcpProbe"),
+        (lambda: web().endpoint(8551), "serves= does not"),
+        (lambda: web(modes={"maintenance": Egress(metadata=True)}), "outlives the window"),
         (lambda: web(user="root"), 'user="root"'),
         (lambda: web(files=[File.text("/srv/a", "a", owner="web")]), "every file in it is root's"),
         (lambda: Container("web", ["busybox", "httpd"], packages=["busybox"]), "program path"),
@@ -64,7 +83,7 @@ def test_a_container_refuses_what_would_fetch_or_leak(
 
 
 def test_a_container_lowers_to_a_subimage_its_unit_runs_from(tmp_path: Path) -> None:
-    image = Image("box", components=[web(state=data.directory("web"))])
+    image = Image("box", components=[web(state=data.directory("web"), expose=[])])
     out = tree(image, tmp_path / "tree")
     subimage = read(out, "mkosi.images/web/mkosi.conf")
     assert "Format=portable\nOutput=web\n" in subimage
@@ -89,15 +108,92 @@ def test_a_container_lowers_to_a_subimage_its_unit_runs_from(tmp_path: Path) -> 
     assert "ExecStart=/usr/sbin/modprobe loop\n" in loader
     assert "ConditionPathExists=!/dev/loop-control\n" in loader
     assert "User=" not in loader
-    forward = read(units, "web-forward-8081.service.d/20-container.conf")
-    assert "JoinsNamespaceOf=web.service\n" in forward
-    assert "PrivateNetwork=yes\n" in forward
-    planned = plan(image)
-    assert planned.unit("web-forward-8081.socket").get("Socket", "ListenStream") == "8081"
-    assert (
-        'tcp dport 8081 accept comment "web-forward-8081.service"'
-        in planned.file("/etc/nftables.conf").text
+    assert not (units / "web-net.service").exists()
+
+
+def networked() -> Image:
+    container = web(
+        expose=[TCP(8081), UDP(9999), TCP(8082)],
+        egress=Egress(hosts=["1.1.1.1:853"]),
+        modes={"maintenance": Egress(hosts=["1.0.0.1:853"])},
+        requires=[RPC.endpoint(8545)],
+        serves=[TCP(8551)],
+        probe=TcpProbe(8551),
     )
+    consumer = Service("cl", ["/usr/bin/cl", container.endpoint(8551)])
+    return Image(
+        "box",
+        services=[RPC, consumer],
+        components=[container, WINDOW],
+        network=Network(egress=Egress()),
+    )
+
+
+def test_a_networked_container_lowers_to_a_veth_the_firewall_forwards() -> None:
+    planned = plan(networked())
+    dropin = planned.file("/usr/lib/systemd/system/web.service.d/20-container.conf").text
+    assert dropin == (
+        "[Unit]\nAfter=web-loop.service web-net.service web-endpoint-8545.socket\n"
+        "Requires=web-loop.service web-net.service web-endpoint-8545.socket\n\n"
+        "[Service]\nMountAPIVFS=yes\nNetworkNamespacePath=/run/netns/web\nPrivateUsers=yes\n"
+        "RootImage=/usr/lib/tundravm/containers/web.raw\n"
+    )
+    net = planned.file("/usr/lib/systemd/system/web-net.service").text
+    for line in (
+        "DefaultDependencies=no\nRequires=nftables.service\nAfter=nftables.service\n",
+        "ExecStart=/usr/bin/ip link add ve-web type veth peer name host0 netns web\n",
+        "ExecStart=/usr/bin/ip -n web route add default via 169.254.132.217\n",
+        "ExecStart=/bin/sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward'\n",
+    ):
+        assert line in net, line
+    relay = planned.file("/usr/lib/systemd/system/web-endpoint-8545.socket.d/20-container.conf")
+    assert "[Socket]\nNetworkNamespacePath=/run/netns/web\n" in relay.text
+    assert "Unmanaged=yes" in planned.file("/etc/systemd/network/10-tundravm-ve-web.network").text
+    assert (
+        "/tcp/169.254.132.218/8551"
+        in planned.file("/usr/lib/systemd/system/web-ready.service").text
+    )
+    conf = planned.file("/etc/nftables.conf").text
+    for line in (
+        'iifname "ve-web" reject with icmpx type admin-prohibited comment "web: not the host"',
+        'iifname "ve-web" ip daddr { 168.63.129.16, 169.254.169.254 } meta l4proto tcp reject '
+        'with tcp reset comment "web: cloud metadata"',
+        'iifname "ve-web" ip daddr 1.1.1.1 tcp dport 853 accept comment "web"',
+        'iifname "ve-web" ip daddr 1.0.0.1 tcp dport 853 meta mark set 0x00000002 '
+        'meta mark @current_mode ct mark set meta mark accept comment "web: maintenance"',
+        'oifname "ve-web" ct status dnat udp dport 9999 accept comment "web"',
+        'oifname "ve-web" ct status dnat jump mode_input',
+        'tcp dport 8082 ct mark set 0x00000002 accept comment "maintenance: web"',
+        'udp dport 9999 dnat ip to 169.254.132.218 comment "web"',
+        'ip saddr 169.254.132.218 oifname != "ve-web" masquerade comment "web"',
+        'oifname "ve-web" ip daddr 169.254.132.218 tcp dport 8551 accept comment "web: serves"',
+    ):
+        assert f"\t\t{line}\n" in conf, line
+    assert "dport 8082 accept" not in conf
+
+
+@pytest.mark.parametrize(
+    ("image", "message"),
+    [
+        (
+            lambda: Image(
+                "box",
+                services=[Service("a", ["/usr/bin/a"], expose=[TCP(8081)])],
+                components=[web()],
+            ),
+            "which a.service takes too",
+        ),
+        (
+            lambda: Image("box", components=[web(modes={"debug": Egress(ports=[TCP(443)])})]),
+            "names 'debug'",
+        ),
+    ],
+)
+def test_a_networked_container_refuses_what_the_firewall_cannot_render(
+    image: Callable[[], Image], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        plan(image()).file("/etc/nftables.conf")
 
 
 def test_a_profile_container_is_that_profile_s_dependency_only(tmp_path: Path) -> None:
@@ -145,12 +241,43 @@ def test_a_container_s_program_is_looked_up_in_its_own_root(image: Image, report
     assert [reported in d.message for d in found] == ([True] if reported else [])
 
 
-def test_the_probe_checks_the_container_in_a_development_profile() -> None:
-    image = Image("box", components=[web()], dev=DevAccess(password="tdx"))
+@pytest.mark.parametrize(
+    ("container", "rows"),
+    [
+        (
+            web(expose=[]),
+            ["container:web\nprobe_container web.service " + ROOT + " 192.0.2.1 9"],
+        ),
+        (
+            web(
+                expose=[UDP(9999)],
+                egress=Egress(hosts=["1.1.1.1:853"]),
+                modes={"maintenance": Egress(hosts=["1.0.0.1:853"])},
+                requires=[RPC.endpoint(8545)],
+                serves=[TCP(8551)],
+            ),
+            [
+                "container:web\nprobe_container web.service " + ROOT + " veth 169.254.132.218",
+                "container:web:egress\nprobe_container_egress web.service 1.1.1.1:853 "
+                "1.0.0.1:853 169.254.169.254:80",
+                "container:web:endpoint:8545\nprobe_container_endpoint web.service 127.0.0.1 "
+                "8545 web-endpoint-8545.socket",
+                "container:web:serves:8551\nprobe_container_serves 169.254.132.218 8551",
+                "container:web:udp:9999\nprobe_container_udp web.service 9999",
+            ],
+        ),
+    ],
+    ids=["lo-only", "veth"],
+)
+def test_the_probe_checks_the_container_in_a_development_profile(
+    container: Container, rows: list[str]
+) -> None:
+    image = Image(
+        "box", services=[RPC], components=[container, WINDOW], dev=DevAccess(password="tdx")
+    )
     script = plan(image, "dev").file("/usr/lib/tundravm/probe").text
-    call = "probe_container web.service /usr/lib/tundravm/containers/web.raw 192.0.2.1 9"
-    assert f"check=container:web\n{call}\n" in script
-    assert "nsenter -t" in script
+    for row in rows:
+        assert f"check={row}\n" in script, row
 
 
 def test_the_manifest_records_each_container_root(tmp_path: Path) -> None:

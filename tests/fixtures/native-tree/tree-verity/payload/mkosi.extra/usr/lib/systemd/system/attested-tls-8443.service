@@ -1,7 +1,7 @@
 [Unit]
 Description=Attested TLS on :8443 to http://127.0.0.1:8090/
-After=runtime-init-owners.service attested-tls-8443-key.service tdx-evidence.service
-Requires=runtime-init-owners.service attested-tls-8443-key.service tdx-evidence.service
+After=runtime-init-owners.service attested-tls-8443-key.service web-loopback-ready.service tdx-evidence.service
+Requires=runtime-init-owners.service attested-tls-8443-key.service web-loopback-ready.service tdx-evidence.service
 
 [Service]
 Type=exec
