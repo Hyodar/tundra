@@ -34,7 +34,6 @@ from tundravm.measure.policy import (
 
 from .._keywords import Keywords
 from ._component import Composite, Export, HttpEndpoint, component
-from ._kernel_hardening import KernelHardening
 from ._network import NETWORK_DIR
 from .config import ConfigFile
 from .model import (
@@ -1372,7 +1371,6 @@ __all__ = [
     "Firewall",
     "GoBinary",
     "HttpEndpoint",
-    "KernelHardening",
     "Login",
     "NETWORK_FILE",
     "Network",

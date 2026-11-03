@@ -101,6 +101,30 @@ The distribution an image is built from: `Debian("trixie")`, the tested baseline
 |---|---|
 | `Debian.archive` | The snapshot the image reads: *snapshot*, else `LOCKED_SNAPSHOT`. |
 
+### `DebianConfig`
+
+*dataclass*
+
+```python
+DebianConfig(
+    version: str,
+    *,
+    flavor: str = 'cloud-amd64',
+    arch: str = 'amd64',
+    snapshot: str | None = None,
+    sha256: str | None = None,
+)
+```
+
+`Kernel.build(base=DebianConfig("6.12.113-1"))`: the config Debian ships for that kernel.
+
+| Member | Does |
+|---|---|
+| `DebianConfig.member` | The compressed config inside the package. |
+| `DebianConfig.security_url(archive: str) -> str` | The package in the pool of the snapshot security *archive* (an archive URL). |
+| `DebianConfig.series` | `6.12` of `6.12.48-1`: the `linux-config-<series>` package. |
+| `DebianConfig.url(archive: str) -> str` | The package in the main pool of the snapshot *archive* (an archive URL). |
+
 ### `doctor`
 
 *function*
@@ -179,9 +203,12 @@ Kernel(
     version: str | None = None,
     source: Git | Http | None = None,
     *,
+    base: DebianConfig | None = None,
     config: Path | None = None,
-    patches: Sequence[Path] = (),
-    modules: Sequence[str] = (),
+    fragments: Sequence[Path | KernelFragment] = (),
+    patches: Sequence[Path | KernelPatch] = (),
+    hardening: bool = True,
+    modules: Sequence[str] | bool = (),
     cmdline: Sequence[str] = (),
 )
 ```
@@ -190,9 +217,38 @@ The kernel: `Kernel.default()` (the distribution's, tested) or `Kernel.build(...
 
 | Member | Does |
 |---|---|
-| `Kernel.build(version: str, source: Git \| Http, *, config: Path, patches: Sequence[Path] = (), cmdline: Sequence[str] = ()) -> Kernel` | Compile *version* from *source* with *config* and *patches*, booted with *cmdline* after the image's own parameters. |
+| `Kernel.build(version: str \| None = None, source: Git \| Http \| None = None, *, base: DebianConfig \| None = None, config: Path \| None = None, fragments: Sequence[Path \| KernelFragment] = (), patches: Sequence[Path \| KernelPatch] = (), hardening: bool = True, modules: bool = False, cmdline: Sequence[str] = ()) -> Kernel` | Compile a kernel: from *base* or *config*, hardened, then *fragments*, in order. |
 | `Kernel.built` | Whether the build compiles this kernel. |
 | `Kernel.default(*, modules: Sequence[str] = (), cmdline: Sequence[str] = ()) -> Kernel` | Debian's kernel with the curated module set plus *modules*, booted with *cmdline* after the image's own parameters. |
+| `Kernel.loadable` | Whether a built kernel builds and installs loadable modules. |
+
+### `KernelFragment`
+
+*dataclass*
+
+```python
+KernelFragment(options: Mapping[str, str | None], *, reason: str = '')
+```
+
+Kernel options a built kernel requests: `KernelFragment({"CONFIG_XFS_FS": "y"})`.
+
+| Member | Does |
+|---|---|
+| `KernelFragment.read(path: Path) -> KernelFragment` | The options of the `.config` fragment file *path*: `CONFIG_X=value` and `# CONFIG_X is not set` lines; blank lines and other comments are skipped. |
+
+### `KernelPatch`
+
+*dataclass*
+
+```python
+KernelPatch(source: Path | Http)
+```
+
+A patch a built kernel applies with `patch -p1`: `KernelPatch(Http(url, sha256=...))`.
+
+| Member | Does |
+|---|---|
+| `KernelPatch.name` | The patch's file name, which a failure to apply names. |
 
 ### `load`
 

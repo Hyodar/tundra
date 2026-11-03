@@ -26,10 +26,8 @@ from tundravm.declarative import (
     lock,
     lower,
 )
-from tundravm.declarative._kernel_hardening import ATTACK_SURFACE, HARDENING
 from tundravm.declarative._lowered import kernel_payload
 from tundravm.declarative.model import KERNEL_BUILD_PACKAGES
-from tundravm.declarative.utils import KernelHardening
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import CloudDrivers
 
@@ -206,30 +204,6 @@ def test_the_cache_key_follows_fragments_and_patches(base: Path, tmp_path: Path)
         return next(line for line in script.splitlines() if line.startswith("KERNEL_CACHE="))
 
     assert key() != key(KernelConfig({"CONFIG_XFS_FS": "y"}))
-
-
-def test_kernel_hardening_declares_the_deny_list_and_hardening() -> None:
-    attack, hardening = KernelHardening().items
-    assert isinstance(attack, KernelConfig) and isinstance(hardening, KernelConfig)
-    assert attack.name == "kernel-attack-surface"
-    assert set(attack.options.values()) == {"n"}
-    assert {"CONFIG_IO_URING", "CONFIG_USERFAULTFD", "CONFIG_XFRM_USER"} <= set(attack.options)
-    assert len(attack.options) == len(ATTACK_SURFACE)
-    assert hardening.options["CONFIG_KEXEC"] == "n"
-    assert hardening.options["CONFIG_SECURITY_LOCKDOWN_LSM"] == "y"
-    assert all(reason for _, _, reason in HARDENING)
-    relaxed = KernelHardening(allow=("CONFIG_IO_URING",)).items[0]
-    assert isinstance(relaxed, KernelConfig) and "CONFIG_IO_URING" not in relaxed.options
-    with pytest.raises(ValidationError, match="does not set"):
-        _ = KernelHardening(allow=("CONFIG_NOPE",)).items
-
-
-def test_kernel_hardening_composes_into_a_built_kernel(base: Path) -> None:
-    kernel = Kernel("6.12.48", SOURCE, base=base)
-    lowered = lower(_recipe(kernel, KernelHardening())).kernel
-    assert lowered is not None
-    assert dict(lowered.options)["CONFIG_DEVMEM"] == "n"
-    assert len(lowered.options) == 1 + len(ATTACK_SURFACE) + len(HARDENING)
 
 
 def test_lint_flags_kernel_modules_a_monolithic_kernel_cannot_have(base: Path) -> None:

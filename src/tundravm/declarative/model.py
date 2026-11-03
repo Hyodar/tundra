@@ -2620,13 +2620,15 @@ _KCONFIG_OPTION = re.compile(r"CONFIG_[A-Z0-9_]+")
 
 @dataclass(frozen=True, slots=True)
 class DebianConfig:
-    """``Kernel(base=DebianConfig("6.12.48-1"))``: the config Debian ships for that kernel.
+    """``Kernel.build(base=DebianConfig("6.12.113-1"))``: the config Debian ships for that kernel.
 
     *version* is the Debian ``linux`` package version (``apt-cache policy
-    linux-config-6.12``); the config is ``config.<arch>_none_<flavor>.xz`` of
-    ``linux-config-<major.minor>`` in the pools of *snapshot* (default: the platform's):
-    the main pool first, then the security pool, which alone carries a kernel Debian ships
-    as a security update until the next point release. ``tundravm lock`` pins the package's
+    linux-config-6.12``), whose upstream part (``6.12.113``) is the stable release
+    ``Kernel.build`` compiles unless it names another; the config is
+    ``config.<arch>_none_<flavor>.xz`` of ``linux-config-<major.minor>`` in the pools of
+    *snapshot* (default: the platform's): the main pool first, then the security pool,
+    which alone carries a kernel Debian ships as a security update until the next point
+    release. ``tundravm lock`` pins the package's
     sha256, ``tundravm build`` downloads it on the host.
     """
 
@@ -2789,7 +2791,10 @@ class Kernel(Declared):
     ``fragments`` (and the variant's :class:`KernelConfig` declarations) and
     ``patches`` compose it; ``modules=False`` builds everything in
     (``CONFIG_MODULES=n``), ``True`` builds and installs loadable modules.
-    ``config=`` is a whole, final config used as is (none of the others apply).
+    ``hardening=True`` merges :data:`~tundravm.declarative._kernel_hardening.HARDENING`
+    first, ``False`` is what ``kernel-unhardened`` reports, and ``None`` (this model's
+    default) is neither. ``config=`` is a whole, final config used as is (none of the
+    others apply).
     """
 
     version: str
@@ -2802,6 +2807,7 @@ class Kernel(Declared):
     fragments: tuple[KernelConfig, ...] = ()
     patches: tuple[KernelPatch, ...] = ()
     modules: bool = False
+    hardening: bool | None = None
 
     def __post_init__(self) -> None:
         _require_name(self, self.version, "version")
@@ -2838,18 +2844,26 @@ class Kernel(Declared):
                 f"two patches share a name: {names!r}.",
                 hint="Give each patch its own file name.",
             )
-        composing = self.base is not None or self.fragments or self.patches or self.modules
+        if self.hardening is not None:
+            _require_bool(self, self.hardening, "hardening")
+        composing = (
+            self.base is not None
+            or self.fragments
+            or self.patches
+            or self.modules
+            or self.hardening is not None
+        )
         if self.config is not None and composing:
             raise _fail(
                 self,
-                "config= is a whole, final config: base, fragments, patches and modules "
-                "do not apply to it.",
+                "config= is a whole, final config: base, fragments, patches, modules and "
+                "hardening do not apply to it.",
                 hint="Pass base=Path(...) to compose from that file instead.",
             )
-        if self.base is None and (self.fragments or self.patches):
+        if self.base is None and (self.fragments or self.patches or self.hardening is not None):
             raise _fail(
                 self,
-                "fragments and patches need a base config to apply to.",
+                "fragments, patches and hardening need a base config to apply to.",
                 hint='Pass base=DebianConfig("6.12.48-1") or base=Path("kernel.config").',
             )
 
@@ -2872,6 +2886,8 @@ class Kernel(Declared):
             btf = self.base.is_file() and "CONFIG_DEBUG_INFO_BTF=y" in self.base.read_text(
                 encoding="utf-8", errors="replace"
             )
+        if self.hardening:
+            btf = False  # the hardening fragment drops BTF unless a fragment keeps it
         for fragment in self.fragments:
             btf = fragment.options.get("CONFIG_DEBUG_INFO_BTF", "y" if btf else "n") == "y"
         extra = (

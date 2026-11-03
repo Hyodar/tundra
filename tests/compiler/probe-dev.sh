@@ -432,7 +432,7 @@ probe_hardening metrics-export.service 2.5 static
 check=hardening:app.service
 probe_hardening app.service 2.6 jit
 check=kernel:symbols
-probe_symbols handle_sysrq
+probe_symbols bond_create fuse_conn_init hibernate __io_uring_cancel l2tp_tunnel_create handle_sysrq kclist_add handle_userfault vhost_dev_init xsk_tx_peek_desc
 check=kernel:modules
 probe_modules
 check=host-keys

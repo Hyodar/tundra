@@ -451,6 +451,10 @@ class Kernel:
     patches: tuple[KernelPatchSpec, ...] = ()
     modules: bool = False
     """Build and install loadable modules; ``False`` requests ``CONFIG_MODULES=n``."""
+    hardening: bool | None = None
+    """Whether the options carry Tundra's hardening fragment: ``False`` for
+    ``Kernel.build(hardening=False)``, which ``kernel-unhardened`` reports; ``None`` when the
+    internal model did not say."""
 
     @property
     def composed(self) -> bool:

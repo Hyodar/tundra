@@ -57,13 +57,21 @@ from ._values import (
     Egress,
     File,
     HttpProbe,
+    KernelFragment,
+    KernelPatch,
     Notify,
     Package,
     Tree,
     mkosi_section,
 )
 
-__all__ = ["OWNERS_STEP", "component_classes", "recipe_of"]
+__all__ = ["OWNERS_STEP", "component_classes", "kernel_of", "recipe_of"]
+
+
+def kernel_of(image: Image) -> dm.Kernel:
+    """The internal kernel *image*'s ``Kernel.build(...)`` lowers to: what CI's kernel
+    fixtures build, so they build exactly what an image does."""
+    return _Lowering(image).kernel()
 
 
 def recipe_of(image: Image) -> dm.Recipe:
@@ -176,7 +184,7 @@ class _Lowering:
             snapshot=base.archive,
             efi_stub=base.efi_stub,
             kernel_package=None if kernel.built else "linux-image-amd64",
-            kernel_modules=() if kernel.built else tuple(kernel.modules),
+            kernel_modules=() if isinstance(kernel.modules, bool) else tuple(kernel.modules),
             kernel_cmdline=tuple(kernel.cmdline),
         )
 
@@ -302,15 +310,33 @@ class _Lowering:
         return tuple(sorted(groups - declared))
 
     def kernel(self) -> dm.Kernel:
-        """The kernel the build compiles, with every driver built in."""
+        """The kernel ``Kernel.build`` compiles: its base, the hardening flag, then its own
+        fragments and patches, in order."""
         kernel = self.image.kernel
         assert kernel.version is not None and kernel.source is not None
-        assert kernel.config is not None
+        base = kernel.base if kernel.base is not None else kernel.config
+        assert base is not None
+        own: list[KernelFragment | KernelPatch] = [
+            KernelFragment.read(item) if isinstance(item, Path) else item
+            for item in kernel.fragments
+        ]
+        own += [KernelPatch(item) if isinstance(item, Path) else item for item in kernel.patches]
+        needs = own
+        fragments = []
+        for item in needs:
+            if isinstance(item, KernelFragment):
+                with _at(item):
+                    fragments.append(dm.KernelConfig(item.options, reason=item.reason))
         return dm.Kernel(
             kernel.version,
             kernel.source,
-            base=kernel.config,
-            patches=tuple(dm.KernelPatch(path) for path in kernel.patches),
+            base=base,
+            fragments=tuple(fragments),
+            patches=tuple(
+                dm.KernelPatch(item.source) for item in needs if isinstance(item, KernelPatch)
+            ),
+            modules=kernel.loadable,
+            hardening=kernel.hardening,
         )
 
     def repositories(self) -> Iterator[dm.Declaration]:

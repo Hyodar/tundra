@@ -1,5 +1,5 @@
 # Kernels built from source, too slow for every push: tests/fixtures/kernel/recipe.py compiles
-# Debian trixie's 6.12 kernel from its own cloud-amd64 config with CONFIG_MODULES=n, the way
+# Debian trixie's 6.12 kernel from its own cloud-amd64 config, hardened, CONFIG_MODULES=n, the way
 # Kernel.build(...) does, and tests/fixtures/kernel/example.py one from its own
 # config. Each build's drivers check asserts
 # every driver the qemu, azure and gcp targets need is built in (=y) and the denied ones are

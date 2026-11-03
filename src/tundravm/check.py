@@ -662,6 +662,35 @@ def _rule_kernel_missing(
     )
 
 
+_UNHARDENED_FIX = (
+    "Drop hardening=False from Kernel.build(...); to keep one option it turns off, set that "
+    'option in a fragment: fragments=[KernelFragment({"CONFIG_IO_URING": "y"})].'
+)
+
+
+def _rule_kernel_unhardened(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    """``Kernel.build(hardening=False)``: an error in a production profile, a warning in a
+    development one."""
+    kernel = image.kernel
+    if kernel is None or kernel.hardening is not False:
+        return
+    production = profile_name not in image.unreleased
+    yield Diagnostic(
+        severity="error" if production else "warning",
+        code="kernel-unhardened",
+        message=(
+            "the built kernel is not hardened (Kernel.build(hardening=False)): it keeps every "
+            "subsystem its base config turns on"
+            + (", and this production profile ships it" if production else "")
+        ),
+        hint=_UNHARDENED_FIX,
+        profile=profile_name,
+        subject="kernel",
+    )
+
+
 def _removes(patterns: Iterable[str], path: str) -> str | None:
     """The first of *patterns* (debloat removal paths or globs) that deletes *path*."""
     for pattern in patterns:
@@ -1681,6 +1710,15 @@ _REGISTRY: tuple[Rule, ...] = (
         tundravm_sets("the kernel package"),
         (_rule_kernel_missing,),
         internal=True,
+    ),
+    Rule(
+        "kernel-unhardened",
+        ("error", "warning"),
+        "A built kernel without Tundra's hardening fragment keeps every subsystem of its "
+        "base config, io_uring, userfaultfd and kexec among them.",
+        _UNHARDENED_FIX,
+        (_rule_kernel_unhardened,),
+        when=("in a development profile (Profile(production=False), dev=)",),
     ),
     Rule(
         "kernel-modules-ignored",

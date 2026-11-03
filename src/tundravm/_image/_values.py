@@ -22,8 +22,9 @@ from urllib.parse import urlsplit
 
 from tundravm._location import Located, caller_location
 from tundravm._modules.instance_key import KEY as INSTANCE_KEY
+from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
-from tundravm.declarative.model import Git, Http
+from tundravm.declarative.model import DebianConfig, Git, Http
 from tundravm.declarative.utils import StaticAddress
 from tundravm.errors import ValidationError
 
@@ -36,10 +37,13 @@ __all__ = [
     "AptRepository",
     "Credential",
     "Debian",
+    "DebianConfig",
     "Egress",
     "File",
     "HttpProbe",
     "Kernel",
+    "KernelFragment",
+    "KernelPatch",
     "Mkosi",
     "Notify",
     "Package",
@@ -538,13 +542,126 @@ it: ``Kernel(cmdline=)`` refuses them, with an ``rd.`` prefix too and every
 
 
 @dataclass(frozen=True, slots=True)
+class KernelFragment(Located):
+    """Kernel options a built kernel requests: ``KernelFragment({"CONFIG_XFS_FS": "y"})``.
+
+    Each key is a ``CONFIG_*`` name and each value ``"y"``, ``"m"``, a string or number as
+    Kconfig spells it, or ``None`` (``"n"``) to turn the option off. *reason* says why, for
+    whoever reviews the image. ``Kernel.build(fragments=)`` takes it beside ``.config``
+    fragment files; the build checks every value survived ``olddefconfig``, and two
+    fragments that set one option differently are refused, naming both.
+    """
+
+    options: Mapping[str, str | None]
+    _: KW_ONLY
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.options, Mapping) or not self.options:
+            raise _fail(
+                self,
+                f"options= must be a mapping of CONFIG_* names, got {shown(self.options)}.",
+                hint='KernelFragment({"CONFIG_XFS_FS": "y", "CONFIG_IO_URING": None})',
+            )
+        normal: dict[str, str] = {}
+        for key, value in self.options.items():
+            if not isinstance(key, str) or not dm._KCONFIG_OPTION.fullmatch(key):
+                raise _fail(
+                    self,
+                    f"option {key!r} is not a CONFIG_* name.",
+                    hint='Name an option like "CONFIG_XFS_FS".',
+                )
+            text = "n" if value is None else value
+            if not isinstance(text, str) or not text or "\n" in text:
+                raise _fail(
+                    self,
+                    f"{key}: value {value!r} must be y, m, n, None or a Kconfig value.",
+                    hint=f'KernelFragment({{"{key}": "y"}})',
+                )
+            normal[key] = text
+        object.__setattr__(self, "options", FrozenMap(normal))
+        if not isinstance(self.reason, str) or "\n" in self.reason:
+            raise _fail(self, "reason= must be one line.", hint='reason="the image mounts XFS"')
+
+    @classmethod
+    def read(cls, path: Path) -> KernelFragment:
+        """The options of the ``.config`` fragment file *path*: ``CONFIG_X=value`` and
+        ``# CONFIG_X is not set`` lines; blank lines and other comments are skipped."""
+        options: dict[str, str | None] = {}
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValidationError(
+                f"Kernel: the fragment {path} cannot be read ({exc.strerror}).",
+                hint="Pass the path of an existing .config fragment, relative to the image file.",
+            ) from None
+        for number, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            unset = _UNSET_LINE.fullmatch(stripped)
+            if unset is not None:
+                options[unset.group(1)] = None
+            elif dm._KCONFIG_OPTION.fullmatch(stripped.partition("=")[0]) and "=" in stripped:
+                key, _, value = stripped.partition("=")
+                options[key] = value
+            elif stripped and not stripped.startswith("#"):
+                raise ValidationError(
+                    f"Kernel: {path}:{number} is not a .config line: {stripped!r}.",
+                    hint="Write CONFIG_X=y or '# CONFIG_X is not set', one per line.",
+                )
+        if not options:
+            raise ValidationError(
+                f"Kernel: the fragment {path} sets no option.",
+                hint="Set at least one CONFIG_X=y, or drop the file from fragments=.",
+            )
+        return cls(options, reason=path.name)
+
+
+_UNSET_LINE = re.compile(r"# (CONFIG_[A-Za-z0-9_]+) is not set")
+
+
+@dataclass(frozen=True, slots=True)
+class KernelPatch(Located):
+    """A patch a built kernel applies with ``patch -p1``: ``KernelPatch(Http(url, sha256=...))``.
+
+    ``Kernel.build(patches=)`` takes a ``Path`` for a file beside the image and this for a
+    download, locked by sha256 like any fetch.
+    """
+
+    source: Path | Http
+
+    def __post_init__(self) -> None:
+        if isinstance(self.source, Path):
+            object.__setattr__(self, "source", _beside_image(self.source))
+        elif not isinstance(self.source, Http):
+            raise _fail(
+                self,
+                f"source= must be a pathlib.Path or Http(url, sha256=...), got "
+                f"{shown(self.source)}.",
+                hint='KernelPatch(Path("0001-fix.patch"))',
+            )
+
+    @property
+    def name(self) -> str:
+        """The patch's file name, which a failure to apply names."""
+        raw = self.source.name if isinstance(self.source, Path) else self.source.url
+        return posixpath.basename(raw.split("?", 1)[0])
+
+
+LINUX_STABLE = "https://github.com/gregkh/linux"
+"""Where ``Kernel.build(base=DebianConfig(...))`` takes the stable release from, by tag."""
+
+_DEBIAN_REVISION = re.compile(r"(\d+\.\d+(?:\.\d+)*)-.+")
+
+
+@dataclass(frozen=True, slots=True)
 class Kernel(Keywords):
     """The kernel: ``Kernel.default()`` (the distribution's, tested) or ``Kernel.build(...)``.
 
     ``Kernel.default()`` installs Debian's ``linux-image-amd64`` and keeps the curated
     module set (``tdx_guest``, virtio, NVMe, Hyper-V, gVNIC, and the ones each target
-    needs). ``Kernel.build(version, source, config=, patches=)`` compiles one instead,
-    with every driver built in and no loadable modules.
+    needs). ``Kernel.build(base=DebianConfig("6.12.113-1"))`` compiles one instead: the
+    stable release that Debian package carries, from Debian's own config, hardened, with
+    every driver built in and no loadable modules.
 
     *cmdline* adds kernel parameters to the UKI's measured command line, after the ones
     the image sets itself: ``Kernel.default(cmdline=["nospectre_v2"])``. Each entry is one
@@ -555,19 +672,35 @@ class Kernel(Keywords):
     version: str | None = None
     source: Git | Http | None = None
     _: KW_ONLY
+    base: DebianConfig | None = None
     config: Path | None = None
-    patches: Sequence[Path] = ()
-    modules: Sequence[str] = ()
-    """Extra modules of the distribution kernel to keep, beyond the curated set."""
+    fragments: Sequence[Path | KernelFragment] = ()
+    patches: Sequence[Path | KernelPatch] = ()
+    hardening: bool = True
+    modules: Sequence[str] | bool = ()
+    """``Kernel.default``: extra modules of the distribution kernel to keep, beyond the
+    curated set. ``Kernel.build``: whether it builds loadable modules."""
     cmdline: Sequence[str] = ()
     """Kernel parameters appended to the image's own command line, in this order."""
 
     def __post_init__(self) -> None:
+        if self.base is not None and not isinstance(self.base, DebianConfig):
+            raise _fail(
+                self,
+                f"base= must be DebianConfig(...), got {shown(self.base)}.",
+                hint='Pass config=Path("kernel.config") for a config file of your own.',
+            )
+        if isinstance(self.base, DebianConfig) and self.version is None:
+            match = _DEBIAN_REVISION.fullmatch(self.base.version)
+            assert match is not None  # DebianConfig checked the version
+            object.__setattr__(self, "version", match.group(1))
+            if self.source is None:
+                object.__setattr__(self, "source", Git(LINUX_STABLE, f"v{match.group(1)}"))
         if (self.version is None) != (self.source is None):
             raise _fail(
                 self,
                 "a built kernel needs both a version and a source.",
-                hint="Use Kernel.build('6.12.48', Git(url, ref)) or Kernel.default().",
+                hint='Use Kernel.build(base=DebianConfig("6.12.113-1")) or Kernel.default().',
             )
         if self.source is not None and not isinstance(self.source, (Git, Http)):
             raise _fail(
@@ -595,41 +728,108 @@ class Kernel(Keywords):
                 if isinstance(self.modules, str)
                 else 'Kernel.default(modules=["kvm"])',
             )
+        for name in ("fragments", "patches"):
+            if isinstance(getattr(self, name), (str, Path, KernelFragment, KernelPatch)):
+                raise _fail(
+                    self,
+                    f"{name}= takes a list.",
+                    hint=f"Pass {name}=[{shown(getattr(self, name))}].",
+                )
         if self.config is not None:
             object.__setattr__(self, "config", _beside_image(self.config))
-        object.__setattr__(
-            self,
-            "patches",
-            tuple(_beside_image(p) if isinstance(p, Path) else p for p in self.patches),
-        )
-        object.__setattr__(self, "modules", tuple(self.modules))
+        object.__setattr__(self, "fragments", tuple(self._fragment(f) for f in self.fragments))
+        object.__setattr__(self, "patches", tuple(self._patch(p) for p in self.patches))
         object.__setattr__(self, "cmdline", tuple(self.cmdline))
         for parameter in self.cmdline:
             _check_kernel_parameter(self, parameter)
-        if self.built and self.config is None:
+        if not isinstance(self.hardening, bool):
             raise _fail(
                 self,
-                "a built kernel needs its config.",
-                hint="Pass config=Path('kernel.config').",
+                f"hardening= must be True or False, got {shown(self.hardening)}.",
+                hint="Leave hardening= out: Tundra's hardening is the default.",
             )
-        if not self.built and (self.config is not None or self.patches):
+        if self.built:
+            self._check_built()
+        else:
+            self._check_default()
+
+    def _fragment(self, item: object) -> Path | KernelFragment:
+        if isinstance(item, Path):
+            return _beside_image(item)
+        if isinstance(item, KernelFragment):
+            return item
+        raise _fail(
+            self,
+            f"fragments= holds {shown(item)}, not a Path or a KernelFragment.",
+            hint='fragments=[Path("xfs.config"), KernelFragment({"CONFIG_XFS_FS": "y"})]',
+        )
+
+    def _patch(self, item: object) -> Path | KernelPatch:
+        if isinstance(item, Path):
+            return _beside_image(item)
+        if isinstance(item, KernelPatch):
+            return item
+        raise _fail(
+            self,
+            f"patches= holds {shown(item)}, not a Path or a KernelPatch.",
+            hint='patches=[Path("0001-fix.patch"), KernelPatch(Http(url, sha256=...))]',
+        )
+
+    def _check_built(self) -> None:
+        if self.base is None and self.config is None:
             raise _fail(
                 self,
-                "config= and patches= apply to a built kernel.",
-                hint="Use Kernel.build(version, source, config=...).",
+                "a built kernel needs a config to start from.",
+                hint='Pass base=DebianConfig("6.12.113-1"), or config=Path("kernel.config").',
             )
-        if self.built and self.modules:
+        if self.base is not None and self.config is not None:
+            raise _fail(
+                self,
+                "base= and config= both name the config to start from.",
+                hint="Keep one: base=DebianConfig(...) or config=Path(...).",
+            )
+        if self.modules == ():
+            object.__setattr__(self, "modules", False)
+        if not isinstance(self.modules, bool):
             raise _fail(
                 self,
                 "modules= keeps modules of Debian's kernel; a built kernel has every driver "
                 "built in and loads none.",
-                hint="Drop modules=, or enable the drivers in the built kernel's config=.",
+                hint="Drop modules=, or enable the drivers in a fragment; "
+                "Kernel.build(modules=True) builds loadable modules.",
             )
+
+    def _check_default(self) -> None:
+        if self.config is not None or self.patches or self.fragments:
+            raise _fail(
+                self,
+                "config=, fragments= and patches= apply to a built kernel.",
+                hint='Use Kernel.build(base=DebianConfig("6.12.113-1"), fragments=[...]).',
+            )
+        if not self.hardening:
+            raise _fail(
+                self,
+                "hardening= applies to a built kernel.",
+                hint="Drop hardening=: Kernel.default() is Debian's kernel as Debian ships it.",
+            )
+        if isinstance(self.modules, bool):
+            raise _fail(
+                self,
+                "modules=True or False says whether a built kernel loads modules.",
+                hint='Kernel.default(modules=["kvm"]) keeps more of Debian\'s; '
+                "Kernel.build(..., modules=True) builds them.",
+            )
+        object.__setattr__(self, "modules", tuple(self.modules))
 
     @property
     def built(self) -> bool:
         """Whether the build compiles this kernel."""
         return self.version is not None
+
+    @property
+    def loadable(self) -> bool:
+        """Whether a built kernel builds and installs loadable modules."""
+        return self.built and self.modules is True
 
     @classmethod
     def default(cls, *, modules: Sequence[str] = (), cmdline: Sequence[str] = ()) -> Kernel:
@@ -640,16 +840,50 @@ class Kernel(Keywords):
     @classmethod
     def build(
         cls,
-        version: str,
-        source: Git | Http,
+        version: str | None = None,
+        source: Git | Http | None = None,
         *,
-        config: Path,
-        patches: Sequence[Path] = (),
+        base: DebianConfig | None = None,
+        config: Path | None = None,
+        fragments: Sequence[Path | KernelFragment] = (),
+        patches: Sequence[Path | KernelPatch] = (),
+        hardening: bool = True,
+        modules: bool = False,
         cmdline: Sequence[str] = (),
     ) -> Kernel:
-        """Compile *version* from *source* with *config* and *patches*, booted with *cmdline*
-        after the image's own parameters."""
-        return cls(version, source, config=config, patches=tuple(patches), cmdline=cmdline)
+        """Compile a kernel: from *base* or *config*, hardened, then *fragments*, in order.
+
+        ``base=DebianConfig("6.12.113-1")`` starts from the ``cloud-amd64`` config Debian
+        ships in that package and compiles the stable release it carries, gregkh/linux
+        ``v6.12.113``, locked to its commit; *version* and *source* pick another tree.
+        ``config=Path("kernel.config")`` starts from a config of your own, and then
+        *version* and *source* are required.
+
+        ``hardening=True`` merges Tundra's deny list first: io_uring, userfaultfd, kexec,
+        KSM, BPF for users, 32-bit syscalls, debug info, and file systems, protocols and
+        decompressors no image uses go off; lockdown, zeroed memory and stack canaries go
+        on (the table, a reason per option, is the docstring of
+        ``tundravm/declarative/_kernel_hardening.py``). ``hardening=False`` is refused in a
+        production profile and warned about in a development one. Each of *fragments*, a
+        ``.config`` fragment file or a :class:`KernelFragment`, merges after it in order;
+        a fragment that sets an option of the deny list itself wins.
+        *patches*, files or :class:`KernelPatch` downloads, apply with ``patch -p1`` in the
+        same order. ``modules=False`` builds every driver in; ``True`` builds and installs
+        loadable modules, and leaves lockdown out, which would refuse them unsigned. The
+        build checks every requested option survived ``olddefconfig`` and every target's
+        drivers are built in. *cmdline* is booted after the image's own parameters.
+        """
+        return cls(
+            version,
+            source,
+            base=base,
+            config=config,
+            fragments=tuple(fragments),
+            patches=tuple(patches),
+            hardening=hardening,
+            modules=modules,
+            cmdline=cmdline,
+        )
 
 
 def _check_kernel_parameter(owner: Kernel, parameter: object) -> None:

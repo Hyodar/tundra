@@ -45,6 +45,7 @@ from tundravm.kernel_modules import VERITY_MODULES, module_selection
 from tundravm.models import Kernel as FluentKernel
 from tundravm.models import KernelPatchSpec, OutputTarget, ProfileState, RecipeState, unit_name
 
+from ._kernel_hardening import hardening_fragment
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
     BASE_VARIANT,
@@ -626,15 +627,23 @@ def _variant_kernel(
 def merged_kernel_options(
     kernel: Kernel, configs: Sequence[KernelConfig] = ()
 ) -> tuple[tuple[str, str], ...]:
-    """The requested options: ``CONFIG_MODULES``, the fragments, then *configs*, in order.
+    """The requested options: ``CONFIG_MODULES``, the hardening fragment, the fragments, then
+    *configs*, in order.
 
-    Two declarations setting one option differently raise ``kernel-option-conflict``,
-    naming both.
+    ``Kernel(hardening=True)`` merges :func:`hardening_fragment` first, without the options
+    a fragment or *configs* set themselves. Two declarations setting one option differently
+    raise ``kernel-option-conflict``, naming both.
     """
     merged: dict[str, tuple[str, str]] = {}
     if not kernel.modules:
         merged["CONFIG_MODULES"] = ("n", "Kernel(modules=False)")
-    for config in (*kernel.fragments, *configs):
+    declared = (*kernel.fragments, *configs)
+    if kernel.hardening:
+        kept = frozenset(option for config in declared for option in config.options)
+        hardening = hardening_fragment(modules=kernel.modules, kept=kept)
+        for option, value in hardening.options.items():
+            merged.setdefault(option, (value or "n", "Kernel.build(hardening=True)"))
+    for config in declared:
         where = display_location(config.declared_at)
         label = f"kernel config fragment {config.name!r}" + (f" ({where})" if where else "")
         for option, raw in config.options.items():
@@ -689,6 +698,7 @@ def _kernel(
         "config_file": kernel.config,
         "cmdline": kernel.cmdline or None,
         "tdx": kernel.tdx,
+        "hardening": kernel.hardening,
     }
     if kernel.base is not None:
         common.update(

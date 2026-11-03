@@ -3,8 +3,9 @@
 An :class:`Image` names what it runs (:class:`Service` values, components, :class:`Profile`
 variations), what it contains (:class:`Package`, :class:`File`, :class:`Tree`,
 :class:`User`, :class:`Group`) and its foundation (:class:`Debian` with its
-:class:`AptRepository` archives, :class:`Kernel`, :class:`RootFS`, the :class:`Mkosi`
-escape), and nothing about how it is built. Everything
+:class:`AptRepository` archives, :class:`Kernel` with the :class:`DebianConfig`,
+:class:`KernelFragment` and :class:`KernelPatch` a built one takes, :class:`RootFS`, the
+:class:`Mkosi` escape), and nothing about how it is built. Everything
 a confidential image needs and no one wants to repeat is implied: Debian trixie from the
 locked snapshot, a measured UKI, NTS time, a volatile journal, a firewall that opens only
 what a service exposed, one hardened system user per service, and the evidence service the
@@ -21,10 +22,13 @@ name has one home: :mod:`tundravm.ports`, :mod:`tundravm.systemd`,
 from ._image import (
     AptRepository,
     Debian,
+    DebianConfig,
     File,
     Group,
     Image,
     Kernel,
+    KernelFragment,
+    KernelPatch,
     Mkosi,
     Package,
     Profile,
@@ -43,10 +47,13 @@ from .declarative.lifecycle import doctor
 __all__ = [
     "AptRepository",
     "Debian",
+    "DebianConfig",
     "File",
     "Group",
     "Image",
     "Kernel",
+    "KernelFragment",
+    "KernelPatch",
     "Mkosi",
     "Package",
     "Profile",

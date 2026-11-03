@@ -18,10 +18,13 @@ from tundravm import _reference, declarative
 ROOT = [
     "AptRepository",
     "Debian",
+    "DebianConfig",
     "File",
     "Group",
     "Image",
     "Kernel",
+    "KernelFragment",
+    "KernelPatch",
     "Mkosi",
     "Package",
     "Profile",
@@ -337,10 +340,11 @@ def test_the_public_surface_says_profile() -> None:
 
 
 def test_the_api_reference_names_no_internal_model() -> None:
-    """The reference speaks the public model: no recipe, fragment or variant."""
-    found = re.findall(
-        r".{0,30}\b(?:[Rr]ecipes?|[Ff]ragments?|[Vv]ariants?)\b.{0,30}", _reference.api_markdown()
-    )
+    """The reference speaks the public model: no recipe, fragment or variant. A kernel config
+    fragment is Kconfig's word, not the internal model's."""
+    kernel = r"KernelFragment|\*?fragments\*?[:=]?|`\.config` fragment"
+    text = re.sub(kernel, "", _reference.api_markdown())
+    found = re.findall(r".{0,30}\b(?:[Rr]ecipes?|[Ff]ragments?|[Vv]ariants?)\b.{0,30}", text)
     assert found == []
 
 

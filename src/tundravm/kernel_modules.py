@@ -175,7 +175,7 @@ DENIED_DRIVERS: tuple[str, ...] = (
     "CONFIG_BLK_DEV_PCIESSD_MTIP32XX",
 )
 """Drivers a built kernel must not carry: no target offers the device, so only a hostile
-host could, and :data:`tundravm.declarative.utils.KernelHardening` turns them off too."""
+host could, and ``Kernel.build(hardening=True)`` turns them off too."""
 
 _FEATURE_MODULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("an encrypted Volume", DISK_MODULES),
