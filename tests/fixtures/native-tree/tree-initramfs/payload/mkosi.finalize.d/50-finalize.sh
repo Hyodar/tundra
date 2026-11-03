@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Kernel modules: mkosi kept KernelModules= and their dependencies (tundravm module sets
-# v2); each must be in the image
+# v3); each must be in the image
 kdirs=("$BUILDROOT"/usr/lib/modules/*/)
 if [ ! -d "${kdirs[0]}" ]; then
     echo "tundravm: no kernel modules under /usr/lib/modules" >&2
@@ -13,7 +13,7 @@ for kdir in "${kdirs[@]}"; do
         find "$kdir" -name '*.ko*' -printf '%f\n'
         sed 's|.*/||' "${kdir}modules.builtin" 2>/dev/null || true
     } | sed 's/\.ko.*//' | tr _ -)
-    for module in crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
+    for module in configfs crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
         if ! grep -qxF "${module//_/-}" <<<"$present"; then
             echo "tundravm: kernel module $module is not in kernel $(basename "$kdir"):" \
                 "drop it from Debian(kernel_modules=...) or pick a kernel that ships it" >&2
@@ -23,7 +23,7 @@ for kdir in "${kdirs[@]}"; do
     # modules.dep is still the kernel package's (mkosi runs no depmod when it only keeps
     # modules): its line for a listed module names every module that loads first.
     files=$(find "$kdir" -name '*.ko*' -printf '%P\n')
-    for module in crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
+    for module in configfs crc32c_generic efivarfs gve hv_netvsc hv_storvsc hv_utils hv_vmbus mana nf_tables nft_ct nft_reject_inet nvme pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi; do
         line=$(grep -E "(^|/)${module//[_-]/[_-]}\.ko[^:/]*:" "${kdir}modules.dep" || true)
         for dep in ${line#*:}; do
             if ! grep -qxF "$dep" <<<"$files"; then

@@ -61,6 +61,7 @@
           "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
+          "configfs",
           "crc32c_generic",
           "dm_verity",
           "efivarfs",
@@ -307,6 +308,7 @@
           "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
+          "configfs",
           "crc32c_generic",
           "dm_verity",
           "efivarfs",

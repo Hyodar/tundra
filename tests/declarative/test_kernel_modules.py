@@ -59,7 +59,7 @@ BUILT_KERNEL = Recipe(
         (
             _recipe(),
             sorted(TDX_GUEST_MODULES),
-            ("for module in efivarfs nvme sd_mod tdx_guest",),
+            ("for module in configfs efivarfs nvme sd_mod tdx_guest",),
             (RM_MODULES,),
         ),
         (

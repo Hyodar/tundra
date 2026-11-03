@@ -24,7 +24,7 @@ from typing import Literal
 from tundravm.errors import ValidationError
 from tundravm.models import MODULES_PATH, DebloatConfig, ProfileState
 
-MODULE_SETS_VERSION = 2
+MODULE_SETS_VERSION = 3
 """Bumped whenever a curated set changes; the generated finalize check names it."""
 
 TDX_GUEST_MODULES: tuple[str, ...] = (
@@ -42,6 +42,9 @@ TDX_GUEST_MODULES: tuple[str, ...] = (
     "nvme",
     # /sys/firmware/efi/efivars: systemd reads the UKI stub's loader variables there.
     "efivarfs",
+    # /sys/kernel/config, which systemd mounts at boot (sys-kernel-config.mount, in the
+    # verity initrd too) and configfs-tsm lives in; tdx_guest holds it only inside a TD.
+    "configfs",
 )
 """Every TDX guest, whatever it boots on (the ``qemu`` output's whole set)."""
 
@@ -140,6 +143,7 @@ MODULE_OPTIONS: dict[str, str] = {
     "sd_mod": "CONFIG_BLK_DEV_SD",
     "nvme": "CONFIG_BLK_DEV_NVME",
     "efivarfs": "CONFIG_EFIVAR_FS",
+    "configfs": "CONFIG_CONFIGFS_FS",
     "hv_vmbus": "CONFIG_HYPERV",
     "hv_netvsc": "CONFIG_HYPERV_NET",
     "hv_storvsc": "CONFIG_HYPERV_STORAGE",

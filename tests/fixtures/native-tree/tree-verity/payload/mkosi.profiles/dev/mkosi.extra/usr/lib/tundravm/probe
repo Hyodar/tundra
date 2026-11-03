@@ -689,7 +689,7 @@ probe_hardening go-probe.service 2.5 static
 check=hardening:rust-probe.service
 probe_hardening rust-probe.service 2.5 static
 check=kernel:modules
-probe_modules crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
+probe_modules configfs crc32c_generic dm_verity efivarfs erofs gve hv_netvsc hv_storvsc hv_utils hv_vmbus loop mana nf_tables nft_ct nft_reject_inet nvme overlay pci_hyperv sd_mod tdx_guest virtio_blk virtio_net virtio_scsi
 check=host-keys
 probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root

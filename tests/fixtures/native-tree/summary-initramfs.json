@@ -46,6 +46,7 @@
           "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
+          "configfs",
           "crc32c_generic",
           "efivarfs",
           "gve",
@@ -266,6 +267,7 @@
           "spec_store_bypass_disable=on"
         ],
         "KernelModules": [
+          "configfs",
           "crc32c_generic",
           "efivarfs",
           "gve",
