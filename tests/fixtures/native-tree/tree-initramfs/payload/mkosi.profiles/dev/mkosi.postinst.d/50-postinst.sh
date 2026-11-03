@@ -11,6 +11,7 @@ mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
 mkosi-chroot systemctl enable tick.timer
 mkosi-chroot systemctl enable journal-export.service
+mkosi-chroot systemctl enable image-metrics.service
 mkosi-chroot systemctl enable prometheus-node-exporter.service
 mkosi-chroot systemctl enable metrics-export.service
 mkosi-chroot systemctl enable sink.service
@@ -25,6 +26,7 @@ ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/syste
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tick.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/journal-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/image-metrics.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/metrics-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

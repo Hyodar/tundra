@@ -339,6 +339,8 @@ else
 fi
 check=socket:tdxs.socket
 probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
+check=service:image-metrics.service
+probe_service image-metrics.service
 check=service:app.service
 probe_service app.service
 check=timer:tick.timer
@@ -360,7 +362,7 @@ probe_upload journal-export.service 'https://logs.example:19532' /var/lib/journa
 check=observability:metrics-export.service
 probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- tdxs.service app.service
+probe_nowait journal-export.service metrics-export.service -- tdxs.service image-metrics.service app.service
 check=observability:egress
 probe_rules 'tcp dport 19532' 'ip daddr 10.0.0.9 tcp dport 443'
 check=hardening:journal-export.service

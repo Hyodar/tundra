@@ -30,7 +30,10 @@ The checks, each only when its declaration exists (:func:`derive`):
   names failing (the sink away), in place of its ``service:`` check;
   ``metrics-export.service`` active with its configuration accepted by ``promtool check
   config --agent``, or without promtool by the agent's own ``Completed loading of
-  configuration file``; ``observability:no-wait``: no other service requires or is ordered
+  configuration file``; ``observability:series``: with a sink on the loopback (the in-guest
+  receiver, or one a dev profile runs), the sink holds ``tundravm_image_digest`` and no
+  series the keep-list drops (``promtool query labels``); ``observability:no-wait``: no
+  other service requires or is ordered
   after either; ``observability:egress``: the output-chain rules the sinks (or the proxy)
   asked for are loaded (``nft list chain``);
 - ``hardening:UNIT``: ``systemd-analyze security UNIT`` under the preset's ceiling
@@ -59,6 +62,7 @@ compromised guest could fake. It is a development aid, not evidence.
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import shlex
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -111,6 +115,7 @@ Helper = Literal[
     "egress",
     "upload",
     "agent",
+    "series",
     "nowait",
     "rules",
     "hardening",
@@ -433,7 +438,7 @@ def _observability(
     waiting on it and, with a filtering *firewall*, the rules its sinks asked for loaded."""
     from tundravm.components._observability import LOGS_SERVICE, METRICS_SERVICE
     from tundravm.declarative._network import egress_match
-    from tundravm.declarative.model import Service
+    from tundravm.declarative.model import File, Service
 
     logs_unit, metrics_unit = unit_name(LOGS_SERVICE), unit_name(METRICS_SERVICE)
     services = {
@@ -476,6 +481,19 @@ def _observability(
                 (unit,),
             )
         )
+        rendered = next((i for i in items if isinstance(i, File) and i.path == config), None)
+        written = None if rendered is None else _remote_write(str(rendered.content))
+        if written is not None:
+            sink, keep = written
+            checks.append(
+                Check(
+                    "observability:series",
+                    f"the sink at {sink} holds tundravm_image_digest and only series {keep} keeps",
+                    f"probe_series {_quote(sink)} {_quote(keep)}",
+                    "series",
+                    (unit,),
+                )
+            )
     others = [unit for unit in services if unit not in found]
     checks.append(
         Check(
@@ -502,6 +520,24 @@ def _observability(
             )
         )
     return frozenset(found), checks
+
+
+def _remote_write(config: str) -> tuple[str, str] | None:
+    """The agent's remote-write sink (``scheme://host:port``) and keep-list regex in
+    *config*, when the sink is on the loopback, where the probe can ask it."""
+    url = re.search(r"^  - url: (.+)$", config, re.MULTILINE)
+    keep = re.search(r"^        regex: (.+)$", config, re.MULTILINE)
+    if url is None or keep is None:
+        return None
+    sink, regex = (json.loads(v) if v.startswith('"') else v for v in (url[1], keep[1]))
+    parts = urlsplit(sink)
+    try:
+        local = (
+            parts.hostname == "localhost" or ipaddress.ip_address(parts.hostname or "").is_loopback
+        )
+    except ValueError:
+        local = False
+    return (f"{parts.scheme}://{parts.netloc}", regex) if local else None
 
 
 def _port(url: str) -> int:
@@ -575,6 +611,31 @@ skip() {{ say "$check skip $*"; }}
 """
 
 _HELPERS: dict[str, str] = {
+    "series": f"""\
+probe_series() {{
+    if ! command -v promtool >/dev/null 2>&1; then
+        skip "no promtool in the image to ask the sink $1"
+        return
+    fi
+    waited=0
+    while :; do
+        names=$(promtool query labels "$1" __name__ 2>/dev/null) || names=
+        printf '%s\\n' "$names" | grep -qx tundravm_image_digest && break
+        if [ "$waited" -ge {3 * WAIT_SECONDS} ]; then
+            fail "the sink at $1 holds no tundravm_image_digest after {3 * WAIT_SECONDS}s: journalctl -u image-metrics -u metrics-export says why"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    dropped=$(printf '%s\\n' "$names" | grep -Evx "$2" | tr '\\n' ' ')
+    if [ -n "$dropped" ]; then
+        fail "the sink at $1 holds series the keep-list drops: $dropped"
+        return
+    fi
+    ok "the sink at $1 holds tundravm_image_digest and $(printf '%s\\n' "$names" | grep -c .) series, each one export= keeps"
+}}
+""",  # noqa: E501
     "service": f"""\
 probe_service() {{
     state=$(systemctl show -P ActiveState "$1")

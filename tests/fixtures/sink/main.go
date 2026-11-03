@@ -5,6 +5,10 @@
 // POST, and for a journal upload, which streams for as long as the uploader follows the
 // journal, one line for its first data and then at most one every two seconds.
 //
+// A remote write's series names are decoded, and the first of each name prints
+// "sink: remote-write series <name>"; GET /api/v1/label/__name__/values answers them as
+// Prometheus does, so the boot probe asks this sink what reached it as it asks metrics-sink.
+//
 // It is the export's proxy too: a request in absolute form (what an exporter sends through
 // Observability(proxy=) to an http:// sink) is forwarded to its host, and the first one to
 // each host prints "sink: proxy carries <host>".
@@ -13,11 +17,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -27,6 +33,7 @@ type counter struct {
 	mu      sync.Mutex
 	batches map[string]int
 	carried map[string]bool
+	names   map[string]bool
 	out     io.Writer
 }
 
@@ -87,6 +94,18 @@ func (c *counter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.forward(w, r)
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/label/__name__/values" {
+		c.mu.Lock()
+		names := make([]string, 0, len(c.names))
+		for name := range c.names {
+			names = append(names, name)
+		}
+		c.mu.Unlock()
+		slices.Sort(names)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": names})
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -99,12 +118,25 @@ func (c *counter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	size, err := io.Copy(io.Discard, r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	c.mark("remote-write", size)
+	names, err := seriesNames(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	c.mark("remote-write", int64(len(body)))
+	c.mu.Lock()
+	for _, name := range names {
+		if !c.names[name] {
+			c.names[name] = true
+			fmt.Fprintf(c.out, "sink: remote-write series %s\n", name)
+		}
+	}
+	c.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -116,7 +148,7 @@ func main() {
 	if console, err := os.OpenFile("/dev/console", os.O_WRONLY|syscall.O_NOCTTY, 0); err == nil {
 		out = console
 	}
-	handler := &counter{batches: map[string]int{}, carried: map[string]bool{}, out: out}
+	handler := &counter{batches: map[string]int{}, carried: map[string]bool{}, names: map[string]bool{}, out: out}
 	failed := make(chan error, len(os.Args)-1)
 	for _, address := range os.Args[1:] {
 		go func(address string) { failed <- http.ListenAndServe(address, handler) }(address)

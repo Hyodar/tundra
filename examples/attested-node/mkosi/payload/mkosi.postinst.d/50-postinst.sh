@@ -33,6 +33,7 @@ mkosi-chroot systemctl enable lighthouse-ready.service
 mkosi-chroot systemctl enable journal-sink.service
 mkosi-chroot systemctl enable journal-sink-ready.service
 mkosi-chroot systemctl enable journal-export.service
+mkosi-chroot systemctl enable image-metrics.service
 mkosi-chroot systemctl enable prometheus-node-exporter.service
 mkosi-chroot systemctl enable metrics-sink.service
 mkosi-chroot systemctl enable metrics-sink-ready.service
@@ -67,6 +68,7 @@ ln -sf "/etc/systemd/system/lighthouse-ready.service" "$BUILDROOT/etc/systemd/sy
 ln -sf "/etc/systemd/system/journal-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/journal-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/journal-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/image-metrics.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/metrics-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/metrics-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

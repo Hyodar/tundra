@@ -8,7 +8,9 @@ users in the preset sandbox, read their credentials as systemd credentials, keep
 buffers, retry on their own, and are required by nothing, so an exporter that cannot
 reach its sink never holds an application back. Either without a ``url`` ships to a
 receiver in the guest, so a dev boot shows the export working before the deployment's
-receiver is known. ``proxy="IP:PORT"`` sends both through
+receiver is known. The metrics always carry the image's identity, which ``image-metrics``
+(``tools/cmd/image-metrics``) writes for the node exporter. ``proxy="IP:PORT"`` sends both
+through
 one fixed-address proxy, the only destination a filtered egress then needs, and
 ``proxy=Proxy(address, port, tls_name=...)`` through one that speaks TLS itself.
 """
@@ -26,7 +28,9 @@ from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
 from tundravm._image._values import Egress, File, Package, TcpProbe, egress_host
 from tundravm.declarative import model as dm
+from tundravm.declarative import utils as du
 from tundravm.declarative.config import ConfigFile
+from tundravm.declarative.systemd import Hardening, Root
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
@@ -75,11 +79,27 @@ EXPORT_PRESETS: dict[str, tuple[str, ...]] = {
         "node_memory_MemAvailable_bytes",
         "node_memory_MemTotal_bytes",
         "node_vmstat_oom_kill",
+        "tundravm_system_state",
+        "tundravm_units_failed",
     ),
 }
 """The named keep-lists :class:`PrometheusRemoteWrite` takes in ``export=``. ``health`` is
 what an operator watches a node by, after flashbots' recording rules: each scrape's
-``up``, the boot time, free and total disk and memory, and the OOM kills."""
+``up``, the boot time, free and total disk and memory, the OOM kills, and the node's own
+readiness, ``systemctl is-system-running`` and the failed units, from ``image-metrics``."""
+
+IDENTITY_SERIES = ("tundravm_image_digest", "tundravm_image_rtmr", "tundravm_mode")
+"""What every keep-list holds, from ``image-metrics``: the UKI's Authenticode digest RTMR1's
+event log records (``digest="unmeasured"`` without TDX) with the image's name, each RTMR
+the TD reports, and the execution gate's mode."""
+
+IMAGE_METRICS = "image-metrics"
+"""The service writing the image's identity and the system's state for the node exporter."""
+
+IMAGE_METRICS_DIRECTORY = f"/run/{IMAGE_METRICS}"
+"""Its runtime directory: the node exporter's textfile collector reads it."""
+
+_TDX_GUEST = "/dev/tdx_guest"
 
 _SERIES = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
@@ -314,9 +334,10 @@ class PrometheusRemoteWrite(Keywords):
     retried from one second to one minute apart, a 429 included.
 
     *export* is the keep-list: series names and the presets of :data:`EXPORT_PRESETS`
-    (``"health"``) by name. The agent drops every other series before the write
+    (``"health"``) by name, and always :data:`IDENTITY_SERIES`, so an operator tells which
+    image a series came from. The agent drops every other series before the write
     (``write_relabel_configs``), since raw series from a TEE are a side channel;
-    ``export=[]`` sends nothing. Without *export* it keeps ``health``, and
+    ``export=[]`` sends the identity alone. Without *export* it keeps ``health``, and
     ``observability-export-unset`` reports it: an error in a production profile that
     writes to *url*, a warning where nothing leaves the VM.
 
@@ -348,7 +369,7 @@ class PrometheusRemoteWrite(Keywords):
 
     def kept(self) -> tuple[str, ...]:
         """The series names that leave: *export* with its presets expanded (``health``
-        without one), in order, once each."""
+        without one), then :data:`IDENTITY_SERIES`, in order, once each."""
         export = "health" if self.export is None else self.export
         entries: Sequence[object] = (
             [export] if isinstance(export, str) or not isinstance(export, Sequence) else export
@@ -366,7 +387,7 @@ class PrometheusRemoteWrite(Keywords):
                     f"({presets}) nor a series name.",
                     hint='Pass export=["health", "node_load1"]: presets and series names.',
                 )
-        return tuple(dict.fromkeys(found))
+        return tuple(dict.fromkeys((*found, *IDENTITY_SERIES)))
 
     def config(self, proxy: Proxy | None = None) -> dict[str, object]:
         """The agent's configuration: scrape the node exporter, keep :meth:`kept`, write to
@@ -385,7 +406,7 @@ class PrometheusRemoteWrite(Keywords):
         remote["write_relabel_configs"] = [
             {
                 "source_labels": ["__name__"],
-                "regex": "|".join(kept) if kept else "",
+                "regex": "|".join(kept),
                 "action": "keep",
             }
         ]
@@ -425,6 +446,29 @@ class PrometheusRemoteWrite(Keywords):
             state="metrics-export",
             unit=dm.DropIn(exec_start_pre=steps) if steps else None,
         )
+
+    def identity(self) -> tuple[dm.Build, dm.Service]:
+        """``image-metrics`` from ``tools/`` and its service: as root without capabilities
+        (the event log and the TDX device are root's), with the TDX device and AF_UNIX
+        alone, rewriting its file in :data:`IMAGE_METRICS_DIRECTORY` every *interval*."""
+        go = dm.Go(package=f"./cmd/{IMAGE_METRICS}", output=IMAGE_METRICS)
+        program = f"/usr/bin/{IMAGE_METRICS}"
+        build = dm.Build(
+            IMAGE_METRICS,
+            du.tools_source(),
+            using=go,
+            install=(dm.Install(go.artifact, program),),
+        )
+        service = dm.Service(
+            IMAGE_METRICS,
+            (program, f"-interval={self.interval}", f"{IMAGE_METRICS_DIRECTORY}/image.prom"),
+            description="Write the image's identity for the node exporter",
+            user=Root(),
+            runtime=IMAGE_METRICS,
+            needs=(),
+            hardening=Hardening.strict(devices=(_TDX_GUEST,), network="unix"),
+        )
+        return build, service
 
     def sink(self) -> Service:
         """``metrics-sink``: the in-guest receiver, plain HTTP on the loopback."""
@@ -518,8 +562,13 @@ class Observability(Component):
             config = self.metrics.config(proxy)
             yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
             yield ConfigFile.env(
-                _NODE_EXPORTER_DEFAULTS, {"ARGS": "--web.listen-address=127.0.0.1:9100"}
+                _NODE_EXPORTER_DEFAULTS,
+                {
+                    "ARGS": "--web.listen-address=127.0.0.1:9100 "
+                    f"--collector.textfile.directory={IMAGE_METRICS_DIRECTORY}"
+                },
             )
+            yield from self.metrics.identity()
             yield dm.Unit("prometheus-node-exporter.service", enabled=True)
             if self.metrics.url is None:
                 yield ConfigFile.yaml(METRICS_SINK_CONFIG, {"global": {}}, sort_keys=False)

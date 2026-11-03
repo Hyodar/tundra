@@ -340,22 +340,30 @@ def test_a_sink_without_a_url_ships_to_the_in_guest_receiver(
     assert "observability-plaintext" not in codes
 
 
+IDENTITY = "|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
 HEALTH = (
     "up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes"
     "|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill"
+    "|tundravm_system_state|tundravm_units_failed"
 )
 
 
 @pytest.mark.parametrize(
     ("export", "url", "profile", "regex", "severity"),
     [
-        ("health", "https://metrics.example", "production", HEALTH, None),
-        (["node_load1", "up"], "https://metrics.example", "production", "node_load1|up", None),
-        (["health", "up", "node_load1"], None, "dev", f"{HEALTH}|node_load1", None),
-        ([], "https://metrics.example", "production", "", None),
-        (None, "https://metrics.example", "production", HEALTH, "error"),
-        (None, None, "production", HEALTH, "warning"),
-        (None, None, "dev", HEALTH, "warning"),
+        ("health", "https://metrics.example", "production", HEALTH + IDENTITY, None),
+        (
+            ["node_load1", "up"],
+            "https://metrics.example",
+            "production",
+            "node_load1|up" + IDENTITY,
+            None,
+        ),
+        (["health", "up", "node_load1"], None, "dev", f"{HEALTH}|node_load1{IDENTITY}", None),
+        ([], "https://metrics.example", "production", IDENTITY[1:], None),
+        (None, "https://metrics.example", "production", HEALTH + IDENTITY, "error"),
+        (None, None, "production", HEALTH + IDENTITY, "warning"),
+        (None, None, "dev", HEALTH + IDENTITY, "warning"),
     ],
 )
 def test_only_the_keep_list_leaves(

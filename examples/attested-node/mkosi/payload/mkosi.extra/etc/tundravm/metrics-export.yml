@@ -8,7 +8,7 @@ remote_write:
   - url: http://127.0.0.1:9091/api/v1/write
     write_relabel_configs:
       - source_labels: [__name__]
-        regex: "up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill"
+        regex: "up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
         action: keep
     queue_config:
       capacity: 10000

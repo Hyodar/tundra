@@ -854,7 +854,8 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 | Member | Does |
 |---|---|
 | `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, keep `kept`, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
-| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave: *export* with its presets expanded (`health` without one), in order, once each. |
+| `PrometheusRemoteWrite.identity() -> tuple[dm.Build, dm.Service]` | `image-metrics` from `tools/` and its service: as root without capabilities (the event log and the TDX device are root's), with the TDX device and AF_UNIX alone, rewriting its file in `IMAGE_METRICS_DIRECTORY` every *interval*. |
+| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave: *export* with its presets expanded (`health` without one), then `IDENTITY_SERIES`, in order, once each. |
 | `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
 | `PrometheusRemoteWrite.sink() -> Service` | `metrics-sink`: the in-guest receiver, plain HTTP on the loopback. |
 
