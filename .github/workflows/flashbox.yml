@@ -1,0 +1,220 @@
+# The flashbox example built as a whole and booted: its dev profile (the built 6.18.57 kernel,
+# Nethermind, Lighthouse, the searcher's container, the delayed-log and input channels) under
+# QEMU in simulated mode, then driven the way a searcher and its operator would: attest with an
+# owner identity, deliver the keys, unlock the volume, the login menu in production, a
+# maintenance window that opens the container's SSH, the delayed log and the input channel, and
+# the window closed again. Too slow for every push (the kernel and Nethermind build), so weekly
+# and by hand:
+#   gh workflow run flashbox.yml --ref BRANCH
+# What the dev profile leaves unproven on a runner: the metrics export (a profile cannot point
+# Observability at the in-guest sink, so it keeps the TLS passthrough to a proxy that is not
+# there), Nethermind and Lighthouse syncing (they only start), the production boot target
+# and TDX itself. The azure and gcp disks are not built.
+name: flashbox
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 1"
+
+concurrency:
+  group: flashbox
+  cancel-in-progress: false
+
+jobs:
+  flashbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      TUNDRAVM_BACKEND: local
+      IMAGE: examples/flashbox/image.py
+      INSTANCE: flashbox-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Put the build root under the runner's temp
+        run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/flashbox" >> "$GITHUB_ENV"
+
+      - name: Set up the build host, QEMU and OVMF
+        uses: ./.github/actions/setup
+        with:
+          host: boot
+          doctor: build run
+
+      - name: Lock and build the dev profile
+        run: |
+          uv run tundravm lock "$IMAGE"
+          uv run tundravm build "$IMAGE" --dev --target qemu
+          uv run tundravm verify latest-development
+          uv run tundravm show latest-development
+          df -h /
+
+      - name: Boot it under QEMU in simulated mode and read the probe
+        if: ${{ !cancelled() }}
+        # The volume is locked and the keys are not delivered, so the probe skips what waits
+        # for them; the rows are read again after the unlock.
+        run: |
+          uv run tundravm run --dev --mode simulated --probe --memory 8G --cpus 4 \
+            --timeout 1800 || true
+          probe=.tundravm/instances/$INSTANCE/probe.json
+          jq -r '.results[] | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          grep -F 'tdx-evidence: no TDX quote path; development profile, running simulated' \
+            ".tundravm/instances/$INSTANCE/console.log"
+
+      - name: Attest as the owner, deliver the keys and unlock the volume
+        if: ${{ !cancelled() }}
+        run: |
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/operator"
+          policy="$TUNDRAVM_BUILD/flashbox/latest-development/measurements.json"
+          receipt=.tundravm/instances/$INSTANCE/instance.json
+          uv run tundravm attest "$INSTANCE" --policy "$policy" --identity "$RUNNER_TEMP/operator"
+          jq -e '.attested.verdict == "simulated"' "$receipt"
+          cp "$RUNNER_TEMP/operator.pub" "$RUNNER_TEMP/searcher-keys"
+          printf '[default]\naws_access_key_id = AKIDEXAMPLE\naws_secret_access_key = secret\n' \
+            > "$RUNNER_TEMP/metrics-aws"
+          uv run tundravm secrets deliver "$INSTANCE" --policy "$policy" \
+            "searcher-keys=@$RUNNER_TEMP/searcher-keys" "metrics-aws=@$RUNNER_TEMP/metrics-aws"
+          printf 'flashbox-test-passphrase\n' | uv run tundravm secrets unlock "$INSTANCE" data
+          uv run tundravm attest "$INSTANCE" --policy "$policy" --identity "$RUNNER_TEMP/operator"
+
+      - name: Wait for the node, the beacon node and the container to start
+        if: ${{ !cancelled() }}
+        # They start; they do not sync.
+        run: |
+          console=.tundravm/instances/$INSTANCE/console.log
+          for attempt in $(seq 1 40); do
+            uv run tundravm run probe "$INSTANCE" > "$RUNNER_TEMP/probe.txt" 2>&1 || true
+            if jq -e '.ok' ".tundravm/instances/$INSTANCE/probe.json" > /dev/null; then break; fi
+            sleep 15
+          done
+          jq -r '.results[] | "\(.check) \(.verdict) \(.detail)"' \
+            ".tundravm/instances/$INSTANCE/probe.json"
+          jq -e '.ok' ".tundravm/instances/$INSTANCE/probe.json"
+
+      - name: The menu answers in production and the container's SSH does not
+        if: ${{ !cancelled() }}
+        run: |
+          receipt=.tundravm/instances/$INSTANCE/instance.json
+          known=.tundravm/instances/$INSTANCE/known_hosts
+          port=$(jq -r '.ports["22"]' "$receipt")
+          ssh_port=$(jq -r '.ports["10022"]' "$receipt")
+          as() {
+            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ServerAliveInterval=3 -o ServerAliveCountMax=3 \
+              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes searcher@127.0.0.1 "$@"
+          }
+          as | tee "$RUNNER_TEMP/menu.txt"
+          for word in status 'logs <lines>' 'toggle <mode>' reboot; do
+            grep -F "  $word" "$RUNNER_TEMP/menu.txt"
+          done
+          as status | tee "$RUNNER_TEMP/status.txt"
+          grep -F production "$RUNNER_TEMP/status.txt"
+          as logs 5
+          if timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$ssh_port && head -c 4 <&3" |
+            grep -q SSH-; then
+            echo "the container's sshd answered in production"; exit 1
+          fi
+          echo "the container's sshd is closed in production"
+
+      - name: Open the maintenance window from the menu and enter the container
+        if: ${{ !cancelled() }}
+        run: |
+          receipt=.tundravm/instances/$INSTANCE/instance.json
+          known=.tundravm/instances/$INSTANCE/known_hosts
+          port=$(jq -r '.ports["22"]' "$receipt")
+          ssh_port=$(jq -r '.ports["10022"]' "$receipt")
+          ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
+            searcher@127.0.0.1 toggle maintenance
+          sleep 3
+          inside() {
+            ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
+              searcher-container@127.0.0.1 "$@"
+          }
+          inside true
+          inside 'id -un; ls -d /persistent/data/searcher /persistent/data/input'
+          echo "inside the container over 10022"
+
+      - name: Feed the input channel and write a log line the delay holds back
+        if: ${{ !cancelled() }}
+        # input-proxy relays tcp 27018 into the socket the container listens on and never
+        # answers; the bot's log line reaches the menu's `logs` only after the delay.
+        run: |
+          receipt=.tundravm/instances/$INSTANCE/instance.json
+          known=.tundravm/instances/$INSTANCE/known_hosts
+          ssh_port=$(jq -r '.ports["10022"]' "$receipt")
+          input_port=$(jq -r '.ports["27018"]' "$receipt")
+          inside() {
+            ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
+              searcher-container@127.0.0.1 "$@"
+          }
+          inside 'nohup socat -u UNIX-LISTEN:/persistent/data/input/input.sock,fork \
+            OPEN:/persistent/data/searcher/input.out,creat,append > /dev/null 2>&1 &'
+          sleep 3
+          printf 'hello-input\n' | timeout 10 bash -c \
+            "exec 3<>/dev/tcp/127.0.0.1/$input_port; cat >&3; sleep 1"
+          sleep 2
+          inside 'cat /persistent/data/searcher/input.out' | tee "$RUNNER_TEMP/input.txt"
+          grep -Fx hello-input "$RUNNER_TEMP/input.txt"
+          inside 'echo bot-line-one >> /persistent/data/searcher/bob.log'
+          date +%s > "$RUNNER_TEMP/logged-at"
+
+      - name: Close the window and read the delayed log
+        if: ${{ !cancelled() }}
+        run: |
+          receipt=.tundravm/instances/$INSTANCE/instance.json
+          known=.tundravm/instances/$INSTANCE/known_hosts
+          port=$(jq -r '.ports["22"]' "$receipt")
+          ssh_port=$(jq -r '.ports["10022"]' "$receipt")
+          policy="$TUNDRAVM_BUILD/flashbox/latest-development/measurements.json"
+          as() {
+            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o ServerAliveInterval=3 -o ServerAliveCountMax=3 \
+              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes searcher@127.0.0.1 "$@"
+          }
+          if as logs 50 | grep -F bot-line-one; then
+            echo "the delayed log showed the line at once"; exit 1
+          fi
+          as toggle production || echo "the session ended with $? once the window closed"
+          sleep 6
+          if timeout 20 bash -c "exec 3<>/dev/tcp/127.0.0.1/$ssh_port && head -c 4 <&3" |
+            grep -q SSH-; then
+            echo "the container's sshd answered after the window closed"; exit 1
+          fi
+          echo "the container's sshd is closed again"
+          waited=$(( $(date +%s) - $(cat "$RUNNER_TEMP/logged-at") ))
+          if [ "$waited" -lt 320 ]; then sleep $(( 320 - waited )); fi
+          as logs 50 | tee "$RUNNER_TEMP/delayed.txt"
+          grep -Fx bot-line-one "$RUNNER_TEMP/delayed.txt"
+          uv run tundravm attest "$INSTANCE" --policy "$policy" | tee "$RUNNER_TEMP/attest-modes.txt"
+          grep -E '^modes  production; 2 switches since boot' "$RUNNER_TEMP/attest-modes.txt"
+
+      - name: Read what the nodes printed
+        if: always()
+        run: |
+          probe=.tundravm/instances/$INSTANCE/probe.json
+          console=.tundravm/instances/$INSTANCE/console.log
+          jq -r '.results[] | select(.check | test("nethermind|lighthouse|searcher|login|menu|firewall|volume|metrics|container"))
+            | "\(.check) \(.verdict) \(.detail)"' "$probe" || true
+          grep -E 'nethermind|lighthouse|searcher-container|mode-switch' "$console" | tail -n 40 || true
+
+      - name: Upload the mkosi log of a failed build
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flashbox-mkosi-log
+          path: ${{ runner.temp }}/flashbox/flashbox/.work/dev/mkosi.log
+          if-no-files-found: ignore
+
+      - name: Upload the console, the probe and the receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flashbox-instance
+          path: .tundravm/instances
+          if-no-files-found: ignore
