@@ -1,8 +1,8 @@
 # Trust, limits and recovery
 
 What a tundravm image defends against, where it stops, and what to do when something
-breaks. Each claim is labelled **implemented** (in the code on master, with tests) or
-**proven** (also run for real in CI). What is not built says so, with the gate of
+breaks. Each claim is labelled **implemented** (on master, with tests) or
+**proven** (also run in CI). What is not built says so, with the gate of
 [the v2 plan](design/plan-v2-2026-10-30.md) that builds it. The
 [manual](manual.md#what-is-proven-today) has the same split per feature.
 
@@ -16,7 +16,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 
 | Mechanism | Defends against | Does not defend against | State |
 |---|---|---|---|
-| TDX | the host reading or changing guest memory and registers | side channels, denial of service, a broken TDX module or firmware | images boot with a `tdx-guest` object under `run --mode tdx`, and as TDX confidential VMs under `deploy`; no real TDX launch is recorded yet (gate 2) |
+| TDX | the host reading or changing guest memory and registers | side channels beyond `mitigations=auto,nosmt`, denial of service, a broken TDX module or firmware | images boot with a `tdx-guest` object under `run --mode tdx`, and as TDX confidential VMs under `deploy`; no real TDX launch is recorded yet (gate 2) |
 | Measured UKI | the host swapping the kernel, the initrd or the command line unnoticed: they are one PE file the firmware measures into RTMR1 and RTMR2 | a verifier that does not check, or approves the wrong values | implemented; predictions are offline replays, never compared with a real quote (gate 2) |
 | dm-verity root (`RootFS.verity()`) | changes to the root partition at rest: the root hash is on the measured command line | runtime writes, which land in a volatile overlay and vanish at reboot; volume data | proven: CI boots from dm-verity |
 | Firewall | inbound connections to anything not exposed | outbound traffic unless `Egress` is set; requests on exposed plaintext ports | implemented; the rendered rules are asserted |
@@ -24,7 +24,7 @@ whether what runs in the TD is what you approved, and whether secrets reach only
 | LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, a key released to the wrong TD | implemented; unlocked over the attested endpoint |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that binds the secret | implemented |
 | Metrics keep-list | series `export=` does not name leaving the TD, a side channel | the journal, which leaves whole | implemented; the dev probe reads the sink |
-| NTS time | the host setting the guest clock, which certificates and freshness depend on | the host delaying or blocking time traffic | implemented |
+| NTS time, DNS over TLS | the host setting the clock (certificates and freshness depend on it) or forging lookups | the host delaying or blocking time traffic | implemented |
 | Fail-closed production profile | a production build starting its services where no TDX quote path exists | a host that offers TDX to a TD you did not approve: that is the verifier's call | proven: CI boots the production fixture without TDX and its services never start |
 
 How the last row works (plan 6.1):
@@ -53,7 +53,7 @@ The boot probe a development profile carries (`run --probe`) checks from inside 
 that what the image declares holds: services up, ports bound, volumes on dm-crypt, egress
 refused, sandboxes under their ceilings, modules, symbols and host keys as declared,
 attested TLS certificates bound. It catches a broken image, not an attacker: a compromised
-guest can print `ok` for anything. Evidence is the
+guest can print `ok`. Evidence is the
 quote `attest` verifies. A production profile carries no probe.
 
 ### What the quote covers
