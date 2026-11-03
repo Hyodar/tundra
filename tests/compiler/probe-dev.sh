@@ -9,6 +9,18 @@ say() { echo "tundravm-probe: $*"; }
 ok() { passed=$((passed + 1)); say "$check ok $*"; }
 fail() { failed=$((failed + 1)); say "$check fail $*"; }
 skip() { say "$check skip $*"; }
+probe_cmdline() {
+    line=" $(cat /proc/cmdline) "
+    missing=
+    for parameter in "$@"; do
+        case $line in *" $parameter "*) ;; *) missing="$missing $parameter" ;; esac
+    done
+    if [ -z "$missing" ]; then
+        ok "$*"
+    else
+        fail "missing:$missing: the kernel did not boot the UKI's own command line; boot the UKI without a loader that replaces it (cat /proc/cmdline)"
+    fi
+}
 probe_service() {
     state=$(systemctl show -P ActiveState "$1")
     waited=0
@@ -389,6 +401,8 @@ if [ "$mode" = tdx ]; then
 else
     skip "no TDX: a simulated guest has no registers to compare with measurements.json"
 fi
+check=cmdline
+probe_cmdline 'mitigations=auto,nosmt' 'spec_store_bypass_disable=on'
 check=socket:tdxs.socket
 probe_active tdxs.socket 'the socket must listen; systemctl status names why it does not'
 check=service:image-metrics.service

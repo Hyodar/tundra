@@ -12,6 +12,8 @@ says why the check cannot run here.
 The checks, each only when its declaration exists (:func:`derive`):
 
 - ``mode``: ``/run/tundravm/mode`` says ``simulated`` or ``tdx`` (the gate, always);
+- ``cmdline``: ``/proc/cmdline`` holds every parameter the image appends to the UKI's
+  command line (``TeeBase``'s CPU mitigations first), so no boot loader replaced it;
 - ``rtmr``: always ``skip``, with the reason: the guest reads its registers only from a
   quote, which ``tdxs`` (tools/) makes; ``tundravm attest`` compares them with
   ``measurements.json``;
@@ -121,6 +123,7 @@ SYMBOLS: dict[str, str] = {
 
 Verdict = Literal["ok", "fail", "skip"]
 Helper = Literal[
+    "cmdline",
     "service",
     "active",
     "port",
@@ -213,13 +216,15 @@ def derive(
     modules: Sequence[str] | None,
     kernel_off: Iterable[str] = (),
     glue: Sequence[Declaration] = (),
+    cmdline: Sequence[str] = (),
 ) -> Probe:
     """The probe *items* (a variant's resolved declarations) imply.
 
     *modules* is the curated module set the profile keeps (``None``: no module check, the
     image keeps every module); *kernel_off* the options a built kernel turns off (empty for
     a distribution kernel); *glue* the cloud units lowering adds that read the metadata
-    servers (``tundravm._platforms.metadata_units``), checked for their egress only."""
+    servers (``tundravm._platforms.metadata_units``), checked for their egress only;
+    *cmdline* the parameters the image appends to the UKI's command line."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
     from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task, Unit
     from tundravm.declarative.systemd import ceiling
@@ -229,6 +234,15 @@ def derive(
         Check("mode", f"{execution.MODE_FILE} says simulated or tdx", ""),
         Check("rtmr", "RTMR0..2 against measurements.json (skipped: needs a quote)", ""),
     ]
+    if cmdline:
+        checks.append(
+            Check(
+                "cmdline",
+                f"/proc/cmdline holds {' '.join(cmdline)}",
+                " ".join(["probe_cmdline", *(_quote(p) for p in cmdline)]),
+                "cmdline",
+            )
+        )
     firewall = next((i for i in items if isinstance(i, Firewall) and i.egress == "filter"), None)
     exporters, observed = _observability(items, firewall)
     hardened: list[Check] = []
@@ -743,6 +757,20 @@ probe_series() {{
     fi
     ok "the sink at $1 holds tundravm_image_digest and $(printf '%s\\n' "$names" | grep -c .) series, each one export= keeps"
 }}
+""",  # noqa: E501
+    "cmdline": """\
+probe_cmdline() {
+    line=" $(cat /proc/cmdline) "
+    missing=
+    for parameter in "$@"; do
+        case $line in *" $parameter "*) ;; *) missing="$missing $parameter" ;; esac
+    done
+    if [ -z "$missing" ]; then
+        ok "$*"
+    else
+        fail "missing:$missing: the kernel did not boot the UKI's own command line; boot the UKI without a loader that replaces it (cat /proc/cmdline)"
+    fi
+}
 """,  # noqa: E501
     "service": f"""\
 probe_service() {{

@@ -313,6 +313,7 @@ def _probes(
     default = selected[0]
     found: dict[str, Probe] = {}
     spec = getattr(recipe.platform, "kernel_modules", ())
+    cmdline = tuple(getattr(recipe.platform, "kernel_cmdline", ()))
     off = () if kernel is None else probe_module.off_options(_kernel_file(kernel), kernel.options)
     for variant in selected:
         name = variant.name
@@ -331,7 +332,9 @@ def _probes(
         if firewall is not None:
             items = (*items, firewall)
         glue = metadata_units(recipe_targets(recipe))
-        probe = probe_module.derive(items, modules=modules, kernel_off=off, glue=glue)
+        probe = probe_module.derive(
+            items, modules=modules, kernel_off=off, glue=glue, cmdline=cmdline
+        )
         builder.probe(name, probe)
         found[name] = probe
     return found

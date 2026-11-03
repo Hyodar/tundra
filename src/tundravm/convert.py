@@ -1283,6 +1283,7 @@ class _Writer:
         """``kernel=Kernel.default(...)``: plain module names and the command line parameters
         the image does not own."""
         from ._image import Kernel
+        from .declarative.utils import TEE_KERNEL_CMDLINE
 
         config = self.config
         if self.resolved.tundravm:
@@ -1302,8 +1303,12 @@ class _Writer:
                     "kernel=Kernel.default(modules=[...]) (added to the curated set)",
                 )
         cmdline: list[str] = []
+        tee = {parameter for parameter, _reason in TEE_KERNEL_CMDLINE}
         for item in config.get("KernelCommandLine") or ():
             parameter = str(item)
+            if parameter in tee:
+                self.mapped("KernelCommandLine", parameter, "TeeBase sets it on every image")
+                continue
             try:
                 Kernel.default(cmdline=[parameter])
             except ValidationError as error:

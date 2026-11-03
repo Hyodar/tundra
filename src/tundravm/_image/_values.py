@@ -25,7 +25,7 @@ from tundravm._modules.instance_key import KEY as INSTANCE_KEY
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.declarative.model import DebianConfig, Git, Http
-from tundravm.declarative.utils import StaticAddress
+from tundravm.declarative.utils import TEE_KERNEL_CMDLINE, TEE_KERNEL_OVERRIDES, StaticAddress
 from tundravm.errors import ValidationError
 
 from .._keywords import Keywords, shown, subject
@@ -666,9 +666,11 @@ class Kernel(Keywords):
     every driver built in and no loadable modules.
 
     *cmdline* adds kernel parameters to the UKI's measured command line, after the ones
-    the image sets itself. Each entry is one
-    parameter, ``name`` or ``name=value``. None is added by default, and the parameters the
-    image owns (the root and its verity, the init, the boot target, the console) are refused.
+    the image sets itself. Each entry is one parameter, ``name`` or ``name=value``. The
+    line always starts with ``TeeBase``'s CPU mitigations (``mitigations=auto,nosmt
+    spec_store_bypass_disable=on``); a parameter that turns one of them off, and the ones
+    the image owns (the root and its verity, the init, the boot target, the console), are
+    refused.
     """
 
     version: str | None = None
@@ -895,9 +897,21 @@ def _check_kernel_parameter(owner: Kernel, parameter: object) -> None:
             owner,
             f"cmdline= entry {parameter!r} is not one kernel parameter.",
             hint="Pass each parameter as its own entry, name or name=value without spaces: "
-            "cmdline=['nospectre_v2', 'mitigations=auto'].",
+            "cmdline=['quiet', 'transparent_hugepage=madvise'].",
         )
     name = parameter.partition("=")[0]
+    defaults = " ".join(default for default, _reason in TEE_KERNEL_CMDLINE)
+    overridden = next(
+        (d for d, _ in TEE_KERNEL_CMDLINE if d.partition("=")[0] == name and d != parameter),
+        None,
+    )
+    if overridden is not None or parameter in TEE_KERNEL_OVERRIDES:
+        what = f"overrides TeeBase's {overridden}" if overridden else "turns a CPU mitigation off"
+        raise _fail(
+            owner,
+            f"cmdline= sets {parameter}, which {what}.",
+            hint=f"Drop it: every image boots with {defaults}, which a TEE needs.",
+        )
     owned = name.removeprefix("rd.")
     if owned.startswith("systemd.verity"):
         owned = "systemd.verity"

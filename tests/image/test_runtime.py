@@ -487,11 +487,17 @@ def test_the_initramfs_uki_ceiling(layout: str, size: str, refused: str | None) 
 
 
 def test_kernel_parameters_follow_the_images_own_and_enter_its_digest() -> None:
-    kernel = Kernel.default(cmdline=["nospectre_v2", "mitigations=auto"])
+    kernel = Kernel.default(cmdline=["quiet", "transparent_hugepage=madvise"])
     image = prover(rootfs=RootFS.verity(), kernel=kernel)
     (line,) = plan(image, "production").settings("Content")["KernelCommandLine"]
     assert line.split()[0] == "root=/dev/mapper/root"
-    assert line.split()[-3:] == ["systemd.volatile=overlay", "nospectre_v2", "mitigations=auto"]
+    assert line.split()[-5:] == [
+        "systemd.volatile=overlay",
+        "mitigations=auto,nosmt",
+        "spec_store_bypass_disable=on",
+        "quiet",
+        "transparent_hugepage=madvise",
+    ]
     digest = lower(image).digest()
     assert digest != lower(prover(rootfs=RootFS.verity())).digest()
     assert digest == lower(prover(rootfs=RootFS.verity(), kernel=kernel)).digest()
@@ -500,7 +506,7 @@ def test_kernel_parameters_follow_the_images_own_and_enter_its_digest() -> None:
 @pytest.mark.parametrize(
     ("cmdline", "message"),
     [
-        ("nospectre_v2", "a list of kernel parameters"),
+        ("quiet", "a list of kernel parameters"),
         (["a b"], "not one kernel parameter"),
         ([""], "not one kernel parameter"),
         (["root=/dev/sda1"], "rootfs="),
@@ -510,6 +516,11 @@ def test_kernel_parameters_follow_the_images_own_and_enter_its_digest() -> None:
         (["init=/bin/sh"], "boots systemd"),
         (["systemd.unit=rescue.target"], "minimal.target"),
         (["console=tty0"], "console=ttyS0 at boot"),
+        (["mitigations=off"], "overrides TeeBase's mitigations=auto,nosmt"),
+        (["mitigations=auto"], "overrides TeeBase's mitigations=auto,nosmt"),
+        (["spec_store_bypass_disable=prctl"], "overrides TeeBase's spec_store_bypass_disable"),
+        (["nospectre_v2"], "turns a CPU mitigation off"),
+        (["mds=off"], "turns a CPU mitigation off"),
     ],
 )
 def test_a_kernel_parameter_tundravm_sets_is_refused(cmdline: object, message: str) -> None:

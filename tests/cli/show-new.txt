@@ -14,6 +14,7 @@ Profiles (2):
 
 Built into production:
   Targets (1): qemu
+  Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
   Packages (10): ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-sysv udev
   Build packages (1): golang
   Sources (1):
@@ -53,7 +54,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  5964B  sha256:9c260a60aa90
+    + /usr/lib/tundravm/probe  0755  6453B  sha256:30007c67b540
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

@@ -580,7 +580,7 @@ class Debian(Platform):
                     self,
                     f"kernel_cmdline entry {parameter!r} is not one parameter.",
                     hint="Pass each parameter as its own entry: cmdline=['quiet', "
-                    "'mitigations=auto'].",
+                    "'transparent_hugepage=madvise'].",
                 )
         if self.boot is not None:
             _require_choice(self, self.boot, tuple(BOOT_PACKAGES), "boot")

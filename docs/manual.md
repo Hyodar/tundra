@@ -119,9 +119,13 @@ the image file, as `Local` is. A file is root-owned unless `owner=` says otherwi
 runtime-init step `owners` applies it at boot.
 
 `cmdline=` on either `Kernel` appends parameters (`name` or `name=value`) to the UKI's
-measured command line, after the image's own: `Kernel.default(cmdline=["nospectre_v2"])`.
-A parameter tundravm sets (`root=`, `init=`, `console=` and their kin) is refused, naming
-what sets it. `Kernel.build` is for a driver built in or a symbol turned off.
+measured command line, after the image's own:
+`Kernel.default(cmdline=["transparent_hugepage=madvise"])`. Every UKI boots `TeeBase`'s CPU
+mitigations first, `mitigations=auto,nosmt` (every vulnerability mitigated, SMT off where
+that needs it) and `spec_store_bypass_disable=on` (Spectre v4 off for every process).
+A parameter tundravm sets (`root=`, `init=`, `console=` and their kin), another value of
+those two and one that turns a mitigation off (`nospectre_v2`, `mds=off`) are refused,
+naming what sets it. `Kernel.build` is for a driver built in or a symbol turned off.
 
 ### The kernel
 

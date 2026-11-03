@@ -691,6 +691,24 @@ def _rule_kernel_unhardened(
     )
 
 
+def _rule_kernel_cmdline_repeated(
+    image: Lowered, profile_name: str, state: ProfileState
+) -> Iterator[Diagnostic]:
+    """A ``TeeBase`` kernel parameter the image's ``Kernel(cmdline=)`` passes again."""
+    from .declarative.utils import TEE_KERNEL_CMDLINE
+
+    cmdline = image.mkosi.kernel_cmdline
+    for parameter, _reason in TEE_KERNEL_CMDLINE:
+        if cmdline.count(parameter) > 1:
+            yield Diagnostic(
+                severity="info",
+                code="kernel-cmdline-repeated",
+                message=f"Kernel(cmdline=) repeats {parameter}, which TeeBase already sets",
+                subject=parameter,
+                hint=f"Drop {parameter!r} from Kernel(cmdline=): every image boots with it.",
+            )
+
+
 def _removes(patterns: Iterable[str], path: str) -> str | None:
     """The first of *patterns* (debloat removal paths or globs) that deletes *path*."""
     for pattern in patterns:
@@ -1719,6 +1737,15 @@ _REGISTRY: tuple[Rule, ...] = (
         _UNHARDENED_FIX,
         (_rule_kernel_unhardened,),
         when=("in a development profile (Profile(production=False), dev=)",),
+    ),
+    Rule(
+        "kernel-cmdline-repeated",
+        "info",
+        "Kernel(cmdline=) repeats a CPU mitigation TeeBase puts on every image's command "
+        "line, so the UKI carries it twice.",
+        "Drop it from Kernel(cmdline=): every image boots with mitigations=auto,nosmt "
+        "spec_store_bypass_disable=on.",
+        (_rule_kernel_cmdline_repeated,),
     ),
     Rule(
         "kernel-modules-ignored",

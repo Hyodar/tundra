@@ -56,6 +56,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `Mkosi(settings=)` writes each key in its mkosi section, and a key tundravm writes is refused with the public slot that sets it.
 - **Breaking:** every error is one shape in the image file's words: what is wrong, naming the public object and keyword (`Service("app"): argv= is empty`), then a `fix:` line; `tundravm` prints it as one block with the image file's line and exits 2, as a crash or a usage error does, while a failed check exits 1; a misspelt keyword, a missing argument or a positional too many is a `ValidationError` with the closest keyword, and two services exposing one port and two services with one name are refused.
 - The shipped library: `TeeBase`, `Network`, `Firewall`, `Tdxs`, `SshAccess`, `DevAccess`, `Observability`; `tundravm.testing` with `plan`, the asserts, `FakeMkosi`, `FakeSources`, `boot`, `assert_probe` and `run_cli`.
+- **Breaking:** every image's UKI boots with `TeeBase`'s CPU mitigations, `mitigations=auto,nosmt spec_store_bypass_disable=on`, before what `Kernel(cmdline=)` appends; a parameter that turns a mitigation off (`nospectre_v2`, `mitigations=off`, `mds=off` and their kin) is refused, a repeat is `kernel-cmdline-repeated`, and a development profile's boot probe checks them in `/proc/cmdline` (`cmdline`).
 
 ### Network and clouds
 
@@ -129,7 +130,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces `service-command-not-shipped`: a service's program must be something the image ships.
 - **Breaking:** `source-unpinned` is image-wide, subject `sources.NAME`.
-- New: `egress-unfiltered`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`.
+- New: `egress-unfiltered`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`, `kernel-cmdline-repeated`.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.
 
 ### Docs

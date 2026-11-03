@@ -26,6 +26,7 @@ Profiles (2):
 
 Built into production:
   Targets (3): qemu azure gcp
+  Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
   Packages (18): busybox ca-certificates chrony cryptsetup curl dmidecode iproute2 kmod linux-image-amd64 nftables nvme-cli openssh-server openssl socat systemd systemd-boot-efi systemd-sysv udev
   Build packages (3): build-essential git golang
   Sources (4):
@@ -96,7 +97,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  13763B  sha256:a4926279d4e1
+    + /usr/lib/tundravm/probe  0755  14252B  sha256:ab318d889b71
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

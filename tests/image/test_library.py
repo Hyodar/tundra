@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tundravm import Image, Package, Service
+from tundravm import Image, Kernel, Package, Service
 from tundravm._image import lower, recipe_of
 from tundravm.components import (
     EVIDENCE,
@@ -121,6 +121,9 @@ def test_component_checks_report_what_the_contract_warns_about() -> None:
     assert "tee-base-clock" in {d.code for d in plan(clockless).lint()}
     unchecked = Image("x", components=[Tdxs(validator="tdx")])
     assert "tdxs-validator-unchecked" in {d.code for d in plan(unchecked).lint()}
+    repeated = Image("x", kernel=Kernel.default(cmdline=["spec_store_bypass_disable=on"]))
+    assert "kernel-cmdline-repeated" in {d.code for d in plan(repeated).lint()}
+    assert "kernel-cmdline-repeated" not in {d.code for d in plan(Image("x")).lint()}
 
 
 PCS = "api.trustedservices.intel.com:443"

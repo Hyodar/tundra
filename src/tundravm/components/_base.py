@@ -68,13 +68,16 @@ def _diagnostic(code: str, severity: Literal["error", "warning", "info"], messag
 
 class TeeBase(Component):
     """The confidential-VM baseline: authenticated time, a volatile journal, sysctl
-    hardening, a static resolver and no apt timers or console getty.
+    hardening, a static resolver, no apt timers or console getty, and the CPU mitigations
+    the kernel boots with.
 
     *time*: chrony over NTS from *nts_servers*, refined by the hypervisor clocks, so the
     host cannot set the guest's clock (TLS, certificates and attestation freshness
     depend on it). *journal*: journald in RAM, capped at *journal_max_use*. *sysctl*: the
     kernel hardening set. *dns*: ``/etc/resolv.conf`` naming *nameservers*. *mask*: no
-    apt timers, no getty on the host-owned console. Component name: ``tee-base``.
+    apt timers, no getty on the host-owned console. The UKI's command line always starts
+    with :attr:`kernel_cmdline`, which ``Kernel(cmdline=)`` appends to and cannot override.
+    Component name: ``tee-base``.
     """
 
     time: bool = True
@@ -100,6 +103,13 @@ class TeeBase(Component):
             firewall=False,
         )
         yield from base.items
+
+    @property
+    def kernel_cmdline(self) -> tuple[str, ...]:
+        """``mitigations=auto,nosmt spec_store_bypass_disable=on``: every CPU vulnerability
+        mitigated, SMT off where that needs it, Speculative Store Bypass off for every
+        process (:data:`~tundravm.declarative.utils.TEE_KERNEL_CMDLINE` says why each)."""
+        return tuple(parameter for parameter, _reason in du.TEE_KERNEL_CMDLINE)
 
     def outbound(self) -> Egress:
         """NTS time (TCP 4460, NTP on UDP 123) with *time*, *nameservers* with *dns*."""

@@ -86,7 +86,7 @@ ROWS = {
         ),
     ),
     "systemd": Row(
-        {"mapped": 7, "kept": 3, "defaulted": 9, "refused": 10},
+        {"mapped": 7, "kept": 3, "defaulted": 9, "refused": 11},
         (
             "# mapped: VolatilePackages=libnss-myhostname ",
             "# mapped: PrepareScripts=mkosi.conf.d/debian-ubuntu/systemd.prepare -> mkosi=Mkosi(",

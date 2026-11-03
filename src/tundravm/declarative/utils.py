@@ -618,6 +618,53 @@ TEE_SYSCTL: tuple[tuple[str, str, str], ...] = (
 ``-``-prefixed, so a key the kernel lacks (no Yama, no IPv6) is skipped, not a boot failure
 (``sysctl.d(5)``)."""
 
+_KERNEL_DOC = "linux: Documentation/admin-guide/kernel-parameters.txt"
+
+TEE_KERNEL_CMDLINE: tuple[tuple[str, str], ...] = (
+    (
+        "mitigations=auto,nosmt",
+        "every CPU vulnerability mitigated, and SMT off where a mitigation needs it (L1TF, "
+        "MDS, TAA, MMIO stale data, Retbleed), so a sibling thread cannot sample the guest's "
+        f"secrets ({_KERNEL_DOC})",
+    ),
+    (
+        "spec_store_bypass_disable=on",
+        "Speculative Store Bypass (Spectre v4) off for every process, where x86 defaults to "
+        f"only those that ask by prctl or seccomp ({_KERNEL_DOC})",
+    ),
+)
+"""``(parameter, reason)`` of the kernel parameters every image's UKI boots with, before the
+ones ``Kernel(cmdline=)`` appends: flashbots-images ``shared/mkosi.conf``, without its
+``nospectre_v2`` (which turns the Spectre v2 mitigation off) and ``transparent_hugepage=madvise``
+(memory tuning, not a mitigation)."""
+
+TEE_KERNEL_OVERRIDES: tuple[str, ...] = (
+    "gather_data_sampling=off",
+    "indirect_target_selection=off",
+    "kvm.nx_huge_pages=off",
+    "l1tf=off",
+    "mds=off",
+    "mmio_stale_data=off",
+    "nopti",
+    "nospec_store_bypass_disable",
+    "nospectre_v1",
+    "nospectre_v2",
+    "pti=off",
+    "reg_file_data_sampling=off",
+    "retbleed=off",
+    "spec_rstack_overflow=off",
+    "spectre_bhi=off",
+    "spectre_v2=off",
+    "spectre_v2_user=off",
+    "srbds=off",
+    "tsx_async_abort=off",
+    "vmscape=off",
+)
+"""The x86 parameters that turn off a mitigation :data:`TEE_KERNEL_CMDLINE` turns on
+(``mitigations=off`` is their sum, in the kernel's documentation): ``Kernel(cmdline=)``
+refuses each, as it does another value of a parameter that list sets."""
+
+
 TEE_MASKED_UNITS: tuple[tuple[str, str], ...] = (
     ("apt-daily.timer", "no package list refresh at runtime: the image is what was measured"),
     ("apt-daily-upgrade.timer", "no unattended upgrades: they would change measured software"),
@@ -1388,6 +1435,8 @@ __all__ = [
     "StaticAddress",
     "Sudo",
     "TEE_HYPERVISOR_CLOCKS",
+    "TEE_KERNEL_CMDLINE",
+    "TEE_KERNEL_OVERRIDES",
     "TEE_MASKED_UNITS",
     "TEE_NAMESERVERS",
     "TEE_NTS_SERVERS",

@@ -196,16 +196,20 @@ class _Lowering:
     # ── The image ───────────────────────────────────────────────────
 
     def platform(self) -> dm.Platform:
-        """Debian, its archive and its boot set."""
+        """Debian, its archive, its boot set and the command line: ``TeeBase``'s
+        parameters, then the kernel's."""
+        from tundravm.components import TeeBase
+
         base = self.image.base
         kernel = self.image.kernel
+        tee = self.explicit(TeeBase) or TeeBase()
         return dm.Debian(
             base.release,
             snapshot=base.archive,
             efi_stub=base.efi_stub,
             kernel_package=None if kernel.built else "linux-image-amd64",
             kernel_modules=() if isinstance(kernel.modules, bool) else tuple(kernel.modules),
-            kernel_cmdline=tuple(kernel.cmdline),
+            kernel_cmdline=(*tee.kernel_cmdline, *kernel.cmdline),
         )
 
     def items(self) -> tuple[dm.Declaration | dm.Fragment, ...]:
