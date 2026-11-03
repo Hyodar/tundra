@@ -743,6 +743,7 @@ def _assemble(
         for split in sorted(Path(artifact.path).parent.glob("payload.*.raw")):
             _move(split, out / split.name, moved)
     kernel = _kernel_records(artifacts, out, moved)
+    containers = _container_roots(img, profile, artifacts, out, moved)
     mf.write_canonical(out / mf.MEASUREMENTS, measurements)
     uki = out / mf.UKI
     root_hash = mf.uki_root_hash(uki) if uki.is_file() else None
@@ -802,6 +803,8 @@ def _assemble(
     }
     if kernel:
         payload["kernel"] = kernel
+    if containers:
+        payload["containers"] = containers
     payload["id"] = mf.build_id(payload)
     mf.write_canonical(out / mf.MANIFEST, payload)
     return payload
@@ -867,6 +870,40 @@ def _kernel_records(artifacts: Sequence[Artifact], out: Path, moved: set[Path]) 
             _mkdir((out / rel).parent)
             _move(source, out / rel, moved)
             found[key] = {"path": rel, **mf.file_record(out / rel)}
+    return found
+
+
+CONTAINERS = "containers"
+"""Where a build directory keeps each container's root image (``<name>.raw``) and its package
+manifest, as the payload ships the image under ``/usr/lib/tundravm/containers/``."""
+
+
+def _container_roots(
+    img: Lowered, profile: str, artifacts: Sequence[Artifact], out: Path, moved: set[Path]
+) -> dict[str, Any]:
+    """Move each container's root image and package manifest of *profile* into
+    ``containers/`` of *out*; the manifest's ``containers`` section, by name, recording the
+    image's sha256 the probe's ``container:`` check prints from inside the guest."""
+    found: dict[str, Any] = {}
+    names = [c.name for c in img.state.effective_profile(profile).containers]
+    directories = sorted({Path(artifact.path).parent for artifact in artifacts})
+    for name in sorted(names):
+        for directory in directories:
+            image = directory / f"{name}.raw"
+            if not image.is_file():
+                continue
+            _mkdir(out / CONTAINERS)
+            _move(image, out / CONTAINERS / image.name, moved)
+            packages = directory / f"{name}.manifest"
+            record: dict[str, Any] = {"path": f"{CONTAINERS}/{image.name}"}
+            record.update(mf.file_record(out / CONTAINERS / image.name))
+            if packages.is_file():
+                _move(packages, out / CONTAINERS / packages.name, moved)
+                record["packages"] = f"{CONTAINERS}/{packages.name}"
+            found[name] = record
+            break
+        else:
+            found[name] = mf.missing(f"the build produced no {name}.raw")
     return found
 
 

@@ -116,11 +116,14 @@ VERITY_MODULES: tuple[str, ...] = (
 mkosi's kernel-modules initrd holds only the ``KernelModules=`` the payload keeps."""
 
 CONTAINER_MODULES: tuple[str, ...] = (
-    # A Container's root is an erofs RootImage= that systemd-nspawn attaches to a loop device.
+    # A container's root image is a file the unit's RootImage= attaches to a loop device.
     "loop",
+    # Its root partition (pulls libcrc32c, hence the generic crc32c as for the verity root).
     "erofs",
+    "crc32c_generic",
 )
-"""What a ``Container(...)``'s nspawn root needs of the kernel."""
+"""A variant that ships a ``Container``, on top of its outputs' sets; a built kernel needs
+each built in."""
 
 TARGET_MODULES: dict[str, tuple[str, ...]] = {
     "qemu": (),
@@ -293,7 +296,11 @@ def installs_kernel_package(packages: Iterable[str]) -> bool:
 
 
 def curated_modules(
-    targets: Iterable[str], *, disks: bool = False, firewall: bool = False
+    targets: Iterable[str],
+    *,
+    disks: bool = False,
+    firewall: bool = False,
+    containers: bool = False,
 ) -> tuple[str, ...]:
     """The curated set for an image booting on every one of *targets* (sorted, unique)."""
     selected = set(TDX_GUEST_MODULES)
@@ -303,6 +310,8 @@ def curated_modules(
         selected.update(DISK_MODULES)
     if firewall:
         selected.update(FIREWALL_MODULES)
+    if containers:
+        selected.update(CONTAINER_MODULES)
     return tuple(sorted(selected))
 
 
@@ -324,7 +333,12 @@ def module_selection(
         return ModuleSelection(modular=True)
     disks = any(entry.name == _DISK_STEP for entry in profile.init_scripts)
     firewall = any(re.split(r"[/=]", p, maxsplit=1)[0] == "nftables" for p in profile.packages)
-    curated = curated_modules(profile.output_targets, disks=disks, firewall=firewall)
+    curated = curated_modules(
+        profile.output_targets,
+        disks=disks,
+        firewall=firewall,
+        containers=bool(profile.containers),
+    )
     return ModuleSelection(modular=True, modules=tuple(sorted({*curated, *spec})))
 
 

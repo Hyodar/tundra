@@ -64,6 +64,7 @@ from tundravm.models import (
     NETWORK_SETUP_UNIT,
     VALID_PHASES,
     CommandSpec,
+    ContainerSpec,
     DebloatConfig,
     FileEntry,
     FileKind,
@@ -92,6 +93,7 @@ from tundravm.models import (
 from .model import (
     BootStep,
     Build,
+    ContainerRoot,
     Debloat,
     Declaration,
     Declared,
@@ -327,6 +329,8 @@ class StateBuilder:
                     self._build_from(profile, source_build(item))
                 case Kernel():
                     profile.build_packages.update(item.build_packages)
+                case ContainerRoot():
+                    profile.containers.append(_container(item))
                 case BootStep() | Setting() | KernelConfig() | RuntimeTools():
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
@@ -791,6 +795,19 @@ def _file(profile: ProfileState, item: File) -> None:
         mode = 0o755 if executable else 0o644
     entries = profile.skeleton_files if item.stage == "skeleton" else profile.files
     entries.append(FileEntry(path=item.path, content=data, mode=_mode(mode)))
+
+
+def _container(item: ContainerRoot) -> ContainerSpec:
+    """*item* as the subimage the emitter writes, its files read as ``File`` reads them."""
+    shipped = ProfileState(name=item.name)
+    for entry in item.files:
+        _file(shipped, entry)
+    return ContainerSpec(
+        name=item.name,
+        packages=tuple(sorted(set(item.packages))),
+        files=tuple(shipped.files),
+        directories=tuple(dict.fromkeys(item.directories)),
+    )
 
 
 def walk_directory(

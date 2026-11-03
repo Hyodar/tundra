@@ -113,7 +113,7 @@ def test_invalid_selections_are_rejected(platform: dict[str, object], message: s
                 "CONFIG_TDX_GUEST_DRIVER": "qemu",
                 "CONFIG_VIRTIO_NET": "qemu",
                 "CONFIG_DM_CRYPT": "an encrypted Volume",
-                "CONFIG_CRYPTO_CRC32C": "the Firewall, RootFS.verity()",
+                "CONFIG_CRYPTO_CRC32C": "the Firewall, RootFS.verity(), a Container",
             },
             {"CONFIG_GVE", "CONFIG_HYPERV", "CONFIG_BLK_DEV_PCIESSD_MTIP32XX"},
         ),

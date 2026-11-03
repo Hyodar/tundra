@@ -3283,6 +3283,52 @@ accepts."""
 
 
 @dataclass(frozen=True, slots=True)
+class ContainerRoot(Declared):
+    """A container's read-only root, built as the subimage ``mkosi.images/<name>/`` from the
+    image's snapshot: *packages* from its repositories, *files* copied in, and empty
+    *directories* the unit binds onto. The payload ships it at
+    ``/usr/lib/tundravm/containers/<name>.raw`` (``Container`` composes it)."""
+
+    name: str
+    packages: tuple[str, ...]
+    _: KW_ONLY
+    files: tuple[File, ...] = ()
+    directories: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _freeze(self, "packages", "files", "directories")
+        if not isinstance(self.name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", self.name):
+            raise _fail(
+                self,
+                f"container name {self.name!r} must be lower-case letters, digits and '-'.",
+                hint='Name it like a unit: ContainerRoot("web", ("busybox",)).',
+            )
+        if self.name in ("payload", "azure", "gcp"):
+            raise _fail(
+                self,
+                f"container name {self.name!r} is a subimage tundravm writes.",
+                hint="Name it after what it runs.",
+            )
+        if not self.packages:
+            raise _fail(
+                self,
+                "a container root needs at least one package: its program comes from one.",
+                hint='ContainerRoot("web", ("busybox",))',
+            )
+        for package in self.packages:
+            _require_name(self, package, "package")
+        for item in self.files:
+            if not isinstance(item, File) or item.stage != "extra":
+                raise _fail(
+                    self,
+                    f"files= holds {item!r}, not a File.",
+                    hint='files=(File("/srv/www/index.html", "..."),)',
+                )
+        for path in self.directories:
+            _require_absolute(self, path, "directory")
+
+
+@dataclass(frozen=True, slots=True)
 class EgressRule:
     """One accept of a filtered output chain: *port* (``None``: every port) of *host* (an
     address or CIDR block; ``None``: any address).
@@ -3649,6 +3695,7 @@ type Declaration = (
     | Task
     | Mount
     | Firewall
+    | ContainerRoot
 )
 
 DECLARATION_TYPES: tuple[type, ...] = (
@@ -3676,6 +3723,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Task,
     Mount,
     Firewall,
+    ContainerRoot,
 )
 
 
@@ -3730,6 +3778,7 @@ __all__ = [
     "BootStep",
     "Build",
     "Cargo",
+    "ContainerRoot",
     "VariantChange",
     "Check",
     "Debloat",

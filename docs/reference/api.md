@@ -742,6 +742,33 @@ ComponentReady(component: Component)
 | `ComponentReady.handles() -> tuple[Readied, ...]` | What proves the component ready, one handle per unit. |
 | `ComponentReady.name` | The component's name. |
 
+### `Container`
+
+*dataclass*
+
+```python
+Container(
+    name: str,
+    argv: Sequence[str],
+    *,
+    packages: Sequence[str] = (),
+    files: Sequence[File] = (),
+    state: VolumeDirectory | None = None,
+    user: str | None = None,
+    expose: Sequence[PortValue] = (),
+    egress: Egress | None = Egress(),
+)
+```
+
+*argv* run in a Debian root of its own: *packages* from the image's snapshot and *files*, built with the image as a read-only root image the payload ships, so the quote covers it, and nothing is fetched at boot.
+
+| Member | Does |
+|---|---|
+| `Container.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `container-shell`: a production container whose program is a shell. |
+| `Container.image` | Where the payload ships its root image. |
+| `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image. |
+| `Container.unit` | The container's `.service`. |
+
 ### `DevAccess`
 
 *dataclass*

@@ -11,6 +11,8 @@ mkosi user:
   the main image's content settings);
 - ``mkosi.images/<cloud>/``: the same disk per cloud target, converted at postoutput
   (fixed VHD for Azure, oldgnu sparse ``tar.gz`` for GCP);
+- ``mkosi.images/<container>/``: a ``Container``'s root, a portable image the payload
+  depends on and ships under ``/usr/lib/tundravm/containers/``;
 - ``payload/``: the shared payload (what every profile builds: :mod:`._split`), as
   ``mkosi.conf``, one ``mkosi.conf.d/`` file per concern, the trees and the phase scripts
   in ``mkosi.<phase>.d/``; and one ``mkosi.profiles/<variant>/`` overlay per variant whose
@@ -51,6 +53,7 @@ from tundravm.kernel_modules import (
 from tundravm.models import (
     Arch,
     CommandSpec,
+    ContainerSpec,
     DebloatConfig,
     FileEntry,
     GroupSpec,
@@ -1183,6 +1186,7 @@ class DeterministicMkosiEmitter:
         mkosi.sandbox/             apt sources and keys for the build, never in the image
         mkosi.images/payload/      Include=../../payload
         mkosi.images/<cloud>/      a disk wrapper per cloud target, converted at postoutput
+        mkosi.images/<container>/  a container's root image, which the payload ships
         payload/                   the OS: mkosi.conf, mkosi.conf.d/ (one file per concern),
                                    trees, scripts and mkosi.profiles/<variant>/ overlays
     """
@@ -1227,6 +1231,8 @@ class DeterministicMkosiEmitter:
         if config.bootable:
             for target in config.targets:
                 self._emit_wrapper(destination / "mkosi.images" / target, target, config)
+        for container in _containers(effective):
+            self._emit_container(destination / "mkosi.images" / container.name, container, config)
 
         payload = destination / PAYLOAD
         self._emit_skeleton_tree(payload, shared, config)
@@ -1381,6 +1387,37 @@ class DeterministicMkosiEmitter:
         name, script = CLOUD_CONVERTERS[target]
         _write(directory / "mkosi.postoutput.d" / name, script, EXEC_MODE)
 
+    def _emit_container(
+        self, directory: Path, container: ContainerSpec, config: EmitConfig
+    ) -> None:
+        """``mkosi.images/<name>/``: a container's root, an erofs root partition in a GPT
+        image (mkosi's unsigned portable layout), from the image's snapshot and tools tree
+        (universal settings); its files in ``mkosi.extra/``, the API mount points
+        (:data:`CONTAINER_API_DIRECTORIES`) and its bind mount points made at postinst. It runs
+        no script of the recipe's, so apt is all it fetches."""
+        sections = {
+            "Output": [
+                "Format=portable",
+                f"Output={container.name}",
+                f"Seed={config.seed}",
+                f"ManifestFormat={config.manifest_format}",
+            ],
+            "Content": [
+                "Bootable=no",
+                "CleanPackageMetadata=yes",
+                *_list_setting("Packages", container.packages),
+            ],
+        }
+        _write(directory / "mkosi.conf", _render_sections(sections), FILE_MODE)
+        for entry in container.files:
+            _write_file_entry(directory / "mkosi.extra" / entry.path.lstrip("/"), entry)
+        lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
+        lines += [f'mkdir -p "$BUILDROOT"{shlex.quote(p)}' for p in CONTAINER_API_DIRECTORIES]
+        lines += [f'chmod 1777 "$BUILDROOT"{p}' for p in ("/tmp", "/var/tmp")]
+        lines += [f'mkdir -p "$BUILDROOT"{shlex.quote(p)}' for p in container.directories]
+        text = "\n".join(lines) + "\n"
+        _write(directory / "mkosi.postinst.d" / "10-mount-points.sh", text, EXEC_MODE)
+
     # ── the payload ─────────────────────────────────────────────────────
 
     def _render_payload(
@@ -1434,6 +1471,9 @@ class DeterministicMkosiEmitter:
         }
         if verity:
             sections["Validation"] = ["Verity=hash"]
+        if profile.containers:
+            sections = {"Config": _container_dependencies(profile.containers), **sections}
+            sections["Content"] = [*content, *_container_trees(profile.containers)]
         return _render_sections(sections, local)
 
     def _emit_payload_repart(self, directory: Path) -> None:
@@ -1457,7 +1497,12 @@ class DeterministicMkosiEmitter:
         packages = [p for p in _image_packages(overlay) if p not in shared]
         content += _list_setting("Packages", packages)
         content += _list_setting("BuildPackages", sorted(overlay.build_packages))
-        sections = {"Output": [f"ImageId=%i-{name}"] if image_id else [], "Content": content}
+        content += _container_trees(overlay.containers)
+        sections = {
+            "Config": _container_dependencies(overlay.containers),
+            "Output": [f"ImageId=%i-{name}"] if image_id else [],
+            "Content": content,
+        }
         return _render_sections(sections)
 
     def _emit_sandbox_tree(
@@ -1903,6 +1948,42 @@ def _split_settings(
         target = root if key in MAIN_IMAGE_SETTINGS else local
         target.setdefault(section, []).extend(f"{key}={value}" for value in values)
     return root, local
+
+
+CONTAINER_API_DIRECTORIES = ("/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp")
+"""What systemd mounts over in a ``RootImage=`` namespace (``MountAPIVFS=``, ``PrivateTmp=``,
+``ProtectSystem=strict``): it cannot make a mount point in a read-only erofs root, and a
+missing one fails the unit with ``226/NAMESPACE`` (ENOENT), so every container root ships
+them. ``/run`` is a fresh tmpfs there, which holds the journal sockets ``BindLogSockets=``
+binds."""
+
+
+def _containers(effective: Mapping[str, ProfileState]) -> list[ContainerSpec]:
+    """Every container a profile of *effective* ships, by name: the subimages the tree holds.
+    Two profiles shipping different roots under one name are refused: the tree has one
+    ``mkosi.images/<name>/``."""
+    found: dict[str, ContainerSpec] = {}
+    for profile, state in effective.items():
+        for container in state.containers:
+            known = found.setdefault(container.name, container)
+            if known != container:
+                raise ValidationError(
+                    f"Profile {profile!r} ships container {container.name!r} with another "
+                    "root than an earlier profile: the tree builds one subimage per name.",
+                    hint="Give the profile's container its own name, or declare one root.",
+                )
+    return [found[name] for name in sorted(found)]
+
+
+def _container_dependencies(containers: Sequence[ContainerSpec]) -> list[str]:
+    """``Dependencies=`` of the payload on each container's subimage, built first."""
+    return [f"Dependencies={c.name}" for c in sorted(containers, key=lambda c: c.name)]
+
+
+def _container_trees(containers: Sequence[ContainerSpec]) -> list[str]:
+    """``ExtraTrees=`` placing each container's root image in the payload."""
+    ordered = sorted(containers, key=lambda c: c.name)
+    return [f"ExtraTrees=%O/{c.name}.raw:{c.image}" for c in ordered]
 
 
 def _payload_trees(config: EmitConfig) -> list[str]:

@@ -21,6 +21,11 @@ What an overlay expresses on top of the shared payload, and so stays shared:
 - each phase's commands, as far as every profile runs the same ones in the same order:
   an overlay's scripts run after the shared payload's.
 
+A container every profile ships alike is the shared payload's; one only some profiles ship
+is the overlay's ``Dependencies=`` and ``ExtraTrees=`` line, while its subimage directory,
+``mkosi.images/<name>/``, is one per tree, which a profile that does not depend on it never
+builds.
+
 The split depends on the recipe's profiles, never on which of them a compile selects.
 """
 
@@ -165,6 +170,7 @@ def _shared(states: Sequence[ProfileState], name: str) -> ProfileState:
         debloat=debloat,
         debloat_explicit=first.debloat_explicit if len(debloats) == 1 else False,
         source_builds=sources,
+        containers=_equal_common([s.containers for s in states]),
     )
 
 
@@ -217,6 +223,7 @@ def _overlay(state: ProfileState, shared: ProfileState) -> ProfileState:
             for key, build in state.source_builds.items()
             if shared.source_builds.get(key) != build
         },
+        containers=[c for c in state.containers if c not in shared.containers],
     )
 
 
@@ -235,6 +242,7 @@ def is_empty(overlay: ProfileState) -> bool:
         or overlay.services
         or overlay.unit_states
         or overlay.debloat.enabled
+        or overlay.containers
     )
 
 

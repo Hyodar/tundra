@@ -167,6 +167,27 @@ class FileEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class ContainerSpec:
+    """A container's root: the ``mkosi.images/<name>/`` subimage the payload ships at
+    :attr:`image` (``Container`` in :mod:`tundravm.components`)."""
+
+    name: str
+    packages: tuple[str, ...]
+    files: tuple[FileEntry, ...] = ()
+    directories: tuple[str, ...] = ()
+    """Mount points the root must hold for the unit's bind mounts (it is read-only)."""
+
+    @property
+    def image(self) -> str:
+        """Where the payload ships the root image."""
+        return f"{CONTAINERS_PATH}/{self.name}.raw"
+
+
+CONTAINERS_PATH = "/usr/lib/tundravm/containers"
+"""Where the payload ships each container's root image, ``<name>.raw``."""
+
+
+@dataclass(frozen=True, slots=True)
 class TemplateEntry:
     path: str
     template: str
@@ -523,6 +544,7 @@ class ProfileState:
     keep_bins: set[str] = field(default_factory=set)
     """Binaries of the ``systemd`` package this profile keeps beyond its debloat's list
     (``systemd-analyze`` for a probe that scores hardening)."""
+    containers: list[ContainerSpec] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -636,6 +658,7 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
         debloat=_fallback_debloat(base, own),
         debloat_explicit=own.debloat_explicit,
         keep_bins=base.keep_bins | own.keep_bins,
+        containers=_override(base.containers, own.containers, lambda c: c.name),
     )
 
 
@@ -845,7 +868,9 @@ __all__ = [
     "ArtifactRef",
     "BakeRequest",
     "BakeResult",
+    "CONTAINERS_PATH",
     "CommandSpec",
+    "ContainerSpec",
     "CompileResult",
     "DebloatConfig",
     "DEFAULT_DEBLOAT_PATHS_REMOVE",

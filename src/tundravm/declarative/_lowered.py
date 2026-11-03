@@ -842,6 +842,16 @@ def recipe_payload(state: RecipeState, profile_names: Sequence[str]) -> dict[str
             declared["source_builds"] = {
                 name: spec.to_payload() for name, spec in sorted(profile.source_builds.items())
             }
+        if profile.containers:
+            declared["containers"] = [
+                {
+                    "name": c.name,
+                    "packages": list(c.packages),
+                    "files": [_file_payload(entry) for entry in c.files],
+                    "directories": list(c.directories),
+                }
+                for c in sorted(profile.containers, key=lambda item: item.name)
+            ]
         if profile.unit_states:
             declared["unit_states"] = {
                 action: [s.unit for s in profile.unit_states if s.action == action]

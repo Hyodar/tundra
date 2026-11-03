@@ -56,6 +56,7 @@ COMPONENTS = [
     "EVIDENCE",
     "Component",
     "ComponentReady",
+    "Container",
     "DevAccess",
     "Diagnostic",
     "Egress",

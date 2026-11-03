@@ -30,6 +30,9 @@ The checks, each only when its declaration exists (:func:`derive`):
 - ``dns``: with ``TeeBase``'s resolver, the first resolver's TLS name resolves through the
   stub, ``systemd-resolved`` holds a connection to port 853 (DNS over TLS) and, where
   ``resolvectl`` reaches it over D-Bus, reports ``+DNSOverTLS``;
+- ``container:NAME``: each ``Container``'s unit is active in its root image, whose
+  ``sha256:`` it prints (``fixture-boot`` compares it with the manifest's), and a datagram
+  sent from inside its network namespace finds no route out;
 - ``egress:ADDRESS:PORT``: with ``Egress``, a UDP datagram to an address and port no rule
   accepts is refused by the output chain (``EPERM``, at once; TCP would only time out);
   ``egress:metadata:OWNER``: with a firewall, a datagram to the cloud metadata server sent
@@ -135,6 +138,7 @@ Helper = Literal[
     "active",
     "port",
     "volume",
+    "container",
     "egress",
     "metadata",
     "upload",
@@ -234,9 +238,20 @@ def derive(
     servers (``tundravm._platforms.metadata_units``), checked for their egress only;
     *cmdline* the parameters the image appends to the UKI's command line."""
     from tundravm._modules.secret_delivery import ENDPOINT_UNIT
-    from tundravm.declarative.model import Disk, File, Firewall, Port, Secrets, Service, Task, Unit
+    from tundravm.declarative.model import (
+        ContainerRoot,
+        Disk,
+        File,
+        Firewall,
+        Port,
+        Secrets,
+        Service,
+        Task,
+        Unit,
+    )
     from tundravm.declarative.systemd import ceiling
     from tundravm.declarative.utils import RESOLVED_DROPIN, RESOLVERS_DROPIN, SSH_HOST_KEY
+    from tundravm.models import CONTAINERS_PATH
 
     checks = [
         Check("mode", f"{execution.MODE_FILE} says simulated or tdx", ""),
@@ -311,6 +326,20 @@ def derive(
                     f"probe_volume {item.mount} {'yes' if encrypted else 'no'}{owned}",
                     "volume",
                     () if item.owner else ("runtime-init.service",),
+                )
+            )
+    for item in items:
+        if isinstance(item, ContainerRoot):
+            unit = unit_name(item.name)
+            address, number = DENIED_ADDRESSES[0], DENIED_PORTS[0]
+            checks.append(
+                Check(
+                    f"container:{item.name}",
+                    f"{unit} is active in its root image, and a datagram to {address}:{number}"
+                    "/udp from its network namespace finds no route",
+                    f"probe_container {unit} {CONTAINERS_PATH}/{item.name}.raw {address} {number}",
+                    "container",
+                    (unit,),
                 )
             )
     if firewall is not None:
@@ -1009,6 +1038,43 @@ probe_volume() {
         esac
     fi
 }
+""",  # noqa: E501
+    "container": f"""\
+probe_container() {{
+    state=$(systemctl show -P ActiveState "$1")
+    waited=0
+    while [ "$state" != active ] && [ "$waited" -lt {WAIT_SECONDS} ]; do
+        sleep 1
+        waited=$((waited + 1))
+        state=$(systemctl show -P ActiveState "$1")
+    done
+    if [ "$state" != active ]; then
+        fail "$state: journalctl -u $1 says why"
+        return
+    fi
+    if [ "$(systemctl show -P RootImage "$1")" != "$2" ]; then
+        fail "$1 does not run in $2: its drop-in is missing; systemctl cat $1"
+        return
+    fi
+    if ! digest=$(sha256sum "$2" 2>/dev/null); then
+        fail "no root image at $2"
+        return
+    fi
+    digest=sha256:${{digest%% *}}
+    if ! command -v nsenter >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
+        skip "active, root $digest; no nsenter or bash to send a datagram from its namespace"
+        return
+    fi
+    pid=$(systemctl show -P MainPID "$1")
+    if said=$(nsenter -t "$pid" -n bash -c 'printf x >"/dev/udp/$0/$1"' "$3" "$4" 2>&1); then
+        fail "root $digest, but a datagram to $3:$4/udp left its namespace: it must hold lo only; cat /proc/$pid/net/dev"
+        return
+    fi
+    case $said in
+        *unreachable*) ok "active, root $digest, no route out of its namespace" ;;
+        *) fail "root $digest, a datagram to $3:$4/udp failed with $(echo "$said" | tail -n 1), not for want of a route" ;;
+    esac
+}}
 """,  # noqa: E501
     "egress": """\
 probe_egress() {

@@ -101,6 +101,7 @@ The codes each component of `tundravm.components` reports, as its class declares
 
 | Component | Code | Severity | What it checks | How to fix |
 |---|---|---|---|---|
+| `Container` | `container-shell` | error | A production profile's container runs a shell, so whoever reaches it gets a prompt in it. | Run the program itself: Container("web", ["/usr/bin/app", ...]), or keep the container in a Profile(production=False). |
 | `DevAccess` | `dev-access-rsa-key` | info | A development profile accepts an RSA SSH key where every current client makes ed25519. | Make an ed25519 key (ssh-keygen -t ed25519) and pass its .pub instead. |
 | `Firewall` | `egress-unfiltered` | warning | A production profile accepts every outbound packet (no Egress, or one allowing 0.0.0.0/0 or ::/0), so a compromised service sends what it holds anywhere. | List what its services talk to: network=Network(egress=Egress(ports=[TCP(443)], hosts=[...])), or give one service its own with Service(..., egress=Egress(...)); what the baseline sends (NTS time, resolvers) is accepted for you. A Profile(production=False) is exempt. |
 | `Firewall` | `firewall-ssh-open` | warning | The firewall opens port 22 by hand, outside the SSH access that accepts only a key. | Drop 22 from Firewall(allow=) and use SshAccess(...) or dev=DevAccess(...), which open it only with a key to accept. |
