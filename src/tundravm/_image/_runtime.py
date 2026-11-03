@@ -19,6 +19,8 @@ values become the declarations the tools and systemd already understand:
 - an ingress is a ``socat`` TLS relay unit with its firewall port; an ``AttestedTLS`` one
   also has a root oneshot making its key pair and certificate each boot, which the relay
   reads as credentials and the endpoint's quotes bind;
+- a ``Login(keys=Secret(...))`` adds that secret, which the endpoint also writes to the
+  login's ``authorized_keys.d`` file;
 - ``/etc/tundravm/runtime.json`` records all of it for the tools that deliver.
 
 Nothing here writes a secret or a key into the image.
@@ -26,6 +28,7 @@ Nothing here writes a secret or a key into the image.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shlex
 from collections.abc import Iterable, Iterator
@@ -34,6 +37,7 @@ from dataclasses import dataclass
 from tundravm._location import declared_at, display_location
 from tundravm._modules import attested_tls
 from tundravm.declarative import model as dm
+from tundravm.declarative import utils as du
 from tundravm.declarative.systemd import Dynamic, Hardening, Root
 from tundravm.errors import ValidationError
 
@@ -58,6 +62,7 @@ __all__ = [
     "RuntimeFragment",
     "bound",
     "check_bindings",
+    "login_key_files",
     "services_of",
 ]
 
@@ -88,9 +93,9 @@ def services_of(items: Iterable[object]) -> Iterator[Service]:
             yield from services_of(composed(item))
 
 
-def _image_services(image: object) -> tuple[Service, ...]:
-    """The services of the image and of every profile it declares, each profile's edits of
-    them included."""
+def _image_items(image: object) -> tuple[object, ...]:
+    """The services and components of the image and of every profile it declares, each
+    profile's edits of them included."""
     from ._change import Edit
     from ._image import Image
 
@@ -101,7 +106,36 @@ def _image_services(image: object) -> tuple[Service, ...]:
     for profile in image.profiles.values():
         items.extend(profile.add)
         items.extend(change.edited for change in profile.changes if isinstance(change, Edit))
-    return tuple(services_of(items))
+    return tuple(items)
+
+
+def _image_services(image: object) -> tuple[Service, ...]:
+    """The services of the image and of every profile it declares, each profile's edits of
+    them included."""
+    return tuple(services_of(_image_items(image)))
+
+
+def _logins(items: Iterable[object]) -> Iterator[du.Login]:
+    """Every ``Login`` of an ``SshAccess`` in *items*, components expanded."""
+    from tundravm.components import SshAccess
+
+    for item in items:
+        if isinstance(item, SshAccess):
+            yield from item.logins
+        elif isinstance(item, Component):
+            yield from _logins(composed(item))
+
+
+def login_key_files(image: object) -> tuple[tuple[str, str], ...]:
+    """``(secret, path)`` for each ``Login(keys=Secret(...))``: the attested endpoint also
+    writes that secret, a public key list, to the login's ``authorized_keys.d`` file."""
+    return tuple(
+        dict.fromkeys(
+            (login.keys.name, login.key_file)
+            for login in _logins(_image_items(image))
+            if isinstance(login.keys, Secret)
+        )
+    )
 
 
 def _first[T: (Volume, Secret)](kind: str, found: dict[str, T], value: T) -> None:
@@ -131,6 +165,9 @@ def bound(image: object) -> tuple[tuple[Volume, ...], tuple[Secret, ...]]:
             _first("volume", volumes, service.state.volume)
         for secret in service.secrets:
             _first("secret", secrets, secret)
+    for login in _logins(_image_items(image)):
+        if isinstance(login.keys, Secret):
+            _first("secret", secrets, login.keys)
     for way in image.ingress:
         if isinstance(way, TLS):
             _first("secret", secrets, way.certificate)
@@ -186,6 +223,12 @@ class Runtime:
     services: tuple[Service, ...]
     tools: dm.Git | dm.Local
     rootfs: str
+    key_files: tuple[tuple[str, str], ...] = ()
+    """``(secret, path)``: a login's delivered keys, written to its ``authorized_keys.d``
+    file (``0644``: sshd reads it as the login) beside the secret's own location."""
+    ssh: Component | None = None
+    """The image's own ``SshAccess``, which the control plane runs with ``from_delivery``
+    on instead of a second one."""
 
     @property
     def control_plane(self) -> bool:
@@ -334,7 +377,10 @@ class Runtime:
         entries = tuple(
             dm.Secret(
                 secret.name,
-                (dm.SecretFile(secret.location, mode=0o600),),
+                (
+                    dm.SecretFile(secret.location, mode=0o600),
+                    *(dm.SecretFile(p, mode=0o644) for s, p in self.key_files if s == secret.name),
+                ),
                 required=secret.required,
             )
             for secret in self.secrets
@@ -346,7 +392,10 @@ class Runtime:
             ssh_key_path=None,
             attested_tls=tuple(way.port for way in self.attested),
         )
-        yield SshAccess(from_delivery=True)
+        if isinstance(self.ssh, SshAccess):
+            yield dataclasses.replace(self.ssh, from_delivery=True)
+        else:
+            yield SshAccess(from_delivery=True)
         for secret in self.secrets:
             yield _wait(
                 secret.ready.unit,

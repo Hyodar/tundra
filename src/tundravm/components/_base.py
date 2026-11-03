@@ -30,6 +30,7 @@ from tundravm._modules import tdxs as _tdxs
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
+from tundravm.declarative.utils import Login, Sudo
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
@@ -38,8 +39,10 @@ __all__ = [
     "INTEL_PCS",
     "DevAccess",
     "Firewall",
+    "Login",
     "Network",
     "SshAccess",
+    "Sudo",
     "Tdxs",
     "TeeBase",
     "egress_rules",
@@ -323,7 +326,9 @@ class SshAccess(Component):
 
     *keys* are public keys baked into the image; *from_delivery* accepts the key the
     attested endpoint takes once ``tundravm attest`` verified the quote binding the host
-    keys. One of them is required. The port is
+    keys. *login* is an account other than root, or a list of them: a :class:`Login` gets
+    in with its own keys into its forced command or shell, with its fixed ``sudo`` rules
+    and nothing else. A key or a login is required. The port is
     opened in the firewall; host keys are generated per instance at boot. Exports
     :attr:`port`. Component name: ``ssh-access``.
     """
@@ -331,6 +336,7 @@ class SshAccess(Component):
     keys: Sequence[str] = ()
     from_delivery: bool = False
     listen_port: int = 22
+    login: Login | Sequence[Login] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.keys, str):
@@ -345,10 +351,17 @@ class SshAccess(Component):
                     f"SshAccess: {key!r} is not one OpenSSH public key line.",
                     hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
                 )
-        if not self.keys and not self.from_delivery:
+        logins = (self.login,) if isinstance(self.login, Login) else self.login
+        if isinstance(logins, str) or not all(isinstance(item, Login) for item in logins):
+            raise ValidationError(
+                f"SshAccess: login= takes a Login or a list of them, got {self.login!r}.",
+                hint='Pass login=Login("tenant", keys=[...], command="/usr/bin/app-status").',
+            )
+        object.__setattr__(self, "login", tuple(logins))
+        if not self.keys and not self.from_delivery and not self.login:
             raise ValidationError(
                 "SshAccess has no key to accept, so nobody could log in.",
-                hint="Pass keys=[...], or from_delivery=True.",
+                hint="Pass keys=[...], from_delivery=True, or login=Login(...).",
             )
 
     @property
@@ -361,8 +374,15 @@ class SshAccess(Component):
             port=self.listen_port,
             authorized_keys=tuple(self.keys),
             from_secrets=self.from_delivery,
+            logins=self.logins,
         )
         yield from access.items
+
+    @property
+    def logins(self) -> tuple[Login, ...]:
+        """Every :class:`Login`, in the order given."""
+        assert isinstance(self.login, tuple)
+        return self.login
 
     rules = (
         Rule(

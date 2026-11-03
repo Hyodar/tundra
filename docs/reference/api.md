@@ -799,6 +799,34 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 | `JournalExport.service(proxy: Proxy \| None = None) -> Service` | The `journal-export` service, through *proxy* when given; without *url*, to the in-guest `sink`, never through a proxy. |
 | `JournalExport.sink() -> Service` | `journal-sink`: the in-guest receiver, plain HTTP on the loopback. |
 
+### `Login`
+
+*dataclass*
+
+```python
+Login(
+    name: str,
+    keys: Sequence[str] | Secret = (),
+    command: str | None = None,
+    shell: str | None = None,
+    sudo: Sequence[Sudo] = (),
+    home: bool = False,
+)
+```
+
+An account other than root that logs in over SSH into exactly what the image allows: `Login("tenant", keys=[...], command="/usr/bin/app-status")`.
+
+| Member | Does |
+|---|---|
+| `Login.account_shell` | The login shell: *shell*, else `/bin/sh` to run *command* (sshd runs a forced command through it, so `nologin` would refuse it). |
+| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, the command if any. |
+| `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys and its sudo rules. |
+| `Login.delivered` | Whether the keys arrive after attestation (a `Secret`) rather than baked in. |
+| `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
+| `Login.options` | The `authorized_keys` options every baked key carries. |
+| `Login.sudoers() -> str` | The `sudoers.d` file: exactly the *sudo* rules. |
+| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without *sudo*. |
+
 ### `Network`
 
 *dataclass*
@@ -958,6 +986,7 @@ SshAccess(
     keys: Sequence[str] = (),
     from_delivery: bool = False,
     listen_port: int = 22,
+    login: Login | Sequence[Login] = (),
 )
 ```
 
@@ -966,6 +995,7 @@ Root logs in over SSH with a public key, and with nothing else.
 | Member | Does |
 |---|---|
 | `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them. |
+| `SshAccess.logins` | Every `Login`, in the order given. |
 | `SshAccess.port` | The port `sshd` listens on. |
 
 ### `StaticAddress`
@@ -981,6 +1011,20 @@ A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")
 | Member | Does |
 |---|---|
 | `StaticAddress.version` | 4 or 6. |
+
+### `Sudo`
+
+*dataclass*
+
+```python
+Sudo(command: str, nopasswd: bool = True)
+```
+
+One command a `Login` runs as root, exactly as written: `Sudo("/usr/bin/systemctl restart app")`.
+
+| Member | Does |
+|---|---|
+| `Sudo.rule(user: str) -> str` | The `sudoers` line letting *user* run this command as root. |
 
 ### `Tdxs`
 

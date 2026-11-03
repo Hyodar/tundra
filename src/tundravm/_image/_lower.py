@@ -42,7 +42,13 @@ from ._component import (
     export_providers,
 )
 from ._image import BASE_PROFILE, DEV_PROFILE, Image, Profile
-from ._runtime import RUNTIME_FRAGMENT, Runtime, RuntimeFragment, services_of
+from ._runtime import (
+    RUNTIME_FRAGMENT,
+    Runtime,
+    RuntimeFragment,
+    login_key_files,
+    services_of,
+)
 from ._secrets import InstanceKey, Secret
 from ._service import Binding, Service
 from ._storage import VolumeDirectory
@@ -100,7 +106,7 @@ class _Lowering:
     """The units of every service the image, its profiles and ``dev=`` declare."""
 
     def __post_init__(self) -> None:
-        from tundravm.components import Firewall, Network, Tdxs, TeeBase
+        from tundravm.components import Firewall, Network, SshAccess, Tdxs, TeeBase
 
         self.baseline_types = (TeeBase, Network, Firewall, Tdxs)
         image = self.image
@@ -127,6 +133,8 @@ class _Lowering:
                 )
             ),
             tools=Tdxs().source if evidence is None else evidence.source,
+            key_files=login_key_files(image),
+            ssh=self.explicit(SshAccess),
             rootfs=image.rootfs.layout,
         )
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
@@ -174,11 +182,15 @@ class _Lowering:
 
     def items(self) -> tuple[dm.Declaration | dm.Fragment, ...]:
         """Everything the image declares, implied baseline first."""
+        from tundravm.components import SshAccess
+
         image = self.image
         body: list[dm.Declaration | dm.Fragment] = []
         for item in (*image.packages, *image.files, *image.users, *image.groups):
             body.extend(self.content(item))
         for component in image.components:
+            if isinstance(component, SshAccess) and self.runtime.control_plane:
+                continue  # the control plane runs it, accepting the operator's key too
             if not isinstance(component, self.baseline_types):
                 body.append(self.component(component))
         if image.observability is not None:

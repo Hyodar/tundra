@@ -59,6 +59,7 @@ COMPONENTS = [
     "Endpoint",
     "Firewall",
     "JournalExport",
+    "Login",
     "Network",
     "Observability",
     "PrometheusRemoteWrite",
@@ -69,6 +70,7 @@ COMPONENTS = [
     "ServiceRef",
     "SshAccess",
     "StaticAddress",
+    "Sudo",
     "Tdxs",
     "TeeBase",
 ]
@@ -168,8 +170,10 @@ REUSED_FROM_DECLARATIVE = [
     "Install",
     "Listen",
     "Local",
+    "Login",
     "Resolved",
     "StaticAddress",
+    "Sudo",
     "User",
 ]
 """Names the public surface keeps rather than re-spells: the internal model's own objects.

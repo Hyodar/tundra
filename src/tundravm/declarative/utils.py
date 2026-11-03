@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from tundravm._modules import devtools as _devtools
 from tundravm._modules import tdxs as _tdxs
 from tundravm._modules.base import tools_source as _tools_source
+from tundravm._modules.init import OWNERS_STEP
 from tundravm._source import FrozenMap, LocalSource
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import (
@@ -63,6 +64,8 @@ from .model import (
 from .systemd import Condition, Hardening, Root
 
 if TYPE_CHECKING:
+    from tundravm._image._secrets import Secret
+
     from .lifecycle import Measurements
 
 TdxsType = Literal["tdx", "azure", "gcp", "simulator"]
@@ -861,6 +864,239 @@ _SSH_PUBLIC_KEY = re.compile(
 )
 
 
+SSH_LOGIN_CONFIG = "/etc/ssh/sshd_config.d/60-tundravm-login-{name}.conf"
+"""Each :class:`Login`'s ``Match User`` block, one file each: a ``Match`` in an included
+file ends with that file, so Debian's own lines after the ``Include`` stay global."""
+SUDOERS_DIRECTORY = "/etc/sudoers.d"
+"""Where a :class:`Login` with ``sudo=`` gets its rules, one file per login (``0440``)."""
+NOLOGIN = "/usr/sbin/nologin"
+_FORCED_SHELL = "/bin/sh"
+_LOGIN_NAME = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+_SUDO_REFUSED = frozenset("*?[]\\\"'")
+_COMMAND_REFUSED = frozenset('"\\\n')
+
+
+@dataclass(frozen=True, slots=True)
+class Sudo(Keywords):
+    """One command a :class:`Login` runs as root, exactly as written:
+    ``Sudo("/usr/bin/systemctl restart app")``.
+
+    The rule is one ``sudoers`` line matching these words and no others: no wildcard, no
+    quoting, and a command without arguments takes none (a bare path in ``sudoers`` takes
+    any). *nopasswd* stays ``True``: a login has no password to type.
+    """
+
+    command: str
+    nopasswd: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.command, str) or "\n" in self.command or not self.command.split():
+            raise ValidationError(
+                f"Sudo: {self.command!r} is not one command line.",
+                hint='Sudo("/usr/bin/systemctl restart app").',
+            )
+        words = self.command.split()
+        if not words[0].startswith("/"):
+            raise ValidationError(
+                f"Sudo: {words[0]!r} is not an absolute path, and sudo runs nothing by name.",
+                hint=f'Sudo("/usr/bin/{words[0]}{self.command[len(words[0]) :]}").',
+            )
+        refused = "".join(sorted(_SUDO_REFUSED & set(self.command)))
+        if refused:
+            raise ValidationError(
+                f"Sudo: {self.command!r} holds {refused!r}, which sudoers reads as a wildcard "
+                "or a quote, so the rule would allow more than it says.",
+                hint="Write each argument literally: one Sudo per exact command line.",
+            )
+        if self.nopasswd is not True:
+            raise ValidationError(
+                "Sudo: nopasswd=False asks for a password the login does not have, so the "
+                "rule could never run.",
+                hint="Drop nopasswd=False.",
+            )
+        object.__setattr__(self, "command", " ".join(words))
+
+    def rule(self, user: str) -> str:
+        """The ``sudoers`` line letting *user* run this command as root."""
+        words = [re.sub(r"([,:=])", r"\\\1", word) for word in self.command.split()]
+        if len(words) == 1:
+            words.append('""')
+        return f"{user} ALL=(root) NOPASSWD: {' '.join(words)}"
+
+
+@dataclass(frozen=True, slots=True)
+class Login(Keywords):
+    """An account other than root that logs in over SSH into exactly what the image allows:
+    ``Login("tenant", keys=[...], command="/usr/bin/app-status")``.
+
+    The account has no password and no other way in. *keys* are public keys baked into the
+    image (``/etc/ssh/authorized_keys.d/<name>``), or a ``Secret`` the attested endpoint
+    writes there once ``tundravm secrets deliver`` verified a quote binding the host keys.
+    *command* is a forced command: whatever the client asks for, sshd runs this (the
+    request is in ``$SSH_ORIGINAL_COMMAND``), without a terminal, through ``/bin/sh``
+    unless *shell* is given. *shell* is the account's login shell, for a restricted shell
+    the image ships (a ``searchersh``-like menu built with ``GoBinary``); tundravm ships
+    none. One of them is required. Every key is ``restrict``-ed and sshd's ``Match User``
+    block disables forwarding and reads only those keys, so a delivered key gets the same
+    limits as a baked one. *sudo* is the fixed list of commands it runs as root
+    (``/etc/sudoers.d/<name>``, checked with ``visudo -c`` while the image is built).
+    *home* makes ``/home/<name>``, which the ``owners`` runtime-init step hands to the
+    login at boot (an initramfs root holds every file as root); without it sshd says
+    it cannot change to one.
+    """
+
+    name: str
+    keys: Sequence[str] | Secret = ()
+    command: str | None = None
+    shell: str | None = None
+    sudo: Sequence[Sudo] = ()
+    home: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _LOGIN_NAME.fullmatch(self.name):
+            raise ValidationError(
+                f"Login: {self.name!r} is not an account name.",
+                hint='Use lower-case letters, digits, "-" and "_": Login("tenant", ...).',
+            )
+        if self.name == "root":
+            raise ValidationError(
+                "Login: root is not a login; SshAccess(keys=) or from_delivery=True is how "
+                "root logs in.",
+                hint='Name the account the login is for: Login("tenant", ...).',
+            )
+        self._check_keys()
+        for keyword in ("command", "shell"):
+            value = getattr(self, keyword)
+            if value is None:
+                continue
+            words = value.split() if isinstance(value, str) else []
+            if not words or not words[0].startswith("/") or _COMMAND_REFUSED & set(value):
+                raise ValidationError(
+                    f"Login {self.name}: {keyword}={value!r} is not one line starting with "
+                    "an absolute path, without '\"' or '\\'.",
+                    hint=f'Login("{self.name}", {keyword}="/usr/bin/app-status").',
+                )
+            if keyword == "shell" and len(words) > 1:
+                raise ValidationError(
+                    f"Login {self.name}: shell={value!r} is a command line, not a shell.",
+                    hint=f'Pass the shell alone, or the line as command="{value}".',
+                )
+            object.__setattr__(self, keyword, " ".join(words))
+        if self.command is None and self.shell is None:
+            raise ValidationError(
+                f"Login {self.name} runs nothing: it has no command= and no shell=.",
+                hint=f'Login("{self.name}", command="/usr/bin/app-status"), or shell= for a '
+                "restricted shell the image ships.",
+            )
+        if isinstance(self.sudo, Sudo) or isinstance(self.sudo, str):
+            raise ValidationError(
+                f"Login {self.name}: sudo= takes a list of Sudo rules.",
+                hint='sudo=[Sudo("/usr/bin/systemctl restart app")].',
+            )
+        object.__setattr__(self, "sudo", tuple(self.sudo))
+        for rule in self.sudo:
+            if not isinstance(rule, Sudo):
+                raise ValidationError(
+                    f"Login {self.name}: sudo= holds {rule!r}, not a Sudo.",
+                    hint=f'sudo=[Sudo("{rule}")].' if isinstance(rule, str) else "Pass Sudo(...).",
+                )
+        if not isinstance(self.home, bool):
+            raise ValidationError(
+                f"Login {self.name}: home= must be True or False.", hint="Pass home=True."
+            )
+
+    def _check_keys(self) -> None:
+        from tundravm._image._secrets import Secret
+
+        if isinstance(self.keys, Secret):
+            return
+        if isinstance(self.keys, str):
+            raise ValidationError(
+                f"Login {self.name}: keys= takes a list of public keys or a Secret.",
+                hint="Pass keys=['ssh-ed25519 AAAA... me@host'].",
+            )
+        object.__setattr__(self, "keys", tuple(self.keys))
+        for key in self.keys:
+            if not isinstance(key, str) or not _SSH_PUBLIC_KEY.fullmatch(key.strip()):
+                raise ValidationError(
+                    f"Login {self.name}: {key!r} is not one OpenSSH public key line.",
+                    hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
+                )
+        if not self.keys:
+            raise ValidationError(
+                f"Login {self.name} has no key to accept, so nobody could log in.",
+                hint=f"Pass keys=['ssh-ed25519 AAAA...'], or keys=Secret('{self.name}-keys') "
+                "for keys delivered after attestation.",
+            )
+
+    @property
+    def delivered(self) -> bool:
+        """Whether the keys arrive after attestation (a ``Secret``) rather than baked in."""
+        return not isinstance(self.keys, tuple)
+
+    @property
+    def key_file(self) -> str:
+        """Where its keys are read: ``/etc/ssh/authorized_keys.d/<name>``."""
+        return f"{SSH_AUTHORIZED_KEYS_DIR}/{self.name}"
+
+    @property
+    def options(self) -> str:
+        """The ``authorized_keys`` options every baked key carries."""
+        if self.command is not None:
+            return f'restrict,command="{self.command}"'
+        return "restrict,pty"
+
+    @property
+    def account_shell(self) -> str:
+        """The login shell: *shell*, else ``/bin/sh`` to run *command* (sshd runs a forced
+        command through it, so ``nologin`` would refuse it)."""
+        return self.shell or _FORCED_SHELL
+
+    @property
+    def sudoers_file(self) -> str | None:
+        """``/etc/sudoers.d/<name>``, or ``None`` without *sudo*."""
+        return f"{SUDOERS_DIRECTORY}/{self.name}" if self.sudo else None
+
+    def config(self) -> str:
+        """The ``sshd_config.d`` file: its own keys only, no forwarding, the command if any."""
+        lines = [
+            f"# tundravm Login {self.name}: its own keys, no forwarding"
+            + (", this command only" if self.command is not None else ""),
+            f"Match User {self.name}",
+            f"    AuthorizedKeysFile {SSH_AUTHORIZED_KEYS_DIR}/%u",
+            "    DisableForwarding yes",
+        ]
+        if self.command is not None:
+            lines += ["    PermitTTY no", f"    ForceCommand {self.command}"]
+        return "\n".join(lines) + "\n"
+
+    def sudoers(self) -> str:
+        """The ``sudoers.d`` file: exactly the *sudo* rules."""
+        rules = "".join(f"{rule.rule(self.name)}\n" for rule in self.sudo)
+        return f"# tundravm Login {self.name}: these commands as root, nothing else\n{rules}"
+
+    def declarations(self) -> Iterator[Declaration]:
+        """The account, its sshd block, its keys and its sudo rules."""
+        home = f"/home/{self.name}" if self.home else None
+        yield User(self.name, system=False, home=home, shell=self.account_shell)
+        if home is not None:
+            chown = shlex.join(["chown", "-R", f"{self.name}:{self.name}", home])
+            yield BootStep(f"{OWNERS_STEP}-login-{self.name}", f"{chown}\n")
+        yield File.text(SSH_LOGIN_CONFIG.format(name=self.name), self.config())
+        if isinstance(self.keys, tuple):
+            keys = "".join(f"{self.options} {key.strip()}\n" for key in self.keys)
+            yield File.text(self.key_file, keys, mode=0o644)
+        else:
+            # the endpoint may write only an existing directory (ReadWritePaths=-...)
+            script = f'mkdir -p "$BUILDROOT{SSH_AUTHORIZED_KEYS_DIR}"'
+            yield Hook(f"ssh-login-{self.name}-keys", "postinst", script)
+        if self.sudoers_file is not None:
+            yield Package("sudo")
+            yield File.text(self.sudoers_file, self.sudoers(), mode=0o440)
+            check = f"mkosi-chroot visudo -c -f {self.sudoers_file}"
+            yield Hook(f"ssh-login-{self.name}-sudoers", "postinst", check)
+
+
 @component
 class SshAccess(Composite):
     """Root logs in over SSH with a public key, and with nothing else.
@@ -872,18 +1108,21 @@ class SshAccess(Composite):
     generates this instance's at boot (``ssh-keygen -A``, skipped when they exist) and sshd
     starts after it. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
     only and root by key only (``PermitRootLogin prohibit-password``): root is the account
-    the attested endpoint takes a key for, and the image has no other login account, so refusing
-    root would refuse everyone, while a password is never accepted.
+    the attested endpoint takes a key for, so refusing root would refuse the operator, while
+    a password is never accepted.
     *authorized_keys* are public keys baked into the image
     (``/etc/ssh/authorized_keys.d/root``); *from_secrets* accepts the key the image's
     ``Secrets`` endpoint takes once the operator verified a quote binding these host keys
     (``/root/.ssh/authorized_keys``, read at each login, so sshd waits only for its host
-    keys). One of them is required. Component name: ``ssh-access``.
+    keys). *logins* are the other accounts (:class:`Login`), each with its own
+    ``sshd_config.d/60-tundravm-login-<name>.conf``. A key or a login is required.
+    Component name: ``ssh-access``.
     """
 
     port: int = 22
     authorized_keys: tuple[str, ...] = ()
     from_secrets: bool = False
+    logins: tuple[Login, ...] = ()
 
     def compose(self) -> Iterator[Declaration]:
         if isinstance(self.port, bool) or not isinstance(self.port, int):
@@ -902,7 +1141,19 @@ class SshAccess(Composite):
                     f"SshAccess: {key!r} is not one OpenSSH public key line.",
                     hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
                 )
-        if not self.authorized_keys and not self.from_secrets:
+        if isinstance(self.logins, Login) or not all(isinstance(x, Login) for x in self.logins):
+            raise ValidationError(
+                f"SshAccess: logins= takes a tuple of Login, got {self.logins!r}.",
+                hint='Pass logins=(Login("tenant", ...),).',
+            )
+        names = [login.name for login in self.logins]
+        twice = sorted({name for name in names if names.count(name) > 1})
+        if twice:
+            raise ValidationError(
+                f"SshAccess: two logins are called {', '.join(twice)}.",
+                hint="Give each Login its own name, or merge their keys and rules into one.",
+            )
+        if not self.authorized_keys and not self.from_secrets and not self.logins:
             raise ValidationError(
                 "SshAccess has no key to accept, so nobody could log in.",
                 hint="Pass SshAccess(keys=[...]), or SshAccess(from_delivery=True).",
@@ -924,6 +1175,8 @@ class SshAccess(Composite):
         )
         yield host_keys
         yield Unit("ssh.service", enabled=True, needs=(host_keys.ready,), ports=(self.port,))
+        for login in self.logins:
+            yield from login.declarations()
 
     def config(self) -> str:
         """The ``sshd_config.d`` drop-in: keys only, root by key only."""
@@ -1120,6 +1373,7 @@ __all__ = [
     "GoBinary",
     "HttpEndpoint",
     "KernelHardening",
+    "Login",
     "NETWORK_FILE",
     "Network",
     "Port",
@@ -1130,8 +1384,11 @@ __all__ = [
     "RuntimeFile",
     "SSH_AUTHORIZED_KEYS_DIR",
     "SSH_CONFIG",
+    "SSH_LOGIN_CONFIG",
+    "SUDOERS_DIRECTORY",
     "SshAccess",
     "StaticAddress",
+    "Sudo",
     "TEE_HYPERVISOR_CLOCKS",
     "TEE_MASKED_UNITS",
     "TEE_NAMESERVERS",
