@@ -65,6 +65,9 @@ The checks, each only when its declaration exists (:func:`derive`):
   so, :mod:`tundravm._modules.root_mode`; a verity root is read-only beneath);
 - ``key:instance``: the instance key (:mod:`tundravm._modules.instance_key`, always) is
   ``root:root 0600`` and its public key file holds its public key;
+- ``mode:firewall``: with ``Firewall(modes=)``, ``mode-switch status``: the mode in force,
+  the switches since boot, and whether the RTMR3 the evidence service reports is their
+  replay;
 - ``attested-tls:PORT``: the attested TLS listener on ``PORT`` serves a certificate, and
   its key is the one the attested endpoint's evidence binds for that port
   (``Secrets(attested_tls=)``);
@@ -149,6 +152,7 @@ Helper = Literal[
     "endpoint",
     "attested-tls",
     "owner",
+    "firewall-mode",
 ]
 
 
@@ -360,6 +364,21 @@ def derive(
                     (relay, unit),
                 )
             )
+    switchable = any(
+        (isinstance(i, Unit) and i.name == "mode-switch.service")
+        or (isinstance(i, Firewall) and i.modes)
+        for i in items
+    )
+    if switchable:
+        checks.append(
+            Check(
+                "mode:firewall",
+                "the firewall mode in force, its switches since boot, and RTMR3 their replay",
+                "probe_firewall_mode",
+                "firewall-mode",
+                ("mode-switch.service", "tdxs.socket"),
+            )
+        )
     checks += observed
     checks += hardened
     off = sorted(option for option in set(kernel_off) if option in SYMBOLS)
@@ -1317,6 +1336,15 @@ probe_login() {
     ok "password locked; sshd forces $4, no forwarding$parsed"
 }
 """,  # noqa: E501
+    "firewall-mode": """\
+probe_firewall_mode() {
+    if said=$(/usr/bin/mode-switch status 2>&1); then
+        ok "$said"
+    else
+        fail "${said#mode-switch: }; journalctl -u mode-switch -u tdxs"
+    fi
+}
+""",
     "owner": """\
 probe_owner() {
     if [ ! -e "$1" ]; then

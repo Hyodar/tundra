@@ -385,6 +385,7 @@ def test_to_dict_is_the_stable_json_shape() -> None:
         "guest_mode",
         "instance_key",
         "issuer",
+        "modes",
         "nonce",
         "passed",
         "platform",

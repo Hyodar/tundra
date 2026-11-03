@@ -239,6 +239,13 @@ def _checked(data: dict[str, object], *, where: str) -> dict[str, object]:
     data["unverifiable"] = dict(sorted(reasons.items()))
     if "platform_approval" in data:
         data["platform_approval"] = _approval(data["platform_approval"], where=where)
+    modes = data.get("modes", ["production"])
+    if not isinstance(modes, list) or not modes or not all(isinstance(m, str) for m in modes):
+        raise ValidationError(
+            f"{where}: modes must list the firewall modes the instance may have been in since "
+            "boot.",
+            hint='"modes": ["production"] refuses an instance that opened any other mode.',
+        )
     return data
 
 

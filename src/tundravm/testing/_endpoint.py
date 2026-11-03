@@ -2,7 +2,7 @@
 side's tests. It speaks through :class:`FakeSession` objects (one per TLS session), signs
 simulator quotes the way tdxs's simulator issuer does and builds synthetic TDX quotes,
 presents the certificate of each attested TLS listener it binds, and misbehaves on
-request: ``relay``, ``replay``, ``wrong-key``, ``wrong-certificate``."""
+request: ``relay``, ``replay``, ``wrong-key``, ``wrong-certificate``, ``mode-log``."""
 
 from __future__ import annotations
 
@@ -20,14 +20,15 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 from tundravm import _ssh_sig
-from tundravm.attestation import SIMULATOR_KEY, report_data_for
+from tundravm.attestation import SIMULATOR_KEY, replay_rtmr3, report_data_for
 from tundravm.bootstrap import PURPOSE, SIGNATURE_NAMESPACE, binding
 
-Misbehaviour = Literal["relay", "replay", "wrong-key", "wrong-certificate"]
+Misbehaviour = Literal["relay", "replay", "wrong-key", "wrong-certificate", "mode-log"]
 """``relay``: the session's TLS key changes after the evidence (the delivery would land on
 another session); ``replay``: the evidence answers the first nonce it ever saw; ``wrong-key``:
 the evidence binds a TLS key that is not the session's; ``wrong-certificate``: an attested
-TLS listener presents a certificate whose key the evidence does not bind."""
+TLS listener presents a certificate whose key the evidence does not bind; ``mode-log``:
+the evidence's firewall events leave out the last switch RTMR3 holds."""
 
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeEndpointHostKeyFakeEndpointHostKey00"
 INSTANCE_KEY = "02" + "ab" * 32
@@ -91,7 +92,10 @@ class FakeEndpoint:
     the first signed one pins :attr:`owner` (a public key line), and a write by another key
     is refused (403); :attr:`signers` holds who signed each write. A signature must verify
     (``ssh-keygen -Y check-novalidate``) over the hex user data of the evidence its nonce
-    fetched, by the key it names, as ``tools/pkg/owner`` checks it."""
+    fetched, by the key it names, as ``tools/pkg/owner`` checks it. With *modes*
+    (production first) the firewall switches: ``POST /mode`` logs
+    ``tundravm:mode:<name>:<clock>`` in :attr:`mode_events`, which the evidence carries and
+    the simulator's RTMR3 replays; *clock* is the boot's seconds, advanced by the test."""
 
     platform: Literal["simulator", "tdx"] = "simulator"
     registers: Mapping[str, bytes] = field(default_factory=dict)
@@ -114,6 +118,10 @@ class FakeEndpoint:
     """Whether the volume's encrypted copy confirmed :attr:`owner` this boot: outside a
     ``simulated`` mode the endpoint takes an SSH key only then."""
     signers: list[str] = field(default_factory=list)
+    modes: tuple[str, ...] = ()
+    mode_events: list[str] = field(default_factory=list)
+    clock: int = 412
+    reply: dict[str, object] = field(default_factory=dict)
 
     @property
     def takes_ssh_key(self) -> bool:
@@ -156,8 +164,9 @@ class FakeEndpoint:
             tag = hmac.new(SIMULATOR_KEY, bound[:32], hashlib.sha256).digest()
             raw = bound[:32] + tag
             zero = bytes(48).hex()
-            names = ("mrtd", "mrowner", "mrseam", "rtmr0", "rtmr1", "rtmr2", "rtmr3")
-            metadata = {"issuerType": "simulator", "metadata": dict.fromkeys(names, zero)}
+            names = ("mrtd", "mrowner", "mrseam", "rtmr0", "rtmr1", "rtmr2")
+            registers = {**dict.fromkeys(names, zero), "rtmr3": replay_rtmr3(self.mode_events)}
+            metadata = {"issuerType": "simulator", "metadata": registers}
         else:
             raw = tdx_quote(bound, registers=self.registers, debug=self.debug)
         document = {
@@ -184,6 +193,7 @@ class FakeEndpoint:
                 for port in bound_ports
             ],
             "mode": self.mode,
+            **({"firewall": self._firewall()} if self.modes else {}),
             "accepts": {
                 "credentials": list(self.credentials),
                 "volumes": list(self.volumes),
@@ -195,6 +205,11 @@ class FakeEndpoint:
                 ),
             },
         }
+
+    def _firewall(self) -> dict[str, object]:
+        events = self.mode_events[:-1] if self.misbehave == "mode-log" else self.mode_events
+        current = events[-1].split(":")[2] if events else "production"
+        return {"mode": current, "modes": list(self.modes), "events": list(events)}
 
     def _fingerprint(self) -> str:
         if self.owner is None:
@@ -240,6 +255,23 @@ class FakeEndpoint:
                 return 409
             self.unlocked[volume] = base64.b64decode(str(body.get("passphrase")))
             return 200
+        if path == "/mode" and self.modes:
+            mode = str(body.get("mode"))
+            previous = self.mode_events[-1].split(":")[2] if self.mode_events else "production"
+            if mode not in self.modes or mode == previous:
+                return 409
+            event = f"tundravm:mode:{mode}:{self.clock}"
+            self.mode_events.append(event)
+            until = 0 if mode == "production" else self.clock + 1800
+            self.reply = {
+                "mode": mode,
+                "previous": previous,
+                "at": self.clock,
+                "until": until,
+                "switches": len(self.mode_events),
+                "event": event,
+            }
+            return 200
         if path == "/ssh-key" and self.takes_ssh_key:
             self.ssh_keys.append(str(body.get("key")))
             return 200
@@ -266,8 +298,9 @@ class FakeSession:
         if method == "GET" and url.path == "/evidence":
             nonce = bytes.fromhex(parse_qs(url.query)["nonce"][0])
             return 200, json.dumps(self.endpoint.evidence(self, nonce)).encode()
+        self.endpoint.reply = {}
         status = self.endpoint.write(self, url.path, json.loads(body or b"{}"))
-        reply = {} if status == 200 else {"error": f"refused with {status}"}
+        reply = self.endpoint.reply if status == 200 else {"error": f"refused with {status}"}
         return status, json.dumps(reply).encode()
 
 

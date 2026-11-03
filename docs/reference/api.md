@@ -1878,6 +1878,10 @@ FakeEndpoint(
     mismatch: str | None = None,
     confirmed: bool = False,
     signers: list[str] = list(),
+    modes: tuple[str, ...] = (),
+    mode_events: list[str] = list(),
+    clock: int = 412,
+    reply: dict[str, object] = dict(),
 )
 ```
 

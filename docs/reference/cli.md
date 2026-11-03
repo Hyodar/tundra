@@ -9,9 +9,9 @@ Generated from the `tundravm` argument parser by `uv run python -m tundravm._ref
 | [`lock`](#tundravm-lock) | Resolve or check the lock: snapshot, sources, toolchain. |
 | [`build`](#tundravm-build) | Build into an immutable build directory, with its manifest. |
 | [`show`](#tundravm-show) | Show the image as written and what it builds, or a build; --diff two of either. |
-| [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode\|probe. |
+| [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode\|switch\|probe. |
 | [`dev`](#tundravm-dev) | Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it. |
-| [`deploy`](#tundravm-deploy) | Deploy a build to Azure or GCP; status\|logs\|mode\|upgrade\|rollback. |
+| [`deploy`](#tundravm-deploy) | Deploy a build to Azure or GCP; status\|logs\|mode\|switch\|upgrade\|rollback. |
 | [`attest`](#tundravm-attest) | Verify an instance's evidence against a policy; delivers nothing. |
 | [`secrets`](#tundravm-secrets) | Deliver credentials or unlock a volume after a fresh attestation. |
 | [`verify`](#tundravm-verify) | Check a build directory against its manifest. |
@@ -32,9 +32,9 @@ positional arguments:
     lock      Resolve or check the lock: snapshot, sources, toolchain.
     build     Build into an immutable build directory, with its manifest.
     show      Show the image as written and what it builds, or a build; --diff two of either.
-    run       Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.
+    run       Run a build locally as a named instance; status|logs|stop|ssh|mode|switch|probe.
     dev       Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it.
-    deploy    Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.
+    deploy    Deploy a build to Azure or GCP; status|logs|mode|switch|upgrade|rollback.
     attest    Verify an instance's evidence against a policy; delivers nothing.
     secrets   Deliver credentials or unlock a volume after a fresh attestation.
     verify    Check a build directory against its manifest.
@@ -224,12 +224,12 @@ options:
 
 ## tundravm run
 
-Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.
+Run a build locally as a named instance; status|logs|stop|ssh|mode|switch|probe.
 
 ```text
 usage: tundravm run [-h] [--json] [--traceback] [--mode {simulated,tdx}] [--dev] [--detach]
                     [--probe] [--timeout SECONDS] [--memory MEMORY] [--cpus CPUS] [--identity KEY]
-                    [BUILD|ACTION] [INSTANCE]
+                    [BUILD|ACTION] [INSTANCE] [MODE]
 
 tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]
     boot qemu.raw through OVMF from its ESP on a snapshot (the build is never
@@ -247,11 +247,15 @@ tundravm run logs INSTANCE     the serial console
 tundravm run stop INSTANCE     quit QEMU
 tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH
 tundravm run mode INSTANCE     the security mode and what it means for evidence
+tundravm run switch INSTANCE MODE
+    put a firewall mode in force over the attested endpoint (signed by the pinned
+    operator); the switch is extended into RTMR3 and a window closes on its own
 tundravm run probe INSTANCE    the boot probe's checks; writes probe.json
 
 positional arguments:
   BUILD|ACTION          A build, or an action.
   INSTANCE              The instance of an action.
+  MODE                  The firewall mode of `switch`.
 
 options:
   -h, --help            show this help message and exit
@@ -307,7 +311,7 @@ loading the image file:
 
 ## tundravm deploy
 
-Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.
+Deploy a build to Azure or GCP; status|logs|mode|switch|upgrade|rollback.
 
 ```text
 usage: tundravm deploy [-h] [--json] [--traceback] [--build BUILD]
@@ -324,6 +328,8 @@ tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID] 
     gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.
     --plan prints each step and every cloud call in order and runs none of them.
 tundravm deploy status|logs|mode INSTANCE
+tundravm deploy switch INSTANCE MODE
+    put a firewall mode in force, as `run switch` does
 tundravm deploy upgrade INSTANCE --build BUILD --policy FILE [NAME=@FILE...]
     the replacement workflow (GCP): launch the candidate, attest it and deliver its
     credentials, stop the old one, move the volumes, unlock, wait for readiness

@@ -119,8 +119,8 @@ COMMANDS = (
     "convert",
     "doctor",
 )
-RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "probe")
-DEPLOY_ACTIONS = ("status", "logs", "mode", "upgrade", "rollback")
+RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "switch", "probe")
+DEPLOY_ACTIONS = ("status", "logs", "mode", "switch", "upgrade", "rollback")
 DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 
 QUICKSTART = """\
@@ -504,7 +504,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = command(
         "run",
         _cmd_run,
-        "Run a build locally as a named instance; status|logs|stop|ssh|mode|probe.",
+        "Run a build locally as a named instance; status|logs|stop|ssh|mode|switch|probe.",
         "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]\n"
         "    boot qemu.raw through OVMF from its ESP on a snapshot (the build is never\n"
         "    written), forward every TCP port the image's firewall accepts or its services\n"
@@ -521,6 +521,9 @@ def build_parser() -> argparse.ArgumentParser:
         "tundravm run stop INSTANCE     quit QEMU\n"
         "tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH\n"
         "tundravm run mode INSTANCE     the security mode and what it means for evidence\n"
+        "tundravm run switch INSTANCE MODE\n"
+        "    put a firewall mode in force over the attested endpoint (signed by the pinned\n"
+        "    operator); the switch is extended into RTMR3 and a window closes on its own\n"
         "tundravm run probe INSTANCE    the boot probe's checks; writes probe.json",
         as_json,
     )
@@ -529,6 +532,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "instance", nargs="?", default=None, metavar="INSTANCE", help="The instance of an action."
+    )
+    run.add_argument(
+        "target", nargs="?", default=None, metavar="MODE", help="The firewall mode of `switch`."
     )
     run.add_argument(
         "--mode", choices=instances.MODES, default=None, help="Security mode (required to start)."
@@ -588,7 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy = command(
         "deploy",
         _cmd_deploy,
-        "Deploy a build to Azure or GCP; status|logs|mode|upgrade|rollback.",
+        "Deploy a build to Azure or GCP; status|logs|mode|switch|upgrade|rollback.",
         "tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID] [--plan]\n"
         "    publish the build's disk and start a TDX VM from it, with a receipt; every\n"
         "    volume the image declares needs --volume (GCP attaches it as tundravm-NAME;\n"
@@ -598,6 +604,8 @@ def build_parser() -> argparse.ArgumentParser:
         "    gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.\n"
         "    --plan prints each step and every cloud call in order and runs none of them.\n"
         "tundravm deploy status|logs|mode INSTANCE\n"
+        "tundravm deploy switch INSTANCE MODE\n"
+        "    put a firewall mode in force, as `run switch` does\n"
         "tundravm deploy upgrade INSTANCE --build BUILD --policy FILE [NAME=@FILE...]\n"
         "    the replacement workflow (GCP): launch the candidate, attest it and deliver its\n"
         "    credentials, stop the old one, move the volumes, unlock, wait for readiness\n"
@@ -1415,6 +1423,10 @@ def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
                 f"{instance.id} is a {instance.platform} deployment.",
                 hint=f"Use `tundravm deploy {args.subject} {instance.id}`.",
             )
+        if args.target is not None and args.subject != "switch":
+            raise ValidationError(
+                f"Unexpected {args.target}.", hint=f"tundravm run {args.subject} INSTANCE"
+            )
         return _run_action(args.subject, instance, args, out)
     if args.instance is not None:
         raise ValidationError(
@@ -1478,6 +1490,9 @@ def _run_action(
             for key in (*shown, "instance_key", "owner", "operator"):
                 if key in report:
                     print(f"{key:<14} {report[key]}", file=out)
+            firewall = _firewall_line(instance)
+            if firewall is not None:
+                print(f"{'firewall':<14} {firewall}", file=out)
             build = cast(Mapping[str, object], report["build"])
             print(f"{'build':<14} {build['id']} ({build['kind']})", file=out)
         return EXIT_OK
@@ -1491,6 +1506,8 @@ def _run_action(
         return EXIT_OK
     if action == "mode":
         return _mode(instance, args, out)
+    if action == "switch":
+        return _switch(instance, args.target, args, out)
     if action == "probe":
         return _probe(instance, out, timeout=args.timeout, as_json=args.json)
     instances.ssh_permitted(instance)
@@ -1502,6 +1519,40 @@ def _run_action(
             file=sys.stderr,
         )
     os.execvp(argv[0], argv)
+
+
+def _firewall_line(instance: instances.Instance) -> str | None:
+    """The firewall mode the last ``attest`` or ``switch`` saw, from the receipt."""
+    seen = instance.data.get("firewall_mode")
+    if not isinstance(seen, dict):
+        return None
+    until = f", closes at {seen['until']}s of boot" if seen.get("until") else ""
+    switches = f"{seen.get('switches')} switches since boot{until}"
+    return f"{seen.get('mode')} ({switches}; seen {seen.get('at')})"
+
+
+def _switch(
+    instance: instances.Instance, mode: str | None, args: argparse.Namespace, out: TextIO
+) -> int:
+    verb = "run" if instance.platform == "qemu" else "deploy"
+    if not mode:
+        raise ValidationError(
+            f"`{verb} switch` needs INSTANCE and MODE.",
+            hint=f"tundravm {verb} switch {instance.id} maintenance",
+        )
+    result, done = bootstrap.switch(instance, mode, validator=getattr(args, "validator", None))
+    if args.json:
+        print(json_report(args.command, {"id": instance.id, **done}), file=out)
+        return EXIT_OK
+    until = f", closes at {done['until']}s" if done.get("until") else ""
+    print(
+        f"{instance.id}: {done.get('mode')} since {done.get('at')}s of boot{until} "
+        f"(switch {done.get('switches')}, from {done.get('previous')}, extended into RTMR3; "
+        f"verdict {result.verdict})",
+        file=out,
+    )
+    print(f"channel: {bootstrap.CHANNEL}", file=out)
+    return EXIT_OK
 
 
 def _mode(instance: instances.Instance, args: argparse.Namespace, out: TextIO) -> int:
@@ -1635,6 +1686,13 @@ def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
         raise ValidationError(
             f"Unexpected {' '.join(rest)}.", hint=f"tundravm deploy {action} INSTANCE"
         )
+    if action == "switch":
+        if len(rest) > 1:
+            raise ValidationError(
+                f"Unexpected {' '.join(rest[1:])}.",
+                hint=f"tundravm deploy switch {instance.id} MODE",
+            )
+        return _switch(instance, rest[0] if rest else None, args, out)
     if action == "status":
         report = deployments.status(instance)
         if args.json:
@@ -1643,6 +1701,9 @@ def _cmd_deploy(args: argparse.Namespace, out: TextIO) -> int:
             for key, value in report.items():
                 if key != "build":
                     print(f"{key:<14} {value}", file=out)
+            firewall = _firewall_line(instance)
+            if firewall is not None:
+                print(f"{'firewall':<14} {firewall}", file=out)
         return EXIT_OK
     if action == "logs":
         out.write(deployments.logs(instance))

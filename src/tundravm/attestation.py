@@ -40,7 +40,7 @@ import json
 import secrets
 import socket
 import struct
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -243,6 +243,92 @@ class RegisterCheck:
         }
 
 
+MODE_EVENT_PREFIX = "tundravm:mode:"
+"""What every firewall mode switch's RTMR3 event starts with: ``tundravm:mode:<name>:<s>``,
+*s* the seconds of ``CLOCK_BOOTTIME`` the switch happened at."""
+PRODUCTION_MODE = "production"
+
+
+@dataclass(frozen=True, slots=True)
+class ModeHistory:
+    """The firewall's modes since boot, as the attested endpoint's evidence carries them:
+    the switch events (*lines*), whether replaying them from zero gives the quote's RTMR3
+    (*replays*), and the modes the policy allows (*allowed*; ``None``: any)."""
+
+    lines: tuple[str, ...]
+    replays: bool
+    allowed: tuple[str, ...] | None = None
+
+    @property
+    def events(self) -> tuple[tuple[str, int], ...]:
+        """Each switch as ``(mode, boottime seconds)``; a malformed event as ``(line, -1)``."""
+        found: list[tuple[str, int]] = []
+        for line in self.lines:
+            name, _, at = line.removeprefix(MODE_EVENT_PREFIX).rpartition(":")
+            ok = line.startswith(MODE_EVENT_PREFIX) and name and at.isdigit()
+            found.append((name, int(at)) if ok else (line, -1))
+        return tuple(found)
+
+    @property
+    def current(self) -> str:
+        return self.events[-1][0] if self.lines else PRODUCTION_MODE
+
+    @property
+    def visited(self) -> tuple[str, ...]:
+        """Every mode in force since boot, production first."""
+        return tuple(dict.fromkeys((PRODUCTION_MODE, *(name for name, _ in self.events))))
+
+    @property
+    def refused(self) -> tuple[str, ...]:
+        """The modes the instance was in that the policy does not allow."""
+        if self.allowed is None:
+            return ()
+        return tuple(name for name in self.visited if name not in self.allowed)
+
+    @property
+    def ok(self) -> bool:
+        return self.replays and not self.refused and all(at >= 0 for _, at in self.events)
+
+    def line(self) -> str:
+        """``production; 2 switches since boot: maintenance at 412s, production at 530s
+        (RTMR3 replays them)``."""
+        count = len(self.lines)
+        switches = f"{count} switch{'es' if count != 1 else ''} since boot" + (
+            ": " + ", ".join(f"{name} at {at}s" for name, at in self.events) if count else ""
+        )
+        register = "RTMR3 replays them" if self.replays else "RTMR3 does not replay them"
+        refused = (
+            f"; the policy allows {', '.join(self.allowed or ())} only" if self.refused else ""
+        )
+        return f"{self.current}; {switches} ({register}){refused}"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "current": self.current,
+            "events": [{"mode": name, "at": at} for name, at in self.events],
+            "lines": list(self.lines),
+            "replays": self.replays,
+            "allowed": None if self.allowed is None else list(self.allowed),
+            "refused": list(self.refused),
+        }
+
+
+def replay_rtmr3(lines: Sequence[str]) -> str:
+    """RTMR3 after extending each event's SHA-384 from zero, as lower-case hex."""
+    value = bytes(48)
+    for line in lines:
+        value = hashlib.sha384(value + hashlib.sha384(line.encode()).digest()).digest()
+    return value.hex()
+
+
+def mode_history(
+    lines: Sequence[str], rtmr3: str | None, allowed: Sequence[str] | None
+) -> ModeHistory:
+    """The history *lines* stand for, checked against the quote's *rtmr3*."""
+    replays = rtmr3 is not None and replay_rtmr3(lines) == rtmr3.lower()
+    return ModeHistory(tuple(lines), replays, None if allowed is None else tuple(allowed))
+
+
 @dataclass(frozen=True, slots=True)
 class Attestation:
     """What :func:`attest` found: the nonce and register checks, the validator's say, the verdict.
@@ -305,6 +391,9 @@ class Attestation:
     certificate: tuple[int, str] | None = None
     """The attested TLS port ``attest --tls`` connected to and the ``sha256:`` fingerprint of
     the certificate it presented, whose key this quote binds; ``None`` when none was checked."""
+    modes: ModeHistory | None = None
+    """The firewall's modes since boot the evidence carries, replayed against RTMR3; ``None``
+    for an image without modes (RTMR3 then stays outside the policy)."""
 
     @property
     def nonce_matches(self) -> bool:
@@ -343,6 +432,10 @@ class Attestation:
             found.append("image-unverified")
         if self.policy_scheme == "azure":
             found.append("vtpm-unverified")
+        if self.modes is not None and not self.modes.replays:
+            found.append("mode-history-mismatch")
+        if self.modes is not None and self.modes.refused:
+            found.append("mode-refused")
         return tuple(found)
 
     @property
@@ -355,7 +448,11 @@ class Attestation:
 
     @property
     def verdict(self) -> Verdict:
-        measured = self.nonce_matches and all(r.verdict != "mismatch" for r in self.registers)
+        measured = (
+            self.nonce_matches
+            and all(r.verdict != "mismatch" for r in self.registers)
+            and (self.modes is None or self.modes.ok)
+        )
         if self.signature_status == "invalid":
             return "untrusted"
         if not measured:
@@ -401,6 +498,7 @@ class Attestation:
             if self.instance_key is None
             else {"public": self.instance_key, "bound_to_quote": True},
             "issuer": self.issuer,
+            "modes": None if self.modes is None else self.modes.to_dict(),
             "nonce": {
                 "value": self.nonce,
                 "report_data": self.report_data,
@@ -475,6 +573,7 @@ class Attestation:
             "signature_status": self.signature_status,
             "verdict": self.verdict,
             "reasons": list(self.reasons),
+            "modes": None if self.modes is None else self.modes.to_dict(),
         }
 
     def save(self, path: str | Path) -> Path:
@@ -1207,6 +1306,8 @@ def render_attestation(result: Attestation, fmt: str) -> str:
     if result.certificate is not None:
         port, fingerprint = result.certificate
         lines.append(f"certificate   :{port}  {fingerprint}  ({CERTIFICATE_NOTE})")
+    if result.modes is not None:
+        lines.append(f"modes  {result.modes.line()}")
     if result.validator is None:
         lines.append(f"note: {CHECKS_NOTE}")
     if result.verdict == "partial":
@@ -1228,6 +1329,7 @@ __all__ = [
     "VERDICTS",
     "Attestation",
     "AttestationRecord",
+    "ModeHistory",
     "Quote",
     "RegisterCheck",
     "SignatureStatus",
@@ -1235,6 +1337,7 @@ __all__ = [
     "Verdict",
     "attest",
     "connect",
+    "mode_history",
     "parse_quote",
     "parse_time",
     "read_attestation",

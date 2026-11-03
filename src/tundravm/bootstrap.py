@@ -53,7 +53,7 @@ from typing import Any, Protocol
 
 from . import _ssh_sig
 from . import manifest as mf
-from .attestation import Attestation, Transport
+from .attestation import Attestation, Transport, mode_history
 from .attestation import attest as check_quote
 from .attestation import connect as connect_issuer
 from .errors import AttestationError, StateError, ValidationError
@@ -270,6 +270,17 @@ class Evidence:
     attested_tls: tuple[tuple[int, bytes], ...] = ()
     """Each attested TLS port and the DER SubjectPublicKeyInfo of the certificate key the
     quote binds for it, in port order."""
+    firewall: Mapping[str, Any] | None = None
+    """The firewall's ``mode``, ``modes`` and switch ``events`` since boot, in an image with
+    modes; the quote's RTMR3 is their replay."""
+
+    @property
+    def mode_events(self) -> tuple[str, ...]:
+        return tuple(str(e) for e in (self.firewall or {}).get("events") or ())
+
+    @property
+    def firewall_modes(self) -> tuple[str, ...]:
+        return tuple(str(m) for m in (self.firewall or {}).get("modes") or ())
 
     @property
     def credentials(self) -> tuple[str, ...]:
@@ -383,6 +394,7 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
         )
     metadata = said.get("metadata")
     accepts = said.get("accepts")
+    firewall = said.get("firewall")
     return Evidence(
         nonce=nonce,
         tls_key=key,
@@ -394,6 +406,7 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
         mode=str(said.get("mode") or "") or None,
         accepts=accepts if isinstance(accepts, Mapping) else {},
         attested_tls=listeners,
+        firewall=firewall if isinstance(firewall, Mapping) else None,
     )
 
 
@@ -405,6 +418,23 @@ def _same_session(channel: Channel, key: bytes) -> None:
             "nothing was sent.",
             hint="Something between this host and the instance took the session over.",
         )
+
+
+def exchange(
+    channel: Channel, evidence: Evidence, path: str, payload: Mapping[str, object]
+) -> dict[str, Any]:
+    """:func:`post` *payload*, and the endpoint's JSON answer."""
+    _same_session(channel, evidence.tls_key)
+    body = json.dumps({"nonce": evidence.nonce.hex(), **payload}).encode()
+    status, reply = channel.request("POST", path, body)
+    said = _json(status, reply, path)
+    if status == 200:
+        return said
+    problem, _, fix = str(said.get("error") or "no reason").partition("\nfix: ")
+    raise AttestationError(
+        f"The attested endpoint refused {path} ({status}): {problem}.",
+        hint=fix or "Read `journalctl -u tundravm-endpoint -u mode-switch` in the guest.",
+    )
 
 
 def post(channel: Channel, evidence: Evidence, path: str, payload: Mapping[str, object]) -> int:
@@ -604,6 +634,19 @@ def verify(
         guest_mode=evidence.mode,
         transport=evidence.transport(),
     )
+    if evidence.firewall is not None:
+        rtmr3 = next((r.actual for r in result.registers if r.name == "RTMR3"), None)
+        allowed = data.get("modes")
+        history = mode_history(
+            evidence.mode_events, rtmr3, None if not isinstance(allowed, list) else allowed
+        )
+        result = replace(result, modes=history)
+        instance.data["firewall_mode"] = {
+            "mode": history.current,
+            "switches": len(history.lines),
+            "replays": history.replays,
+            "at": result.observed_at,
+        }
     return result, evidence
 
 
@@ -924,6 +967,67 @@ def _fingerprint_of(signature: Mapping[str, str]) -> str | None:
     return None if signer is None else _ssh_sig.fingerprint(signer)
 
 
+def switch(
+    instance: Instance,
+    mode: str,
+    *,
+    validator: str | None = None,
+    connect: Connector | None = None,
+) -> tuple[Attestation, dict[str, Any]]:
+    """Verify again with the last approved policy, then hand *instance*'s firewall *mode* to
+    its switcher on the bound session (``POST /mode``), signed by the owner when the image
+    pins one: the switcher extends RTMR3 with the switch before the ruleset changes. A
+    production build switches only for a pinned operator; the CLI refuses before sending.
+    Returns the attestation and the switch (``mode``, ``previous``, ``at``, ``until``,
+    ``switches``, ``event``)."""
+    approved = instance.data.get("attested")
+    if not isinstance(approved, dict):
+        raise StateError(
+            f"{instance.id} has not passed an attestation yet.",
+            hint=f"Run `tundravm attest {instance.id} --policy FILE` first.",
+        )
+    result, evidence, channel = _released(
+        instance, Path(approved["policy"]), "switch-refused", validator, connect, mode=mode
+    )
+    if evidence.firewall is None:
+        raise ValidationError(
+            f"{instance.id}'s image has no firewall modes.",
+            hint='Declare Firewall(modes={"production": Mode(), "maintenance": '
+            "Mode(ingress=[TCP(22)])}) and build again.",
+        )
+    if mode not in evidence.firewall_modes:
+        raise ValidationError(
+            f"{instance.id}'s image has no firewall mode {mode!r}.",
+            hint=f"Modes: {', '.join(evidence.firewall_modes)}.",
+        )
+    if instance.data["build"]["kind"] == "production" and not evidence.pins_owner:
+        raise AttestationError(
+            f"Refused: {instance.id} is a production build that pins no operator, so anyone "
+            "reaching its endpoint could open a window; nothing was sent.",
+            hint="Give the image a Volume(unlock=OperatorKey()): its owner alone switches.",
+        )
+    signature = signed(instance, evidence, recorded_operator(instance))
+    done = exchange(channel, evidence, "/mode", {"mode": mode, **signature})
+    instance.data["firewall_mode"] = {
+        "mode": done.get("mode"),
+        "switches": done.get("switches"),
+        "until": done.get("until") or None,
+        "at": result.observed_at,
+    }
+    instance.save()
+    instance.event(
+        "switched",
+        mode=done.get("mode"),
+        previous=done.get("previous"),
+        boottime=done.get("at"),
+        until=done.get("until") or None,
+        rtmr3_event=done.get("event"),
+        channel=CHANNEL,
+        owner=evidence.owner or _fingerprint_of(signature),
+    )
+    return result, done
+
+
 def rotate(
     instance: Instance,
     identity: Path,
@@ -996,6 +1100,7 @@ __all__ = [
     "recorded_operator",
     "rotate",
     "signed",
+    "switch",
     "post",
     "read_passphrase",
     "read_policy",
