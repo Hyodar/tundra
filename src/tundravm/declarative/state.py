@@ -849,8 +849,7 @@ def _directory(profile: ProfileState, item: FileTree) -> None:
     if not item.source.is_dir():
         raise ValidationError(
             f'Tree("{item.source}", "{item.path}"): {item.source} is not a directory.',
-            hint='Pass a directory relative to the working directory: Tree("app/static", '
-            '"/srv/www").',
+            hint='Pass a directory beside the image file: Tree("app/static", "/srv/www").',
             context={"path": item.path, "source": str(item.source)},
         )
     found = walk_directory(item.source, item.exclude, follow=item.symlinks == "follow")
