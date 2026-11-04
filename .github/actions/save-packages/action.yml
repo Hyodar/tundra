@@ -1,0 +1,36 @@
+name: save-packages
+description: >-
+  Saves the Debian package cache that .github/actions/setup restored (its `packages-key`
+  output), owned by the runner user; run it last, with `if: always()`.
+
+inputs:
+  key:
+    description: The `packages-key` output of the setup step; empty saves nothing.
+    default: ""
+  hit:
+    description: The `packages-hit` output; an exact hit saves nothing.
+    default: ""
+  status:
+    description: >-
+      The job's status. A failed job may hold only some of the packages, so it saves under
+      a key of its own run and job; keys are immutable and a partial one must not shadow the full.
+    default: success
+
+runs:
+  using: composite
+  steps:
+    - name: Hand the package cache to the runner user
+      if: inputs.key != '' && inputs.hit != 'true'
+      shell: bash
+      run: |
+        if [ -d ~/.cache/tundravm/packages ]; then
+          sudo chown -R "$(id -u):$(id -g)" ~/.cache/tundravm/packages
+          du -sh ~/.cache/tundravm/packages
+        fi
+
+    - name: Save the package cache
+      if: inputs.key != '' && inputs.hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/tundravm/packages
+        key: ${{ inputs.status == 'success' && inputs.key || format('{0}-{1}-{2}-{3}', inputs.key, github.run_id, github.run_attempt, github.job) }}

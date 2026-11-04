@@ -14,6 +14,23 @@ inputs:
     description: The `tundravm doctor --for` checks to run after the sync, space-separated.
     default: ""
 
+  packages:
+    description: >-
+      The Debian package cache to restore: attested (examples/attested-node's trees),
+      fixture (tests/fixtures/native-tree's) or none. The key names the mkosi version and
+      a hash of those trees, which hold every snapshot. ~/.cache/tundravm/packages holds
+      only the packages mkosi downloaded, apt still verifies each one, and no built tree
+      or tools tree is cached. Save with .github/actions/save-packages.
+    default: none
+
+outputs:
+  packages-key:
+    description: The key the package cache was looked up under; empty when it is off.
+    value: ${{ steps.packages.outputs.key }}
+  packages-hit:
+    description: true when that exact key was restored, so the cache is complete.
+    value: ${{ steps.restore.outputs.cache-hit }}
+
 runs:
   using: composite
   steps:
@@ -54,6 +71,31 @@ runs:
     - name: Sync dependencies
       shell: bash
       run: uv sync
+
+    - name: Key the package cache
+      id: packages
+      shell: bash
+      env:
+        GROUP: ${{ github.event_name == 'schedule' && 'none' || inputs.packages }}
+        TREES: ${{ inputs.packages == 'attested' && hashFiles('examples/attested-node/mkosi/**', 'tests/integration/test_mkosi_smoke.py') || hashFiles('tests/fixtures/native-tree/tree-*/**') }}
+        MKOSI: ${{ hashFiles('uv.lock') }}
+      run: |
+        if [ "$GROUP" = none ]; then
+          echo "key=" >> "$GITHUB_OUTPUT"
+        else
+          echo "key=pkgs-$GROUP-$MKOSI-$TREES" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Restore the package cache
+      id: restore
+      if: steps.packages.outputs.key != ''
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/tundravm/packages
+        key: ${{ steps.packages.outputs.key }}
+        restore-keys: |
+          ${{ steps.packages.outputs.key }}-
+          pkgs-${{ inputs.packages }}-
 
     - name: mkosi and the host
       if: inputs.doctor != ''

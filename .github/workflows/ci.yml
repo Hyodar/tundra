@@ -15,6 +15,9 @@ on:
     branches:
       - "**"
   pull_request:
+  schedule:
+    # Weekly and without the package cache, so a snapshot package that vanished is caught.
+    - cron: "17 4 * * 1"
 
 # A push already runs every branch of this repository, so a pull request from one would run
 # the same commit twice; each job skips that case and runs pull requests from forks only.
@@ -87,8 +90,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up the build host
+        id: setup
         uses: ./.github/actions/setup
         with:
+          packages: attested
           host: build
           doctor: build
 
@@ -110,6 +115,14 @@ jobs:
           go test ./...
           go build -o /dev/null ./...
 
+      - name: Save the Debian packages
+        if: always()
+        uses: ./.github/actions/save-packages
+        with:
+          key: ${{ steps.setup.outputs.packages-key }}
+          hit: ${{ steps.setup.outputs.packages-hit }}
+          status: ${{ job.status }}
+
   boot:
     # Bakes the attested node's stage 1 as its dev profile and boots it under QEMU with OVMF
     # (KVM when the runner exposes /dev/kvm, TCG otherwise; no TDX here): payload.efi through
@@ -125,8 +138,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up the build host, QEMU and OVMF
+        id: setup
         uses: ./.github/actions/setup
         with:
+          packages: attested
           host: boot
           doctor: build run
 
@@ -144,6 +159,14 @@ jobs:
           name: boot-console-logs
           path: ${{ runner.temp }}/boot-logs
           if-no-files-found: ignore
+
+      - name: Save the Debian packages
+        if: always()
+        uses: ./.github/actions/save-packages
+        with:
+          key: ${{ steps.setup.outputs.packages-key }}
+          hit: ${{ steps.setup.outputs.packages-hit }}
+          status: ${{ job.status }}
 
   fixture-boot:
     # Gate 1, 3 and 5 evidence: the fixture image (initramfs root, a Go build from a Git
@@ -177,8 +200,10 @@ jobs:
         run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/fixture" >> "$GITHUB_ENV"
 
       - name: Set up the build host, QEMU and OVMF
+        id: setup
         uses: ./.github/actions/setup
         with:
+          packages: fixture
           host: boot
           doctor: build run
 
@@ -526,6 +551,14 @@ jobs:
           path: ${{ runner.temp }}/boot-logs
           if-no-files-found: ignore
 
+      - name: Save the Debian packages
+        if: always()
+        uses: ./.github/actions/save-packages
+        with:
+          key: ${{ steps.setup.outputs.packages-key }}
+          hit: ${{ steps.setup.outputs.packages-hit }}
+          status: ${{ job.status }}
+
   verity:
     # Gate 1 evidence: the fixture image with RootFS.verity() (fixture.py's verity, picked
     # with --attr) built through tundravm, its production qemu.raw booted under QEMU through
@@ -549,8 +582,10 @@ jobs:
         run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/verity" >> "$GITHUB_ENV"
 
       - name: Set up the build host, QEMU and OVMF
+        id: setup
         uses: ./.github/actions/setup
         with:
+          packages: fixture
           host: boot
           doctor: build run
 
@@ -594,6 +629,14 @@ jobs:
           path: ${{ runner.temp }}/boot-logs
           if-no-files-found: ignore
 
+      - name: Save the Debian packages
+        if: always()
+        uses: ./.github/actions/save-packages
+        with:
+          key: ${{ steps.setup.outputs.packages-key }}
+          hit: ${{ steps.setup.outputs.packages-hit }}
+          status: ${{ job.status }}
+
   verity-cloud:
     # The verity layout's azure and gcp targets: both converters must keep the root and
     # hash partitions byte for byte (tests/integration/test_verity_cloud.py).
@@ -609,8 +652,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up the build host
+        id: setup
         uses: ./.github/actions/setup
         with:
+          packages: fixture
           host: build
 
       - name: Lock and build the verity fixture's cloud targets
@@ -626,6 +671,14 @@ jobs:
         env:
           TUNDRAVM_VERITY_CLOUD_BUILD: ${{ runner.temp }}/verity-cloud/fixture/latest-production
         run: uv run pytest tests/integration/test_verity_cloud.py -v -rs
+
+      - name: Save the Debian packages
+        if: always()
+        uses: ./.github/actions/save-packages
+        with:
+          key: ${{ steps.setup.outputs.packages-key }}
+          hit: ${{ steps.setup.outputs.packages-hit }}
+          status: ${{ job.status }}
 
   reproduce:
     # Gate 1 and 5 evidence: the fixture with its azure and gcp targets built twice through
@@ -651,8 +704,10 @@ jobs:
         run: echo "TUNDRAVM_BUILD=$RUNNER_TEMP/reproduce" >> "$GITHUB_ENV"
 
       - name: Set up the build host
+        id: setup
         uses: ./.github/actions/setup
         with:
+          packages: fixture
           host: build
           doctor: build
 
@@ -686,3 +741,12 @@ jobs:
           name: reproduce-records
           path: ${{ runner.temp }}/reproduce-records
           if-no-files-found: ignore
+
+      - name: Save the Debian packages
+        if: always()
+        uses: ./.github/actions/save-packages
+        with:
+          key: ${{ steps.setup.outputs.packages-key }}
+          hit: ${{ steps.setup.outputs.packages-hit }}
+          status: ${{ job.status }}
+
