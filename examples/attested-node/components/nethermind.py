@@ -27,7 +27,14 @@ INSTALL = (
     Install("publish/nethermind", f"{HOME}/nethermind"),
     Install("publish/NLog.config", f"{HOME}/NLog.config", mode=0o644),
     Install("publish/plugins", f"{HOME}/plugins", mode=None, directory=True),
+    Install(
+        "src/Nethermind/Nethermind.Runner/configs", f"{HOME}/configs", mode=None, directory=True
+    ),
+    Install("src/Nethermind/Nethermind.Runner/Data", f"{HOME}/Data", mode=None, directory=True),
+    Install("src/Nethermind/Chains", f"{HOME}/chainspec", mode=None, directory=True),
 )
+"""Nethermind resolves its configs, chainspecs and static nodes beside its executable, and the
+single-file bundle keeps none of them there."""
 RUNTIME = ("libssl3t64", "libstdc++6")
 """What the self-contained publish needs from Debian at runtime: OpenSSL for its TLS and
 hashes, the C++ runtime for the CLR. It is built with invariant globalization, so no ICU."""
