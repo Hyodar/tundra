@@ -305,15 +305,18 @@ This one says what closed each earlier gap (c) and example fix (d).
 | Order-flow `/etc/hosts` | d | closed | `Container(files=)` |
 | Dev profile points metrics at the in-guest sink | new | open | a profile cannot edit `Observability` |
 | Nethermind's single-file bundle needs a writable extraction directory | new | closed | `DOTNET_BUNDLE_EXTRACT_BASE_DIR` in its data directory; found by the CI boot, where it crash-looped |
+| Nethermind reads its configs and chainspecs beside its executable | new | closed | the component installs `configs`, `Data` and `chainspec` from the source tree |
+| .NET lists network interfaces over netlink | new | closed | the `dotnet` preset allows `AF_NETLINK` |
+| `/run/nologin` turns the searcher's login away | new | closed | a `Login` enables `systemd-user-sessions.service` |
 
 ## What the CI boot showed
 
-The dev profile built (the 6.18.57 kernel, after two library fixes) and booted under QEMU in
-simulated mode. Seen on the console: the volume key generated, `secrets deliver` and
-`secrets unlock data` accepted, the volume opened and its directories made, `delay-pipe`
-and `input-proxy` started, the container's loop loader skipped (`/dev/loop-control` exists in
-a built kernel), the container's network namespace and host key made, `mode-switch` and
-`ssh` started. The boot stopped there: Nethermind could not extract its bundle, restarted
-1000 times, and the container, Lighthouse and the probe wait on its readiness. The menu, the
-maintenance window, the delayed log and the input channel were not reached, so the rows above
-that depend on them are declared and compiled, not yet booted.
+The dev profile builds (the 6.18.57 kernel, Nethermind, Lighthouse) and boots under QEMU in
+simulated mode, and the workflow drives it end to end: attest as the owner, deliver the keys,
+unlock the volume; Nethermind, Lighthouse and the container start; the menu answers in
+production and the container's SSH is closed; `toggle` opens maintenance and the operator
+enters the container on 10022 with the host key the evidence binds; a line fed to the input
+channel reaches the container; a log line is held back by the delay; closing the window shuts
+the container's SSH again and the delayed log releases the line. Two probe rows fail on a
+runner and the workflow names them: the bundle relays answer only flashbots' peers, and no
+program listens on 27017/udp without BoB.
