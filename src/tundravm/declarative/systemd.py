@@ -46,9 +46,14 @@ __all__ = [
 ]
 
 ProtectSystem = Literal["strict", "full", "yes", "no"]
-Network = Literal["inet", "unix", "none", "any"]
+Network = Literal["inet", "inet+netlink", "unix", "none", "any"]
 
-_FAMILIES = {"inet": "AF_UNIX AF_INET AF_INET6", "unix": "AF_UNIX", "none": "none"}
+_FAMILIES = {
+    "inet": "AF_UNIX AF_INET AF_INET6",
+    "inet+netlink": "AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+    "unix": "AF_UNIX",
+    "none": "none",
+}
 _CAPABILITY = re.compile(r"CAP_[A-Z_]+")
 _UMASK = re.compile(r"0?[0-7]{3}")
 _WORD = re.compile(r"~?@?[A-Za-z0-9_:-]+")
@@ -83,7 +88,7 @@ PresetName = Literal["static", "dotnet", "jit", "node", "python"]
 
 PRESETS: dict[str, dict[str, object]] = {
     "static": {},
-    "dotnet": {"jit": True, "deny_syscalls": ("@privileged",)},
+    "dotnet": {"jit": True, "deny_syscalls": ("@privileged",), "network": "inet+netlink"},
     "jit": {"jit": True},
     "node": {"jit": True},
     "python": {"jit": True},
@@ -101,7 +106,9 @@ later turns out to need belongs to that name alone, not to the other two.
 
 ``dotnet``: ``MemoryDenyWriteExecute=`` goes for the same reason, and ``@resources`` comes
 back out of the deny list: the .NET GC and thread pool size themselves with
-``sched_setaffinity`` and ``setrlimit``, both of which that group covers.
+``sched_setaffinity`` and ``setrlimit``, both of which that group covers. ``AF_NETLINK`` is
+allowed beside the internet families: .NET lists the network interfaces over netlink, and
+DotNetty does so before its first socket, so Nethermind cannot listen without it.
 
 The probe a development profile carries (``tundravm._modules.probe``) holds each service to
 its preset's :data:`CEILINGS`: ``systemd-analyze security UNIT`` must report an exposure at
@@ -191,11 +198,11 @@ class Hardening(Keywords):
                 hint='Hardening.strict(protect_system="strict"): one of '
                 f"{', '.join(repr(v) for v in get_args(ProtectSystem))}.",
             )
-        if self.network not in ("inet", "unix", "none", "any"):
+        if self.network not in get_args(Network):
             raise _fail(
                 self,
                 f"invalid network {self.network!r}.",
-                hint="Expected 'inet', 'unix', 'none' or 'any'.",
+                hint="Expected 'inet', 'inet+netlink', 'unix', 'none' or 'any'.",
             )
         for name in ("protect_home", "private_tmp", "private_devices", "no_new_privileges"):
             _require_flag(self, name)

@@ -15,6 +15,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### SDK
 
+- The `dotnet` hardening preset allows `AF_NETLINK`, which .NET needs to list network interfaces; `network="inet+netlink"` names that set for any other preset.
 - **Breaking:** `Image`, `Service`, `Component` and `Profile` replace `Recipe`, `Variant` and `Fragment`.
 - **Breaking:** every public name has one home (`tundravm`, `.ports`, `.systemd`, `.components`, `.storage`, `.secrets`, `.sources`, `.errors`, `.testing`); flat imports are gone.
 - **Breaking:** `profile` replaces `variant` everywhere, `--json` and `tundravm.testing` included; `show --json` says `image`, `components` and `profiles`.

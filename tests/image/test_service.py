@@ -238,7 +238,8 @@ def test_every_preset_renders_its_directives(preset: str) -> None:
     assert unit.get("Service", "ProtectSystem") == "strict"
     assert unit.get("Service", "NoNewPrivileges") == "yes"
     assert unit.get("Service", "ProtectHome") == "yes"
-    assert unit.get("Service", "RestrictAddressFamilies") == "AF_UNIX AF_INET AF_INET6"
+    families = "AF_UNIX AF_INET AF_INET6" + (" AF_NETLINK" if preset == "dotnet" else "")
+    assert unit.get("Service", "RestrictAddressFamilies") == families
     assert unit.get("Service", "SystemCallArchitectures") == "native"
 
     write_execute = unit.get("Service", "MemoryDenyWriteExecute")

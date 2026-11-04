@@ -56,7 +56,12 @@ _SCALARS = {
     "TimeoutStartSec": "timeout_start",
     "TimeoutStopSec": "timeout_stop",
 }
-_FAMILIES = {"AF_UNIX AF_INET AF_INET6": "inet", "AF_UNIX": "unix", "none": "none"}
+_FAMILIES = {
+    "AF_UNIX AF_INET AF_INET6": "inet",
+    "AF_UNIX AF_INET AF_INET6 AF_NETLINK": "inet+netlink",
+    "AF_UNIX": "unix",
+    "none": "none",
+}
 _LAYOUT = "layout (directive order, comments, blank lines or spacing)"
 
 
