@@ -11,14 +11,9 @@ from components.lighthouse import Lighthouse
 from components.nethermind import Nethermind
 
 from tundravm import Debian, File, Image, Profile, RootFS, Service
-from tundravm.components import (
-    DevAccess,
-    Egress,
-    JournalExport,
-    Network,
-    Observability,
-    PrometheusRemoteWrite,
-)
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
+from tundravm.components.observability import JournalExport, Observability, PrometheusRemoteWrite
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Generated, InstanceKey, Secret
 from tundravm.sources import GoBinary, Local

@@ -31,21 +31,15 @@ from collections.abc import Iterator
 from typing import Literal
 
 from tundravm import Debian, File, Image, Mkosi, Package, Profile, RootFS, Service
-from tundravm.components import (
-    Component,
-    Container,
-    ContainerSsh,
-    Egress,
-    Firewall,
+from tundravm.components import Component
+from tundravm.components.access import Login, SshAccess, Sudo
+from tundravm.components.container import Container, ContainerSsh
+from tundravm.components.network import Egress, Firewall, Mode, Network
+from tundravm.components.observability import (
     JournalExport,
-    Login,
-    Mode,
-    Network,
     Observability,
     PrometheusRemoteWrite,
     RecordingRule,
-    SshAccess,
-    Sudo,
 )
 from tundravm.ports import TCP, UDP, AttestedTLS
 from tundravm.secrets import Secret

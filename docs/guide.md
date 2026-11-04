@@ -35,7 +35,8 @@ filtered egress, and a dev profile with a serial console and root password "tdx"
 """
 
 from tundravm import Debian, Image
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 
 image = Image(
     "attested-node",
@@ -85,7 +86,8 @@ so it comes in four parts.
 +from components.nethermind import Nethermind
 +
 +from tundravm import Debian, Image, RootFS
- from tundravm.components import DevAccess, Egress, Network
+ from tundravm.components.access import DevAccess
+ from tundravm.components.network import Egress, Network
 +from tundravm.secrets import Generated
 +from tundravm.storage import OperatorKey, Volume
 +
@@ -274,7 +276,8 @@ signs Nethermind's block responses with the **instance key**.
  
 -from tundravm import Debian, Image, RootFS
 +from tundravm import Debian, Image, RootFS, Service
- from tundravm.components import DevAccess, Egress, Network
+ from tundravm.components.access import DevAccess
+ from tundravm.components.network import Egress, Network
 -from tundravm.secrets import Generated
 +from tundravm.secrets import Generated, InstanceKey
 +from tundravm.sources import GoBinary, Local
@@ -329,7 +332,7 @@ on 8546 fronts the signer:
 --- stages/04-signer.py
 +++ stages/05-attested.py
 @@
- from tundravm.components import DevAccess, Egress, Network
+ from tundravm.components.network import Egress, Network
 +from tundravm.ports import AttestedTLS
  from tundravm.secrets import Generated, InstanceKey
 @@
@@ -380,16 +383,10 @@ The idea: what running it for real takes. `image.py` is this stage with `Local("
 @@
  
 -from tundravm import Debian, Image, RootFS, Service
--from tundravm.components import DevAccess, Egress, Network
 +from tundravm import Debian, File, Image, Profile, RootFS, Service
-+from tundravm.components import (
-+    DevAccess,
-+    Egress,
-+    JournalExport,
-+    Network,
-+    Observability,
-+    PrometheusRemoteWrite,
-+)
+ from tundravm.components.access import DevAccess
+ from tundravm.components.network import Egress, Network
++from tundravm.components.observability import JournalExport, Observability, PrometheusRemoteWrite
  from tundravm.ports import AttestedTLS
 -from tundravm.secrets import Generated, InstanceKey
 +from tundravm.secrets import Generated, InstanceKey, Secret

@@ -428,7 +428,7 @@ def test_namespaced_spellings_are_caught(text: str, what: str) -> None:
         "from tundravm import File, Image, Service\nfrom tundravm.ports import TCP",
         "from tundravm import secrets",
         "Bind a tundravm.Image to `image`.",
-        "from tundravm.components import Component, DevAccess",
+        "from tundravm.components.access import DevAccess",
         "from tundravm.declarative import Recipe, bake",
     ],
 )

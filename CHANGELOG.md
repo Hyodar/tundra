@@ -18,6 +18,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - A `Login` enables `systemd-user-sessions.service`, so `/run/nologin` no longer turns a non-root login away after boot.
 - The `dotnet` hardening preset allows `AF_NETLINK`, which .NET needs to list network interfaces; `network="inet+netlink"` names that set for any other preset.
 - **Breaking:** `Image`, `Service`, `Component` and `Profile` replace `Recipe`, `Variant` and `Fragment`.
+- **Breaking:** each shipped component and its helper values live in their own submodule (`tundravm.components.tee`, `.network`, `.access`, `.container`, `.observability`); `tundravm.components` keeps the API for writing one.
 - **Breaking:** every public name has one home (`tundravm`, `.ports`, `.systemd`, `.components`, `.storage`, `.secrets`, `.sources`, `.errors`, `.testing`); flat imports are gone.
 - **Breaking:** `profile` replaces `variant` everywhere, `--json` and `tundravm.testing` included; `show --json` says `image`, `components` and `profiles`.
 - **Breaking:** the API speaks the public model (`Resolved.targets`, `.components`, `.production`, `class X(Component, name=)`, `ImageFile.component`); the internal-model test helpers and fixtures are gone.

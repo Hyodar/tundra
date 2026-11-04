@@ -217,19 +217,19 @@ A `Component` groups declarations and exports typed values: [stage
 says where it sends, and `kernel()` the `KernelFragment` and `KernelPatch` values a built
 kernel needs for it.
 
-`tundravm.components` ships the baseline and the ways in. Application components are the
-project's.
+`tundravm.components` holds the API for writing one; its submodules ship these.
+Application components are the project's.
 
 | Component | What it is | Exports |
 |---|---|---|
-| `TeeBase` | the confidential-VM baseline (implied) | none |
-| `Network` | systemd-networkd, DHCP or a static address (implied) | `online` |
-| `Firewall` | nftables, inbound drop by default (implied) | none |
-| `Tdxs` | the evidence service (implied) | `EVIDENCE`, `socket`, `group` |
-| `SshAccess` | root SSH by public key, keys baked or delivered; `login=` for others | `port` |
-| `DevAccess` | debug access, only in the `dev` profile | none |
-| `Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
-| `Container` | a program in a Debian root of its own | `unit`, `image`, `endpoint(port)` |
+| `tee.TeeBase` | the confidential-VM baseline (implied) | none |
+| `network.Network` | systemd-networkd, DHCP or a static address (implied) | `online` |
+| `network.Firewall` | nftables, inbound drop by default (implied) | none |
+| `tee.Tdxs` | the evidence service (implied) | `EVIDENCE`, `socket`, `group` |
+| `access.SshAccess` | root SSH by public key, keys baked or delivered; `login=` for others | `port` |
+| `access.DevAccess` | debug access, only in the `dev` profile | none |
+| `observability.Observability` | journal and metrics export | `service("journal-export")`, `service("metrics-export")` |
+| `container.Container` | a program in a Debian root of its own | `unit`, `image`, `endpoint(port)` |
 
 `SshAccess(login=Login(name, keys=, owner=, commands={...}, shell=))` lets another account
 in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to an argv. A list runs
@@ -517,7 +517,7 @@ refused with the slot that sets it (`KernelCommandLine` names `Kernel(cmdline=)`
 
 ```python
 from tundravm import Image
-from tundravm.components import Egress, Network
+from tundravm.components.network import Egress, Network
 from tundravm.testing import assert_clean, plan
 
 image = Image("node", network=Network(egress=Egress()))

@@ -9,7 +9,8 @@ read-only dm-verity disk.
 from components.nethermind import Nethermind
 
 from tundravm import Debian, Image, RootFS
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 from tundravm.secrets import Generated
 from tundravm.storage import OperatorKey, Volume
 

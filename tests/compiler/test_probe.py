@@ -21,14 +21,9 @@ import tundravm
 from tundravm import Image, Kernel, Service
 from tundravm._modules import probe
 from tundravm.attestation import tagged
-from tundravm.components import (
-    DevAccess,
-    Egress,
-    JournalExport,
-    Network,
-    Observability,
-    PrometheusRemoteWrite,
-)
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
+from tundravm.components.observability import JournalExport, Observability, PrometheusRemoteWrite
 from tundravm.declarative import Git
 from tundravm.ports import TCP, UDP
 from tundravm.storage import BrokerKey, OperatorKey, Volume

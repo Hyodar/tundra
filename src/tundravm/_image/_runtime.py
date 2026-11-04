@@ -62,7 +62,7 @@ from ._storage import TPM_PLATFORMS, OperatorKey, TpmSeal, Volume, VolumeDirecto
 from ._values import MANAGEMENT_PORT
 
 if TYPE_CHECKING:
-    from tundravm.components import Container
+    from tundravm.components.container import Container
 
 __all__ = [
     "CONTROL_PLANE",
@@ -129,7 +129,7 @@ def _image_services(image: object) -> tuple[Service, ...]:
 
 def _logins(items: Iterable[object]) -> Iterator[du.Login]:
     """Every ``Login`` of an ``SshAccess`` in *items*, components expanded."""
-    from tundravm.components import SshAccess
+    from tundravm.components.access import SshAccess
 
     for item in items:
         if isinstance(item, SshAccess):
@@ -140,7 +140,7 @@ def _logins(items: Iterable[object]) -> Iterator[du.Login]:
 
 def _containers(items: Iterable[object]) -> Iterator[Container]:
     """Every ``Container`` running an sshd (``ssh=``) in *items*, components expanded."""
-    from tundravm.components import Container
+    from tundravm.components.container import Container
 
     for item in items:
         if isinstance(item, Container):
@@ -182,7 +182,7 @@ def container_ports(image: object) -> tuple[tuple[str, int], ...]:
 def check_owner_login(image: object, ssh: object) -> None:
     """Refuse a ``Login(owner=True)`` outside the image's own ``SshAccess``: the control plane
     hands the owner's key only to the one in ``components=``."""
-    from tundravm.components import SshAccess
+    from tundravm.components.access import SshAccess
 
     own = {login.name for login in ssh.logins} if isinstance(ssh, SshAccess) else set()
     for login in _logins(_image_items(image)):
@@ -300,7 +300,7 @@ class Runtime:
     def owner_login(self) -> str | None:
         """The ``Login(owner=True)`` of the image's ``SshAccess``, which takes the owner's key
         instead of root."""
-        from tundravm.components import SshAccess
+        from tundravm.components.access import SshAccess
 
         if not isinstance(self.ssh, SshAccess):
             return None
@@ -310,7 +310,7 @@ class Runtime:
     def root_delivery(self) -> bool:
         """Whether root takes the delivered key: unless the image's ``SshAccess`` declares a
         login and does not ask for it with ``from_delivery=True``."""
-        from tundravm.components import SshAccess
+        from tundravm.components.access import SshAccess
 
         if not isinstance(self.ssh, SshAccess) or not self.ssh.logins:
             return True
@@ -474,7 +474,7 @@ class Runtime:
         """The control plane: the attested endpoint, SSH for the delivered key (root's, or the
         owner login's), and the credential waits of the required secrets; an optional secret
         has none, so the boot completes without it."""
-        from tundravm.components import SshAccess
+        from tundravm.components.access import SshAccess
 
         entries = tuple(
             dm.Secret(

@@ -81,7 +81,8 @@ DevAccess, Diagnostic, Endpoint, File, Image, Package, Resolved, Service, TcpPro
 
 ```python
 from tundravm import Debian, File, Image, Package, Service
-from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved
+from tundravm.components.access import DevAccess
 from tundravm.ports import TCP
 from tundravm.systemd import TcpProbe
 ```
@@ -91,7 +92,8 @@ Secret, Volume, VolumeDirectory`:
 
 ```python
 from tundravm import Debian, File, Image, Package, Service
-from tundravm.components import Component, DevAccess, Diagnostic, Endpoint, Resolved
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved
+from tundravm.components.access import DevAccess
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume, VolumeDirectory

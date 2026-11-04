@@ -10,16 +10,9 @@ import pytest
 from tundravm import AptRepository, File, Image, Kernel, Mkosi, Package, Profile, Service, Tree
 from tundravm._image import recipe_of
 from tundravm._image._values import RESERVED_SETTINGS
-from tundravm.components import (
-    Component,
-    DevAccess,
-    Diagnostic,
-    Egress,
-    Endpoint,
-    Network,
-    Resolved,
-    Rule,
-)
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret

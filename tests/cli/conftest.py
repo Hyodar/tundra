@@ -22,7 +22,7 @@ from tundravm.cli import main
 
 STARTER = """\
 from tundravm import File, Image, Service
-from tundravm.components import DevAccess
+from tundravm.components.access import DevAccess
 from tundravm.ports import TCP
 
 image = Image(
@@ -43,7 +43,8 @@ image = Image(
 
 PROVER = """\
 from tundravm import File, Image, Service
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume

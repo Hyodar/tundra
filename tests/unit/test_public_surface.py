@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import tundravm
-from tundravm import _reference, declarative
+from tundravm import _reference, check, declarative
 
 # Changing one of these lists changes the public API: update it deliberately, in review.
 ROOT = [
@@ -53,35 +53,26 @@ SYSTEMD = [
     "TcpProbe",
 ]
 COMPONENTS = [
-    "EVIDENCE",
-    "Bind",
     "Component",
     "ComponentReady",
-    "Container",
-    "ContainerSsh",
-    "DevAccess",
     "Diagnostic",
-    "Egress",
     "Endpoint",
-    "Firewall",
-    "JournalExport",
-    "Login",
-    "Mode",
-    "Network",
-    "Observability",
-    "PrometheusRemoteWrite",
-    "Proxy",
-    "RecordingRule",
     "Resolved",
     "Rule",
     "ServiceReady",
     "ServiceRef",
+]
+ACCESS = ["DevAccess", "Login", "SshAccess", "Sudo"]
+NETWORK = ["Egress", "Firewall", "Mode", "Network", "StaticAddress"]
+TEE = ["EVIDENCE", "Tdxs", "TeeBase"]
+CONTAINER = ["Bind", "Container", "ContainerSsh"]
+OBSERVABILITY = [
+    "JournalExport",
+    "Observability",
+    "PrometheusRemoteWrite",
+    "Proxy",
+    "RecordingRule",
     "SigV4",
-    "SshAccess",
-    "StaticAddress",
-    "Sudo",
-    "Tdxs",
-    "TeeBase",
 ]
 STORAGE = ["BrokerKey", "OperatorKey", "TpmSeal", "Volume", "VolumeDirectory"]
 SECRETS = ["Credential", "Generated", "InstanceKey", "Secret"]
@@ -153,6 +144,11 @@ NAMESPACES = {
     "tundravm.ports": PORTS,
     "tundravm.systemd": SYSTEMD,
     "tundravm.components": COMPONENTS,
+    "tundravm.components.tee": TEE,
+    "tundravm.components.network": NETWORK,
+    "tundravm.components.access": ACCESS,
+    "tundravm.components.container": CONTAINER,
+    "tundravm.components.observability": OBSERVABILITY,
     "tundravm.storage": STORAGE,
     "tundravm.secrets": SECRETS,
     "tundravm.sources": SOURCES,
@@ -214,8 +210,9 @@ def test_systemd_all_is_frozen() -> None:
     assert sorted(importlib.import_module("tundravm.systemd").__all__) == sorted(SYSTEMD)
 
 
-def test_components_all_is_frozen() -> None:
-    assert sorted(importlib.import_module("tundravm.components").__all__) == sorted(COMPONENTS)
+@pytest.mark.parametrize("module", [name for name in NAMESPACES if "components" in name])
+def test_components_all_is_frozen(module: str) -> None:
+    assert sorted(importlib.import_module(module).__all__) == sorted(NAMESPACES[module])
 
 
 def test_storage_all_is_frozen() -> None:
@@ -285,7 +282,9 @@ def test_no_private_module_looks_like_a_namespace() -> None:
         assert not list((package / gone).glob("*.py")), gone
     components = importlib.import_module("tundravm.components")
     submodules = [m.name for m in pkgutil.iter_modules(components.__path__)]
-    assert submodules and all(name.startswith("_") for name in submodules), submodules
+    shipped = [name for name in submodules if not name.startswith("_")]
+    assert sorted(shipped) == sorted(check.SHIPPED_MODULES), submodules
+    assert {f"tundravm.components.{name}" for name in shipped} <= set(_reference.MODULES)
 
 
 def test_reused_names_are_the_declarative_objects() -> None:
@@ -308,7 +307,8 @@ def test_the_component_library_is_components() -> None:
         "TeeBase",
     ]
     for name in shipped:
-        value = getattr(components, name)
+        value = _home(name)
+        assert isinstance(value, type), name
         assert issubclass(value, components.Component), name
         assert value.__module__.startswith("tundravm.components._"), name
     # Application components are the image author's: an example carries the ones it needs.

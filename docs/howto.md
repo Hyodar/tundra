@@ -198,7 +198,7 @@ names and the `"health"` preset, its default. A production profile with a `url=`
 ## Open a maintenance window
 
 ```python
-from tundravm.components import Firewall, Mode
+from tundravm.components.network import Firewall, Mode
 from tundravm.ports import TCP
 
 window = Mode(ingress=[TCP(22)], lasts="30m")

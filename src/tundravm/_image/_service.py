@@ -189,7 +189,7 @@ class Service(Located):
     user. ``Egress(metadata=True)`` is the only way any service reaches the cloud metadata
     server, where the instance's identity token lives.
     ``quotes=True`` says it asks the evidence service for TDX quotes: it joins the ``tdx``
-    group and requires :data:`~tundravm.components.EVIDENCE`. tdxs tags each quote with the
+    group and requires :data:`~tundravm.components.tee.EVIDENCE`. tdxs tags each quote with the
     caller's user name (the service's name unless ``user=``), which a verifier of its quote
     requires; ``user="root"`` is refused, since uid 0's tag is the attested endpoint's.
 

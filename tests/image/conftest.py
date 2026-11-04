@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 
 from tundravm import File, Image, Service
-from tundravm.components import Egress, Network
+from tundravm.components.network import Egress, Network
 from tundravm.ports import TCP
 from tundravm.testing import PlannedImage, plan
 
 STARTER_SOURCE = '''"""The starter: plan section 3.1's demo.py."""
 
 from tundravm import File, Image, Service
-from tundravm.components import Egress, Network
+from tundravm.components.network import Egress, Network
 from tundravm.ports import TCP
 
 image = Image(

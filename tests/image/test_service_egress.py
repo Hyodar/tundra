@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 
 from tundravm import Image, Service
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 from tundravm.declarative import Dynamic, Task
 from tundravm.declarative.model import EgressRule
 from tundravm.errors import ValidationError

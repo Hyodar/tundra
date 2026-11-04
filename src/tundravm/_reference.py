@@ -55,6 +55,11 @@ MODULES: tuple[str, ...] = (
     "tundravm.ports",
     "tundravm.systemd",
     "tundravm.components",
+    "tundravm.components.tee",
+    "tundravm.components.network",
+    "tundravm.components.access",
+    "tundravm.components.container",
+    "tundravm.components.observability",
     "tundravm.storage",
     "tundravm.secrets",
     "tundravm.sources",
@@ -403,8 +408,7 @@ def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
 def lint_markdown() -> str:
     """``lint.md``: every code tundravm reports, sorted, with what it checks and how to fix
     it, then the codes each shipped component declares, by component."""
-    from tundravm import components
-    from tundravm.check import RULES
+    from tundravm.check import RULES, shipped_components
 
     lines = _header("Lint reference", "the `tundravm check` rule registry")
     rules = sorted(RULES.values(), key=_code)
@@ -426,10 +430,8 @@ def lint_markdown() -> str:
         "| Component | Code | Severity | What it checks | How to fix |",
         "|---|---|---|---|---|",
     ]
-    for name in sorted(components.__all__):
-        cls = getattr(components, name)
-        if isinstance(cls, type) and issubclass(cls, components.Component):
-            lines += [f"| `{name}` | {_rule_row(rule)} |" for rule in sorted(cls.rules, key=_code)]
+    for name, cls in shipped_components():
+        lines += [f"| `{name}` | {_rule_row(rule)} |" for rule in sorted(cls.rules, key=_code)]
     return "\n".join(lines)
 
 

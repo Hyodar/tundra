@@ -10,7 +10,8 @@ from collections.abc import Iterator
 from urllib.parse import urlsplit
 
 from tundravm import Package, Service
-from tundravm.components import Component, Diagnostic, Egress, Endpoint, Resolved, Rule
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
+from tundravm.components.network import Egress
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Generated, Secret

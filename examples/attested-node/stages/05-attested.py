@@ -10,7 +10,8 @@ from components.lighthouse import Lighthouse
 from components.nethermind import Nethermind
 
 from tundravm import Debian, Image, RootFS, Service
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 from tundravm.ports import AttestedTLS
 from tundravm.secrets import Generated, InstanceKey
 from tundravm.sources import GoBinary, Local

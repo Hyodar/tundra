@@ -14,7 +14,7 @@ import pytest
 import tundravm
 from tundravm import File, Image, Package, Profile, Service
 from tundravm.cli import main
-from tundravm.components import Egress, Network
+from tundravm.components.network import Egress, Network
 from tundravm.errors import TdxError
 from tundravm.ports import TCP
 from tundravm.secrets import Credential, Secret

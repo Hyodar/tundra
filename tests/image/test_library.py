@@ -9,25 +9,19 @@ import pytest
 
 from tundravm import Image, Kernel, Package, Service
 from tundravm._image import lower, recipe_of
-from tundravm.components import (
-    EVIDENCE,
-    Component,
-    DevAccess,
-    Egress,
-    Endpoint,
-    Firewall,
+from tundravm.components import Component, Endpoint
+from tundravm.components._observability import PROXY_HOSTS, PROXY_HOSTS_SCRIPT
+from tundravm.components.access import DevAccess, SshAccess
+from tundravm.components.network import Egress, Firewall, Network
+from tundravm.components.observability import (
     JournalExport,
-    Network,
     Observability,
     PrometheusRemoteWrite,
     Proxy,
     RecordingRule,
     SigV4,
-    SshAccess,
-    Tdxs,
-    TeeBase,
 )
-from tundravm.components._observability import PROXY_HOSTS, PROXY_HOSTS_SCRIPT
+from tundravm.components.tee import EVIDENCE, Tdxs, TeeBase
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
 from tundravm.secrets import Secret
@@ -214,7 +208,7 @@ def test_an_explicit_tdxs_builds_the_evidence_and_the_volume_tools_from_its_sour
 
 
 def test_an_explicit_firewall_and_network_replace_the_defaults() -> None:
-    from tundravm.components import Egress
+    from tundravm.components.network import Egress
 
     image = Image(
         "x",

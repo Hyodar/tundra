@@ -164,7 +164,9 @@ class _Lowering:
     """The units of every service the image, its profiles and ``dev=`` declare."""
 
     def __post_init__(self) -> None:
-        from tundravm.components import Firewall, Network, SshAccess, Tdxs, TeeBase
+        from tundravm.components.access import SshAccess
+        from tundravm.components.network import Firewall, Network
+        from tundravm.components.tee import Tdxs, TeeBase
 
         self.baseline_types = (TeeBase, Network, Firewall, Tdxs)
         image = self.image
@@ -232,7 +234,7 @@ class _Lowering:
     def platform(self) -> dm.Platform:
         """Debian, its archive, its boot set and the command line: ``TeeBase``'s
         parameters, then the kernel's."""
-        from tundravm.components import TeeBase
+        from tundravm.components.tee import TeeBase
 
         base = self.image.base
         kernel = self.image.kernel
@@ -248,7 +250,7 @@ class _Lowering:
 
     def items(self) -> tuple[dm.Declaration | dm.Fragment, ...]:
         """Everything the image declares, implied baseline first."""
-        from tundravm.components import SshAccess
+        from tundravm.components.access import SshAccess
 
         image = self.image
         body: list[dm.Declaration | dm.Fragment] = []
@@ -286,8 +288,10 @@ class _Lowering:
     def baseline(self) -> tuple[dm.Declaration | dm.Fragment, ...]:
         """What every image gets: the TEE baseline, the network, the firewall and the
         evidence service, each the image's own when it passed one in ``components=``."""
-        from tundravm.components import Firewall, Network, Tdxs, TeeBase
-        from tundravm.components._base import CHRONY_NTP, egress_rules
+        from tundravm.components._network import egress_rules
+        from tundravm.components._tee import CHRONY_NTP
+        from tundravm.components.network import Firewall, Network
+        from tundravm.components.tee import Tdxs, TeeBase
 
         network = self.image.network
         if network is not None and self.explicit(Network) is not None:
@@ -349,7 +353,7 @@ class _Lowering:
         the components it adds (*added*, beyond the *inherited* ones of the profiles it
         extends) send: none when the image does not filter egress or they ask for nothing
         new."""
-        from tundravm.components._base import egress_rules
+        from tundravm.components._network import egress_rules
 
         if self.sends is None:
             return ()
@@ -940,7 +944,7 @@ class _Lowering:
         """``egress-resolve.service`` when *item*'s own egress names a host the image's
         filter resolves: ``Wants=`` and ``After=`` it, so the service starts once the first
         resolution filled the name's sets, and starts anyway when it finds nothing."""
-        from tundravm.components import Firewall, Network
+        from tundravm.components.network import Firewall, Network
 
         egress = item.egress
         if egress is None or not any(egress_host(egress, host)[2] for host in egress.hosts):
@@ -1093,7 +1097,7 @@ def _removed_unit(change: Remove, units: set[str]) -> str | None:
 
 def _evidence(item: Service) -> tuple[ServiceReady, ...]:
     """The evidence service's readiness, which a service that asks for quotes requires."""
-    from tundravm.components import EVIDENCE
+    from tundravm.components.tee import EVIDENCE
 
     return (EVIDENCE,) if item.quotes else ()
 
@@ -1274,7 +1278,7 @@ def component_classes(recipe: dm.Recipe) -> tuple[type[Component], ...]:
 
 def _own_egress(item: Service) -> tuple[dm.EgressRule, ...]:
     """*item*'s ``egress=`` as the rules the firewall accepts for its user alone."""
-    from tundravm.components._base import egress_rules
+    from tundravm.components._network import egress_rules
 
     return () if item.egress is None else egress_rules(((item.unit_name, item.egress),))
 

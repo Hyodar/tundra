@@ -7,7 +7,8 @@ from collections.abc import Iterator
 import pytest
 
 from tundravm import Image, Profile, Service
-from tundravm.components import EVIDENCE, Component, Endpoint
+from tundravm.components import Component, Endpoint
+from tundravm.components.tee import EVIDENCE
 from tundravm.declarative import Root, Task
 from tundravm.declarative.systemd import PRESETS
 from tundravm.errors import ValidationError

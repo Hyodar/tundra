@@ -16,7 +16,8 @@ import pytest
 from tundravm import File, Image, Kernel, RootFS, Service
 from tundravm._image import lower, recipe_of
 from tundravm._image._values import MANAGEMENT_PORT
-from tundravm.components import Egress, Endpoint, Network
+from tundravm.components import Endpoint
+from tundravm.components.network import Egress, Network
 from tundravm.declarative import Disk, Key, Secrets
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, TLS, AttestedTLS

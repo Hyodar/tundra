@@ -19,7 +19,7 @@ from tundravm import File, Image, Profile, Tree
 from tundravm import Service as ImageService
 from tundravm._modules import execution as gate
 from tundravm._modules import instance_key as key
-from tundravm.components import DevAccess
+from tundravm.components.access import DevAccess
 from tundravm.errors import ValidationError
 from tundravm.secrets import Credential, InstanceKey
 from tundravm.systemd import DropIn, Every

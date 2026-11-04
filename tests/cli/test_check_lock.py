@@ -21,8 +21,10 @@ image = Image("b", services=[Service("app", ["/usr/bin/app"], user="ghost")])
 
 
 MIRRORED = STARTER.replace(
-    "from tundravm.components import DevAccess\n",
-    "from tundravm.components import DevAccess, Tdxs\nfrom tundravm.sources import Git\n",
+    "from tundravm.components.access import DevAccess\n",
+    "from tundravm.components.access import DevAccess\n"
+    "from tundravm.components.tee import Tdxs\n"
+    "from tundravm.sources import Git\n",
 ).replace(
     '    dev=DevAccess(password="tdx"),\n',
     '    dev=DevAccess(password="tdx"),\n'
@@ -84,7 +86,8 @@ PRIVILEGED_APP = """\
 from collections.abc import Iterator
 
 from tundravm import Image, Service
-from tundravm.components import Component, Diagnostic, Egress, Network, Resolved, Rule
+from tundravm.components import Component, Diagnostic, Resolved, Rule
+from tundravm.components.network import Egress, Network
 
 
 class App(Component):
@@ -287,7 +290,7 @@ def test_a_dev_build_re_pins_a_changed_local_source(
     dev = 'services=[Service("app", [app])], dev=DevAccess(password="tdx"))'
     source = LOCAL.replace('services=[Service("app", [app])])', dev)
     (project / "demo.py").write_text(
-        "from tundravm.components import DevAccess\n" + source, encoding="utf-8"
+        "from tundravm.components.access import DevAccess\n" + source, encoding="utf-8"
     )
     (project / "app").mkdir()
     main = project / "app" / "main.go"

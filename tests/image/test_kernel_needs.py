@@ -8,7 +8,8 @@ import pytest
 
 from tundravm import DebianConfig, Image, Kernel, KernelFragment, KernelPatch, Profile, RootFS
 from tundravm._image._lower import CONTAINER_KERNEL, VERITY_KERNEL, kernel_of
-from tundravm.components import Component, Container
+from tundravm.components import Component
+from tundravm.components.container import Container
 from tundravm.errors import ValidationError
 
 BASE = DebianConfig("6.12.113-1")

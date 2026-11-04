@@ -40,6 +40,7 @@ from .models import ContainerSpec, ProfileState, ServiceSpec, debloat_units_keep
 from .project import lock_command
 
 if TYPE_CHECKING:
+    from ._image._component import Component
     from ._units.lint import ShippedUnit
     from .declarative._lowered import Lowered
     from .declarative.model import Recipe, Service, Task
@@ -1788,7 +1789,7 @@ class Declared:
 
     rule: Rule
     origin: str
-    """``App in demo.py``; ``TeeBase in tundravm.components`` for a shipped component."""
+    """``App in demo.py``; ``TeeBase in tundravm.components.tee`` for a shipped component."""
 
 
 def component_rules(classes: Iterable[type]) -> dict[str, Declared]:
@@ -1803,14 +1804,14 @@ def component_rules(classes: Iterable[type]) -> dict[str, Declared]:
 
 
 def _declared_in(cls: type) -> str:
-    """Where *cls* is written: ``tundravm.components`` for a shipped component, else its
-    file, relative to the working directory."""
+    """Where *cls* is written: its public ``tundravm.components`` submodule for a shipped
+    component, else its file, relative to the working directory."""
     import inspect
 
     from ._location import display_location
 
-    if cls.__module__.startswith("tundravm.components."):
-        return "tundravm.components"
+    if cls.__module__.startswith("tundravm.components._"):
+        return cls.__module__.replace("components._", "components.", 1)
     try:
         file = inspect.getsourcefile(cls)
     except TypeError:
@@ -1820,12 +1821,27 @@ def _declared_in(cls: type) -> str:
 
 def shipped_rules() -> dict[str, Declared]:
     """The rules the shipped components of :mod:`tundravm.components` declare, by code."""
+    return component_rules(cls for _, cls in shipped_components())
+
+
+SHIPPED_MODULES = ("access", "container", "network", "observability", "tee")
+"""The :mod:`tundravm.components` submodules that hold the shipped library."""
+
+
+def shipped_components() -> list[tuple[str, type[Component]]]:
+    """Each shipped component class, with its name, sorted by name."""
+    import importlib
+
     from . import components
 
-    shipped = (getattr(components, name) for name in components.__all__)
-    return component_rules(
-        cls for cls in shipped if isinstance(cls, type) and issubclass(cls, components.Component)
-    )
+    found: list[tuple[str, type[Component]]] = []
+    for module in SHIPPED_MODULES:
+        imported = importlib.import_module(f"tundravm.components.{module}")
+        for name in imported.__all__:
+            value = getattr(imported, name)
+            if isinstance(value, type) and issubclass(value, components.Component):
+                found.append((name, value))
+    return sorted(found, key=lambda pair: pair[0])
 
 
 def explain(codes: Sequence[str], declared: Mapping[str, Declared] | None = None) -> str:
@@ -2063,6 +2079,7 @@ def _located(diagnostic: Diagnostic, item: object) -> Diagnostic:
 
 __all__ = [
     "RULES",
+    "SHIPPED_MODULES",
     "Declared",
     "Diagnostic",
     "Rule",
@@ -2077,6 +2094,7 @@ __all__ = [
     "render",
     "render_github",
     "render_summary",
+    "shipped_components",
     "shipped_rules",
     "summarize",
 ]

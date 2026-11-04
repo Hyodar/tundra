@@ -12,7 +12,8 @@ from tundravm import File as PublicFile
 from tundravm import Image, Profile
 from tundravm import Service as PublicService
 from tundravm._modules.base import tools_source
-from tundravm.components import Component, Egress, Network
+from tundravm.components import Component
+from tundravm.components.network import Egress, Network
 from tundravm.declarative import (
     BootStep,
     Diagnostic,

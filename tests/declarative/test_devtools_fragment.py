@@ -7,7 +7,7 @@ import pytest
 from tundravm import Image
 from tundravm._image import recipe_of
 from tundravm._units import v1
-from tundravm.components import DevAccess
+from tundravm.components.access import DevAccess
 from tundravm.declarative import Debloat, Package, Recipe, Unit, Variant
 from tundravm.declarative.utils import DevTools
 from tundravm.testing._model import CompiledTree, compile_tree

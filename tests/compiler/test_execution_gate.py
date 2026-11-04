@@ -16,7 +16,7 @@ from tundravm import Image, Profile
 from tundravm import Service as ImageService
 from tundravm._modules import execution as gate
 from tundravm._modules import tdxs as issuers
-from tundravm.components import DevAccess
+from tundravm.components.access import DevAccess
 from tundravm.declarative import (
     BootStep,
     Calendar,

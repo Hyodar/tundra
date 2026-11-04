@@ -35,7 +35,8 @@ filtered egress, and a dev profile with a serial console and root password "tdx"
 """
 
 from tundravm import Debian, Image
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 
 image = Image(
     "$title",

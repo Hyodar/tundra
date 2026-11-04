@@ -26,7 +26,8 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 PROVER_SOURCE = '''"""Plan section 3.1's prover.py."""
 
 from tundravm import Image, RootFS, Service
-from tundravm.components import DevAccess, Egress, Network
+from tundravm.components.access import DevAccess
+from tundravm.components.network import Egress, Network
 from tundravm.ports import TCP, AttestedTLS
 from tundravm.secrets import Secret
 from tundravm.sources import Git, GoBinary

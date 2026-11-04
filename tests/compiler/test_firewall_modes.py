@@ -17,7 +17,7 @@ import pytest
 
 import tundravm
 from tundravm import DebianConfig, Image, Kernel
-from tundravm.components import Egress, Firewall, Mode, Network
+from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.declarative._network import expand_firewall
 from tundravm.declarative.model import EgressRule, FirewallMode, Port
 from tundravm.declarative.model import Firewall as Ruleset

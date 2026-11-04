@@ -23,7 +23,9 @@ from ._storage import TpmSeal, Volume
 from ._values import MANAGEMENT_PORT, Debian, File, Kernel, Mkosi, Package, Tree
 
 if TYPE_CHECKING:
-    from tundravm.components import DevAccess, Network, Observability
+    from tundravm.components.access import DevAccess
+    from tundravm.components.network import Network
+    from tundravm.components.observability import Observability
 
 __all__ = ["Content", "Image", "Profile"]
 
@@ -286,26 +288,28 @@ class Image(Located):
                 f"kernel= holds {shown(self.kernel)}, not a Kernel.",
                 hint="kernel=Kernel.default(modules=[...]) or Kernel.build(...)",
             )
-        from tundravm.components import DevAccess, Network, Observability
+        from tundravm.components.access import DevAccess
+        from tundravm.components.network import Network
+        from tundravm.components.observability import Observability
 
         if self.network is not None and not isinstance(self.network, Network):
             raise _fail(
                 self,
                 f"network= holds {shown(self.network)}, not a Network.",
-                hint="network=Network(egress=Egress(...)), from tundravm.components",
+                hint="network=Network(egress=Egress(...)), from tundravm.components.network",
             )
         if self.dev is not None and not isinstance(self.dev, DevAccess):
             raise _fail(
                 self,
                 f"dev= holds {shown(self.dev)}, not a DevAccess.",
-                hint="dev=DevAccess(ssh_keys=[...]), from tundravm.components",
+                hint="dev=DevAccess(ssh_keys=[...]), from tundravm.components.access",
             )
         if self.observability is not None and not isinstance(self.observability, Observability):
             raise _fail(
                 self,
                 f"observability= holds {shown(self.observability)}, not Observability.",
                 hint="observability=Observability(logs=JournalExport(url)), from "
-                "tundravm.components",
+                "tundravm.components.observability",
             )
         if not isinstance(self.rootfs, RootFS):
             raise _fail(
@@ -369,7 +373,7 @@ class Image(Located):
 
     def _check_runtime(self) -> None:
         """Volumes, secrets and ingress: types, unique names, and what the targets allow."""
-        from tundravm.components import DevAccess
+        from tundravm.components.access import DevAccess
 
         for entry in self.components:
             if isinstance(entry, DevAccess):

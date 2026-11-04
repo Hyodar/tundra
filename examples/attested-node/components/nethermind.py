@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from tundravm import Package, Service
-from tundravm.components import Component, Diagnostic, Egress, Endpoint, Resolved, Rule
+from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
+from tundravm.components.network import Egress
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Generated, Secret
 from tundravm.sources import Build, Dotnet, Git, Install

@@ -1,11 +1,16 @@
 # API reference
 
-Generated from the `__all__` of `tundravm`, `tundravm.ports`, `tundravm.systemd`, `tundravm.components`, `tundravm.storage`, `tundravm.secrets`, `tundravm.sources`, `tundravm.errors`, `tundravm.testing` by `uv run python -m tundravm._reference docs/reference` (Python 3.12). Do not edit it by hand: `tests/docs/test_reference.py` fails when it is stale.
+Generated from the `__all__` of `tundravm`, `tundravm.ports`, `tundravm.systemd`, `tundravm.components`, `tundravm.components.tee`, `tundravm.components.network`, `tundravm.components.access`, `tundravm.components.container`, `tundravm.components.observability`, `tundravm.storage`, `tundravm.secrets`, `tundravm.sources`, `tundravm.errors`, `tundravm.testing` by `uv run python -m tundravm._reference docs/reference` (Python 3.12). Do not edit it by hand: `tests/docs/test_reference.py` fails when it is stale.
 
 - [`tundravm`](#tundravm)
 - [`tundravm.ports`](#tundravmports)
 - [`tundravm.systemd`](#tundravmsystemd)
 - [`tundravm.components`](#tundravmcomponents)
+- [`tundravm.components.tee`](#tundravmcomponentstee)
+- [`tundravm.components.network`](#tundravmcomponentsnetwork)
+- [`tundravm.components.access`](#tundravmcomponentsaccess)
+- [`tundravm.components.container`](#tundravmcomponentscontainer)
+- [`tundravm.components.observability`](#tundravmcomponentsobservability)
 - [`tundravm.storage`](#tundravmstorage)
 - [`tundravm.secrets`](#tundravmsecrets)
 - [`tundravm.sources`](#tundravmsources)
@@ -707,22 +712,7 @@ Readiness: *host* accepts a TCP connection on *port*, polled every *interval* un
 
 ## tundravm.components
 
-Components: the `Component` base class, what a component exports, and the shipped library.
-
-### `Bind`
-
-*dataclass*
-
-```python
-Bind(path: str, *, at: str | None = None, writable: bool = False, file: bool = False)
-```
-
-A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind("/run/input", writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
-
-| Member | Does |
-|---|---|
-| `Bind.directive` | `BindPaths=` for a writable bind, else `BindReadOnlyPaths=`. |
-| `Bind.target` | Where the container sees it. |
+Components: the API for writing one. The shipped library lives in the submodules.
 
 ### `Component`
 
@@ -759,6 +749,381 @@ ComponentReady(component: Component)
 |---|---|
 | `ComponentReady.handles() -> tuple[Readied, ...]` | What proves the component ready, one handle per unit. |
 | `ComponentReady.name` | The component's name. |
+
+### `Diagnostic`
+
+*dataclass*
+
+```python
+Diagnostic(
+    code: str,
+    severity: Severity,
+    message: str,
+    subject: str = '',
+    profile: str = '',
+    location: str = '',
+    hint: str | None = None,
+    context: Context = (),
+)
+```
+
+One finding: a lint *code*, its *severity* and a one-line *message*.
+
+| Member | Does |
+|---|---|
+| `Diagnostic.to_dict() -> dict[str, object]` | The JSON form `check --json` prints: every field, *context* as an object. |
+
+### `Endpoint`
+
+*dataclass*
+
+```python
+Endpoint(
+    host: str,
+    port: int,
+    path: str = '/',
+    scheme: str = 'http',
+    ready: ServiceReady | None = None,
+    provider: str | Component | None = None,
+)
+```
+
+Where a component answers, with its readiness: an export a caller can wire.
+
+| Member | Does |
+|---|---|
+| `Endpoint.address` | `host:port`, with an IPv6 host in brackets. |
+| `Endpoint.loopback` | Whether only the image itself can reach it (`127.0.0.0/8`, `::1`, `localhost`). |
+| `Endpoint.url` | `scheme://host:port/path`. |
+| `Endpoint.with_scheme(scheme: str) -> Endpoint` | The same address under *scheme* (`ws` for a JSON-RPC server's WebSocket). |
+
+### `Resolved`
+
+*dataclass*
+
+```python
+Resolved(
+    profile: str,
+    targets: tuple[Target, ...],
+    items: tuple[Declaration, ...],
+    components: tuple[str, ...],
+    production: bool = True,
+)
+```
+
+One profile of the image after expansion, profile changes and reference checks.
+
+| Member | Does |
+|---|---|
+| `Resolved.bind(ref: Ref) -> Declaration` | The profile's final declaration *ref* names; `ValidationError` when absent. |
+
+### `Rule`
+
+*dataclass*
+
+```python
+Rule(
+    code: str,
+    severity: Severity | Sequence[Severity],
+    summary: str,
+    fix: str,
+    checks: Sequence[RuleCheck] = (),
+    *,
+    when: Sequence[str] = (),
+)
+```
+
+One code `tundravm check` reports: its severity, what it checks and how to fix it.
+
+| Member | Does |
+|---|---|
+| `Rule.severity_text` | The severity as the lint reference and `--explain` print it: `error (warning under Policy(storage_safety='warn'))`. |
+
+### `ServiceReady`
+
+*dataclass*
+
+```python
+ServiceReady(unit: str, probe: Readiness | None = None)
+```
+
+"That service is ready": `service.ready`, what `requires=` takes.
+
+### `ServiceRef`
+
+*dataclass*
+
+```python
+ServiceRef(unit: str, probe: Readiness | None = None, service: Service | None = None)
+```
+
+A service a component composed, named from outside: `node.service("node")`.
+
+| Member | Does |
+|---|---|
+| `ServiceRef.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where that service answers on the loopback, with its readiness, as `Service.endpoint` gives it: what a component exports (`self.service("app").endpoint(8080)`). It opens no port. |
+| `ServiceRef.ready` | The readiness handle of that service. |
+| `ServiceRef.ref` | The reference a profile change targets. |
+
+## tundravm.components.tee
+
+The confidential-VM baseline every image implies: `TeeBase` and `Tdxs`, the evidence service, whose readiness is `EVIDENCE`. Passing one in `components=` replaces the default.
+
+### `EVIDENCE`
+
+*value*
+
+```python
+EVIDENCE = ServiceReady(unit='tdxs.service')
+```
+
+### `Tdxs`
+
+*dataclass*
+
+```python
+Tdxs(
+    *,
+    source: dm.Git | dm.Local = tools_source(),
+    validator: du.TdxsType | None = None,
+    expected_measurements: Mapping[str, str] = FrozenMap({}),
+    check_revocations: bool = False,
+    get_collateral: bool = False,
+    verify_imds: bool = False,
+    verify_identity_token: bool = False,
+)
+```
+
+The evidence service: `tdxs` from `tools/` of tundravm's repository, socket-activated on `/var/tdxs.sock`, which produces the TDX quote an attestation is checked against.
+
+| Member | Does |
+|---|---|
+| `Tdxs.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tdxs-validator-unchecked`: a validator with nothing to compare a quote to. |
+| `Tdxs.from_policy(policy: str \| Path \| Mapping[str, object], *, validator: du.TdxsType = 'tdx', allow_placeholder: bool = False, **kwargs: Any) -> Tdxs` | A verifier whose `expected_measurements` are *policy*'s registers. |
+| `Tdxs.group` | The group whose members may ask for quotes. |
+| `Tdxs.outbound() -> Egress` | Intel's PCS over HTTPS with *get_collateral* or *check_revocations*, and the root CA's CRL with *check_revocations*; nothing otherwise (quotes are made in the guest). |
+| `Tdxs.socket` | Where a service asks for quotes (its `tdx` group may connect). |
+
+### `TeeBase`
+
+*dataclass*
+
+```python
+TeeBase(
+    *,
+    time: bool = True,
+    nts_servers: Sequence[str] = ('time.cloudflare.com', 'nts.netnod.se'),
+    journal: bool = True,
+    journal_max_use: str = '128M',
+    sysctl: bool = True,
+    dns: bool = True,
+    mask: bool = True,
+)
+```
+
+The confidential-VM baseline: authenticated time, a volatile journal, sysctl hardening, DNS over TLS, no apt timers or console getty, and the CPU mitigations the kernel boots with.
+
+| Member | Does |
+|---|---|
+| `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
+| `TeeBase.kernel_cmdline` | `mitigations=auto,nosmt spec_store_bypass_disable=on`: every CPU vulnerability mitigated, SMT off where that needs it, Speculative Store Bypass off for every process (`TEE_KERNEL_CMDLINE` says why each). |
+| `TeeBase.outbound() -> Egress` | With *time*, NTS key exchange (TCP 4460) to each of *nts_servers*. NTP on UDP 123 goes where the key exchange says (RFC 8915 4.1.7), so the firewall accepts it to any address for chrony's user alone (`CHRONY_NTP`). The `Network` names where DNS goes. |
+
+## tundravm.components.network
+
+The network baseline every image implies: `Network` (also `image.network`, configured with `StaticAddress` and `Egress`) and `Firewall` (switchable with `Mode`). Passing one in `components=` replaces the default.
+
+### `Egress`
+
+*dataclass*
+
+```python
+Egress(
+    ports: Sequence[PortValue] = (),
+    hosts: Sequence[str] = (),
+    metadata: bool = False,
+)
+```
+
+Outbound traffic the image, or one service, may send; everything else is dropped.
+
+### `Firewall`
+
+*dataclass*
+
+```python
+Firewall(
+    *,
+    allow: Sequence[PortValue] = (),
+    egress: Egress | None = None,
+    modes: Mapping[str, Mode] = FrozenMap({}),
+)
+```
+
+The inbound (and optionally outbound) packet filter, nftables in the image.
+
+| Member | Does |
+|---|---|
+| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
+| `Firewall.lowered_modes() -> tuple[dm.FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
+
+### `Mode`
+
+*dataclass*
+
+```python
+Mode(
+    ingress: Sequence[PortValue] = (),
+    egress: Egress | None = None,
+    lasts: str | None = None,
+)
+```
+
+One mode of `Firewall(modes={...})`: the ports it opens (*ingress*), what it may send beyond the image's `Egress` (*egress*) and how long it lasts once an operator switched to it (*lasts*, a systemd time span; `"30m"` unless given, and never on `production`, which the image boots into and returns to).
+
+| Member | Does |
+|---|---|
+| `Mode.seconds` | *lasts* in whole seconds, 30 minutes when it is not given. |
+
+### `Network`
+
+*dataclass*
+
+```python
+Network(
+    *,
+    dhcp: bool = True,
+    static: StaticAddress | None = None,
+    egress: Egress | None = None,
+    interfaces: Sequence[str] = ('en*', 'eth*'),
+    dns: Sequence[str] = ('1.1.1.1#cloudflare-dns.com', '1.0.0.1#cloudflare-dns.com'),
+)
+```
+
+How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
+
+| Member | Does |
+|---|---|
+| `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
+| `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
+| `Network.outbound() -> Egress` | DNS over TLS (TCP 853) to each of *dns*. |
+
+### `StaticAddress`
+
+*dataclass*
+
+```python
+StaticAddress(address: str, gateway: str | None = None)
+```
+
+A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")`.
+
+| Member | Does |
+|---|---|
+| `StaticAddress.version` | 4 or 6. |
+
+## tundravm.components.access
+
+The ways in for people: `SshAccess` (root, and each non-root `Login` with its `Sudo` rules) and `DevAccess` (`image.dev`).
+
+### `DevAccess`
+
+*dataclass*
+
+```python
+DevAccess(*, ssh_keys: Sequence[str] = (), password: str | None = None)
+```
+
+Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`.
+
+| Member | Does |
+|---|---|
+| `DevAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
+| `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
+| `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
+
+### `Login`
+
+*dataclass*
+
+```python
+Login(
+    name: str,
+    keys: Sequence[str] | Secret = (),
+    commands: Mapping[str, Sequence[str] | Sudo] | None = None,
+    shell: str | None = None,
+    owner: bool = False,
+    home: bool = False,
+)
+```
+
+An account other than root that logs in over SSH into a menu of commands: `Login("tenant", keys=[...], commands={"status": ["/usr/bin/app-status"]})`.
+
+| Member | Does |
+|---|---|
+| `Login.account_shell` | The login shell: `login-menu` for a menu, else *shell*. |
+| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, its menu if any. |
+| `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys, its menu and its sudo lines. |
+| `Login.delivered` | Whether the keys arrive after attestation (a `Secret`, or the owner's). |
+| `Login.entries` | The menu, sorted by command name. |
+| `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
+| `Login.menu() -> str` | The menu file `login-menu` reads: each entry with its words typed. |
+| `Login.menu_file` | `/etc/tundravm/logins/<name>.json`, or `None` for a shell login. |
+| `Login.options` | The `authorized_keys` options every baked key carries. |
+| `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: each root entry's exact argv, or its digits-only pattern. |
+| `Login.sudoers() -> str` | The `sudoers.d` file: exactly `sudo_rules`. |
+| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without a root entry. |
+
+### `SshAccess`
+
+*dataclass*
+
+```python
+SshAccess(
+    *,
+    keys: Sequence[str] = (),
+    from_delivery: bool = False,
+    listen_port: int = 22,
+    login: Login | Sequence[Login] = (),
+)
+```
+
+Root logs in over SSH with a public key, and with nothing else.
+
+| Member | Does |
+|---|---|
+| `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu. |
+| `SshAccess.logins` | Every `Login`, in the order given. |
+| `SshAccess.port` | The port `sshd` listens on. |
+
+### `Sudo`
+
+*dataclass*
+
+```python
+Sudo(argv: Sequence[str])
+```
+
+A `Login` entry that runs as root, exactly as written: `Sudo(["/usr/bin/systemctl", "restart", "app"])`.
+
+## tundravm.components.container
+
+Containers: `Container`, a program in a Debian root of its own built with the image, its `Bind` mounts, and `ContainerSsh`, its own sshd.
+
+### `Bind`
+
+*dataclass*
+
+```python
+Bind(path: str, *, at: str | None = None, writable: bool = False, file: bool = False)
+```
+
+A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind("/run/input", writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
+
+| Member | Does |
+|---|---|
+| `Bind.directive` | `BindPaths=` for a writable bind, else `BindReadOnlyPaths=`. |
+| `Bind.target` | Where the container sees it. |
 
 ### `Container`
 
@@ -817,110 +1182,9 @@ The container's own sshd on *port*, letting its user in with *keys* and with not
 |---|---|
 | `ContainerSsh.delivered` | Whether the keys arrive after attestation (a `Secret`) rather than baked in. |
 
-### `DevAccess`
+## tundravm.components.observability
 
-*dataclass*
-
-```python
-DevAccess(*, ssh_keys: Sequence[str] = (), password: str | None = None)
-```
-
-Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`.
-
-| Member | Does |
-|---|---|
-| `DevAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
-| `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
-| `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
-
-### `Diagnostic`
-
-*dataclass*
-
-```python
-Diagnostic(
-    code: str,
-    severity: Severity,
-    message: str,
-    subject: str = '',
-    profile: str = '',
-    location: str = '',
-    hint: str | None = None,
-    context: Context = (),
-)
-```
-
-One finding: a lint *code*, its *severity* and a one-line *message*.
-
-| Member | Does |
-|---|---|
-| `Diagnostic.to_dict() -> dict[str, object]` | The JSON form `check --json` prints: every field, *context* as an object. |
-
-### `Egress`
-
-*dataclass*
-
-```python
-Egress(
-    ports: Sequence[PortValue] = (),
-    hosts: Sequence[str] = (),
-    metadata: bool = False,
-)
-```
-
-Outbound traffic the image, or one service, may send; everything else is dropped.
-
-### `Endpoint`
-
-*dataclass*
-
-```python
-Endpoint(
-    host: str,
-    port: int,
-    path: str = '/',
-    scheme: str = 'http',
-    ready: ServiceReady | None = None,
-    provider: str | Component | None = None,
-)
-```
-
-Where a component answers, with its readiness: an export a caller can wire.
-
-| Member | Does |
-|---|---|
-| `Endpoint.address` | `host:port`, with an IPv6 host in brackets. |
-| `Endpoint.loopback` | Whether only the image itself can reach it (`127.0.0.0/8`, `::1`, `localhost`). |
-| `Endpoint.url` | `scheme://host:port/path`. |
-| `Endpoint.with_scheme(scheme: str) -> Endpoint` | The same address under *scheme* (`ws` for a JSON-RPC server's WebSocket). |
-
-### `EVIDENCE`
-
-*value*
-
-```python
-EVIDENCE = ServiceReady(unit='tdxs.service')
-```
-
-### `Firewall`
-
-*dataclass*
-
-```python
-Firewall(
-    *,
-    allow: Sequence[PortValue] = (),
-    egress: Egress | None = None,
-    modes: Mapping[str, Mode] = FrozenMap({}),
-)
-```
-
-The inbound (and optionally outbound) packet filter, nftables in the image.
-
-| Member | Does |
-|---|---|
-| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
-| `Firewall.lowered_modes() -> tuple[dm.FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
+The export path (`image.observability`): `Observability` with `JournalExport`, `PrometheusRemoteWrite` (its `RecordingRule` values, a `SigV4` credential) and `Proxy`.
 
 ### `JournalExport`
 
@@ -936,79 +1200,6 @@ Ship the journal to *url* (a `systemd-journal-remote` receiver) over HTTPS.
 |---|---|
 | `JournalExport.service(proxy: Proxy \| None = None) -> Service` | The `journal-export` service, through *proxy* when given; without *url*, to the in-guest `sink`, never through a proxy. |
 | `JournalExport.sink() -> Service` | `journal-sink`: the in-guest receiver, plain HTTP on the loopback. |
-
-### `Login`
-
-*dataclass*
-
-```python
-Login(
-    name: str,
-    keys: Sequence[str] | Secret = (),
-    commands: Mapping[str, Sequence[str] | Sudo] | None = None,
-    shell: str | None = None,
-    owner: bool = False,
-    home: bool = False,
-)
-```
-
-An account other than root that logs in over SSH into a menu of commands: `Login("tenant", keys=[...], commands={"status": ["/usr/bin/app-status"]})`.
-
-| Member | Does |
-|---|---|
-| `Login.account_shell` | The login shell: `login-menu` for a menu, else *shell*. |
-| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, its menu if any. |
-| `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys, its menu and its sudo lines. |
-| `Login.delivered` | Whether the keys arrive after attestation (a `Secret`, or the owner's). |
-| `Login.entries` | The menu, sorted by command name. |
-| `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
-| `Login.menu() -> str` | The menu file `login-menu` reads: each entry with its words typed. |
-| `Login.menu_file` | `/etc/tundravm/logins/<name>.json`, or `None` for a shell login. |
-| `Login.options` | The `authorized_keys` options every baked key carries. |
-| `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: each root entry's exact argv, or its digits-only pattern. |
-| `Login.sudoers() -> str` | The `sudoers.d` file: exactly `sudo_rules`. |
-| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without a root entry. |
-
-### `Mode`
-
-*dataclass*
-
-```python
-Mode(
-    ingress: Sequence[PortValue] = (),
-    egress: Egress | None = None,
-    lasts: str | None = None,
-)
-```
-
-One mode of `Firewall(modes={...})`: the ports it opens (*ingress*), what it may send beyond the image's `Egress` (*egress*) and how long it lasts once an operator switched to it (*lasts*, a systemd time span; `"30m"` unless given, and never on `production`, which the image boots into and returns to).
-
-| Member | Does |
-|---|---|
-| `Mode.seconds` | *lasts* in whole seconds, 30 minutes when it is not given. |
-
-### `Network`
-
-*dataclass*
-
-```python
-Network(
-    *,
-    dhcp: bool = True,
-    static: StaticAddress | None = None,
-    egress: Egress | None = None,
-    interfaces: Sequence[str] = ('en*', 'eth*'),
-    dns: Sequence[str] = ('1.1.1.1#cloudflare-dns.com', '1.0.0.1#cloudflare-dns.com'),
-)
-```
-
-How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
-
-| Member | Does |
-|---|---|
-| `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
-| `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
-| `Network.outbound() -> Egress` | DNS over TLS (TCP 853) to each of *dns*. |
 
 ### `Observability`
 
@@ -1089,74 +1280,6 @@ RecordingRule(record: str, expr: str)
 
 A series the guest computes from others: `RecordingRule("node:up", "min(up)")`.
 
-### `Resolved`
-
-*dataclass*
-
-```python
-Resolved(
-    profile: str,
-    targets: tuple[Target, ...],
-    items: tuple[Declaration, ...],
-    components: tuple[str, ...],
-    production: bool = True,
-)
-```
-
-One profile of the image after expansion, profile changes and reference checks.
-
-| Member | Does |
-|---|---|
-| `Resolved.bind(ref: Ref) -> Declaration` | The profile's final declaration *ref* names; `ValidationError` when absent. |
-
-### `Rule`
-
-*dataclass*
-
-```python
-Rule(
-    code: str,
-    severity: Severity | Sequence[Severity],
-    summary: str,
-    fix: str,
-    checks: Sequence[RuleCheck] = (),
-    *,
-    when: Sequence[str] = (),
-)
-```
-
-One code `tundravm check` reports: its severity, what it checks and how to fix it.
-
-| Member | Does |
-|---|---|
-| `Rule.severity_text` | The severity as the lint reference and `--explain` print it: `error (warning under Policy(storage_safety='warn'))`. |
-
-### `ServiceReady`
-
-*dataclass*
-
-```python
-ServiceReady(unit: str, probe: Readiness | None = None)
-```
-
-"That service is ready": `service.ready`, what `requires=` takes.
-
-### `ServiceRef`
-
-*dataclass*
-
-```python
-ServiceRef(unit: str, probe: Readiness | None = None, service: Service | None = None)
-```
-
-A service a component composed, named from outside: `node.service("node")`.
-
-| Member | Does |
-|---|---|
-| `ServiceRef.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where that service answers on the loopback, with its readiness, as `Service.endpoint` gives it: what a component exports (`self.service("app").endpoint(8080)`). It opens no port. |
-| `ServiceRef.ready` | The readiness handle of that service. |
-| `ServiceRef.ref` | The reference a profile change targets. |
-
 ### `SigV4`
 
 *dataclass*
@@ -1166,104 +1289,6 @@ SigV4(region: str, secret: Secret)
 ```
 
 AWS Signature V4 for a remote-write sink such as Amazon Managed Prometheus: `credential=SigV4("us-east-2", Secret("metrics-aws"))`.
-
-### `SshAccess`
-
-*dataclass*
-
-```python
-SshAccess(
-    *,
-    keys: Sequence[str] = (),
-    from_delivery: bool = False,
-    listen_port: int = 22,
-    login: Login | Sequence[Login] = (),
-)
-```
-
-Root logs in over SSH with a public key, and with nothing else.
-
-| Member | Does |
-|---|---|
-| `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu. |
-| `SshAccess.logins` | Every `Login`, in the order given. |
-| `SshAccess.port` | The port `sshd` listens on. |
-
-### `StaticAddress`
-
-*dataclass*
-
-```python
-StaticAddress(address: str, gateway: str | None = None)
-```
-
-A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")`.
-
-| Member | Does |
-|---|---|
-| `StaticAddress.version` | 4 or 6. |
-
-### `Sudo`
-
-*dataclass*
-
-```python
-Sudo(argv: Sequence[str])
-```
-
-A `Login` entry that runs as root, exactly as written: `Sudo(["/usr/bin/systemctl", "restart", "app"])`.
-
-### `Tdxs`
-
-*dataclass*
-
-```python
-Tdxs(
-    *,
-    source: dm.Git | dm.Local = tools_source(),
-    validator: du.TdxsType | None = None,
-    expected_measurements: Mapping[str, str] = FrozenMap({}),
-    check_revocations: bool = False,
-    get_collateral: bool = False,
-    verify_imds: bool = False,
-    verify_identity_token: bool = False,
-)
-```
-
-The evidence service: `tdxs` from `tools/` of tundravm's repository, socket-activated on `/var/tdxs.sock`, which produces the TDX quote an attestation is checked against.
-
-| Member | Does |
-|---|---|
-| `Tdxs.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tdxs-validator-unchecked`: a validator with nothing to compare a quote to. |
-| `Tdxs.from_policy(policy: str \| Path \| Mapping[str, object], *, validator: du.TdxsType = 'tdx', allow_placeholder: bool = False, **kwargs: Any) -> Tdxs` | A verifier whose `expected_measurements` are *policy*'s registers. |
-| `Tdxs.group` | The group whose members may ask for quotes. |
-| `Tdxs.outbound() -> Egress` | Intel's PCS over HTTPS with *get_collateral* or *check_revocations*, and the root CA's CRL with *check_revocations*; nothing otherwise (quotes are made in the guest). |
-| `Tdxs.socket` | Where a service asks for quotes (its `tdx` group may connect). |
-
-### `TeeBase`
-
-*dataclass*
-
-```python
-TeeBase(
-    *,
-    time: bool = True,
-    nts_servers: Sequence[str] = ('time.cloudflare.com', 'nts.netnod.se'),
-    journal: bool = True,
-    journal_max_use: str = '128M',
-    sysctl: bool = True,
-    dns: bool = True,
-    mask: bool = True,
-)
-```
-
-The confidential-VM baseline: authenticated time, a volatile journal, sysctl hardening, DNS over TLS, no apt timers or console getty, and the CPU mitigations the kernel boots with.
-
-| Member | Does |
-|---|---|
-| `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
-| `TeeBase.kernel_cmdline` | `mitigations=auto,nosmt spec_store_bypass_disable=on`: every CPU vulnerability mitigated, SMT off where that needs it, Speculative Store Bypass off for every process (`TEE_KERNEL_CMDLINE` says why each). |
-| `TeeBase.outbound() -> Egress` | With *time*, NTS key exchange (TCP 4460) to each of *nts_servers*. NTP on UDP 123 goes where the key exchange says (RFC 8915 4.1.7), so the firewall accepts it to any address for chrony's user alone (`CHRONY_NTP`). The `Network` names where DNS goes. |
 
 ## tundravm.storage
 

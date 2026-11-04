@@ -129,7 +129,7 @@ def test_show_the_image_units_and_tree(project: Path, cli: Cli) -> None:
     assert "# payload/mkosi.extra/usr/lib/systemd/system/app.service" in units.out
     assert "ExecStart=/usr/bin/busybox httpd" in units.out
     assert units.out.endswith("\n# egress: not filtered (no Egress)\n")
-    filtered = STARTER.replace("import DevAccess", "import Egress, Network")
+    filtered = STARTER.replace(".access import DevAccess", ".network import Egress, Network")
     filtered = filtered.replace('dev=DevAccess(password="tdx")', "network=Network(egress=Egress())")
     (project / "filtered.py").write_text(filtered, encoding="utf-8")
     assert (

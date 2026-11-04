@@ -18,7 +18,7 @@ from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
 
 LOCAL = """\
 from tundravm import Image, Service
-from tundravm.components import DevAccess
+from tundravm.components.access import DevAccess
 from tundravm.sources import GoBinary, Local
 
 image = Image(

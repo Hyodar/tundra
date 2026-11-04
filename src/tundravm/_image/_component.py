@@ -353,7 +353,7 @@ class Component(Located, metaclass=_ComponentMeta):
         traffic, in every profile the component is part of (one a ``Profile`` adds, in that
         profile's ``nftables.conf`` only), and each rule's comment names the component. A URL
         field becomes ``HOST:PORT``; a host name is matched by the addresses it resolves
-        to at boot (see :class:`~tundravm.components.Egress`).
+        to at boot (see :class:`~tundravm.components.network.Egress`).
         """
         return Egress()
 

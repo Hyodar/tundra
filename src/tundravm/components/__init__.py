@@ -1,5 +1,4 @@
-"""Components: the :class:`Component` base class, what a component exports, and the shipped
-library.
+"""Components: the API for writing one. The shipped library lives in the submodules.
 
 A :class:`Component` subclass is a frozen, keyword-only dataclass: its fields are
 configuration, ``compose()`` yields what it stands for, its properties export an
@@ -8,21 +7,20 @@ configuration, ``compose()`` yields what it stands for, its properties export an
 findings, a lint rule ``tundravm check`` runs, of the codes the class declares as
 :class:`Rule` values in ``rules``.
 
-- Baseline, implied by every image and replaced by passing one in ``components=``:
-  :class:`TeeBase`, :class:`Network` (also ``image.network``, configured with
-  :class:`StaticAddress` and :class:`Egress`), :class:`Firewall` (switchable with
-  :class:`Mode`), :class:`Tdxs` (the
-  evidence service; :data:`EVIDENCE` is its readiness).
-- Ways in for people: :class:`SshAccess` (root, and each non-root :class:`Login` with its
-  :class:`Sudo` rules), :class:`DevAccess` (``image.dev``).
-- :class:`Container`: a program in a Debian root of its own, built with the image, and
-  :class:`ContainerSsh`, its own sshd.
-- :class:`Observability` with :class:`JournalExport`, :class:`PrometheusRemoteWrite` (its
-  :class:`RecordingRule` values, a :class:`SigV4` credential) and :class:`Proxy`
-  (``image.observability``).
+The shipped components, one submodule each:
 
-Application components are the project's own, written against this module: the
-example's Nethermind and Lighthouse live in ``examples/attested-node/components/``.
+- :mod:`tundravm.components.tee`: ``TeeBase``, ``Tdxs`` and its readiness ``EVIDENCE``.
+- :mod:`tundravm.components.network`: ``Network``, ``StaticAddress``, ``Egress``,
+  ``Firewall``, ``Mode``.
+- :mod:`tundravm.components.access`: ``SshAccess``, ``Login``, ``Sudo``, ``DevAccess``.
+- :mod:`tundravm.components.container`: ``Container``, ``ContainerSsh``, ``Bind``.
+- :mod:`tundravm.components.observability`: ``Observability``, ``JournalExport``,
+  ``PrometheusRemoteWrite``, ``Proxy``, ``RecordingRule``, ``SigV4``.
+
+The tee and network components are the baseline every image implies; passing one in
+``components=`` replaces that default. Application components are the project's own,
+written against this module: the example's Nethermind and Lighthouse live in
+``examples/attested-node/components/``.
 """
 
 from __future__ import annotations
@@ -34,60 +32,16 @@ from tundravm._image._component import (
     ServiceReady,
     ServiceRef,
 )
-from tundravm._image._values import Egress, StaticAddress
 from tundravm.declarative.model import Diagnostic, Resolved
 from tundravm.diagnostics import Rule
 
-from ._base import (
-    EVIDENCE,
-    DevAccess,
-    Firewall,
-    Login,
-    Mode,
-    Network,
-    SshAccess,
-    Sudo,
-    Tdxs,
-    TeeBase,
-)
-from ._container import Bind, Container, ContainerSsh
-from ._observability import (
-    JournalExport,
-    Observability,
-    PrometheusRemoteWrite,
-    Proxy,
-    RecordingRule,
-    SigV4,
-)
-
 __all__ = [
-    "EVIDENCE",
-    "Bind",
     "Component",
     "ComponentReady",
-    "Container",
-    "ContainerSsh",
-    "DevAccess",
     "Diagnostic",
-    "Egress",
     "Endpoint",
-    "Firewall",
-    "JournalExport",
-    "Login",
-    "Mode",
-    "Network",
-    "Observability",
-    "PrometheusRemoteWrite",
-    "Proxy",
-    "RecordingRule",
     "Resolved",
     "Rule",
     "ServiceReady",
     "ServiceRef",
-    "SigV4",
-    "SshAccess",
-    "StaticAddress",
-    "Sudo",
-    "Tdxs",
-    "TeeBase",
 ]

@@ -13,19 +13,10 @@ import pytest
 from tundravm import File, Image, Profile, Service
 from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
-from tundravm.components import (
-    Bind,
-    Container,
-    ContainerSsh,
-    DevAccess,
-    Egress,
-    Endpoint,
-    Firewall,
-    Login,
-    Mode,
-    Network,
-    SshAccess,
-)
+from tundravm.components import Endpoint
+from tundravm.components.access import DevAccess, Login, SshAccess
+from tundravm.components.container import Bind, Container, ContainerSsh
+from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.errors import ValidationError
 from tundravm.models import ContainerSpec
 from tundravm.ports import TCP, UDP

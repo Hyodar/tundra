@@ -26,23 +26,15 @@ from tundravm import (
     RootFS,
     Service,
 )
-from tundravm.components import (
-    Bind,
-    Container,
-    ContainerSsh,
-    DevAccess,
-    Egress,
-    Firewall,
-    Login,
-    Mode,
-    Network,
+from tundravm.components.access import DevAccess, Login, SshAccess, Sudo
+from tundravm.components.container import Bind, Container, ContainerSsh
+from tundravm.components.network import Egress, Firewall, Mode, Network
+from tundravm.components.observability import (
     Observability,
     PrometheusRemoteWrite,
     Proxy,
     RecordingRule,
     SigV4,
-    SshAccess,
-    Sudo,
 )
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Generated, Secret

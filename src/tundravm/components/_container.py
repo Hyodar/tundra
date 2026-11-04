@@ -43,7 +43,7 @@ from tundravm.errors import ValidationError
 from tundravm.kernel_modules import CONTAINER_NETWORK_PATH
 from tundravm.models import CONTAINERS_PATH
 
-from ._base import egress_rules
+from ._network import egress_rules
 
 __all__ = ["Bind", "Container", "ContainerSsh"]
 

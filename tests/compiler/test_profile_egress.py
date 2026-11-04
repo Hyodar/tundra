@@ -16,7 +16,8 @@ from pathlib import Path
 import tundravm
 from tundravm import Image, Profile
 from tundravm._modules import probe
-from tundravm.components import Component, Egress, Network
+from tundravm.components import Component
+from tundravm.components.network import Egress, Network
 from tundravm.ports import UDP
 from tundravm.testing._model import CompiledTree
 

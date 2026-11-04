@@ -9,7 +9,7 @@ import json
 import pytest
 
 from tundravm import Image, Profile, Service
-from tundravm.components import Login, SshAccess, Sudo
+from tundravm.components.access import Login, SshAccess, Sudo
 from tundravm.errors import ValidationError
 from tundravm.secrets import Secret
 from tundravm.storage import OperatorKey, Volume
