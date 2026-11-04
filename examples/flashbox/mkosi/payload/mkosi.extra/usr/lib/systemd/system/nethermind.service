@@ -8,6 +8,7 @@ Type=exec
 ExecStart=/usr/lib/nethermind/nethermind --config=mainnet --datadir=/persistent/data/nethermind --JsonRpc.Enabled=true --JsonRpc.Host=127.0.0.1 --JsonRpc.Port=8545 --JsonRpc.EngineHost=127.0.0.1 --JsonRpc.EnginePort=8551 --JsonRpc.JwtSecretFile=${CREDENTIALS_DIRECTORY}/jwt
 User=nethermind
 WorkingDirectory=/persistent/data/nethermind
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/persistent/data/nethermind
 Environment=STATE_DIRECTORY=/persistent/data/nethermind
 LoadCredential=jwt:/run/tundravm/secrets/jwt
 ReadWritePaths=-/persistent/data/nethermind

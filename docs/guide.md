@@ -159,6 +159,7 @@ class Nethermind(Component):
             readiness=TcpProbe(self.rpc_port, timeout="10min"),
             state="nethermind" if self.state is None else self.state,
             credentials=[self.jwt],
+            environment={"DOTNET_BUNDLE_EXTRACT_BASE_DIR": datadir},
             hardening="dotnet",
         )
 
