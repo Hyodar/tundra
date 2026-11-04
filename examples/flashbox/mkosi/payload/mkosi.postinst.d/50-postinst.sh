@@ -42,6 +42,7 @@ mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
+mkosi-chroot systemctl enable systemd-user-sessions.service
 mkosi-chroot systemctl enable credential-metrics-aws.service
 mkosi-chroot systemctl enable credential-searcher-keys.service
 mkosi-chroot systemctl enable nftables.service
@@ -73,6 +74,7 @@ ln -sf "/etc/systemd/system/tundravm-endpoint.service" "$BUILDROOT/etc/systemd/s
 ln -sf "/etc/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/systemd-user-sessions.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/credential-metrics-aws.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/credential-searcher-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -106,7 +108,7 @@ mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | while read -r bin_pa
 done
 
 # Debloat: mask unwanted systemd units
-systemd_svc_whitelist=("basic.target" "final.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "poweroff.target" "reboot.target" "shutdown.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-poweroff.service" "systemd-reboot.service" "systemd-remount-fs.service" "systemd-resolved.service" "systemd-sysctl.service" "timers.target" "umount.target")
+systemd_svc_whitelist=("basic.target" "final.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "poweroff.target" "reboot.target" "shutdown.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-poweroff.service" "systemd-reboot.service" "systemd-remount-fs.service" "systemd-resolved.service" "systemd-sysctl.service" "systemd-user-sessions.service" "timers.target" "umount.target")
 SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"
 mkdir -p "$SYSTEMD_DIR"
 # Keep the targets the enabled units order against or pull in: masking one drops the

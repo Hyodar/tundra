@@ -1427,7 +1427,9 @@ class SshAccess(Composite):
     from ``127.0.0.1`` (an image without ``SshAccess`` gets no SSH forward).
     The image carries no host keys (the build removes them): the ``ssh-host-keys`` task
     generates this instance's at boot (``ssh-keygen -A``, skipped when they exist) and sshd
-    starts after it. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
+    starts after it. A ``Login`` also enables ``systemd-user-sessions.service``: the boot
+    target does not pull it, and until it runs ``/run/nologin`` turns every account but root
+    away. ``sshd_config.d/50-tundravm.conf`` allows public-key authentication
     only and root by key only (``PermitRootLogin prohibit-password``): root is the account
     the attested endpoint takes a key for, so refusing root would refuse the operator, while
     a password is never accepted.
@@ -1509,6 +1511,8 @@ class SshAccess(Composite):
         )
         yield host_keys
         yield Unit("ssh.service", enabled=True, needs=(host_keys.ready,), ports=(self.port,))
+        if self.logins:
+            yield Unit("systemd-user-sessions.service", enabled=True)
         for login in self.logins:
             yield from login.declarations()
 

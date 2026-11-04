@@ -15,6 +15,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### SDK
 
+- A `Login` enables `systemd-user-sessions.service`, so `/run/nologin` no longer turns a non-root login away after boot.
 - The `dotnet` hardening preset allows `AF_NETLINK`, which .NET needs to list network interfaces; `network="inet+netlink"` names that set for any other preset.
 - **Breaking:** `Image`, `Service`, `Component` and `Profile` replace `Recipe`, `Variant` and `Fragment`.
 - **Breaking:** every public name has one home (`tundravm`, `.ports`, `.systemd`, `.components`, `.storage`, `.secrets`, `.sources`, `.errors`, `.testing`); flat imports are gone.

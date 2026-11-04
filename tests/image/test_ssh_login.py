@@ -81,6 +81,7 @@ def test_a_login_lowers_to_its_account_keys_menu_and_rules(
         assert path not in planned.files, path
     user = planned.users["tenant"]
     assert (user.shell, user.home) == (shell, "/home/tenant" if login.home else None)
+    assert "systemd-user-sessions.service" in _postinst(planned)
     if MENU in planned.files:
         assert planned.file(MENU).mode == 0o444
         assert "login-menu" in planned.builds

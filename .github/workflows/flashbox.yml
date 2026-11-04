@@ -82,17 +82,20 @@ jobs:
 
       - name: Wait for the node, the beacon node and the container to start
         if: ${{ !cancelled() }}
-        # They start; they do not sync.
+        # They start; they do not sync. Two rows may fail on a runner: the bundle relays
+        # answer only flashbots' peers, and no program listens on 27017/udp without BoB.
         run: |
-          console=.tundravm/instances/$INSTANCE/console.log
+          probe=.tundravm/instances/$INSTANCE/probe.json
+          others='[.results[] | select(.verdict == "fail")
+            | select(.check != "container:searcher-container:egress"
+              and .check != "container:searcher-container:udp:27017")] | length == 0'
           for attempt in $(seq 1 40); do
             uv run tundravm run probe "$INSTANCE" > "$RUNNER_TEMP/probe.txt" 2>&1 || true
-            if jq -e '.ok' ".tundravm/instances/$INSTANCE/probe.json" > /dev/null; then break; fi
+            if jq -e "$others" "$probe" > /dev/null; then break; fi
             sleep 15
           done
-          jq -r '.results[] | "\(.check) \(.verdict) \(.detail)"' \
-            ".tundravm/instances/$INSTANCE/probe.json"
-          jq -e '.ok' ".tundravm/instances/$INSTANCE/probe.json"
+          jq -r '.results[] | "\(.check) \(.verdict) \(.detail)"' "$probe"
+          jq -e "$others" "$probe"
 
       - name: The menu answers in production and the container's SSH does not
         if: ${{ !cancelled() }}
