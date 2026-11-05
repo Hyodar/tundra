@@ -356,7 +356,6 @@ def test_mounted_cache_key_fingerprints_the_distribution() -> None:
 
     key = with_()
     assert with_(Package("htop")) == key  # image packages are not the toolchain
-    assert with_(Setting("Build", "PackageCacheDirectory", ("mkosi.cache",))) == key
     changed = [
         with_(snapshot="20260101T000000Z"),
         with_(snapshot="20260201T000000Z"),

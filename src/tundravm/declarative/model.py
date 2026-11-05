@@ -384,9 +384,6 @@ class Mkosi:
     output_dir: str | None = None
     """Where mkosi writes the images, relative to the tree (``OutputDirectory=``). ``None``:
     ``mkosi.output``, which ``tundravm build`` overrides with its workspace."""
-    package_cache: str | None = None
-    """mkosi's package cache directory, relative to the tree (``PackageCacheDirectory=``).
-    ``None``: mkosi's default."""
     compress: Literal["zstd", "xz", "gz"] | None = None
     """Compress the payload image (``CompressOutput=``). ``None``: uncompressed."""
     manifest: Literal["json", "changelog"] = "json"
@@ -406,7 +403,7 @@ class Mkosi:
                 self.root_size,
                 self.uki_max_size,
             )
-        for what in ("seed", "output_dir", "package_cache"):
+        for what in ("seed", "output_dir"):
             if (value := getattr(self, what)) is not None:
                 _require_name(self, value, what)
         if self.seed is not None and not _UUID.fullmatch(self.seed):

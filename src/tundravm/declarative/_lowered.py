@@ -439,8 +439,8 @@ class Lowered:
         and build packages, and its ``Build`` settings that shape the build
         sandbox (environment, sandbox trees and files, verbatim keys such as
         ``ToolsTree``), so a persistent ``BuildDirectory`` never restores a binary
-        built by another toolchain. ``PackageCacheDirectory`` and ``WithNetwork``
-        choose where packages come from, not which, and stay out.
+        built by another toolchain. ``WithNetwork`` chooses where packages come
+        from, not which, and stays out.
         """
         effective = self.state.effective_profile(profile)
         options = self.mkosi

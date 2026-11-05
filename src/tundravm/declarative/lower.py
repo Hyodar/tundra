@@ -109,7 +109,6 @@ _SINGLE_SETTINGS: dict[tuple[str, str], str] = {
     ("Output", "OutputDirectory"): "output_directory",
     ("Output", "CompressOutput"): "compress_output",
     ("Output", "ManifestFormat"): "manifest_format",
-    ("Build", "PackageCacheDirectory"): "package_cache_directory",
 }
 _BOOL_SETTINGS: dict[tuple[str, str], str] = {
     ("Build", "WithNetwork"): "with_network",
@@ -810,7 +809,6 @@ def _typed_options(recipe: Recipe) -> dict[str, Any]:
     typed: dict[str, Any] = {
         "seed": config.seed,
         "output_directory": config.output_dir,
-        "package_cache_directory": config.package_cache,
         "compress_output": config.compress,
         "manifest_format": config.manifest,
         "with_network": config.build_network,

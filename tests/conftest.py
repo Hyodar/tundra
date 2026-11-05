@@ -56,6 +56,18 @@ def _plain_format_outside_github(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _private_package_cache(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Outside integration tests the host package cache is a fresh directory, never the
+    user's ``~/.cache``."""
+    if request.node.get_closest_marker("integration") is None:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("xdg-cache")))
+
+
+@pytest.fixture(autouse=True)
 def _fake_process_boundary(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Outside integration tests a build runs the Linux backend against a fake mkosi and
     fake source checkouts: the whole build path runs, nothing forks, fetches or needs

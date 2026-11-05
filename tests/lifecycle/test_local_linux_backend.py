@@ -12,7 +12,7 @@ import pytest
 from tests.helpers import bake_request
 from tundravm import _mkosi
 from tundravm.backends.base import StreamResult
-from tundravm.backends.local_linux import LocalLinuxBackend
+from tundravm.backends.local_linux import LocalLinuxBackend, package_cache
 from tundravm.compiler.emit_mkosi import esp_bytes, uki_capacity
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, OutputTarget
@@ -104,6 +104,7 @@ def test_local_arguments_are_absolute_paths_only(
         f"--output-directory={build / 'default' / 'output'}",
         f"--workspace-directory={build / '.mkosi' / 'workspace'}",
         f"--cache-directory={build / '.mkosi' / 'cache'}",
+        f"--package-cache-directory={package_cache()}",
     ]
 
 
@@ -315,6 +316,7 @@ def test_local_execute_uses_sudo_without_user_namespaces_and_reclaims_the_output
         build / "default" / "output",
         build / ".mkosi" / "workspace",
         build / ".mkosi" / "cache",
+        package_cache(),
         build / "default" / "mkosi.log",
     ]
     assert chowned == [["sudo", "chown", "-R", "1000:1001", *map(str, owned)]]

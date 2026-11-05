@@ -64,6 +64,15 @@ CACHE_DIRNAME = "cache"
 """``<build>/.mkosi/cache``: a production build's mkosi cache directory, repository metadata
 only; a development build's is the sibling :data:`~tundravm.backends.base.INCREMENTAL_DIRNAME`."""
 
+
+def package_cache() -> Path:
+    """Where every build on this host keeps the packages mkosi downloads:
+    ``$XDG_CACHE_HOME/tundravm/packages`` (``~/.cache`` without it), shared by builds with and
+    without sudo. apt verifies each package against the snapshot's signed index before use."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "tundravm" / "packages"
+
+
 LOG_FILENAME = "mkosi.log"
 """What mkosi logged for a variant's build, beside its ``output/``."""
 
@@ -142,7 +151,7 @@ class LocalLinuxBackend:
         output_dir = profile_dir / "output"
         state_dir = build_dir / STATE_DIRNAME
         cache_dir = self.cache_dir(request)
-        for path in (output_dir, state_dir / "workspace", cache_dir):
+        for path in (output_dir, state_dir / "workspace", cache_dir, package_cache()):
             path.mkdir(parents=True, exist_ok=True)
 
         argv = self.arguments(request)
@@ -186,6 +195,7 @@ class LocalLinuxBackend:
                     output_dir,
                     state_dir / "workspace",
                     state_dir / CACHE_DIRNAME,
+                    package_cache(),
                     profile_dir / LOG_FILENAME,
                 )
                 self._reclaim(reclaimed, request)
@@ -225,6 +235,7 @@ class LocalLinuxBackend:
             f"--output-directory={build_dir / request.profile / 'output'}",
             f"--workspace-directory={state_dir / 'workspace'}",
             f"--cache-directory={self.cache_dir(request)}",
+            f"--package-cache-directory={package_cache()}",
         ]
         if request.cache_key is not None:
             build = self.cache_dir(request) / BUILD_DIRNAME

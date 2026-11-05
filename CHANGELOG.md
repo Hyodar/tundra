@@ -113,6 +113,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### Build and lock
 
+- **Breaking:** every local build keeps the packages mkosi downloads in one host cache, `$XDG_CACHE_HOME/tundravm/packages`, with or without sudo; `Mkosi(package_cache=...)` is gone.
 - `build` publishes `build/<image>/production/<id>/` once, read-only, with a canonical `manifest.json` whose digest is `<id>`, `measurements.json` (a `tundravm.policy/2` policy per record), an SPDX SBOM, `observations.json` and a report of artifacts, sources, toolchains, phases and predicted registers.
 - **Breaking:** the manifest is `tundravm.manifest/2`: `image_digest` replaces `recipe_digest`, in `show BUILD --json` and `lock --json` too; an older build directory is refused, so build again.
 - **Breaking:** a production build needs `build/tundravm.lock` (`lock-missing`); a development build writes a missing one and re-pins `Local` sources.

@@ -11,7 +11,6 @@ SEED = "630b5f72-a36a-4e83-b23d-6ef47c82fd9c"
 TYPED = Mkosi(
     seed=SEED,
     output_dir="build",
-    package_cache="mkosi.cache",
     compress="zstd",
     manifest="changelog",
     build_network=False,
@@ -19,7 +18,6 @@ TYPED = Mkosi(
 RAW = (
     Setting("Output", "Seed", (SEED,)),
     Setting("Output", "OutputDirectory", ("build",)),
-    Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
     Setting("Output", "CompressOutput", ("zstd",)),
     Setting("Output", "ManifestFormat", ("changelog",)),
     Setting("Build", "WithNetwork", ("no",)),

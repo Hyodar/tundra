@@ -191,7 +191,6 @@ def _emit_config(lowered: Lowered, pins: Mapping[str, LockedFetch]) -> EmitConfi
         "output_directory": options.output_directory,
         "sandbox_trees": options.sandbox_trees,
         "sandbox_files": options.sandbox_files,
-        "package_cache_directory": options.package_cache_directory,
         "generate_version_script": options.generate_version_script,
         "environment": dict(options.environment),
         "settings": options.settings,

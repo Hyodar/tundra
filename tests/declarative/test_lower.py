@@ -224,7 +224,6 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
             Kernel("6.1.2", Git("https://example.com/linux", "v6.1.2"), config=config),
             Setting("Output", "Seed", ("seed-1",)),
             Setting("Output", "OutputDirectory", ("build",)),
-            Setting("Build", "PackageCacheDirectory", ("mkosi.cache",)),
             Setting("Build", "Environment", ("FOO=bar",)),
             Setting("Build", "WithNetwork", ("no",)),
             Setting("Build", "SandboxTrees", ("a:/b", "c:/d")),
@@ -246,7 +245,6 @@ def test_lowering_maps_recipe_wide_fields(tmp_path: Path) -> None:
     assert img.mkosi == MkosiOptions(
         seed="seed-1",
         output_directory="build",
-        package_cache_directory="mkosi.cache",
         environment={"FOO": "bar"},
         with_network=False,
         sandbox_trees=("a:/b", "c:/d"),

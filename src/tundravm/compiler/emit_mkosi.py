@@ -450,7 +450,6 @@ class EmitConfig:
     sandbox_trees: tuple[str, ...] = ()
     sandbox_files: tuple[tuple[str, str], ...] = ()
     """``(path, content)`` written under ``mkosi.sandbox/`` (the package manager's sandbox)."""
-    package_cache_directory: str | None = None
     generate_version_script: bool = False
     environment: Mapping[str, str] = field(default_factory=dict)
     settings: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
@@ -1356,11 +1355,6 @@ class DeterministicMkosiEmitter:
                 *_tools_tree_packages(config, recipe),
                 "History=no",
                 f"WithNetwork={'yes' if config.with_network else 'no'}",
-                *(
-                    [f"PackageCacheDirectory={config.package_cache_directory}"]
-                    if config.package_cache_directory
-                    else []
-                ),
                 *(f"SandboxTrees={tree}" for tree in config.sandbox_trees),
                 *_build_sources(recipe),
             ],

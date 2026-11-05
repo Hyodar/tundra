@@ -42,8 +42,6 @@ class MkosiOptions:
     sandbox_files: tuple[tuple[str, str], ...] = ()
     """``(path, content)`` written under ``mkosi.sandbox/``, which mkosi copies into its
     package-manager sandbox (not the image)."""
-    package_cache_directory: str | None = None
-    """``PackageCacheDirectory=``."""
     environment: Mapping[str, str] = field(default_factory=dict)
     """``Environment=`` key/value pairs of the payload's scripts (never host pass-through)."""
     generate_version_script: bool = False
