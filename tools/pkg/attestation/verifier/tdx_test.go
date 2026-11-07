@@ -3,9 +3,11 @@ package verifier
 import (
 	"context"
 	"crypto/sha256"
+	"strings"
 	"testing"
 
 	"github.com/Hyodar/tundra/tools/pkg/attestation"
+	"github.com/google/go-tdx-guest/testing/testdata"
 )
 
 func TestTDXVerifier_Platform(t *testing.T) {
@@ -242,4 +244,41 @@ func TestAzureTDXVerifier_ImplementsInterface(t *testing.T) {
 
 func TestGCPTDXVerifier_ImplementsInterface(t *testing.T) {
 	var _ Verifier = NewGCPTDXVerifier(GCPTDXVerifyOptions{})
+}
+
+// tdAttributesAt is where a DCAP v4 quote holds TD_ATTRIBUTES: after the 48-byte header,
+// TEE_TCB_SVN (16), MRSEAM (48), MRSIGNERSEAM (48) and SEAM_ATTRIBUTES (8).
+const tdAttributesAt = 48 + 16 + 48 + 48 + 8
+
+func TestVerifiersRefuseADebugTD(t *testing.T) {
+	debug := append([]byte{}, testdata.RawQuote...)
+	debug[tdAttributesAt] |= tdDebug
+	verifiers := []Verifier{
+		NewTDXVerifier(TDXVerifyOptions{}),
+		NewAzureTDXVerifier(AzureTDXVerifyOptions{}),
+		NewGCPTDXVerifier(GCPTDXVerifyOptions{}),
+	}
+	cases := []struct {
+		name    string
+		quote   []byte
+		refused bool
+	}{
+		{"a quote whose TD sets DEBUG", debug, true},
+		{"a production TD's quote", testdata.RawQuote, false},
+	}
+	for _, v := range verifiers {
+		for _, c := range cases {
+			t.Run(v.Platform()+": "+c.name, func(t *testing.T) {
+				doc := &attestation.AttestationDocument{Platform: v.Platform(), RawQuote: c.quote}
+				result, err := v.Verify(context.Background(), doc, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				refused := result.Error != nil && strings.Contains(result.Error.Error(), "TUD.DEBUG")
+				if refused != c.refused || (c.refused && result.Valid) {
+					t.Fatalf("valid %v, error %v; want a DEBUG refusal: %v", result.Valid, result.Error, c.refused)
+				}
+			})
+		}
+	}
 }

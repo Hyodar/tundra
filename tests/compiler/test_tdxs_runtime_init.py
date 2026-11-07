@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
 
 import pytest
 
@@ -90,21 +89,6 @@ def test_tdxs_validator_config_supports_expected_measurements(tmp_path: Path) ->
     assert 'rtmr0: "def456"' in config
     assert "check_revocations: true" in config
     assert "get_collateral: true" in config
-
-
-@pytest.mark.parametrize(
-    ("validator", "flag"),
-    [("azure", "verify_imds: true"), ("gcp", "verify_identity_token: true")],
-)
-def test_tdxs_platform_validator_verification_flags(
-    tmp_path: Path, validator: Literal["azure", "gcp"], flag: str
-) -> None:
-    fragment = Tdxs(validator=validator, verify_imds=True, verify_identity_token=True)
-    config = _compile(tmp_path, fragment).read(TDXS_CONFIG)
-
-    assert flag in config
-    other = {"verify_imds: true", "verify_identity_token: true"} - {flag}
-    assert not any(line in config for line in other)
 
 
 @pytest.mark.parametrize(

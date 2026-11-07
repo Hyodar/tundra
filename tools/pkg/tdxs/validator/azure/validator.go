@@ -24,7 +24,6 @@ type AzureValidatorConfig struct {
 	ExpectedMeasurements *attestation.TDXMeasurements `yaml:"expected_measurements,omitempty"`
 	CheckRevocations     bool                         `yaml:"check_revocations,omitempty"`
 	GetCollateral        bool                         `yaml:"get_collateral,omitempty"`
-	VerifyIMDS           bool                         `yaml:"verify_imds,omitempty"`
 }
 
 func NewAzureValidator(cfg *AzureValidatorConfig, logger logger.Logger) *AzureValidator {
@@ -33,7 +32,6 @@ func NewAzureValidator(cfg *AzureValidatorConfig, logger logger.Logger) *AzureVa
 		opts.ExpectedMeasurements = cfg.ExpectedMeasurements
 		opts.CheckRevocations = cfg.CheckRevocations
 		opts.GetCollateral = cfg.GetCollateral
-		opts.VerifyIMDS = cfg.VerifyIMDS
 	}
 	return &AzureValidator{
 		backend: tundraverifier.NewAzureTDXVerifier(opts),

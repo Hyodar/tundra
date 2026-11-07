@@ -152,8 +152,6 @@ class Tdxs(Component):
     expected_measurements: Mapping[str, str] = FrozenMap()
     check_revocations: bool = False
     get_collateral: bool = False
-    verify_imds: bool = False
-    verify_identity_token: bool = False
 
     @classmethod
     def from_policy(
@@ -180,8 +178,6 @@ class Tdxs(Component):
             expected_measurements=FrozenMap(dict(reader.expected_measurements)),
             check_revocations=reader.check_revocations,
             get_collateral=reader.get_collateral,
-            verify_imds=reader.verify_imds,
-            verify_identity_token=reader.verify_identity_token,
             **fields,
         )
 
@@ -217,8 +213,6 @@ class Tdxs(Component):
             expected_measurements=dict(self.expected_measurements),
             check_revocations=self.check_revocations,
             get_collateral=self.get_collateral,
-            verify_imds=self.verify_imds,
-            verify_identity_token=self.verify_identity_token,
         )
         yield from service.items
 

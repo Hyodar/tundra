@@ -28,7 +28,3 @@ validator:
   #     xfam: "0x..."
   #   check_revocations: false
   #   get_collateral: false
-  #   # Azure-specific:
-  #   # verify_imds: false
-  #   # GCP-specific:
-  #   # verify_identity_token: false

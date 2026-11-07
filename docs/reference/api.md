@@ -891,8 +891,6 @@ Tdxs(
     expected_measurements: Mapping[str, str] = {},
     check_revocations: bool = False,
     get_collateral: bool = False,
-    verify_imds: bool = False,
-    verify_identity_token: bool = False,
 )
 ```
 

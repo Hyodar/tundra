@@ -24,7 +24,6 @@ type GCPValidatorConfig struct {
 	ExpectedMeasurements *attestation.TDXMeasurements `yaml:"expected_measurements,omitempty"`
 	CheckRevocations     bool                         `yaml:"check_revocations,omitempty"`
 	GetCollateral        bool                         `yaml:"get_collateral,omitempty"`
-	VerifyIdentityToken  bool                         `yaml:"verify_identity_token,omitempty"`
 }
 
 func NewGCPValidator(cfg *GCPValidatorConfig, logger logger.Logger) *GCPValidator {
@@ -33,7 +32,6 @@ func NewGCPValidator(cfg *GCPValidatorConfig, logger logger.Logger) *GCPValidato
 		opts.ExpectedMeasurements = cfg.ExpectedMeasurements
 		opts.CheckRevocations = cfg.CheckRevocations
 		opts.GetCollateral = cfg.GetCollateral
-		opts.VerifyIdentityToken = cfg.VerifyIdentityToken
 	}
 	return &GCPValidator{
 		backend: tundraverifier.NewGCPTDXVerifier(opts),

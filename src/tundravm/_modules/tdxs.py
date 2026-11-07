@@ -116,8 +116,6 @@ class Tdxs:
     log_level: Literal["debug", "info", "warn", "error"] = "info"
     check_revocations: bool = False
     get_collateral: bool = False
-    verify_imds: bool = False
-    verify_identity_token: bool = False
     expected_measurements: dict[str, str] | None = None
 
     def _canonical_role_type(self, value: str | None) -> str | None:
@@ -166,10 +164,6 @@ class Tdxs:
             lines.append("check_revocations: true")
         if self.get_collateral:
             lines.append("get_collateral: true")
-        if validator_type == "azure" and self.verify_imds:
-            lines.append("verify_imds: true")
-        if validator_type == "gcp" and self.verify_identity_token:
-            lines.append("verify_identity_token: true")
         return lines
 
     def render_udev_rule(self) -> str:
@@ -203,8 +197,8 @@ class Tdxs:
         - An issuer-less (validator-only) or ``simulator`` service gets none of this.
         - The socket comes from systemd and readiness goes to ``$NOTIFY_SOCKET``, both
           ``AF_UNIX``: ``RestrictAddressFamilies=AF_UNIX`` unless the issuer is ``azure`` or
-          ``gcp`` (IMDS/metadata over HTTP) or a validator option fetches collateral,
-          revocations or tokens over HTTPS.
+          ``gcp`` (IMDS/metadata over HTTP) or a validator option fetches collateral or
+          revocations over HTTPS.
         - The ``azure`` and ``gcp`` issuers read the metadata server (Azure's attested
           document, Compute Engine's identity token): the service's ``egress`` names it,
           the only way past the firewall's metadata drop.
@@ -215,12 +209,7 @@ class Tdxs:
         from tundravm.declarative.systemd import Hardening
 
         issuer = self._canonical_role_type(self.issuer_type)
-        fetches = (
-            self.check_revocations
-            or self.get_collateral
-            or self.verify_imds
-            or self.verify_identity_token
-        )
+        fetches = self.check_revocations or self.get_collateral
         cloud = issuer in ("azure", "gcp")
         online = fetches or cloud
         quotes = issuer in QUOTE_ISSUERS

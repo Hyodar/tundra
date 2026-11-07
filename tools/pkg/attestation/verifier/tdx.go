@@ -45,7 +45,7 @@ func NewTDXVerifier(opts TDXVerifyOptions) *TDXVerifier {
 func (v *TDXVerifier) Platform() string { return platformTDX }
 
 // Verify performs full TDX quote verification:
-//  1. Parses the raw quote into a QuoteV4 protobuf
+//  1. Parses the raw quote into a QuoteV4 protobuf and refuses a DEBUG TD
 //  2. Verifies the signature chain via go-tdx-guest/verify
 //  3. Checks that ReportData matches SHA-256(userData || nonce)
 //  4. Optionally checks measurements against expected values
@@ -57,30 +57,11 @@ func (v *TDXVerifier) Verify(_ context.Context, doc *attestation.AttestationDocu
 		return failResult(fmt.Errorf("tdx: unexpected platform %q", doc.Platform)), nil
 	}
 
-	// Step 1: Verify the TDX quote signature and certificate chain.
-	verifyOpts := verify.DefaultOptions()
-	verifyOpts.CheckRevocations = v.opts.CheckRevocations
-	verifyOpts.GetCollateral = v.opts.GetCollateral
-
-	if err := verify.RawTdxQuote(doc.RawQuote, verifyOpts); err != nil {
-		return failResult(fmt.Errorf("tdx: quote verification failed: %w", err)), nil
-	}
-
-	// Step 2: Parse the quote to extract body fields.
-	quoteAny, err := tdxabi.QuoteToProto(doc.RawQuote)
+	q4, err := verifiedQuote(platformTDX, doc.RawQuote, v.opts.CheckRevocations, v.opts.GetCollateral)
 	if err != nil {
-		return failResult(fmt.Errorf("tdx: failed to parse quote: %w", err)), nil
+		return failResult(err), nil
 	}
-
-	q4, ok := quoteAny.(*pb.QuoteV4)
-	if !ok {
-		return failResult(fmt.Errorf("tdx: unexpected quote type %T", quoteAny)), nil
-	}
-
 	body := q4.GetTdQuoteBody()
-	if body == nil {
-		return failResult(fmt.Errorf("tdx: quote has nil TD body")), nil
-	}
 
 	// Step 3: Check report data binding.
 	expectedReportData := buildExpectedReportData(doc.UserData, nonce)
@@ -103,6 +84,38 @@ func (v *TDXVerifier) Verify(_ context.Context, doc *attestation.AttestationDocu
 		UserData:     doc.UserData,
 		Measurements: measurements,
 	}, nil
+}
+
+// tdDebug is bit 0 of a TD's ATTRIBUTES, TUD.DEBUG in the Intel TDX Module ABI: the host
+// can read and write a debug TD's memory and registers, so nothing it quotes holds.
+const tdDebug = 1
+
+// verifiedQuote parses raw as a DCAP v4 TDX quote, refuses a TD with DEBUG set, then
+// checks its signature chain to Intel's root.
+func verifiedQuote(platform string, raw []byte, checkRevocations, getCollateral bool) (*pb.QuoteV4, error) {
+	quoteAny, err := tdxabi.QuoteToProto(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to parse quote: %w", platform, err)
+	}
+	q4, ok := quoteAny.(*pb.QuoteV4)
+	if !ok {
+		return nil, fmt.Errorf("%s: unexpected quote type %T", platform, quoteAny)
+	}
+	body := q4.GetTdQuoteBody()
+	if body == nil {
+		return nil, fmt.Errorf("%s: quote has nil TD body", platform)
+	}
+	if attributes := body.GetTdAttributes(); len(attributes) == 0 || attributes[0]&tdDebug != 0 {
+		return nil, fmt.Errorf("%s: the TD's ATTRIBUTES set TUD.DEBUG (bit 0): the host can read and change "+
+			"a debug TD, so its quote proves nothing\nfix: launch the TD without debug", platform)
+	}
+	verifyOpts := verify.DefaultOptions()
+	verifyOpts.CheckRevocations = checkRevocations
+	verifyOpts.GetCollateral = getCollateral
+	if err := verify.RawTdxQuote(raw, verifyOpts); err != nil {
+		return nil, fmt.Errorf("%s: quote verification failed: %w", platform, err)
+	}
+	return q4, nil
 }
 
 // buildExpectedReportData computes SHA-256(userData || nonce).

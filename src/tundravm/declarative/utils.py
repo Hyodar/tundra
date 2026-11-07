@@ -277,8 +277,6 @@ class Tdxs(Composite):
     expected_measurements: Mapping[str, str] = field(default_factory=FrozenMap)
     check_revocations: bool = False
     get_collateral: bool = False
-    verify_imds: bool = False
-    verify_identity_token: bool = False
     needs: Sequence[Ready] = ()
     policy_file: Path | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -373,8 +371,6 @@ class Tdxs(Composite):
             expected_measurements=dict(self.expected_measurements) or None,
             check_revocations=self.check_revocations,
             get_collateral=self.get_collateral,
-            verify_imds=self.verify_imds,
-            verify_identity_token=self.verify_identity_token,
         )
         go = Go(package="./cmd/tdxs", output="tdxs")
         return Fragment(

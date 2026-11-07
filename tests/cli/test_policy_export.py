@@ -107,8 +107,8 @@ def test_from_policy_normalises_registers_for_the_validator() -> None:
 def test_from_policy_reads_a_file_and_passes_fields(tmp_path: Path) -> None:
     path = tmp_path / "peer.json"
     path.write_text(json.dumps(_policy(RTMR0=R0, RTMR1=R1, RTMR2=R2)), encoding="utf-8")
-    tdxs = Tdxs.from_policy(path, validator="azure", issuer="azure", verify_imds=True)
-    assert (tdxs.validator, tdxs.issuer, tdxs.verify_imds) == ("azure", "azure", True)
+    tdxs = Tdxs.from_policy(path, validator="azure", issuer="azure", get_collateral=True)
+    assert (tdxs.validator, tdxs.issuer, tdxs.get_collateral) == ("azure", "azure", True)
     assert dict(tdxs.expected_measurements) == {"rtmr0": R0, "rtmr1": R1, "rtmr2": R2}
 
 
