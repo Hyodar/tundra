@@ -97,20 +97,31 @@ def test_what_a_switchable_firewall_refuses(build: Callable[[], object], problem
         build()
 
 
+SWITCHABLE = {"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])}
+
+
 @pytest.mark.parametrize(
-    ("kernel", "warned"),
+    ("kernel", "modes", "warned"),
     [
-        (Kernel.default(), True),
-        (Kernel.build(base=DebianConfig("6.12.113-1")), True),
-        (Kernel.build(base=DebianConfig("6.18.15-1~bpo13+1", snapshot="20261003T143013Z")), False),
+        (Kernel.default(), SWITCHABLE, True),
+        (Kernel.build(base=DebianConfig("6.12.113-1")), SWITCHABLE, True),
+        (
+            Kernel.build(base=DebianConfig("6.18.15-1~bpo13+1", snapshot="20261003T143013Z")),
+            SWITCHABLE,
+            False,
+        ),
+        (Kernel.default(), {}, False),
     ],
-    ids=["debian-6.12", "built-6.12", "backports-6.18"],
+    ids=["debian-6.12", "built-6.12", "backports-6.18", "no-modes"],
 )
-def test_modes_on_a_kernel_without_rtmr3_extends_are_warned(kernel: Kernel, warned: bool) -> None:
-    modes = {"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])}
+def test_modes_on_a_kernel_without_rtmr3_extends_are_warned(
+    kernel: Kernel, modes: dict[str, Mode], warned: bool
+) -> None:
     image = Image("modes", kernel=kernel, components=[Firewall(modes=modes)])
     found = [d for d in plan(image).lint() if d.code == "firewall-modes-kernel"]
-    assert [d.severity for d in found] == (["warning"] if warned else [])
+    assert [
+        (d.severity, "Linux 6.12" in d.message, "Kernel.build(" in (d.hint or "")) for d in found
+    ] == ([("warning", True, True)] if warned else [])
 
 
 THREE = {"production": Mode(), "debug": Mode(ingress=[TCP(22)]), "sync": Mode(ingress=[TCP(9)])}
