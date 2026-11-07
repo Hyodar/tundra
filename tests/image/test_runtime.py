@@ -266,6 +266,24 @@ def test_a_volume_mounts_at_its_name_under_persistent_unless_told() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "found"),
+    [
+        ("output.log", "/persistent/db/app/output.log"),
+        ("logs/output.log", "/persistent/db/app/logs/output.log"),
+        ("/etc/passwd", "not a path inside it"),
+        ("../db.key", "leaves the directory"),
+    ],
+)
+def test_a_path_inside_a_volume_directory_is_its_slash(name: str, found: str) -> None:
+    app = Volume("db", unlock=OperatorKey()).directory("app")
+    if found.startswith("/"):
+        assert app / name == found
+        return
+    with pytest.raises(ValidationError, match=f"/persistent/db/app: .* {found}"):
+        app / name
+
+
+@pytest.mark.parametrize(
     ("make", "message"),
     [
         (lambda: Volume("Data", mount="/d", unlock=OperatorKey()), "not a volume name"),

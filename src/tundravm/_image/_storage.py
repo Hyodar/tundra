@@ -267,6 +267,7 @@ class Volume(Located):
 @dataclass(frozen=True, slots=True)
 class VolumeDirectory(Keywords):
     """A directory on a :class:`Volume`: ``data.directory("app")``, bound as a state.
+    ``state / "output.log"`` is the absolute path of a file in it.
 
     The image creates it once the volume is open, owned by the one service that binds it
     (or ``root:<group>`` when it is shared), and the service waits for that before it
@@ -323,6 +324,20 @@ class VolumeDirectory(Keywords):
     def ready(self) -> BootReady:
         """The volume's readiness: it exists once the volume is open."""
         return self.volume.ready
+
+    def __truediv__(self, name: str) -> str:
+        """The absolute path of a file or directory inside: ``state / "output.log"``."""
+        if not isinstance(name, str) or not _DIRECTORY.fullmatch(name):
+            raise ValidationError(
+                f"VolumeDirectory {self.path}: {name!r} is not a path inside it.",
+                hint='Use a relative path such as "output.log" or "logs/output.log".',
+            )
+        if ".." in name.split("/"):
+            raise ValidationError(
+                f"VolumeDirectory {self.path}: {name!r} leaves the directory.",
+                hint="Name a file inside the directory, without '..'.",
+            )
+        return posixpath.join(self.path, name)
 
     def __str__(self) -> str:
         return self.path

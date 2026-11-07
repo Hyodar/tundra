@@ -1384,7 +1384,7 @@ VolumeDirectory(
 )
 ```
 
-A directory on a `Volume`: `data.directory("app")`, bound as a state.
+A directory on a `Volume`: `data.directory("app")`, bound as a state. `state / "output.log"` is the absolute path of a file in it.
 
 | Member | Does |
 |---|---|
