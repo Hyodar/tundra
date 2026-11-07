@@ -109,8 +109,8 @@ delay_pipe = Service(
     "delay-pipe",
     [
         GoBinary("delay-pipe", channels, package="./cmd/delay-pipe"),
-        f"{searcher_state.path}/bob.log",
-        f"{delayed.path}/output.log",
+        searcher_state / "bob.log",
+        delayed / "output.log",
         str(DELAY),
     ],
     user=searcher.run_user,
@@ -121,37 +121,32 @@ input_proxy = Service(
     [
         GoBinary("input-proxy", channels, package="./cmd/input-proxy"),
         f"0.0.0.0:{INPUT_TCP}",
-        f"{input_dir.path}/input.sock",
+        input_dir / "input.sock",
     ],
     user=searcher.run_user,
     state=input_dir,
     expose=[TCP(INPUT_TCP)],
 )
 
-ssh = SshAccess(
-    login=Login(
-        "searcher",
-        owner=True,
-        commands={
-            "status": Sudo(["/usr/bin/mode-switch", "status"]),
-            "logs": Sudo(
-                [
-                    "/usr/bin/tail",
-                    "--lines",
-                    "{lines:int:1-10000}",
-                    f"{delayed.path}/output.log",
-                ]
-            ),
-            "toggle": Sudo(["/usr/bin/mode-switch", "to", "{mode:choice:production|maintenance}"]),
-            "reboot": Sudo(["/usr/bin/systemctl", "reboot"]),
-        },
-    )
-)
 firewall = Firewall(
     modes={
         "production": Mode(),
         "maintenance": Mode(ingress=[TCP(SSH_PORT), TCP(30303), UDP(30303)]),
     }
+)
+ssh = SshAccess(
+    login=Login(
+        "searcher",
+        owner=True,
+        commands={
+            "status": firewall.status,
+            "logs": Sudo(
+                ["/usr/bin/tail", "--lines", "{lines:int:1-10000}", delayed / "output.log"]
+            ),
+            "toggle": firewall.switch,
+            "reboot": Sudo(["/usr/bin/systemctl", "reboot"]),
+        },
+    )
 )
 
 RULES = [

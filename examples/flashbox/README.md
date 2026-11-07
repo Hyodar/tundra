@@ -13,7 +13,7 @@ attested node's components. `channels/` holds the two small Go programs flashbox
 | flashbots-images | tundravm |
 |---|---|
 | podman, `init-container.sh` | `Container(ssh=, expose=, egress=, modes=, binds=, files=)` |
-| `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, the menu's `toggle` |
+| `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `firewall.switch` as the menu's `toggle` |
 | `searchersh.c`, `99-searcher`, dropbear | `SshAccess(login=Login("searcher", owner=True, commands=))` |
 | tdx-init, `persistent-mount.service` | `Volume("data", unlock=OperatorKey())` |
 | `lighthouse.service` | `Lighthouse(disable_quic=, ...)`, `Generated("jwt")` |
