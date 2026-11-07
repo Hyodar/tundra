@@ -22,6 +22,7 @@ from tundravm._image._values import (
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
+from tundravm.declarative._network import MODE_SWITCH
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
@@ -252,6 +253,28 @@ class Firewall(Component):
             )
             for name, mode in ordered
         )
+
+    @property
+    def status(self) -> du.Sudo:
+        """A :class:`~tundravm.components.access.Login` entry printing the mode in force,
+        the switches since boot and whether RTMR3 replays them: ``mode-switch status``."""
+        self._switchable("status")
+        return du.Sudo((MODE_SWITCH, "status"))
+
+    @property
+    def switch(self) -> du.Sudo:
+        """A :class:`~tundravm.components.access.Login` entry switching to the mode the
+        client names, one of *modes*: ``mode-switch to MODE``, extended into RTMR3."""
+        self._switchable("switch")
+        return du.Sudo((MODE_SWITCH, "to", f"{{mode:choice:{'|'.join(self.modes)}}}"))
+
+    def _switchable(self, entry: str) -> None:
+        if not self.modes:
+            raise ValidationError(
+                f"Firewall: {entry} is a login entry for a switchable firewall, and this one "
+                "has no modes.",
+                hint='Add modes={"production": Mode(), "maintenance": Mode(...)}.',
+            )
 
     def compose(self) -> Iterator[object]:
         allow = tuple(dm.Port(p.port, p.protocol) for p in self.allow)

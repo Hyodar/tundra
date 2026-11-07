@@ -17,6 +17,7 @@ import pytest
 
 import tundravm
 from tundravm import DebianConfig, Image, Kernel
+from tundravm.components.access import Sudo
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.declarative._network import expand_firewall
 from tundravm.declarative.model import EgressRule, FirewallMode, Port
@@ -110,3 +111,28 @@ def test_modes_on_a_kernel_without_rtmr3_extends_are_warned(kernel: Kernel, warn
     image = Image("modes", kernel=kernel, components=[Firewall(modes=modes)])
     found = [d for d in plan(image).lint() if d.code == "firewall-modes-kernel"]
     assert [d.severity for d in found] == (["warning"] if warned else [])
+
+
+THREE = {"production": Mode(), "debug": Mode(ingress=[TCP(22)]), "sync": Mode(ingress=[TCP(9)])}
+
+
+@pytest.mark.parametrize(
+    ("modes", "entry", "argv"),
+    [
+        (MODES, "status", ("/usr/bin/mode-switch", "status")),
+        (MODES, "switch", ("/usr/bin/mode-switch", "to", "{mode:choice:production|maintenance}")),
+        (THREE, "status", ("/usr/bin/mode-switch", "status")),
+        (THREE, "switch", ("/usr/bin/mode-switch", "to", "{mode:choice:production|debug|sync}")),
+        ({}, "status", None),
+        ({}, "switch", None),
+    ],
+)
+def test_a_switchable_firewall_hands_out_its_login_entries(
+    modes: dict[str, Mode], entry: str, argv: tuple[str, ...] | None
+) -> None:
+    firewall = Firewall(modes=modes)
+    if argv is None:
+        with pytest.raises(ValidationError, match="no modes"):
+            getattr(firewall, entry)
+        return
+    assert getattr(firewall, entry) == Sudo(argv)

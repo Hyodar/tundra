@@ -966,6 +966,8 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 |---|---|
 | `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
 | `Firewall.lowered_modes() -> tuple[dm.FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
+| `Firewall.status` | A `Login` entry printing the mode in force, the switches since boot and whether RTMR3 replays them: `mode-switch status`. |
+| `Firewall.switch` | A `Login` entry switching to the mode the client names, one of *modes*: `mode-switch to MODE`, extended into RTMR3. |
 
 ### `Mode`
 
