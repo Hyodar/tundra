@@ -1,12 +1,10 @@
 """flashbox: flashbots-images' flashbox-l1, the BoB searcher sandbox, as one image.
 
-An L1 node, Nethermind and Lighthouse on mainnet, beside the searcher's container, on a
-volume only the searcher's key opens. The firewall boots into production and opens the
-container's SSH in a maintenance window the searcher switches to, every switch lands in
-RTMR3, and the searcher's login menu answers in both. Only recorded health booleans leave,
-signed for Amazon Managed Prometheus, through a TLS passthrough. podman, dropbear,
-searchersh, toggle, delay-pipe and input-only-proxy became ``Container``,
-``SshAccess(login=)``, ``Firewall(modes=)`` and the two programs in ``channels/``.
+The image runs an L1 node, Nethermind and Lighthouse on mainnet, beside the searcher's
+container. Both keep their state on a volume that only the searcher's key opens. The
+firewall boots into production mode. In maintenance mode it also opens the container's
+SSH. The searcher switches between the two modes, and every switch lands in RTMR3. Only
+recorded health booleans leave the image, signed for Amazon Managed Prometheus.
 
 The execution client runs on the host, not in the container as in flashbox: the engine
 API's jwt cannot be bound into a container, so only a host client can share it with
@@ -211,7 +209,7 @@ kernel = Kernel.build(
 image = Image(
     "flashbox",
     base=Debian("trixie", snapshot="20261018T143805Z"),
-    files=[File.text("/etc/sysctl.d/60-flashbox.conf", "vm.max_map_count = 2097152\n")],
+    sysctl={"vm.max_map_count": 2097152},
     components=[nethermind, lighthouse, searcher, ssh, firewall],
     services=[delay_pipe, input_proxy],
     network=Network(egress=Egress()),
