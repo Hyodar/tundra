@@ -181,6 +181,7 @@ Image(
     base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None, repositories=()),
     packages: Sequence[str | Package] = (),
     files: Sequence[File | Tree | Build] = (),
+    sysctl: Mapping[str, str | int | bool] = FrozenMap(),
     services: Sequence[Service] = (),
     components: Sequence[Component] = (),
     ingress: Sequence[Ingress] = (),

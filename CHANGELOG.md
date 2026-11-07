@@ -16,6 +16,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 ### SDK
 
 - `Firewall(modes=)` hands a login menu its entries: `firewall.status` and `firewall.switch` (a choice of every mode), and `state / "output.log"` is a path inside a volume directory, refusing one that leaves it.
+- `Image(sysctl={"vm.max_map_count": 2097152})` writes kernel parameters to `/etc/sysctl.d/60-<name>.conf` and refuses a key `TeeBase`'s hardening sets.
 - A `Login` enables `systemd-user-sessions.service`, so `/run/nologin` no longer turns a non-root login away after boot.
 - The `dotnet` hardening preset allows `AF_NETLINK`, which .NET needs to list network interfaces; `network="inet+netlink"` names that set for any other preset.
 - **Breaking:** `Image`, `Service`, `Component` and `Profile` replace `Recipe`, `Variant` and `Fragment`.

@@ -13,7 +13,7 @@ from tundravm import File, Image, Service
 from tundravm._image._values import MANAGEMENT_PORT
 from tundravm.components import Component
 from tundravm.errors import ValidationError
-from tundravm.testing import PlannedImage, assert_clean
+from tundravm.testing import PlannedImage, assert_clean, plan
 from tundravm.testing._model import compile_tree
 
 from .conftest import STARTER_SOURCE, starter
@@ -137,6 +137,32 @@ def test_files_takes_file_tree_and_build_only() -> None:
     assert "not a File, Tree or Build" in str(caught.value)
     only = Image("x", files=[File.text("/etc/motd", "hi\n")]).files[0]
     assert isinstance(only, File) and only.path == "/etc/motd"
+
+
+def test_sysctl_lands_sorted_in_the_image_file() -> None:
+    planned = plan(Image("x", sysctl={"vm.swappiness": 10, "net.ipv4.ip_forward": True}))
+    assert planned.file("/etc/sysctl.d/60-x.conf").text == (
+        "net.ipv4.ip_forward = 1\nvm.swappiness = 10\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("sysctl", "names", "fix"),
+    [
+        ([("vm.swappiness", 10)], "must be a mapping", "sysctl={"),
+        ({"Vm.Swappiness": 10}, "not a sysctl name", '"vm.swappiness"'),
+        ({"swappiness": 10}, "not a sysctl name", '"vm.swappiness"'),
+        ({"kernel.sysrq": 1}, "50-tundravm-tee.conf sets to 0", 'Drop "kernel.sysrq"'),
+        ({"vm.swappiness": 1.5}, "not a string, integer or boolean", '"vm.swappiness": 1'),
+        ({"vm.swappiness": "1\n2"}, "not one line of text", "on one line"),
+    ],
+    ids=["a-list", "upper-case", "no-dot", "hardened", "a-float", "two-lines"],
+)
+def test_sysctl_refuses_what_sysctl_d_cannot_read(sysctl: object, names: str, fix: str) -> None:
+    with pytest.raises(ValidationError) as caught:
+        Image("x", sysctl=sysctl)  # type: ignore[arg-type]
+    what, _, hint = str(caught.value).partition("\nfix: ")
+    assert names in what and fix in hint, caught.value
 
 
 def test_an_unknown_target_is_named() -> None:

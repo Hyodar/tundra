@@ -93,6 +93,7 @@ Passing a baseline component in `components=` replaces the implied one.
 | `base` | `Debian(release, snapshot=, efi_stub=, repositories=[AptRepository(...)])` |
 | `packages` | package names, or `Package(name, backports=True)`: runtime packages only |
 | `files` | `File.text(path, text, mode=, owner=)`, `File.copy(src, dst)`, `Tree(src, dst, exclude=)`, a `Build` |
+| `sysctl` | `{"vm.swappiness": 10}` in `/etc/sysctl.d/60-<name>.conf`, refusing `TeeBase`'s keys |
 | `services` | `Service` |
 | `components` | `Component` instances |
 | `ingress` | `AttestedTLS` or `TLS`: see [Ingress](#ingress) |
@@ -119,11 +120,10 @@ runtime-init step `owners` applies it at boot.
 `cmdline=` on either `Kernel` appends parameters (`name` or `name=value`) to the UKI's
 measured command line, after the image's own:
 `Kernel.default(cmdline=["transparent_hugepage=madvise"])`. Every UKI boots `TeeBase`'s CPU
-mitigations first, `mitigations=auto,nosmt` (every vulnerability mitigated, SMT off where
-that needs it) and `spec_store_bypass_disable=on` (Spectre v4 off for every process).
-A parameter tundravm sets (`root=`, `init=`, `console=` and their kin), another value of
-those two and one that turns a mitigation off (`nospectre_v2`, `mds=off`) are refused,
-naming what sets it. `Kernel.build` is for a driver built in or a symbol turned off.
+mitigations first, `mitigations=auto,nosmt` (SMT off where a
+mitigation needs it) and `spec_store_bypass_disable=on` (Spectre v4 off for every process).
+A parameter tundravm sets (`root=`, `console=` and their kin) is refused, and so is one
+that turns a mitigation off (`nospectre_v2`, `mds=off`). `Kernel.build` is for a driver built in or a symbol turned off.
 
 ### The kernel
 

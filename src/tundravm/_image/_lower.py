@@ -254,7 +254,7 @@ class _Lowering:
 
         image = self.image
         body: list[dm.Declaration | dm.Fragment] = []
-        for item in (*image.packages, *image.files, *image.users, *image.groups):
+        for item in (*image.packages, *image.files, *self.sysctl(), *image.users, *image.groups):
             body.extend(self.content(item))
         for component in image.components:
             if isinstance(component, SshAccess) and self.runtime.control_plane:
@@ -459,6 +459,18 @@ class _Lowering:
                     f'test "${{{inrelease_variable(repository.name)}:-{fetched}}}" '
                     f"= {repository.sha256} || {{ echo {message} >&2; exit 1; }}",
                 )
+
+    def sysctl(self) -> tuple[File, ...]:
+        """``sysctl=`` as its ``/etc/sysctl.d`` file, located at the image."""
+        image = self.image
+        if not image.sysctl:
+            return ()
+        lines = [
+            f"{key} = {int(value) if isinstance(value, bool) else value}\n"
+            for key, value in sorted(image.sysctl.items())
+        ]
+        with _at(image):
+            return (File.text(f"/etc/sysctl.d/60-{image.name}.conf", "".join(lines)),)
 
     def mkosi(self) -> tuple[dm.Declaration, ...]:
         """``mkosi=Mkosi(settings=, scripts=)``, recorded as settings and hooks."""

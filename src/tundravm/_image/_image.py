@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field
 from typing import TYPE_CHECKING
@@ -48,6 +49,8 @@ _SLOT_EXAMPLE = {
     "users": 'User("app")',
     "groups": 'Group("app")',
 }
+_SYSCTL_KEY = re.compile(r"[a-z0-9_][a-z0-9_-]*(\.[a-z0-9_-]+)+")
+"""A ``sysctl.d(5)`` key in its dotted spelling: ``vm.max_map_count``."""
 
 
 def _fail(owner: object, message: str, *, hint: str | None = None) -> ValidationError:
@@ -144,6 +147,7 @@ class Image(Located):
       sysctl hardening set, a static resolver, DHCP on ``en*``/``eth*``, and no apt timers
       or console getty. Escape: ``network=Network(...)`` for the network; every other piece
       is an ordinary declaration, so a ``Profile`` change removes or edits it by reference.
+      ``sysctl={...}`` adds kernel parameters beside the hardening set, never over it.
     - *A firewall that drops inbound traffic* except the ports services declare with
       ``expose=``, and the management port
       :data:`~tundravm._image._values.MANAGEMENT_PORT` (8745) in an image with an operator-
@@ -207,6 +211,10 @@ class Image(Located):
     packages: Sequence[str | Package] = ()
     files: Sequence[File | Tree | Build] = ()
     """Files, trees, and builds whose ``install=`` ships files."""
+    sysctl: Mapping[str, str | int | bool] = field(default_factory=FrozenMap)
+    """Kernel parameters in ``/etc/sysctl.d/60-<name>.conf``: a ``key = value`` line each, keys
+    sorted, ``True`` and ``False`` as ``1`` and ``0``. A key ``TeeBase``'s hardening sets is
+    refused."""
     services: Sequence[Service] = ()
     components: Sequence[Component] = ()
     ingress: Sequence[Ingress] = ()
@@ -249,6 +257,7 @@ class Image(Located):
                 hint='Name it in one word without "/": Image("demo").',
             )
         self._check_slots()
+        self._check_sysctl()
         self._check_services()
         self._check_profiles()
         from ._runtime import bound, check_bindings
@@ -338,6 +347,47 @@ class Image(Located):
                 "targets= names a target twice.",
                 hint=f"targets={list(dict.fromkeys(self.targets))!r}",
             )
+
+    def _check_sysctl(self) -> None:
+        if not isinstance(self.sysctl, Mapping):
+            raise _fail(
+                self,
+                f"sysctl= must be a mapping, got {shown(self.sysctl)}.",
+                hint='sysctl={"vm.max_map_count": 2097152}',
+            )
+        object.__setattr__(self, "sysctl", FrozenMap(dict(self.sysctl)))
+        from tundravm.components.tee import TeeBase
+        from tundravm.declarative.utils import _SYSCTL_FILE, TEE_SYSCTL
+
+        tee = next((item for item in self.components if isinstance(item, TeeBase)), TeeBase())
+        hardened = {key: value for key, value, _reason in TEE_SYSCTL} if tee.sysctl else {}
+        for key, value in self.sysctl.items():
+            if not isinstance(key, str) or not _SYSCTL_KEY.fullmatch(key):
+                raise _fail(
+                    self,
+                    f"sysctl= is keyed by {shown(key)}, which is not a sysctl name.",
+                    hint='Name it in lower case with dots, as sysctl.d(5) does: "vm.swappiness".',
+                )
+            if key in hardened:
+                raise _fail(
+                    self,
+                    f"sysctl= sets {key}, which TeeBase's hardening in {_SYSCTL_FILE} sets to "
+                    f"{hardened[key]}. An image does not override the hardening.",
+                    hint=f'Drop "{key}" from sysctl=.',
+                )
+            if not isinstance(value, (str, int)):
+                raise _fail(
+                    self,
+                    f"sysctl[{key!r}] holds {shown(value)}, not a string, integer or boolean.",
+                    hint=f'sysctl={{"{key}": 1}}',
+                )
+            if isinstance(value, str) and (not value.strip() or "\n" in value):
+                raise _fail(
+                    self,
+                    f"sysctl[{key!r}] holds {shown(value)}, which is not one line of text.",
+                    hint="Write the value on one line, as sysctl.d(5) reads it: "
+                    f'sysctl={{"{key}": "4096 87380 6291456"}}',
+                )
 
     def _check_services(self) -> None:
         for item in self.services:
