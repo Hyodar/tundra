@@ -57,10 +57,9 @@ and a `Container`.
 
 ## Wrong in the code
 
-- A `Container` running busybox fails `check`: `error service-program-missing
-  [production] web.service: ... runs /usr/bin/busybox, which nothing in the image ships`.
-  The program is in the container's root.
-- `convert --from mkosi` prints `OutputDirectory=...: ... never incrementally`; dev builds
-  are incremental.
-- No check warns that `Firewall(modes=)` on a 6.12 kernel refuses every TDX switch.
-- `show` omits the signer's `quotes=True`.
+All four were fixed on master on 2026-11-03 (`f7b49102`, `3997d9a5`, `03bcf9f8`, `5355c715`); `054d5f91` adds the tests they lacked.
+
+- ~~A `Container` running busybox fails `check`: `error service-program-missing [production] web.service: ... runs /usr/bin/busybox, which nothing in the image ships`. The program is in the container's root.~~
+- ~~`convert --from mkosi` prints `OutputDirectory=...: ... never incrementally`; dev builds are incremental.~~
+- ~~No check warns that `Firewall(modes=)` on a 6.12 kernel refuses every TDX switch.~~
+- ~~`show` omits the signer's `quotes=True`.~~
