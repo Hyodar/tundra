@@ -42,7 +42,7 @@ Built into production:
     /usr/lib/udev/rules.d/65-tundravm-tdx-guest.rules                                        0644  94B  sha256:c44e6e77f177
   Users (1): tdxs
   Groups (1): tdx
-  Enabled units (12): chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
+  Enabled units (13): chrony.service systemd-time-wait-sync.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
   Units started on demand (1): tdxs.service
   Masked units (7): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service acpid.path acpid.service acpid.socket
   Firewall (4):

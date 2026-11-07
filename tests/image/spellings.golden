@@ -130,12 +130,15 @@ set -euo pipefail
 test "${TUNDRAVM_INRELEASE_APT_EXAMPLE_COM_DEBIAN_STABLE:-$(curl -fsSL --proto =https https://apt.example.com/debian/dists/stable/InRelease | sha256sum | cut -d " " -f 1)}" = 0000000000000000000000000000000000000000000000000000000000000000 || { echo 'AptRepository https://apt.example.com/debian stable moved: its InRelease is no longer sha256 0000000000000000000000000000000000000000000000000000000000000000' >&2; exit 1; }
 == mkosi.postinst.d/50-postinst.sh: the lines naming them
 mkosi-chroot useradd --system --shell /usr/sbin/nologin prometheus-node-exporter-ready
+mkosi-chroot systemctl enable systemd-time-wait-sync.service
 mkosi-chroot systemctl enable prometheus-node-exporter.service
 mkosi-chroot systemctl enable prometheus-node-exporter-ready.service
 mkosi-chroot systemctl enable ssh.service
+ln -sf "/etc/systemd/system/systemd-time-wait-sync.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/prometheus-node-exporter-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+systemd_svc_whitelist=("basic.target" "final.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "poweroff.target" "reboot.target" "shutdown.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-poweroff.service" "systemd-reboot.service" "systemd-remount-fs.service" "systemd-resolved.service" "systemd-sysctl.service" "systemd-time-wait-sync.service" "timers.target" "umount.target")
 == mkosi.build.d/50-build.sh: the lines naming them
 # tundravm build: {"build":{"kind":"script","output":"public","packages":["hugo"],"script":"hugo --minify"},"install":[{"dest":"/srv/www","kind":"tree","path":"public"}],"name":"site","source":{"kind":"local","path":"."}}
 echo 'tundravm: source build site is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

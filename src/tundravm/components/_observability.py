@@ -385,7 +385,11 @@ class JournalExport(Keywords):
             state="journal-export",
             groups=["systemd-journal"],
             environment={} if url is None else {"https_proxy": url, "http_proxy": url},
-            unit=dm.DropIn(exec_start_pre=(*_start_steps(proxy), f"+/bin/sh {JOURNAL_ACCESS}")),
+            unit=dm.DropIn(
+                exec_start_pre=(*_start_steps(proxy), f"+/bin/sh {JOURNAL_ACCESS}"),
+                after=() if local else ("time-sync.target",),
+                wants=() if local else ("time-sync.target",),
+            ),
         )
 
     def sink(self) -> Service:
@@ -668,7 +672,11 @@ class PrometheusRemoteWrite(Keywords):
             credentials=[] if credential is None else [credential],
             state="metrics-export",
             environment=environment,
-            unit=dm.DropIn(exec_start_pre=steps) if steps else None,
+            unit=None
+            if local
+            else dm.DropIn(
+                exec_start_pre=steps, after=("time-sync.target",), wants=("time-sync.target",)
+            ),
         )
 
     def identity(self) -> tuple[dm.Build, dm.Service]:

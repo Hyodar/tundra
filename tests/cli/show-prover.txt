@@ -74,7 +74,7 @@ Built into production:
     /usr/lib/udev/rules.d/81-tundravm-azure-volumes.rules                                    0644  434B  sha256:8fc00d290c64
   Users (3): app attested-tls-443 tdxs
   Groups (4): azure-complete-provisioning gcp-forwarded-ips gcp-hostname tdx
-  Enabled units (23): azure-complete-provisioning.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
+  Enabled units (24): azure-complete-provisioning.service gcp-hostname.service gcp-forwarded-ips.timer chrony.service systemd-time-wait-sync.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service app.service tundravm-volume-owner.service tundravm-endpoint.service ssh-host-keys.service ssh.service credential-api-token.service attested-tls-443-key.service attested-tls-443.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
   Units started on demand (2): gcp-forwarded-ips.service tdxs.service
   Masked units (11): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service acpid.path acpid.service acpid.socket nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
   Firewall (9):

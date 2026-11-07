@@ -897,6 +897,9 @@ class TeeBase(Composite):
     *time*: ``chrony`` syncs from the *nts_servers* over NTS (RFC 8915), so the host cannot
     set the guest's clock (TLS, certificate and policy checks depend on it); the
     *hypervisor_clocks* only refine them (flashbots-images ``etc/chrony/chrony.conf``).
+    ``systemd-time-wait-sync`` holds ``time-sync.target`` until chrony has synced (its
+    ``rtcsync`` clears the kernel's unsynchronized flag), so a unit that checks a
+    certificate orders ``After=time-sync.target`` and never judges it by the host's clock.
     *journal*: journald keeps logs in RAM, capped (``Storage=volatile``, a
     ``journald.conf.d`` drop-in): nothing reaches a host-readable disk.
     *sysctl*: the :data:`TEE_SYSCTL` hardening in ``/etc/sysctl.d/50-tundravm-tee.conf``.
@@ -935,6 +938,7 @@ class TeeBase(Composite):
             yield Package("chrony")
             yield File.text("/etc/chrony/chrony.conf", self._chrony_conf())
             yield Unit("chrony.service", enabled=True)
+            yield Unit("systemd-time-wait-sync.service", enabled=True)
         if self.journal:
             journal = {
                 "Storage": "volatile",

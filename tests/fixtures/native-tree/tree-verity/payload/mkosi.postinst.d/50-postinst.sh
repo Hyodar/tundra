@@ -16,6 +16,7 @@ mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-hostname.service
 mkosi-chroot systemctl enable gcp-forwarded-ips.timer
 mkosi-chroot systemctl enable chrony.service
+mkosi-chroot systemctl enable systemd-time-wait-sync.service
 mkosi-chroot systemctl enable systemd-resolved.service
 mkosi-chroot systemctl enable tdxs.socket
 mkosi-chroot systemctl enable systemd-networkd.service
@@ -45,6 +46,7 @@ ln -sf "/etc/systemd/system/azure-complete-provisioning.service" "$BUILDROOT/etc
 ln -sf "/etc/systemd/system/gcp-hostname.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/gcp-forwarded-ips.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/chrony.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/systemd-time-wait-sync.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/systemd-resolved.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/systemd-networkd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
@@ -91,7 +93,7 @@ mkosi-chroot dpkg-query -L systemd | grep -E '^/usr/bin/' | while read -r bin_pa
 done
 
 # Debloat: mask unwanted systemd units
-systemd_svc_whitelist=("basic.target" "final.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "poweroff.target" "reboot.target" "shutdown.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-poweroff.service" "systemd-reboot.service" "systemd-remount-fs.service" "systemd-resolved.service" "systemd-sysctl.service" "systemd-user-sessions.service" "timers.target" "umount.target")
+systemd_svc_whitelist=("basic.target" "final.target" "local-fs-pre.target" "local-fs.target" "minimal.target" "network-online.target" "poweroff.target" "reboot.target" "shutdown.target" "slices.target" "sockets.target" "sysinit.target" "systemd-journald-dev-log.socket" "systemd-journald.service" "systemd-journald.socket" "systemd-networkd-wait-online.service" "systemd-networkd.service" "systemd-networkd.socket" "systemd-poweroff.service" "systemd-reboot.service" "systemd-remount-fs.service" "systemd-resolved.service" "systemd-sysctl.service" "systemd-time-wait-sync.service" "systemd-user-sessions.service" "timers.target" "umount.target")
 SYSTEMD_DIR="$BUILDROOT/etc/systemd/system"
 mkdir -p "$SYSTEMD_DIR"
 # Keep the targets the enabled units order against or pull in: masking one drops the

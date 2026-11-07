@@ -204,5 +204,6 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `tools/pkg/verify` (one function, `AttestedTLS`) and `go run ./cmd/attested-client https://HOST:PORT` give a relying party the `attest --tls` check and verdicts in Go, a TDX quote's chain checked against Intel's root.
 - `disk-setup` refuses a LUKS2 volume whose init token names another volume, so a disk attached in another volume's place is not opened even with the same passphrase.
 - `key-gen` draws random keys from `crypto/rand` only, never the host's `/dev/hwrng`; `disk-setup` closes a volume that fails to mount or to read its owner copy; `tdxs` hangs up on a malformed request instead of spinning.
+- `journal-export` and `metrics-export` sending to a remote sink order `After=time-sync.target`, and `TeeBase(time=True)` enables `systemd-time-wait-sync.service`, so a sink's certificate is judged by the NTS-synced clock, never the host's.
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 

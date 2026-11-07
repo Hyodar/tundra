@@ -16,7 +16,7 @@ ours, C Codex. **B** breaks a trust claim, **W** weakens it, **H** hygiene.
 | 8 | W | AC | OperatorKey first boot | The host pins, unlocks with its own passphrase, gets a confirmed owner; AttestedTLS clients see no owner. | Bake the operator key. | doc |
 | 9 | W | AC | `verify.judge`, `attestation/verifier` | No collateral, TCB or revocation check: a revoked platform is `trusted`. | Check them for production. | no |
 | 10 | W | AC | `verify.AttestedTLS` | The certificate is checked on a throwaway connection against any bound port. | Return a `tls.Config` pinning the requested port's key. | no |
-| 11 | W | C | in-guest validators | Before NTS syncs, the host's clock judges certificates. | Order after `time-sync.target`. | no |
+| 11 | W | C | in-guest validators | Before NTS syncs, the host's clock judges certificates. | Order after `time-sync.target`. | yes: time-sync |
 | 12 | W | C | `verifier/*` | DEBUG TDs are `Valid`; `VerifyIdentityToken`, `VerifyIMDS` check presence only. | Refuse DEBUG; verify or drop the options. | no |
 | 13 | W | C | `rotate`, `WatchOwners` | A kill after the 200, before the header write, keeps the old owner. | Answer once header and copy are written. | no |
 | 14 | W | C | signer `signResult` | Signatures omit method, params, freshness. | Sign request, result and a challenge. | no |
