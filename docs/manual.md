@@ -233,7 +233,8 @@ Application components are the project's.
 
 `SshAccess(login=Login(name, keys=, owner=, commands={...}, shell=))` lets another account
 in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to an argv. A list runs
-as the login, `Sudo([...])` as root. `{lines:int}` (0-65535), `{lines:int:1-1000}` and
+as the login, `Sudo([...])` as root. `firewall.status` and `firewall.switch` are root
+entries. `{lines:int}` (0-65535), `{lines:int:1-1000}` and
 `{mode:choice:a|b}` are whole-word arguments. `login-menu` is the account's shell and
 forced command. It lists the menu for an empty request and refuses anything else. It runs
 no shell and no terminal. Each root entry gets exact lines in
@@ -390,8 +391,8 @@ file the secret holds, as Amazon Managed Prometheus requires.
 `Firewall()` opens what services expose, an ingress's port and 8745. `Firewall(modes=)`
 makes it switchable ([a task](howto.md#open-a-maintenance-window)). A port a mode names
 opens in that mode only. A mode's `egress=` adds to the image's. The image boots into
-`production`. A switch goes over the attested endpoint, or through a login's `mode-switch
-to`. `mode-switch` extends RTMR3 with it, then swaps the ruleset, and old flows drop on
+`production`. A switch goes over the attested endpoint, or through a login's
+`firewall.switch`. `mode-switch` extends RTMR3 with it, then swaps the ruleset, and old flows drop on
 their next packet. A window closes
 itself after `lasts` (30 minutes by default) of boot time. The probe's `mode:firewall` row
 checks the history against RTMR3. Refused: 22 in `production`, a mode named `tdx` or
