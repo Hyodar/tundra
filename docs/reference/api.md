@@ -1221,7 +1221,7 @@ The export path for logs and metrics: `image.observability` takes it.
 
 | Member | Does |
 |---|---|
-| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM; `observability-export-unset`: the metrics name no keep-list, an error where a production profile writes them to *url*. |
+| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM; `observability-export-unset`: the metrics name no keep-list and no rules, an error where a production profile writes them to *url*. |
 | `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one. |
 
 ### `PrometheusRemoteWrite`
@@ -1245,7 +1245,7 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 |---|---|
 | `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, keep `kept`, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
 | `PrometheusRemoteWrite.identity() -> tuple[dm.Build, dm.Service]` | `image-metrics` from `tools/` and its service: as root without capabilities (the event log and the TDX device are root's), with the TDX device and AF_UNIX alone, rewriting its file in `IMAGE_METRICS_DIRECTORY` every *interval*. |
-| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave: *export* with its presets expanded (`health` without one), then `IDENTITY_SERIES`, in order, once each. A name with a colon must be one of *rules*' records. |
+| `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave, in order, once each: the records of the rules with `export=True`, then *export* with its presets expanded, then `IDENTITY_SERIES`. Without *export*, `health` leaves when there are no rules. A rule's record in *export* is refused: the rule says that itself. |
 | `PrometheusRemoteWrite.rules_file() -> dict[str, object]` | `METRICS_RULES`: *rules* as one group, in their order. |
 | `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, in server mode with *rules*, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
 | `PrometheusRemoteWrite.sink() -> Service` | `metrics-sink`: the in-guest receiver, plain HTTP on the loopback. |
@@ -1278,7 +1278,7 @@ The fixed-address proxy both exporters reach their sinks through: `Proxy("10.0.0
 *dataclass*
 
 ```python
-RecordingRule(record: str, expr: str)
+RecordingRule(record: str, expr: str, *, export: bool = True)
 ```
 
 A series the guest computes from others: `RecordingRule("node:up", "min(up)")`.

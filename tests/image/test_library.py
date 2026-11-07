@@ -403,45 +403,51 @@ HEALTH = (
 )
 
 
+UP = RecordingRule("node:up", "min(up)")
+MIXED = [RecordingRule("local:ratio", "1", export=False), UP]
+URL = "https://metrics.example"
+
+
 @pytest.mark.parametrize(
-    ("export", "url", "profile", "regex", "severity"),
+    ("rules", "export", "url", "profile", "kept", "severity"),
     [
-        ("health", "https://metrics.example", "production", HEALTH + IDENTITY, None),
-        (
-            ["node_load1", "up"],
-            "https://metrics.example",
-            "production",
-            "node_load1|up" + IDENTITY,
-            None,
-        ),
-        (["health", "up", "node_load1"], None, "dev", f"{HEALTH}|node_load1{IDENTITY}", None),
-        ([], "https://metrics.example", "production", IDENTITY[1:], None),
-        (None, "https://metrics.example", "production", HEALTH + IDENTITY, "error"),
-        (None, None, "production", HEALTH + IDENTITY, "warning"),
-        (None, None, "dev", HEALTH + IDENTITY, "warning"),
+        ((), "health", URL, "production", HEALTH + IDENTITY, None),
+        ((), ["node_load1", "up"], URL, "production", "node_load1|up" + IDENTITY, None),
+        ((), ["health", "up", "node_load1"], None, "dev", f"{HEALTH}|node_load1{IDENTITY}", None),
+        ((), [], URL, "production", IDENTITY[1:], None),
+        ((), None, URL, "production", HEALTH + IDENTITY, "error"),
+        ((), None, None, "production", HEALTH + IDENTITY, "warning"),
+        ((), None, None, "dev", HEALTH + IDENTITY, "warning"),
+        (MIXED, None, URL, "production", "node:up" + IDENTITY, None),
+        (MIXED, ["health", "up"], URL, "production", f"node:up|{HEALTH}{IDENTITY}", None),
+        (MIXED, ["node:up"], URL, "production", "rules say export= themselves", None),
+        (MIXED, ["local:ratio"], URL, "production", "rules say export= themselves", None),
+        ((), ["node:up"], URL, "production", "no rule records", None),
+        ((), ["health", "node load"], URL, "production", "neither a preset", None),
     ],
 )
-def test_only_the_keep_list_leaves(
+def test_the_exported_rules_and_the_keep_list_leave(
+    rules: list[RecordingRule],
     export: str | list[str] | None,
     url: str | None,
     profile: str,
-    regex: str,
+    kept: str,
     severity: str | None,
 ) -> None:
-    """The agent keeps the named series and the presets' and drops the rest before the
-    write; no export= keeps health and is an error only where a production profile writes
-    out."""
-    metrics = PrometheusRemoteWrite(url, export=export)
+    """The agent keeps the rules that export, then the named series and the presets', then
+    the identity, and drops the rest before the write. A rule's record in export= is
+    refused. No export= and no rules keeps health, an error only where a production profile
+    writes out."""
+    if "|" not in kept:
+        with pytest.raises(ValidationError, match=kept):
+            PrometheusRemoteWrite(url, rules=rules, export=export)
+        return
+    metrics = PrometheusRemoteWrite(url, rules=rules, export=export)
     relabel = metrics.config()["remote_write"][0]["write_relabel_configs"]  # type: ignore[index]
-    assert relabel == [{"source_labels": ["__name__"], "regex": regex, "action": "keep"}]
+    assert relabel == [{"source_labels": ["__name__"], "regex": kept, "action": "keep"}]
     image = Image("x", observability=Observability(metrics=metrics), dev=DevAccess(password="tdx"))
     found = [d for d in plan(image, profile).lint() if d.code == "observability-export-unset"]
     assert [d.severity for d in found] == ([] if severity is None else [severity])
-    with pytest.raises(ValidationError, match="neither a preset"):
-        PrometheusRemoteWrite(export=["health", "node load"])
-
-
-UP = RecordingRule("node:up", "min(up)")
 
 
 @pytest.mark.parametrize(
@@ -452,12 +458,10 @@ UP = RecordingRule("node:up", "min(up)")
         (lambda: PrometheusRemoteWrite(rules=UP), "not a list of RecordingRule"),  # type: ignore[arg-type]
         (lambda: PrometheusRemoteWrite(rules=["node:up"]), "is not a RecordingRule"),  # type: ignore[list-item]
         (lambda: PrometheusRemoteWrite(rules=[UP, UP]), "two rules record 'node:up'"),
-        (lambda: PrometheusRemoteWrite(export=["node:up"]), "no rule records"),
+        (lambda: RecordingRule("node:up", "min(up)", export="yes"), "not True or False"),  # type: ignore[arg-type]
     ],
 )
-def test_a_rule_records_a_colon_name_once_and_export_names_only_recorded_ones(
-    build: Callable[[], object], refusal: str
-) -> None:
+def test_a_rule_records_a_colon_name_once(build: Callable[[], object], refusal: str) -> None:
     with pytest.raises(ValidationError, match=refusal):
         build()
 

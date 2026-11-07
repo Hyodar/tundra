@@ -98,6 +98,7 @@ RULES = [
     RecordingRule(
         "local:memory_available_ratio",
         "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes",
+        export=False,
     ),
     RecordingRule(
         "fixture:memory_available_over_10_percent", "local:memory_available_ratio > bool 0.1"
@@ -108,6 +109,7 @@ RULES = [
         "local:box_cpu_ratio",
         'sum(rate(tundravm_unit_cpu_seconds_total{unit="box.service"}[1m]))'
         ' / count(node_cpu_seconds_total{mode="idle"})',
+        export=False,
     ),
     RecordingRule("fixture:box_cpu_under_80_percent", "local:box_cpu_ratio < bool 0.8"),
 ]
@@ -117,12 +119,6 @@ OBSERVABILITY = Observability(
         f"http://{METRICS_SINK}/api/v1/write",
         interval="10s",
         rules=RULES,
-        export=[
-            "fixture:memory_available_over_10_percent",
-            "fixture:node_up",
-            "fixture:box_alive",
-            "fixture:box_cpu_under_80_percent",
-        ],
     ),
     proxy=PROXY,
 )

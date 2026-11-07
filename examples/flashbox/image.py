@@ -155,6 +155,7 @@ RULES = [
         "local:container_cpu_ratio",
         'sum(rate(tundravm_unit_cpu_seconds_total{unit="searcher-container.service"}[5m]))'
         ' / count(node_cpu_seconds_total{mode="idle"})',
+        export=False,
     ),
     RecordingRule(
         "flashbox:container_average_cpu_is_under_80_percent",
@@ -177,12 +178,10 @@ RULES = [
         ' + sum(rate(node_network_transmit_bytes_total{device!~"lo"}[5m]))) > bool 0',
     ),
 ]
-EXPORT = [rule.record for rule in RULES if rule.record.startswith("flashbox:")]
 metrics = PrometheusRemoteWrite(
     url="https://metrics.flashbox.example/api/v1/write",
     credential=SigV4("us-east-2", Secret("metrics-aws")),
     rules=RULES,
-    export=EXPORT,
 )
 
 kernel = Kernel.build(

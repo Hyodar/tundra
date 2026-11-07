@@ -10,7 +10,7 @@ reach its sink never holds an application back. Either without a ``url`` ships t
 receiver in the guest, so a dev boot shows the export working before the deployment's
 receiver is known. The metrics always carry the image's identity, which ``image-metrics``
 (``tools/cmd/image-metrics``) writes for the node exporter. ``rules=`` computes
-:class:`RecordingRule` series in the guest, so ``export=`` can ship derived booleans in place
+:class:`RecordingRule` series in the guest, so the image can ship derived booleans in place
 of raw series; Prometheus then runs in server mode, which evaluates rules and agent mode
 does not. ``proxy="IP:PORT"`` sends both through one fixed-address proxy, the only
 destination a filtered egress then needs, and ``proxy=Proxy(address, port, tls_name=...)``
@@ -429,10 +429,15 @@ class RecordingRule(Keywords):
     recorded series and no exporter does, so it never shadows a raw one. *expr* is PromQL,
     checked by ``promtool check rules`` in the image at build time. A rule reads the series
     the scrape collects and the rules declared before it.
+
+    *export* says whether the series leaves the guest. ``export=False`` keeps an
+    intermediate series, which later rules read, inside the TEE.
     """
 
     record: str
     expr: str
+    _: KW_ONLY
+    export: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -450,6 +455,11 @@ class RecordingRule(Keywords):
                 f"RecordingRule {self.record}: expr {self.expr!r} is not a PromQL expression.",
                 hint="Pass the expression as text: 'min(up{job=\"node\"})'.",
             )
+        if not isinstance(self.export, bool):
+            raise ValidationError(
+                f"RecordingRule {self.record}: export {self.export!r} is not True or False.",
+                hint="Pass export=False to keep the series in the guest.",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,20 +473,19 @@ class PrometheusRemoteWrite(Keywords):
     of samples it could not send; in memory, at most four shards of 10000 samples wait,
     retried from one second to one minute apart, a 429 included.
 
-    *export* is the keep-list: series names, the outputs of *rules* and the presets of
-    :data:`EXPORT_PRESETS` (``"health"``) by name, and always :data:`IDENTITY_SERIES`, so an
-    operator tells which image a series came from. The agent drops every other series
-    before the write (``write_relabel_configs``), since raw series from a TEE are a side
-    channel; ``export=[]`` sends the identity alone. Without *export* it keeps ``health``,
-    and ``observability-export-unset`` reports it: an error in a production profile that
-    writes to *url*, a warning where nothing leaves the VM.
+    *rules* are :class:`RecordingRule` values, evaluated every *interval* in their order.
+    Each rule says itself whether its series leaves. Agent mode evaluates no rules, so with
+    *rules* Prometheus runs in server mode. A local store under ``/var/lib/metrics-export``
+    then keeps *buffer* of samples, and its query API listens on the loopback only.
 
-    *rules* are :class:`RecordingRule` values, evaluated every *interval* in their order:
-    what the guest derives, the booleans ``export=`` names in place of the raw series they
-    read. A rule not in ``export=`` stays in the guest; an ``export=`` name with a colon
-    must be a rule's. Agent mode evaluates no rules, so with *rules* Prometheus runs in
-    server mode: a local store under ``/var/lib/metrics-export`` keeps *buffer* of samples,
-    and its query API listens on the loopback only.
+    *export* names the raw series that leave, and the presets of :data:`EXPORT_PRESETS`
+    (``"health"``). The agent drops every other series before the write
+    (``write_relabel_configs``), since raw series from a TEE are a side channel. The
+    image's :data:`IDENTITY_SERIES` always leave, so an operator tells which image a series
+    came from. ``export=[]`` sends no raw series. Without *export* and without *rules* the
+    agent keeps ``health``, and ``observability-export-unset`` reports it. That finding is
+    an error in a production profile that writes to *url*, and a warning where nothing
+    leaves the VM.
 
     Without *url* the receiver is in the guest: ``metrics-sink``, Prometheus with its
     remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A dev
@@ -528,17 +537,26 @@ class PrometheusRemoteWrite(Keywords):
         self.kept()
 
     def kept(self) -> tuple[str, ...]:
-        """The series names that leave: *export* with its presets expanded (``health``
-        without one), then :data:`IDENTITY_SERIES`, in order, once each. A name with a
-        colon must be one of *rules*' records."""
-        export = "health" if self.export is None else self.export
+        """The series names that leave, in order, once each: the records of the rules with
+        ``export=True``, then *export* with its presets expanded, then
+        :data:`IDENTITY_SERIES`. Without *export*, ``health`` leaves when there are no
+        rules. A rule's record in *export* is refused: the rule says that itself."""
+        default = () if self.rules else "health"
+        export = default if self.export is None else self.export
         entries: Sequence[object] = (
             [export] if isinstance(export, str) or not isinstance(export, Sequence) else export
         )
-        found: list[str] = []
+        found = [rule.record for rule in self.rules if rule.export]
         recorded = {rule.record for rule in self.rules}
         for entry in entries:
-            if isinstance(entry, str) and ":" in entry and entry not in recorded:
+            if isinstance(entry, str) and entry in recorded:
+                raise ValidationError(
+                    f"PrometheusRemoteWrite: export entry {entry!r} is a rule's record; "
+                    "rules say export= themselves.",
+                    hint=f'Drop it from export=: RecordingRule("{entry}", ...) leaves unless '
+                    "it says export=False.",
+                )
+            if isinstance(entry, str) and ":" in entry:
                 raise ValidationError(
                     f"PrometheusRemoteWrite: export entry {entry!r} is a recorded series no "
                     "rule records, so nothing would carry it.",
@@ -790,8 +808,8 @@ class Observability(Component):
         Rule(
             "observability-export-unset",
             ("error", "warning"),
-            "PrometheusRemoteWrite names no export= keep-list, so what leaves the TEE is "
-            "undeclared; it keeps the health preset.",
+            "PrometheusRemoteWrite names neither an export= keep-list nor rules, so what "
+            "leaves the TEE is undeclared; it keeps the health preset.",
             'Pass export="health", or the series names that may leave: '
             'export=["health", "node_load1"].',
             when=("where nothing leaves the VM: a development profile, or no url=",),
@@ -809,11 +827,11 @@ class Observability(Component):
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``observability-plaintext``: an http:// sink sees what the TD logs in the clear;
         ``observability-sink-unset``: a production profile's logs or metrics never leave the
-        VM; ``observability-export-unset``: the metrics name no keep-list, an error where a
-        production profile writes them to *url*."""
+        VM; ``observability-export-unset``: the metrics name no keep-list and no rules, an error
+        where a production profile writes them to *url*."""
         found: list[dm.Diagnostic] = []
         metrics = self.metrics
-        if metrics is not None and metrics.export is None:
+        if metrics is not None and metrics.export is None and not metrics.rules:
             leaves = resolved.production and metrics.url is not None
             found.append(
                 dm.Diagnostic(
