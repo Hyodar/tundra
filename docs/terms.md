@@ -1,94 +1,106 @@
 # Terms
 
-Each term the [guide](guide.md) and the [how-to](howto.md) use, defined once, in the order
-they need them. Read this page first if mkosi or TDX are new to you.
+This page defines each term that the [guide](guide.md) and the [how-to](howto.md) use. It
+defines them once, in the order the guide needs them. Read it first if mkosi or TDX are new
+to you.
 
 ## The two tools underneath
 
-**mkosi** is systemd's image builder. It builds a bootable OS image from a directory of
-`mkosi.conf` files. tundravm writes that directory for you. You can still build it with
+**mkosi** is the image builder of systemd. It builds a bootable OS image from a directory of
+`mkosi.conf` files. tundravm writes that directory for you, and you can still build it with
 mkosi alone.
 
-**Intel TDX** runs a VM as a *trust domain* (TD), whose memory the host cannot read or
-change. The CPU signs a *quote*, a report of what booted in the TD. A remote party checks
-the quote before it trusts the VM.
+**Intel TDX** runs a VM as a *trust domain* (TD), and the host can neither read nor change
+the memory of a TD. The CPU signs a *quote*, which is a report of what booted in the TD. A
+remote party checks the quote before it trusts the VM.
 
 ## Stage 1
 
-**Image.** An `Image(...)` value is the whole OS: base, packages, services, ports, disks.
-An *image file* is a Python file that binds one to the name `image`.
+**Image.** An `Image(...)` value describes a whole OS, with its base, packages, services,
+ports and disks. An *image file* is a Python file that binds one such value to the name
+`image`.
 
-**Implied.** What every image gets without asking: Debian trixie, systemd, a firewall, a
-measured kernel, and the *evidence service* `tdxs`, which issues quotes. Each implied piece
-has one typed escape hatch, listed in the [manual](manual.md#what-is-implied).
+**Implied.** Every image gets some things without asking for them. These are Debian trixie,
+systemd, a firewall, a measured kernel and the *evidence service* `tdxs`, which issues
+quotes. Each implied piece has one typed escape hatch, and the
+[manual](manual.md#what-is-implied) lists them.
 
-**Profile.** A variant of the image. The image itself is the `production` profile.
-`dev=DevAccess(...)` adds a `dev` profile with a console, debugging tools and a root
-password.
+**Profile.** A profile is a variant of the image. The image itself is the `production`
+profile. Passing `dev=DevAccess(...)` adds a `dev` profile with a console, debugging tools
+and a root password.
 
-**Development and production.** A development build comes from a non-production profile,
-such as `dev`. Only a production build is meant to hold real secrets.
+**Development and production.** A development build comes from a profile that is not
+production, such as `dev`. Only a production build is meant to hold real secrets.
 
-**Security mode.** `simulated` runs a build under plain QEMU, without TDX. `tdx` runs it
-in a real TD. A production build that finds no TDX starts none of its services: it *fails
-closed*. A development build runs its services either way.
+**Security mode.** In `simulated` mode a build runs under plain QEMU, without TDX. In `tdx`
+mode it runs in a real TD. A production build that finds no TDX starts none of its services,
+so it *fails closed*. A development build runs its services in either mode.
 
-**Boot probe.** A checklist a development build runs inside the guest at boot: each
-service up, each port bound, egress refused. It proves the image works, not that it is
-trustworthy.
+**Boot probe.** The boot probe is a checklist that a development build runs inside the
+guest at boot. It checks that each service is up, each port is bound and egress is refused.
+It shows that the image works. It does not show that the image is trustworthy.
 
 ## Stages 2 to 6
 
-**Component.** A Python class that groups declarations, such as a build and the service
-running it. It exports typed values, such as an endpoint. You write your own.
+**Component.** A component is a Python class that groups related declarations, such as a
+build and the service that runs it. It exports typed values, such as an endpoint. You write
+your own components.
 
-**Service.** A program the image runs as a systemd unit, under its own user, in a sandbox.
+**Service.** A service is a program that the image runs as a systemd unit. It runs under its
+own user and inside a sandbox.
 
-**Volume.** An encrypted disk that keeps data across boots. Something must *unlock* it at
-each boot, such as an operator who sends its passphrase.
+**Volume.** A volume is an encrypted disk that keeps data across boots. Something must
+*unlock* it at each boot, such as an operator who sends its passphrase.
 
-**Owner.** The one SSH key an instance with an `OperatorKey()` volume takes writes from.
-The first signed write pins it in the volume's header.
+**Owner.** The owner is the one SSH key from which an instance takes writes, when the image
+has a volume with `OperatorKey()`. The first signed write pins that key in the volume's
+header.
 
-**Secret.** A value the image needs and never contains. An operator *delivers* it after
-checking the quote. A *generated* secret is made in the guest at each boot instead.
+**Secret.** A secret is a value that the image needs and never contains. An operator
+*delivers* it after checking the quote. A *generated* secret is made in the guest at each
+boot instead.
 
-**Control plane.** What an image with a volume an operator unlocks, a secret or an attested
-ingress runs: the *attested endpoint* on port 8745, which serves quotes and takes
-deliveries, and SSH on 22.
+**Control plane.** An image runs the control plane when it has a volume that an operator
+unlocks, a secret or an attested ingress. The control plane is the *attested endpoint* on
+port 8745, which serves quotes and takes deliveries, together with SSH on port 22.
 
-**Instance key.** A key pair each boot generates. The quote covers its public key, so a
-client can tell that a signature came from this TD.
+**Instance key.** The instance key is a key pair that each boot generates. The quote covers
+its public key, so a client can tell that a signature came from this TD.
 
-**Ingress.** A port that takes outside requests and relays them to a service on the
-loopback.
+**Ingress.** An ingress is a port that takes requests from outside and relays them to a
+service on the loopback.
 
-**Keep-list.** The metric series allowed to leave the guest. Every other series stays in.
+**Keep-list.** The keep-list names the metric series that may leave the guest. Every other
+series stays inside.
 
 ## After the stages
 
-**Lock.** `build/tundravm.lock` pins every input: the Debian snapshot, each source's commit
-or digest, the toolchain. A production build refuses a missing or stale lock.
+**Lock.** The file `build/tundravm.lock` pins every input: the Debian snapshot, the commit
+or digest of each source, and the toolchain. A production build refuses a missing or stale
+lock.
 
-**Tree.** The mkosi directory an image compiles to. A project commits it in `mkosi/`, so a
-review shows what changed in the OS.
+**Tree.** The tree is the mkosi directory that an image compiles to. A project commits it in
+`mkosi/`, so a review shows what changed in the OS.
 
-**Build directory.** Where one build lands: `build/<image>/production/<id>/`. It holds the
-disk images and a *manifest*, a JSON record of every file's digest. The id is the
-manifest's digest. The directory is never written again.
+**Build directory.** Each build lands in its own directory, `build/<image>/production/<id>/`.
+It holds the disk images and a *manifest*, which is a JSON record of every file's digest.
+The id is the digest of the manifest. Nothing writes to the directory again.
 
-**Measurements.** The register values a TD of this build should report, predicted at
-build time. A *policy* is the set of values you approve.
+**Measurements.** Measurements are the register values that a TD of this build should
+report. They are the RTMRs (runtime measurement registers) and MRTD, and tundravm predicts
+them at build time. A *policy* is the set of values you approve.
 
-**Instance.** One running copy of a build: under QEMU on your machine, or a cloud VM.
+**Instance.** An instance is one running copy of a build, either under QEMU on your machine
+or as a cloud VM.
 
-**Attest.** Ask an instance for a quote, check it against a policy and print a *verdict*.
-Only `trusted` releases secrets to a production build.
+**Attest.** To attest is to ask an instance for a quote, check it against a policy and print
+a *verdict*. Only the verdict `trusted` releases secrets to a production build.
 
-**Firewall mode.** A named set of open ports, such as `maintenance` opening SSH. The image
-boots into `production`. An operator switches modes over the control plane with
-`run switch`. `attest` shows every switch since boot.
+**Firewall mode.** A firewall mode is a named set of open ports, such as `maintenance`,
+which opens SSH. The image boots into `production`. An operator switches modes over the
+control plane with `run switch`, and `attest` shows every switch since boot.
 
-**Container.** A program in a Debian root of its own, built with the image from the same
-snapshot. Its network is a veth the firewall forwards: the ports it exposes, the
-destinations its egress names, and the host endpoints it requires.
+**Container.** A container is a program that runs in a Debian root of its own. The build
+makes that root with the image, from the same snapshot. Its network is a veth that the
+firewall forwards. The container declares the ports it exposes, the destinations its egress
+names and the host endpoints it requires.
