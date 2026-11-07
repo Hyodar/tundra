@@ -147,6 +147,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** a component declares its codes in `rules = (Rule(...),)`; an undeclared code is `rule-undeclared`.
 - **Breaking:** `component-conflict`, `component-requires-missing` and `image-arch-unsupported` replace the `fragment-` and `recipe-` codes.
 - **Breaking:** `service-program-missing` (error) replaces `service-command-not-shipped`: a service's program must be something the image ships.
+- `service-program-missing` looks for a `Container`'s program in the container's own root, its `packages=` and `files=`, and names its `packages=` when neither ships it.
 - **Breaking:** `source-unpinned` is image-wide, subject `sources.NAME`.
 - New: `egress-unfiltered`, `service-metadata`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`, `kernel-cmdline-repeated`, `kernel-unhardened`, `ssh-login-shell`, `container-shell`.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.

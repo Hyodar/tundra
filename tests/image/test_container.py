@@ -248,21 +248,26 @@ def test_container_shell_refuses_a_production_shell(
     assert (found.get("container-shell") == "error") is reported
 
 
+SERVE = File.text("/usr/bin/serve", "#!/bin/sh\nexec busybox httpd -f\n", mode=0o755)
+
+
 @pytest.mark.parametrize(
-    ("image", "reported"),
+    ("container", "missing"),
     [
-        (Image("box", services=[Service("web", HTTPD)]), "nothing in the image ships"),
-        (Image("box", components=[web()]), ""),
-        (
-            Image("box", packages=["busybox"], components=[web(packages=["curl"])]),
-            "nothing in its root ships",
-        ),
+        (web(), False),
+        (Container("web", ["/usr/bin/serve"], packages=["busybox"], files=[SERVE]), False),
+        (web(packages=["curl"]), True),
     ],
-    ids=["host-missing", "container-root-ships-it", "container-root-lacks-it"],
+    ids=["its-package-ships-it", "its-files-ship-it", "nothing-in-its-root-ships-it"],
 )
-def test_a_container_s_program_is_looked_up_in_its_own_root(image: Image, reported: str) -> None:
+def test_a_container_s_program_is_looked_up_in_its_own_root(
+    container: Container, missing: bool
+) -> None:
+    image = Image("box", packages=["busybox"], components=[container])
     found = [d for d in plan(image).lint() if d.code == "service-program-missing"]
-    assert [reported in d.message for d in found] == ([True] if reported else [])
+    assert [
+        ("nothing in its root ships" in d.message, "packages=[" in (d.hint or "")) for d in found
+    ] == ([(True, True)] if missing else [])
 
 
 @pytest.mark.parametrize(
