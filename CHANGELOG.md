@@ -189,6 +189,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - **Breaking:** `source-unpinned` is image-wide, subject `sources.NAME`.
 - `source-unpinned` is a warning, the one level an `Image` file reaches; its `error` and `info` levels are gone.
 - Without a lockfile `check` reports no `source-unpinned`: its note says once what `tundravm lock` pins; with one, the rule names each source the lock lacks.
+- `hardening-relaxed` counts a umask only when it is looser than `0027`: what a service writes into a `group=` directory is no relaxation.
 - New: `egress-unfiltered`, `service-metadata`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`, `kernel-cmdline-repeated`, `kernel-unhardened`, `ssh-login-shell`, `container-shell`.
 - A finding's message speaks the image file too: no mkosi tree, build stage or internal spelling (`file-path-duplicate`, `debloat-removes-declared-file`, `service-runs-as-root`, `hardening-relaxed`), and an order only a shipped component writes says to report it.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.

@@ -81,6 +81,8 @@ def test_opt_outs_are_linted() -> None:
             Service("jit", "/usr/bin/c", hardening=Hardening.strict(jit=True)),
             Service("net", "/usr/bin/n", hardening=Hardening.preset("dotnet")),
             Service("dev", "/usr/bin/d", hardening=Hardening.strict(devices=("/dev/tdx_guest",))),
+            Service("shared", "/usr/bin/s", hardening=Hardening.strict(umask="0027")),
+            Service("open", "/usr/bin/o", hardening=Hardening.strict(umask="0022")),
             Task("once", "/usr/bin/e", user="root"),
         ),
     )
@@ -95,6 +97,7 @@ def test_opt_outs_are_linted() -> None:
         ("hardening-disabled", "bare.service", "warning"),
         ("hardening-relaxed", "jit.service", "info"),
         ("hardening-relaxed", "net.service", "info"),
+        ("hardening-relaxed", "open.service", "info"),
     }
     assert (
         "hardening-relaxed",

@@ -1126,6 +1126,8 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             hint=_METADATA_FIX,
         )
     sandbox = item.sandbox if isinstance(item, TypedService) else item.hardening
+    if sandbox is not None and not _umask_relaxed(sandbox.umask):
+        sandbox = replace(sandbox, umask=Hardening.strict().umask)
     entries = STRICT_HARDENING if sandbox is None else sandbox.entries()
     if not entries:
         yield Diagnostic(
@@ -1171,6 +1173,19 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             hint="Each relaxed knob widens what a compromised process can do; keep only the "
             "ones the program needs (docs/reference/api.md: Hardening).",
         )
+
+
+def _umask_relaxed(umask: str | None) -> bool:
+    """Whether *umask* opens a file bit that both the strict sandbox's umask and a
+    ``group=`` directory's (``0027``) close: a write others can read, or the group can
+    change. Without a umask, systemd's ``0022`` applies."""
+    from ._image._lower import GROUP_UMASK
+    from .declarative.systemd import Hardening
+
+    strict = Hardening.strict().umask
+    assert strict is not None
+    closed = int(strict, 8) & int(GROUP_UMASK, 8)
+    return umask is None or bool(closed & ~int(umask, 8))
 
 
 _PRESETS = {
@@ -1667,7 +1682,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "A Service relaxes knobs of the strict sandbox, and each one widens what a "
         "compromised process can do: a preset (dotnet, jit, node, python) relaxes what its "
         'runtime needs and the message says why; hardening="relaxed" or a preset\'s '
-        "deviations relax what the image file chose.",
+        "deviations relax what the image file chose. A umask counts only when others can "
+        "read what the service writes or its group can change it (looser than 0027).",
         'Nothing for a preset as it is; for hardening="relaxed" or a preset\'s deviations, '
         "keep only the knobs the program needs (the message lists them).",
     ),
