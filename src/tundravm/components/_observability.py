@@ -31,6 +31,7 @@ from tundravm._image._metrics import Selector, UnitMetrics, VolumeMetrics
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
 from tundravm._image._values import Egress, File, Package, TcpProbe, egress_host
+from tundravm._modules import instance_key
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
 from tundravm.declarative.config import ConfigFile
@@ -138,6 +139,10 @@ IMAGE_METRICS_DIRECTORY = f"/run/{IMAGE_METRICS}"
 """Its runtime directory: the node exporter's textfile collector reads it."""
 
 _TDX_GUEST = "/dev/tdx_guest"
+
+_INSTANCE_LABEL = "tundravm_instance_key"
+"""The external label ``metrics-export`` reads the instance key into, from
+:data:`~tundravm._modules.instance_key.ENVIRONMENT`; the write moves it to ``instance``."""
 
 _SERIES = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
@@ -507,10 +512,12 @@ class PrometheusRemoteWrite(Keywords):
     (``"health"``). The agent drops every other series before the write
     (``write_relabel_configs``), since raw series from a TEE are a side channel. The
     image's :data:`IDENTITY_SERIES` always leave, so an operator tells which image a series
-    came from. ``export=[]`` sends no raw series. Without *export* and without *rules* the
-    agent keeps ``health``, and ``observability-export-unset`` reports it. That finding is
-    an error in a production profile that writes to *url*, and a warning where nothing
-    leaves the VM.
+    came from. Each series leaves with ``instance`` set to this boot's instance key (the
+    public key ``attest`` prints as bound to the quote) in place of the scrape address, so
+    two replicas never merge at the sink. ``export=[]`` sends no raw series. Without
+    *export* and without *rules* the agent keeps ``health``, and
+    ``observability-export-unset`` reports it. That finding is an error in a production
+    profile that writes to *url*, and a warning where nothing leaves the VM.
 
     Without *url* the receiver is in the guest: ``metrics-sink``, Prometheus with its
     remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A
@@ -623,7 +630,9 @@ class PrometheusRemoteWrite(Keywords):
                 "source_labels": ["__name__"],
                 "regex": "|".join(kept),
                 "action": "keep",
-            }
+            },
+            {"source_labels": [_INSTANCE_LABEL], "target_label": "instance", "action": "replace"},
+            {"regex": _INSTANCE_LABEL, "action": "labeldrop"},
         ]
         remote["queue_config"] = {
             "capacity": 10000,
@@ -632,9 +641,10 @@ class PrometheusRemoteWrite(Keywords):
             "max_backoff": "1m",
             "retry_on_http_429": True,
         }
-        timing = {"scrape_interval": self.interval}
+        timing: dict[str, object] = {"scrape_interval": self.interval}
         if self.rules:
             timing["evaluation_interval"] = self.interval
+        timing["external_labels"] = {_INSTANCE_LABEL: f"${{{instance_key.VARIABLE}}}"}
         config: dict[str, object] = {"global": timing}
         if self.rules:
             config["rule_files"] = [METRICS_RULES]
@@ -663,7 +673,8 @@ class PrometheusRemoteWrite(Keywords):
                 "AWS_EC2_METADATA_DISABLED": "true",
             }
             credential = credential.secret
-        mode, store = ([], "tsdb") if self.rules else (["--enable-feature=agent"], "agent")
+        features, store = ("", "tsdb") if self.rules else ("agent,", "agent")
+        mode = [f"--enable-feature={features}expand-external-labels"]
         retention = "retention.time" if self.rules else "retention.max-time"
         return Service(
             METRICS_SERVICE,
@@ -680,9 +691,12 @@ class PrometheusRemoteWrite(Keywords):
             credentials=[] if credential is None else [credential],
             state="metrics-export",
             environment=environment,
-            unit=None
-            if local
-            else dm.DropIn(after=("time-sync.target",), wants=("time-sync.target",)),
+            unit=dm.DropIn(
+                env_file=instance_key.ENVIRONMENT,
+                after=(instance_key.UNIT,) if local else (instance_key.UNIT, "time-sync.target"),
+                requires=(instance_key.UNIT,),
+                wants=() if local else ("time-sync.target",),
+            ),
         )
 
     def identity(self) -> tuple[dm.Build, dm.Service]:

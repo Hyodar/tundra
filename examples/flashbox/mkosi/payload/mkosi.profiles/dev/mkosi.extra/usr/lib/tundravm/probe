@@ -37,7 +37,13 @@ probe_series() {
         fail "the sink at $sink holds series the keep-list drops: $dropped"
         return
     fi
-    ok "the sink at $sink holds only what export= keeps: $(printf '%s\n' "$names" | grep . | tr '\n' ' ')"
+    instances=$(promtool query labels "$sink" instance 2>/dev/null | grep . | tr '\n' ' ')
+    key=$(cat /run/tundravm/instance-key.pub 2>/dev/null || true)
+    if [ "$instances" != "$key " ]; then
+        fail "the sink at $sink labels its series instance=${instances:-none}, not this boot's instance key $key: metrics-export reads it from /run/tundravm/instance-key.env; journalctl -u metrics-export"
+        return
+    fi
+    ok "the sink at $sink holds only what export= keeps, instance=$key: $(printf '%s\n' "$names" | grep . | tr '\n' ' ')"
 }
 probe_cmdline() {
     line=" $(cat /proc/cmdline) "

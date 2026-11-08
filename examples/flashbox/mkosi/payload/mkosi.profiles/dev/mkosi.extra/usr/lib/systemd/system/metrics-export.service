@@ -5,7 +5,7 @@ Requires=metrics-sink-ready.service tdx-evidence.service
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/prometheus --config.file=/etc/tundravm/metrics-export.yml --storage.tsdb.path=/var/lib/metrics-export --storage.tsdb.retention.time=1h --web.listen-address=127.0.0.1:9090 --web.config.file=/etc/tundravm/metrics-export-web.yml
+ExecStart=/usr/bin/prometheus --enable-feature=expand-external-labels --config.file=/etc/tundravm/metrics-export.yml --storage.tsdb.path=/var/lib/metrics-export --storage.tsdb.retention.time=1h --web.listen-address=127.0.0.1:9090 --web.config.file=/etc/tundravm/metrics-export-web.yml
 User=metrics-export
 WorkingDirectory=/var/lib/metrics-export
 StateDirectory=metrics-export

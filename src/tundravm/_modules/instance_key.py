@@ -8,6 +8,8 @@ secp256k1 curve (the curve Ethereum signs with, so an address derives from it) w
 
 - :data:`KEY`, root:root 0600, the private key as SEC1 PEM (``BEGIN EC PRIVATE KEY``);
 - :data:`PUBLIC`, world-readable, the compressed public key (33 bytes) as one hex line;
+- :data:`ENVIRONMENT`, world-readable, the same hex as :data:`VARIABLE`, for an
+  ``EnvironmentFile=`` (``metrics-export`` labels its series with it);
 - one console line, :data:`CONSOLE` and the hex, which ``run status`` reads.
 
 ``tools/``' ``key-gen`` makes random bytes and pipe keys only, so ``openssl`` (the
@@ -33,6 +35,9 @@ UNIT = "tundravm-instance-key.service"
 SCRIPT_PATH = "/usr/lib/tundravm/instance-key"
 KEY = "/run/tundravm/instance-key.pem"
 PUBLIC = "/run/tundravm/instance-key.pub"
+ENVIRONMENT = "/run/tundravm/instance-key.env"
+VARIABLE = "TUNDRAVM_INSTANCE_KEY"
+"""The variable :data:`ENVIRONMENT` sets to the public key's hex."""
 CREDENTIAL = "instance-key"
 """The credential name a bound service reads under ``$CREDENTIALS_DIRECTORY``."""
 CURVE = "secp256k1"
@@ -53,21 +58,23 @@ pub_of() {{
         tail -c 33 | od -An -v -tx1 | tr -d ' \\n'
 }}
 mkdir -p -m 0711 /run/tundravm
-if [ -s {KEY} ] && [ -s {PUBLIC} ]; then
-    echo "{CONSOLE}$(cat {PUBLIC})"
-    exit 0
-fi
 umask 077
-openssl ecparam -name {CURVE} -genkey -noout -out {KEY}.tmp
-pub=$(pub_of {KEY}.tmp)
-if [ "${{#pub}}" -ne 66 ] || [ "${{pub#0[23]}}" = "$pub" ]; then
-    echo "tundravm-instance-key: failed: openssl made no {CURVE} key"
-    exit 1
+if [ ! -s {KEY} ] || [ ! -s {PUBLIC} ]; then
+    openssl ecparam -name {CURVE} -genkey -noout -out {KEY}.tmp
+    pub=$(pub_of {KEY}.tmp)
+    if [ "${{#pub}}" -ne 66 ] || [ "${{pub#0[23]}}" = "$pub" ]; then
+        echo "tundravm-instance-key: failed: openssl made no {CURVE} key"
+        exit 1
+    fi
+    printf '%s\\n' "$pub" > {PUBLIC}.tmp
+    chmod 0644 {PUBLIC}.tmp
+    mv {KEY}.tmp {KEY}
+    mv {PUBLIC}.tmp {PUBLIC}
 fi
-printf '%s\\n' "$pub" > {PUBLIC}.tmp
-chmod 0644 {PUBLIC}.tmp
-mv {KEY}.tmp {KEY}
-mv {PUBLIC}.tmp {PUBLIC}
+pub=$(cat {PUBLIC})
+printf '{VARIABLE}=%s\\n' "$pub" > {ENVIRONMENT}.tmp
+chmod 0644 {ENVIRONMENT}.tmp
+mv {ENVIRONMENT}.tmp {ENVIRONMENT}
 echo "{CONSOLE}$pub"
 """
 """``/usr/lib/tundravm/instance-key``: ``/bin/sh``, coreutils and ``openssl``."""
@@ -129,6 +136,7 @@ __all__ = [
     "CONSOLE",
     "CREDENTIAL",
     "CURVE",
+    "ENVIRONMENT",
     "KEY",
     "PACKAGE",
     "PUBLIC",
@@ -136,6 +144,7 @@ __all__ = [
     "SCRIPT",
     "SCRIPT_PATH",
     "UNIT",
+    "VARIABLE",
     "public_key",
     "service",
 ]

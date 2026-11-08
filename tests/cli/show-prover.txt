@@ -76,7 +76,7 @@ Built into production:
     /usr/lib/tundravm/egress-resolve                                                         0755  1647B  sha256:261319bac71a
     /usr/lib/tundravm/gcp/forwarded-ips                                                      0755  1235B  sha256:a708f93eac75
     /usr/lib/tundravm/gcp/hostname                                                           0755  607B  sha256:9763439d3eb8
-    /usr/lib/tundravm/instance-key                                                           0755  1112B  sha256:63e33f30e3b8
+    /usr/lib/tundravm/instance-key                                                           0755  1306B  sha256:1c794ff71762
     /usr/lib/tundravm/tdx-evidence                                                           0755  1094B  sha256:01c9bc138c5a
     /usr/lib/udev/google_nvme_id                                                             0755  16576B  sha256:0c3590103e0b
     /usr/lib/udev/rules.d/65-gce-disk-naming.rules                                           0644  2638B  sha256:7f4c09e0cf36

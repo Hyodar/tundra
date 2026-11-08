@@ -496,13 +496,14 @@ synced clock.
 
 The metrics keep-list says which series leave the guest. `export=` names raw series and
 presets, the `health` preset when neither it nor a rule is given, and the image's identity
-(its digest, RTMRs and mode) always leaves. `rules=[RecordingRule("box:up",
-f"max({box.metrics.active})")]` computes series in the guest ([a
-task](howto.md#ship-booleans-not-raw-series)) from the `.metrics` selectors of services,
-containers and volumes, and a rule's series leaves unless `export=False`. A record carries a
-colon, and `promtool check rules` checks each at build. With rules Prometheus runs in server
-mode, and its API on `127.0.0.1:9090` refuses every request. `image-metrics` also logs the
-digest and RTMR0-3 at boot.
+(its digest, RTMRs and mode) always leaves. Each series leaves labelled `instance=` the
+boot's instance key, which `attest` prints as bound to the quote, so replicas never merge at
+the sink. `rules=[RecordingRule("box:up", f"max({box.metrics.active})")]` computes series
+in the guest ([a task](howto.md#ship-booleans-not-raw-series)) from the `.metrics`
+selectors of services, containers and volumes, and a rule's series leaves unless
+`export=False`. A record carries a colon, and `promtool check rules` checks each at build.
+With rules Prometheus runs in server mode, and its API on `127.0.0.1:9090` refuses every
+request. `image-metrics` also logs the digest and RTMR0-3 at boot.
 
 | Sink option | Does |
 |---|---|

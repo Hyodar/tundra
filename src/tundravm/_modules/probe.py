@@ -1026,7 +1026,9 @@ def _observability(
         unit = metrics_unit
         config = _flag(metrics.exec_start, "--config.file")
         argv = metrics.exec_start
-        agent = "--enable-feature=agent" in (argv.split() if isinstance(argv, str) else argv)
+        words = argv.split() if isinstance(argv, str) else argv
+        features = [w.partition("=")[2] for w in words if w.startswith("--enable-feature=")]
+        agent = any("agent" in flag.split(",") for flag in features)
         checks.append(
             Check(
                 f"observability:{unit}",
@@ -1044,7 +1046,8 @@ def _observability(
             checks.append(
                 Check(
                     "observability:series",
-                    f"the sink at {sink} holds {', '.join(held)} and only series {keep} keeps",
+                    f"the sink at {sink} holds {', '.join(held)} and only series {keep} keeps, "
+                    "each with instance= this boot's instance key",
                     " ".join(["probe_series", _quote(sink), _quote(keep), *map(_quote, held)]),
                     "series",
                     (unit,),
@@ -1210,7 +1213,13 @@ probe_series() {{
         fail "the sink at $sink holds series the keep-list drops: $dropped"
         return
     fi
-    ok "the sink at $sink holds only what export= keeps: $(printf '%s\\n' "$names" | grep . | tr '\\n' ' ')"
+    instances=$(promtool query labels "$sink" instance 2>/dev/null | grep . | tr '\\n' ' ')
+    key=$(cat {instance_key.PUBLIC} 2>/dev/null || true)
+    if [ "$instances" != "$key " ]; then
+        fail "the sink at $sink labels its series instance=${{instances:-none}}, not this boot's instance key $key: metrics-export reads it from {instance_key.ENVIRONMENT}; journalctl -u metrics-export"
+        return
+    fi
+    ok "the sink at $sink holds only what export= keeps, instance=$key: $(printf '%s\\n' "$names" | grep . | tr '\\n' ' ')"
 }}
 """,  # noqa: E501
     "cmdline": """\

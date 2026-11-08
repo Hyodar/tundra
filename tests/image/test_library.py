@@ -9,6 +9,7 @@ import pytest
 
 from tundravm import Image, Kernel, Package, Profile, Service
 from tundravm._image import lower, recipe_of
+from tundravm._modules import instance_key
 from tundravm.components import Component, Endpoint
 from tundravm.components.access import DevAccess, SshAccess
 from tundravm.components.container import Container
@@ -485,10 +486,43 @@ def test_the_exported_rules_and_the_keep_list_leave(
         return
     metrics = PrometheusRemoteWrite(url, rules=rules, export=export)
     relabel = metrics.config()["remote_write"][0]["write_relabel_configs"]  # type: ignore[index]
-    assert relabel == [{"source_labels": ["__name__"], "regex": kept, "action": "keep"}]
+    assert relabel[0] == {"source_labels": ["__name__"], "regex": kept, "action": "keep"}
     image = Image("x", observability=Observability(metrics=metrics), dev=DevAccess(password="tdx"))
     found = [d for d in plan(image, profile).lint() if d.code == "observability-export-unset"]
     assert [d.severity for d in found] == ([] if severity is None else [severity])
+
+
+LABEL = "tundravm_instance_key"
+KEYED = instance_key.UNIT
+SYNCED = f"{KEYED} time-sync.target"
+
+
+@pytest.mark.parametrize(
+    ("metrics", "feature", "after"),
+    [
+        (PrometheusRemoteWrite(URL, export="health"), "agent,expand-external-labels", SYNCED),
+        (PrometheusRemoteWrite(URL, rules=[UP]), "expand-external-labels", SYNCED),
+        (PrometheusRemoteWrite(export="health"), "agent,expand-external-labels", KEYED),
+    ],
+    ids=["agent", "server", "in-guest"],
+)
+def test_every_series_leaves_labelled_with_the_instance_key(
+    metrics: PrometheusRemoteWrite, feature: str, after: str
+) -> None:
+    """Prometheus reads the boot's instance key into an external label from the key's
+    environment file, and the write moves it to ``instance``: two replicas never merge."""
+    config = metrics.config()
+    assert config["global"]["external_labels"] == {LABEL: "${TUNDRAVM_INSTANCE_KEY}"}  # type: ignore[index]
+    relabel = config["remote_write"][0]["write_relabel_configs"][1:]  # type: ignore[index]
+    assert relabel == [
+        {"source_labels": [LABEL], "target_label": "instance", "action": "replace"},
+        {"regex": LABEL, "action": "labeldrop"},
+    ]
+    planned = plan(Image("x", observability=Observability(metrics=metrics)), "production")
+    assert f"--enable-feature={feature} " in (planned.service("metrics-export").exec_start or "")
+    dropin = planned.file("/usr/lib/systemd/system/metrics-export.service.d/20-tundravm.conf")
+    assert f"After={after}\nRequires={KEYED}\n" in dropin.text
+    assert f"EnvironmentFile={instance_key.ENVIRONMENT}\n" in dropin.text
 
 
 @pytest.mark.parametrize(

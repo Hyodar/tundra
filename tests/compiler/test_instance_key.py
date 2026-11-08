@@ -56,6 +56,7 @@ def test_the_script_makes_a_secp256k1_key_once_per_boot(tmp_path: Path) -> None:
     private, public = run / "instance-key.pem", run / "instance-key.pub"
     pub = public.read_text().strip()
     assert said == [f"{key.CONSOLE}{pub}\n"] * 2
+    assert (run / "instance-key.env").read_text() == f"{key.VARIABLE}={pub}\n"
     assert key.PUBLIC_KEY.fullmatch(pub)
     assert stat.S_IMODE(private.stat().st_mode) == 0o600
     assert stat.S_IMODE(public.stat().st_mode) == 0o644

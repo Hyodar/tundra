@@ -1,6 +1,8 @@
 global:
   scrape_interval: 30s
   evaluation_interval: 30s
+  external_labels:
+    tundravm_instance_key: "${TUNDRAVM_INSTANCE_KEY}"
 rule_files: [/etc/tundravm/metrics-rules.yml]
 scrape_configs:
   - job_name: node
@@ -14,6 +16,11 @@ remote_write:
       - source_labels: [__name__]
         regex: "flashbox:container_alive|flashbox:container_average_cpu_is_under_80_percent|flashbox:container_oom_kills_count|flashbox:disk_free_space_is_over_10_percent|flashbox:disk_free_space_is_over_128_gb|flashbox:network_is_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
         action: keep
+      - source_labels: [tundravm_instance_key]
+        target_label: instance
+        action: replace
+      - regex: tundravm_instance_key
+        action: labeldrop
     queue_config:
       capacity: 10000
       max_shards: 4
