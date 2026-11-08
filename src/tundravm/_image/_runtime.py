@@ -596,7 +596,7 @@ class Runtime:
                     hint="Give each container a directory of its own.",
                 )
             owner = found.get(directory.path, (group,))[0]
-            found[directory.path] = (owner, group, 0o770 if writable else 0o2750)
+            found[directory.path] = (owner, group, 0o2770 if writable else 0o2750)
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:

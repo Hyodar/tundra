@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # tundravm: the directories services keep on volume data
-/usr/bin/install -d -o delay-pipe -g searcher -m 0750 /persistent/data/delayed
-/usr/bin/install -d -o input-proxy -g bob -m 0770 /persistent/data/input
+/usr/bin/install -d -o delay-pipe -g searcher -m 2750 /persistent/data/delayed
+/usr/bin/install -d -o input-proxy -g bob -m 2770 /persistent/data/input
 /usr/bin/install -d -o lighthouse -g lighthouse -m 0750 /persistent/data/lighthouse
 /usr/bin/install -d -o lighthouse -g bob -m 2750 /persistent/data/lighthouse-logs
 /usr/bin/install -d -o nethermind -g nethermind -m 0750 /persistent/data/nethermind

@@ -347,7 +347,7 @@ host key made each boot that every quote binds; `attest` pins that key, and
 The container runs in a PID namespace of its own, so it sees no host process. It writes
 group-readable files, and a host service joins `container.group` to read them.
 `Bind(data.directory("in"), writable=True)` gives a volume directory the container's group,
-`2750` (setgid) or `0770` when writable, and the container waits for the volume. The control plane
+setgid: `2750`, or `2770` when writable, and the container waits for the volume. The control plane
 under `/run/tundravm`, the kernel's interfaces and whole system trees are refused as binds.
 
 ## Profiles
@@ -404,10 +404,10 @@ pins its key, and every later write must be signed by it
 ([trust](trust.md#what-first-contact-proves)). `TpmSeal` is refused for `targets=` that boot
 another vTPM, because a sealed key opens on one platform only.
 
-`data.directory("nethermind")` is a directory on the volume, bound with `state=`: the image
-creates it once the volume is open, owned by that service, and the service waits for it.
-`directory(name, group=)` shares it through a group, and `state / "output.log"` is the path
-of a file in it.
+`data.directory("nethermind")` is a directory on the volume, bound with `state=`: created
+once the volume opens, owned by that service, which waits for it. `directory(name, group=)`
+shares it through a group, setgid so files are the group's, and `state / "output.log"` is
+the path of a file in it.
 
 ### Secrets
 

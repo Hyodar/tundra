@@ -429,7 +429,7 @@ def neighbours() -> Any:
         ("/usr/lib/systemd/system/web.service", "UMask=0027"),
         ("/usr/lib/systemd/system/reader.service", "SupplementaryGroups=web tenant"),
         ("/usr/lib/systemd/system/reader.service", "UMask=0027"),
-        ("volume-data", "/usr/bin/install -d -o reader -g tenant -m 0750 /persistent/data/out"),
+        ("volume-data", "/usr/bin/install -d -o reader -g tenant -m 2750 /persistent/data/out"),
         ("volume-data", "/usr/bin/install -d -o web -g web -m 0750 /persistent/data/web"),
     ],
 )
@@ -504,13 +504,13 @@ def test_a_mode_opens_a_containers_sshd_by_naming_it(ingress: list[Any], rule: s
     [
         (
             Bind(data.directory("input"), writable=True),
-            "-o feeder -g web -m 0770 /persistent/data/input",
+            "-o feeder -g web -m 2770 /persistent/data/input",
         ),
         (Bind(data.directory("input")), "-o feeder -g web -m 2750 /persistent/data/input"),
         (Bind(data.directory("logs")), "-o feeder -g web -m 2750 /persistent/data/logs"),
         (
             Bind(data.directory("drop"), writable=True),
-            "-o web -g web -m 0770 /persistent/data/drop",
+            "-o web -g web -m 2770 /persistent/data/drop",
         ),
     ],
 )

@@ -423,7 +423,8 @@ def _call(value: object, *, nested: bool = True) -> str:
         return named
     if isinstance(value, VolumeDirectory):
         words: list[str] = [json.dumps(value.name)]
-        words += [] if value.mode == 0o750 else [f"mode={value.mode:#o}"]
+        default = 0o750 if value.group is None else 0o2750
+        words += [] if value.mode == default else [f"mode={value.mode:#o}"]
         words += [] if value.group is None else [f"group={json.dumps(value.group)}"]
         return f"{_call(value.volume)}.directory({', '.join(words)})"
     if isinstance(value, Mapping):

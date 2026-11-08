@@ -1224,7 +1224,7 @@ Bind(
 )
 ```
 
-A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind(data.directory("input"), writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A volume directory is made for it: its service keeps it, the container's group traverses it (`0750`) and writes it when *writable* (`0770`), and the container waits for the volume. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
+A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind(data.directory("input"), writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A volume directory is made for it: its service keeps it, the container's group traverses it (`2750`) and writes it when *writable* (`2770`), setgid so what either writes belongs to the group, and the container waits for the volume. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
 
 | Member | Does |
 |---|---|

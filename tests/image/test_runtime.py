@@ -130,9 +130,27 @@ def test_a_shared_directory_needs_a_group_and_is_owned_by_it() -> None:
     )
     planned = plan(image, "production")
     (step,) = [step for step in planned.init_steps if step.name == "volume-data"]
-    assert "install -d -o root -g eth -m 0750 /persistent/chain" in step.script
+    assert "install -d -o root -g eth -m 2750 /persistent/chain" in step.script
     assert planned.service("a").values("Service", "SupplementaryGroups") == ("eth",)
     assert "eth" in planned.groups
+
+
+@pytest.mark.parametrize(
+    ("keywords", "made"),
+    [
+        ({}, "-o app -g app -m 0750"),
+        ({"group": "eth"}, "-o app -g eth -m 2750"),
+        ({"group": "eth", "mode": 0o770}, "-o app -g eth -m 2770"),
+        ({"mode": 0o700}, "-o app -g app -m 0700"),
+    ],
+)
+def test_a_group_directory_is_setgid_so_its_files_are_the_groups(
+    keywords: dict[str, object], made: str
+) -> None:
+    state = data.directory("app", **keywords)  # type: ignore[arg-type]
+    image = Image("x", services=[Service("app", ["/usr/bin/app"], state=state)])
+    (step,) = [s for s in plan(image, "production").init_steps if s.name == "volume-data"]
+    assert f"/usr/bin/install -d {made} /persistent/app" in step.script.splitlines()
 
 
 def test_a_profile_service_keeps_its_state_on_the_volume_too() -> None:

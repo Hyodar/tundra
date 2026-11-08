@@ -256,9 +256,10 @@ class Volume(Located):
         """The directory *name* on this volume, for a service's (or component's) state.
 
         One service owns it, with *mode*; *group* is who else reads it: the directory is
-        ``<service>:<group>``, and what the service writes there is group-readable (``UMask=0027``).
-        Several services share it only through *group* (``root:<group>``, each joins it). A
-        ``Login``'s own name is a group *group* may name.
+        ``<service>:<group>`` and setgid (``0o2750``), so what the service writes there
+        belongs to *group* and is group-readable (``UMask=0027``). Several services share it
+        only through *group* (``root:<group>``, each joins it). A ``Login``'s own name is a
+        group *group* may name.
         """
         return VolumeDirectory(self, name, mode=mode, group=group)
 
@@ -281,7 +282,8 @@ class VolumeDirectory(Keywords):
     The image creates it once the volume is open, owned by the one service that binds it
     (or ``root:<group>`` when it is shared), and the service waits for that before it
     starts. Its absolute :attr:`path` is the service's working directory and
-    ``$STATE_DIRECTORY``.
+    ``$STATE_DIRECTORY``. A *group* adds the setgid bit to *mode* (``0o2750`` by default),
+    so a file written there belongs to the group whoever writes it.
     """
 
     volume: Volume = field(repr=False)
@@ -323,6 +325,8 @@ class VolumeDirectory(Keywords):
                 f"VolumeDirectory: group {self.group!r} is not a group name.",
                 hint="Pass a group name such as group='eth'.",
             )
+        if self.group is not None:
+            object.__setattr__(self, "mode", self.mode | 0o2000)
 
     @property
     def path(self) -> str:

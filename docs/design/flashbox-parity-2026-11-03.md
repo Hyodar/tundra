@@ -293,9 +293,9 @@ This one says what closed each earlier gap (c) and example fix (d).
 | Input-only proxy | c | closed in part | `channels/cmd/input-proxy` on tcp 27018, a bind for the socket; plain TCP, no TLS |
 | Writable container layer | c | open | needs a uid-range user namespace: Franco's decision |
 | Jwt in the container | c | open | a control-plane secret cannot be bound |
-| Lighthouse logs in the container | c | open | no log-directory keyword on the example Lighthouse |
+| Lighthouse logs in the container | c | ~~open~~ | ~~no log-directory keyword on the example Lighthouse~~ (done: flashbox-lacks) |
 | 443 to any address from the host | c | closed | a host name's egress is the addresses it resolves to (`egress-resolve`) |
-| Egress that excludes (maintenance drops the tx stream) | c | open | `Egress` only adds |
+| Egress that excludes (maintenance drops the tx stream) | c | ~~open~~ | ~~`Egress` only adds~~ (done: flashbox-lacks) |
 | Kernel v6.18.57 at `2ff600d29ee4` | d | closed | `Kernel.build("6.18.57", Git(...), base=DebianConfig(...))` |
 | BBR | d | closed | fragment `TCP_CONG_BBR`, `DEFAULT_BBR` |
 | `vm.max_map_count` | d | closed | `Image(sysctl={"vm.max_map_count": 2097152})` (`9b90896a`), which writes the same `/etc/sysctl.d/60-flashbox.conf` |
