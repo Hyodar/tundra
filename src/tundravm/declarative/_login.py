@@ -35,6 +35,7 @@ _SUDO_REFUSED = frozenset("*?[]\\\"'")
 _SUDO_ESCAPED = re.compile(r"([,:=#])")
 _PATTERN_LITERAL = re.compile(r"[A-Za-z0-9/_.+-]*")
 _PATTERN_REFUSED = frozenset(" \t\n\\,:=\"'")
+_PATTERN_BRACKET = re.compile(r"\[\]?[^]]*\]")
 SUDO_LINES = 64
 """The most sudoers lines one ``sudo=True`` command may take (``login-sudo-lines``)."""
 
@@ -672,9 +673,9 @@ class Command:
                 if pattern is not None and not _sudo_pattern(pattern):
                     raise ValidationError(
                         f"{where}: {params[name].name}'s pattern {pattern!r} is not an anchored "
-                        "regular expression sudoers reads as written.",
-                        hint="Anchor it (^...$) and leave out spaces, quotes, \\ , : and =: "
-                        "'^[0-9a-f]{64}$'.",
+                        "regular expression of one word sudoers reads as written.",
+                        hint="Anchor it (^...$), match no space (no . and no [^...]) and leave out "
+                        "quotes, \\ , : and =: '^[0-9a-f]{64}$'.",
                     )
         count = len(self.sudoers())
         if count > SUDO_LINES:
@@ -784,13 +785,17 @@ def _joined(parts: Sequence[tuple[bool, str]]) -> tuple[bool, str]:
 
 
 def _sudo_pattern(pattern: object) -> bool:
-    """Whether *pattern* is anchored and holds nothing sudoers would read otherwise."""
+    """Whether *pattern* is anchored, holds nothing sudoers would read otherwise and matches
+    no space: sudo matches the arguments joined by spaces, so a pattern that could match one
+    would admit an argv of more words than the program passes."""
     if not isinstance(pattern, str) or len(pattern) < 3:
         return False
     if not (pattern.startswith("^") and pattern.endswith("$")):
         return False
     core = pattern[1:-1]
-    if _PATTERN_REFUSED & set(core) or "^" in core.replace("[^", "") or "$" in core:
+    if _PATTERN_REFUSED & set(core) or "^" in core or "$" in core:
+        return False
+    if not all("!" <= c <= "~" for c in core) or "." in _PATTERN_BRACKET.sub("", core):
         return False
     try:
         re.compile(pattern)

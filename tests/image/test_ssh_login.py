@@ -6,6 +6,7 @@ for them, its ``sudo=True`` commands as the sudoers lines of every argv they pro
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +57,20 @@ class Hex(ParamType):
 
     def pattern(self) -> str:
         return f"^[0-9a-f]{{{self.digits}}}$"
+
+
+@dataclass(frozen=True)
+class Pattern(ParamType):
+    regex: str
+
+    def usage(self) -> str:
+        return self.regex
+
+    def check(self) -> str:
+        return f"Match(value, {json.dumps(self.regex)})"
+
+    def pattern(self) -> str:
+        return self.regex
 
 
 @dataclass(frozen=True)
@@ -184,6 +199,14 @@ def test_the_owners_key_goes_to_the_owner_login_and_root_takes_none_without_aski
                 sudo=True,
             ),
             ["/usr/bin/x ^[0-9a-f]{64}$"],
+        ),
+        (
+            Command(
+                params=[CommandParam("unit", type=Pattern("^[a-z][a-z.-]*$"))],
+                runs=["/usr/bin/x", "{{unit}}"],
+                sudo=True,
+            ),
+            ["/usr/bin/x ^[a-z][a-z.-]*$"],
         ),
         (Command(runs=["/usr/bin/x"], modes=["maintenance"], sudo=True), ['/usr/bin/x ""']),
         (Command(runs=["/usr/bin/x"]), []),
@@ -438,6 +461,17 @@ def _choices(count: int) -> CommandParam:
         (
             lambda: Command(params=[LINES], runs=["/x", "--n={{lines}}"], sudo=True),
             "part of a sudoers pattern",
+        ),
+        *(
+            (
+                lambda pattern=pattern: Command(
+                    params=[CommandParam("v", type=Pattern(pattern))],
+                    runs=["/x", "{{v}}"],
+                    sudo=True,
+                ),
+                "of one word",
+            )
+            for pattern in ("[0-9]+", "^[0-9]+", "^a$|^b$", "^.+$", "^[^/]+$", "^a\tb$", "^é$")
         ),
         (
             lambda: Command(
