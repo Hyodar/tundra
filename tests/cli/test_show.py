@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.cli.conftest import STARTER, Cli
+from tests.helpers import ATTESTED_NODE, FLASHBOX, REPO_ROOT
 from tundravm._source import SourceBuild
 from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_OK
@@ -128,6 +129,20 @@ def test_show_json_has_the_sections_show_prints(project: Path, cli: Cli) -> None
     )
     assert [row["name"] for row in payload["profiles"]] == ["production", "dev"]
     assert set(payload["resolved"]) == {"production", "dev"}
+
+
+@pytest.mark.parametrize("example", [ATTESTED_NODE, FLASHBOX], ids=lambda path: path.name)
+def test_show_describes_each_examples_metrics_export(
+    example: Path, monkeypatch: pytest.MonkeyPatch, cli: Cli
+) -> None:
+    monkeypatch.chdir(REPO_ROOT)
+    image = example.relative_to(REPO_ROOT) / "image.py"
+    text, payload = cli("show", image), cli("show", image, "--json")
+    assert (text.code, payload.code) == (EXIT_OK, EXIT_OK), text.err + payload.err
+    metrics = json.loads(payload.out)["resolved"]["production"]["metrics"]
+    assert metrics["url"].endswith("/api/v1/write") and "tundravm_mode" in metrics["series"]
+    assert f"Metrics export to {metrics['url']}\n" in text.out
+    assert f"Exported series ({len(metrics['series'])}): " in text.out
 
 
 def test_show_json_carries_each_declarations_provenance(project: Path, cli: Cli) -> None:
