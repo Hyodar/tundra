@@ -90,6 +90,7 @@ class FakeMkosi:
     calls: list[FakeCall] = field(default_factory=list)
 
     def verbs(self) -> list[str]:
+        """The verb of each recorded call, in order: ``["summary", "build"]``."""
         return [call.verb for call in self.calls]
 
     def invoke(
@@ -102,6 +103,7 @@ class FakeMkosi:
         stdout: bool = False,
         terminal: bool = False,
     ) -> MkosiResult:
+        """Record one mkosi call and answer it as mkosi would, without running anything."""
         from tundravm._mkosi import MkosiError, MkosiResult
 
         call = FakeCall(tuple(argv), Path(cwd), Path(log), stdout)
@@ -125,6 +127,7 @@ class FakeMkosi:
         return MkosiResult(argv=tuple(argv), stdout=printed, log=log)
 
     def needs_sudo(self) -> bool:
+        """Whether mkosi would run under sudo: *sudo*."""
         return self.sudo
 
     def _build(self, call: FakeCall, only: Sequence[str] | None = None) -> None:

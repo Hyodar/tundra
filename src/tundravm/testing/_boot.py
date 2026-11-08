@@ -228,6 +228,7 @@ class HttpResponse:
 
     @property
     def ok(self) -> bool:
+        """Whether the URL answered with a 2xx."""
         return self.status is not None and 200 <= self.status < 300
 
 
@@ -315,12 +316,14 @@ class BootUnavailable(RuntimeError):
     """QEMU or OVMF is missing on this host: the boot cannot run here."""
 
 
-class _HasPath(Protocol):
+class HasPath(Protocol):
+    """Anything with a ``path``: what ``build`` returns for each artifact."""
+
     @property
     def path(self) -> Path: ...
 
 
-Bootable = str | os.PathLike[str] | _HasPath
+Bootable = str | os.PathLike[str] | HasPath
 """A UKI (``.efi``) or disk image path, the directory holding one, or an
 :class:`~tundravm.declarative.lifecycle.Artifact` (``path`` the disk, ``boot_payload`` its UKI)."""
 

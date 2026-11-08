@@ -22,8 +22,11 @@ if TYPE_CHECKING:
     from .models import ProfileState
 
 Severity = Literal["error", "warning", "info"]
+"""How much a finding matters: ``"error"`` fails ``tundravm check`` and ``build``,
+``"warning"`` and ``"info"`` are reported only."""
 SEVERITIES: tuple[Severity, ...] = get_args(Severity)
 Context = tuple[tuple[str, str], ...]
+"""A finding's extra ``(key, value)`` facts; a mapping passed instead is converted."""
 
 
 @dataclass(frozen=True, slots=True)

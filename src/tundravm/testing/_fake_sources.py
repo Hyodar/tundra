@@ -53,6 +53,7 @@ class FakeSources:
     fetched: list[FakeFetch] = field(default_factory=list)
 
     def lock_dotnet_sdk(self, build: SourceBuild, pin: str, checkout: Path) -> LockedToolchain:
+        """The .NET SDK a Dotnet build locks to: always :data:`SDK`."""
         del checkout
         return LockedToolchain(
             name=build.key,
@@ -65,12 +66,15 @@ class FakeSources:
         )
 
     def fetch_source(self, source: Source, pin: str, dest: Path) -> None:
+        """Make a checkout of *source* at *pin* in *dest*: one file naming them."""
         dest.mkdir(parents=True)
         text = json.dumps({"url": source.url, "pin": pin}, sort_keys=True) + "\n"
         (dest / CHECKOUT_FILE).write_text(text, encoding="utf-8")
         self.fetched.append(FakeFetch(source.url, pin, dest))
 
     def git_output(self, checkout: Path, *args: str) -> str | None:
+        """What git prints for *args* in a fake *checkout*: its pin for ``rev-parse``, a clean
+        tree otherwise; ``None`` outside a fake checkout."""
         try:
             recorded = json.loads((Path(checkout) / CHECKOUT_FILE).read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -82,6 +86,8 @@ class FakeSources:
     def prefetch_deps(
         self, build: SourceBuild, pin: str, checkout: Path, root: Path, **kwargs: object
     ) -> str | None:
+        """Record an empty, complete dependency cache for *build* under *root*; ``None`` for a
+        build without dependencies to prefetch."""
         from tundravm import _source
 
         del checkout

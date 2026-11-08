@@ -38,7 +38,11 @@ from tundravm.models import unit_name
 from ._units import UnitView, parse_conf
 
 Role = Literal["runtime", "build"]
+"""Where a package is installed: ``"runtime"`` in the image, ``"build"`` in the build
+sandbox only."""
 Stage = Literal["skeleton", "extra"]
+"""Which tree of the compiled image a file is in: ``"skeleton"`` before packages install,
+``"extra"`` after them."""
 
 UNIT_DIRS = ("/usr/lib/systemd/system", "/etc/systemd/system")
 _ENABLE = re.compile(r"systemctl\s+(enable|mask|disable)\s+([^\n;&|]+)")

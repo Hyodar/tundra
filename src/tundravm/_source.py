@@ -353,6 +353,8 @@ class LocalSource:
 
 
 Source = GitSource | HttpSource | LocalSource
+"""A build's source as the lock pins it: a git checkout, an HTTP download or a local
+directory."""
 Resolver = Callable[[Source], str]
 """Maps a source to its pin: a commit sha for git, a sha256 for http (a local source is
 never resolved: its pin is :meth:`LocalSource.digest`)."""

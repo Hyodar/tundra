@@ -2200,6 +2200,7 @@ class Report:
 
     @property
     def failed(self) -> tuple[Result, ...]:
+        """The checks whose last line was ``fail``."""
         return tuple(r for r in self.results if r.verdict == "fail")
 
     @property
@@ -2228,6 +2229,7 @@ class Report:
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, object]:
+        """The report as JSON: ``ok``, the ``done`` counts, each result, the missing checks."""
         return {
             "ok": self.ok,
             "done": None if self.done is None else {"ok": self.done[0], "fail": self.done[1]},

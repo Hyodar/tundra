@@ -46,7 +46,13 @@ __all__ = [
 ]
 
 ProtectSystem = Literal["strict", "full", "yes", "no"]
+"""``ProtectSystem=``: ``"strict"`` mounts the whole file system read-only but the unit's own
+directories, ``"full"`` ``/usr``, the boot loader and ``/etc``, ``"yes"`` the first two,
+``"no"`` none."""
 AddressFamilies = Literal["inet", "inet+netlink", "unix", "none", "any"]
+"""``RestrictAddressFamilies=``: ``"inet"`` allows IPv4, IPv6 and Unix sockets,
+``"inet+netlink"`` those and netlink, ``"unix"`` Unix sockets only, ``"none"`` no socket,
+``"any"`` every family."""
 
 _FAMILIES = {
     "inet": "AF_UNIX AF_INET AF_INET6",
@@ -84,7 +90,9 @@ _STRICT: dict[str, object] = {
 """The strict profile: every :class:`Hardening` field's default."""
 
 PresetName = Literal["static", "dotnet", "jit", "node", "python"]
-"""The runtime classes :meth:`Hardening.preset` knows."""
+"""The runtime classes ``Hardening.preset`` knows: ``"static"`` is the strict profile,
+``"jit"``, ``"node"`` and ``"python"`` allow writable code pages, ``"dotnet"`` that, the
+``@resources`` system calls and netlink."""
 
 PRESETS: dict[str, dict[str, object]] = {
     "static": {},

@@ -158,6 +158,8 @@ class FakeEndpoint:
         return der_certificate(listener_key() if key is None else key)
 
     def evidence(self, session: FakeSession, nonce: bytes) -> dict[str, object]:
+        """The evidence the endpoint answers *nonce* with, bound to *session*'s TLS key
+        unless *misbehave* breaks it."""
         if self.first_nonce is None:
             self.first_nonce = nonce
         if self.misbehave == "replay":
@@ -237,6 +239,8 @@ class FakeEndpoint:
         return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
     def write(self, session: FakeSession, path: str, body: Mapping[str, object]) -> int:
+        """Apply a delivery to *path* (``/credentials``, ``/unlock``, ``/owner``...) and return
+        its HTTP status: 403 for a spent nonce or a bad signature."""
         nonce = str(body.get("nonce") or "")
         if nonce not in session.nonces:
             return 403

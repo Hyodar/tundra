@@ -5,8 +5,9 @@
 parser prints it at a fixed width. ``api.md`` has one section per public namespace
 (:data:`MODULES`), each listing every name of its ``__all__``: its signature (a
 dataclass's is its fields with their defaults), the first paragraph of its docstring, and
-a class's public methods and properties. Every type is spelled by the name its namespace
-exports, never a module path. A name has one home, so an object exported by
+a class's public methods and properties; then each type alias a signature uses. Every type
+is spelled by the name its namespace exports, never a module path. A name has one home,
+so an object exported by
 two namespaces is an error, not a cross-reference. ``lint.md`` is every code of the
 registry ``tundravm check`` explains (``tundravm.check.RULES``), then the rules each shipped
 component declares. All are pure functions of
@@ -580,8 +581,16 @@ def _entry(name: str, obj: object, names: _Names) -> list[str]:
     return lines
 
 
+_ALIASES_INTRO = (
+    "The names the signatures above use for a set of accepted values. None is imported: "
+    "pass one of the values it stands for."
+)
+"""What the aliases section says before its entries."""
+
+
 def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
-    """``api.md``: one section per module, its ``__all__`` sorted.
+    """``api.md``: one section per module, its ``__all__`` sorted, then every alias a
+    signature uses that no module exports, sorted.
 
     An object two modules export is a :class:`ValueError`: each public name has one home.
     """
@@ -589,7 +598,7 @@ def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
     names = _Names.of(loaded)
     lines = _header("API reference", "the `__all__` of `" + "`, `".join(modules) + "`")
     lines += [f"- [`{module.__name__}`](#{slug(module.__name__)})" for module in loaded]
-    lines.append("")
+    lines += ["- [Type aliases](#type-aliases)", ""]
     seen: dict[int, str] = {}
     for module in loaded:
         exported = sorted(getattr(module, "__all__", ()), key=lambda n: (n.lower(), n))
@@ -604,6 +613,13 @@ def api_markdown(modules: tuple[str, ...] = MODULES) -> str:
             if _kind(obj) != "value":
                 seen[id(obj)] = f"{module.__name__}.{name}"
             lines += _entry(name, obj, names)
+    entries: dict[str, list[str]] = {}
+    while pending := [name for name in names.aliases if name not in entries]:
+        for name in pending:
+            entries[name] = _alias_entry(name, names.aliases[name][1], names)
+    lines += ["## Type aliases", "", _ALIASES_INTRO, ""]
+    for name in sorted(entries, key=lambda n: (n.lower(), n)):
+        lines += entries[name]
     return "\n".join(lines)
 
 

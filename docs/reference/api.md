@@ -16,6 +16,7 @@ Generated from the `__all__` of `tundravm`, `tundravm.ports`, `tundravm.systemd`
 - [`tundravm.sources`](#tundravmsources)
 - [`tundravm.errors`](#tundravmerrors)
 - [`tundravm.testing`](#tundravmtesting)
+- [Type aliases](#type-aliases)
 
 ## tundravm
 
@@ -2028,10 +2029,10 @@ The endpoint of one boot: what it accepts, what it received.
 | Member | Does |
 |---|---|
 | `FakeEndpoint.connect(host: str, port: int) -> FakeSession` | A new TLS session (the `connect=` the operator commands take). |
-| `FakeEndpoint.evidence(session: FakeSession, nonce: bytes) -> dict[str, object]` |  |
+| `FakeEndpoint.evidence(session: FakeSession, nonce: bytes) -> dict[str, object]` | The evidence the endpoint answers *nonce* with, bound to *session*'s TLS key unless *misbehave* breaks it. |
 | `FakeEndpoint.presented(host: str, port: int) -> bytes` | The DER certificate the attested TLS listener on *port* presents (the `presented=` that `attest` takes): around its bound key, or around a key the evidence does not bind when misbehaving or when *port* is no listener. |
 | `FakeEndpoint.takes_ssh_key` | Whether `POST /ssh-key` installs a key: the first in a `simulated` mode, else only a confirmed owner's. |
-| `FakeEndpoint.write(session: FakeSession, path: str, body: Mapping[str, object]) -> int` |  |
+| `FakeEndpoint.write(session: FakeSession, path: str, body: Mapping[str, object]) -> int` | Apply a delivery to *path* (`/credentials`, `/unlock`, `/owner`...) and return its HTTP status: 403 for a spent nonce or a bad signature. |
 
 ### `FakeFetch`
 
@@ -2065,9 +2066,9 @@ Records mkosi verbs instead of running them.
 | Member | Does |
 |---|---|
 | `FakeMkosi.install(setattr: Callable[[object, str, object], None]) -> FakeMkosi` | Put this fake in place of the adapter's `invoke` and `needs_sudo` using *setattr* (pytest's `monkeypatch.setattr`, which undoes it after the test). |
-| `FakeMkosi.invoke(argv: Sequence[str], *, cwd: Path, log: Path, on_output: Callable[[str], None] \| None = None, stdout: bool = False, terminal: bool = False) -> MkosiResult` |  |
-| `FakeMkosi.needs_sudo() -> bool` |  |
-| `FakeMkosi.verbs() -> list[str]` |  |
+| `FakeMkosi.invoke(argv: Sequence[str], *, cwd: Path, log: Path, on_output: Callable[[str], None] \| None = None, stdout: bool = False, terminal: bool = False) -> MkosiResult` | Record one mkosi call and answer it as mkosi would, without running anything. |
+| `FakeMkosi.needs_sudo() -> bool` | Whether mkosi would run under sudo: *sudo*. |
+| `FakeMkosi.verbs() -> list[str]` | The verb of each recorded call, in order: `["summary", "build"]`. |
 
 ### `FakeSources`
 
@@ -2081,11 +2082,11 @@ Records source checkouts instead of fetching them.
 
 | Member | Does |
 |---|---|
-| `FakeSources.fetch_source(source: Source, pin: str, dest: Path) -> None` |  |
-| `FakeSources.git_output(checkout: Path, *args: str) -> str \| None` |  |
+| `FakeSources.fetch_source(source: Source, pin: str, dest: Path) -> None` | Make a checkout of *source* at *pin* in *dest*: one file naming them. |
+| `FakeSources.git_output(checkout: Path, *args: str) -> str \| None` | What git prints for *args* in a fake *checkout*: its pin for `rev-parse`, a clean tree otherwise; `None` outside a fake checkout. |
 | `FakeSources.install(setattr: Callable[[object, str, object], None]) -> FakeSources` | Put this fake in place of the fetch boundary using *setattr* (pytest's `monkeypatch.setattr`, which undoes it after the test). |
-| `FakeSources.lock_dotnet_sdk(build: SourceBuild, pin: str, checkout: Path) -> LockedToolchain` |  |
-| `FakeSources.prefetch_deps(build: SourceBuild, pin: str, checkout: Path, root: Path, **kwargs: object) -> str \| None` |  |
+| `FakeSources.lock_dotnet_sdk(build: SourceBuild, pin: str, checkout: Path) -> LockedToolchain` | The .NET SDK a Dotnet build locks to: always `SDK`. |
+| `FakeSources.prefetch_deps(build: SourceBuild, pin: str, checkout: Path, root: Path, **kwargs: object) -> str \| None` | Record an empty, complete dependency cache for *build* under *root*; `None` for a build without dependencies to prefetch. |
 
 ### `HttpResponse`
 
@@ -2099,7 +2100,7 @@ What one `wait_http` URL answered while the VM ran: `status` `None` when it neve
 
 | Member | Does |
 |---|---|
-| `HttpResponse.ok` |  |
+| `HttpResponse.ok` | Whether the URL answered with a 2xx. |
 
 ### `image_file`
 
@@ -2227,11 +2228,11 @@ What the probe printed: each check's last line, and its `done` counts (`None` un
 
 | Member | Does |
 |---|---|
-| `ProbeReport.failed` |  |
+| `ProbeReport.failed` | The checks whose last line was `fail`. |
 | `ProbeReport.missing` | Expected checks that printed no line. |
 | `ProbeReport.ok` | It finished, nothing failed and every expected check printed. |
 | `ProbeReport.table() -> str` | The results as a table: check, verdict, detail; then the counts. |
-| `ProbeReport.to_dict() -> dict[str, object]` |  |
+| `ProbeReport.to_dict() -> dict[str, object]` | The report as JSON: `ok`, the `done` counts, each result, the missing checks. |
 
 ### `Profiles`
 
@@ -2320,3 +2321,324 @@ One compiled systemd unit: its text, parsed sections and whether the image enabl
 ```python
 UPDATE_GOLDEN_ENV = 'TUNDRAVM_UPDATE_GOLDEN'
 ```
+
+## Type aliases
+
+The names the signatures above use for a set of accepted values. None is imported: pass one of the values it stands for.
+
+### `AddressFamilies`
+
+*alias*
+
+```python
+AddressFamilies = Literal['inet', 'inet+netlink', 'unix', 'none', 'any']
+```
+
+`RestrictAddressFamilies=`: `"inet"` allows IPv4, IPv6 and Unix sockets, `"inet+netlink"` those and netlink, `"unix"` Unix sockets only, `"none"` no socket, `"any"` every family.
+
+### `Argument`
+
+*alias*
+
+```python
+Argument = str | Endpoint | Binding | Built
+```
+
+What an argv element may be: a word, an `Endpoint` rendered as its URL, a `Secret` (or `Credential`) rendered as the path the service reads it at, which binds it, or a built binary as the first element.
+
+### `Binding`
+
+*alias*
+
+```python
+Binding = Credential | Secret
+```
+
+What `credentials=` takes: a delivered `Secret`, or a fixed-path credential.
+
+### `Bootable`
+
+*alias*
+
+```python
+Bootable = str | os.PathLike[str] | HasPath
+```
+
+A UKI (`.efi`) or disk image path, the directory holding one, or an `Artifact` (`path` the disk, `boot_payload` its UKI).
+
+### `BootPath`
+
+*alias*
+
+```python
+BootPath = Literal['auto', 'kernel', 'disk']
+```
+
+How `boot` starts *artifact*: `"kernel"` passes the UKI to `-kernel`, `"disk"` attaches the disk image and lets OVMF boot its ESP, `"auto"` goes by the path's suffix (an artifact's `path`, a directory's single `.efi`).
+
+### `Change`
+
+*alias*
+
+```python
+Change = Edit | Remove
+```
+
+What `Profile(changes=)` holds: `value.ref.edit(...)` or `value.ref.remove()` (a `User` or `Group` ref makes the declaration's own).
+
+### `Content`
+
+*alias*
+
+```python
+Content = str | Package | File | Tree | Service | Component | User | Group
+```
+
+What an image's (or a profile's) content may be.
+
+### `Context`
+
+*alias*
+
+```python
+Context = tuple[tuple[str, str], ...]
+```
+
+A finding's extra `(key, value)` facts; a mapping passed instead is converted.
+
+### `Declaration`
+
+*alias*
+
+```python
+Declaration = (
+    tundravm.declarative.model.Package
+    | tundravm.declarative.model.File
+    | FileTree
+    | Group
+    | User
+    | Unit
+    | tundravm.declarative.model.Service
+    | Template
+    | Hook
+    | BootStep
+    | Repository
+    | Partition
+    | Debloat
+    | Setting
+    | Key
+    | Disk
+    | Secrets
+    | RuntimeTools
+    | Build
+    | tundravm.declarative.model.Kernel
+    | KernelConfig
+    | Task
+    | Mount
+    | tundravm.declarative.model.Firewall
+    | ContainerRoot
+)
+```
+
+One item of a resolved profile: what the image's values and components lowered to, in the compiler's words; `Resolved.bind(value.ref)` finds the one a value made.
+
+### `Extra`
+
+*alias*
+
+```python
+Extra = Mapping[str, Mapping[str, str | tuple[str, ...]]]
+```
+
+`extra={"Service": {"OOMScoreAdjust": "-500"}}`: section -> directive -> value(s).
+
+### `Ingress`
+
+*alias*
+
+```python
+Ingress = AttestedTLS | TLS
+```
+
+A way in: `AttestedTLS` or `TLS`.
+
+### `Misbehaviour`
+
+*alias*
+
+```python
+Misbehaviour = Literal['relay', 'replay', 'wrong-key', 'wrong-certificate', 'mode-log', 'service-quote']
+```
+
+`relay`: the session's TLS key changes after the evidence (the delivery would land on another session); `replay`: the evidence answers the first nonce it ever saw; `wrong-key`: the evidence binds a TLS key that is not the session's; `wrong-certificate`: an attested TLS listener presents a certificate whose key the evidence does not bind; `mode-log`: the evidence's firewall events leave out the last switch RTMR3 holds; `service-quote`: tdxs issued the quote to a `tdx`-group service (tag `signer`), not to the endpoint.
+
+### `Pairs`
+
+*alias*
+
+```python
+Pairs = tuple[tuple[str, str], ...]
+```
+
+Unit directives as `(key, value)` pairs, in the order a unit file lists them.
+
+### `PortValue`
+
+*alias*
+
+```python
+PortValue = TCP | UDP
+```
+
+### `PresetName`
+
+*alias*
+
+```python
+PresetName = Literal['static', 'dotnet', 'jit', 'node', 'python']
+```
+
+The runtime classes `Hardening.preset` knows: `"static"` is the strict profile, `"jit"`, `"node"` and `"python"` allow writable code pages, `"dotnet"` that, the `@resources` system calls and netlink.
+
+### `ProbeRunner`
+
+*alias*
+
+```python
+ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+```
+
+What runs a host probe's command for `doctor`: `subprocess.run` by default, a fake in a test.
+
+### `ProtectSystem`
+
+*alias*
+
+```python
+ProtectSystem = Literal['strict', 'full', 'yes', 'no']
+```
+
+`ProtectSystem=`: `"strict"` mounts the whole file system read-only but the unit's own directories, `"full"` `/usr`, the boot loader and `/etc`, `"yes"` the first two, `"no"` none.
+
+### `Readied`
+
+*alias*
+
+```python
+Readied = ServiceReady | BootReady
+```
+
+What proves one thing ready: a service's readiness, or a boot step finishing.
+
+### `Readiness`
+
+*alias*
+
+```python
+Readiness = HttpProbe | TcpProbe | Notify
+```
+
+### `Requirement`
+
+*alias*
+
+```python
+Requirement = (
+    ServiceReady
+    | ComponentReady
+    | BootReady
+    | Endpoint
+    | ServiceRef
+    | UnitOutput
+)
+```
+
+What `requires=` takes: a readiness handle, an export that carries one, or a setup task's `task.output(path)` (start after it, and only if it wrote *path*).
+
+### `RuleCheck`
+
+*alias*
+
+```python
+RuleCheck = Callable[['Lowered', str, 'ProfileState'], Iterator[Diagnostic]]
+```
+
+A compiler pass: the findings of one profile of the lowered image.
+
+### `Sandbox`
+
+*alias*
+
+```python
+Sandbox = Hardening | Literal['static', 'jit', 'node', 'python', 'dotnet', 'relaxed']
+```
+
+What `hardening=` takes: a preset by name (`Hardening.preset(name)`, or `Hardening.relaxed()` for `"relaxed"`), or a `Hardening` with deviations.
+
+### `Severity`
+
+*alias*
+
+```python
+Severity = Literal['error', 'warning', 'info']
+```
+
+How much a finding matters: `"error"` fails `tundravm check` and `build`, `"warning"` and `"info"` are reported only.
+
+### `Source`
+
+*alias*
+
+```python
+Source = GitSource | HttpSource | LocalSource
+```
+
+A build's source as the lock pins it: a git checkout, an HTTP download or a local directory.
+
+### `Stage`
+
+*alias*
+
+```python
+Stage = Literal['skeleton', 'extra']
+```
+
+Which tree of the compiled image a file is in: `"skeleton"` before packages install, `"extra"` after them.
+
+### `Target`
+
+*alias*
+
+```python
+Target = Literal['qemu', 'azure', 'gcp']
+```
+
+Where an image boots: `"qemu"` a local QEMU disk, `"azure"` an Azure confidential VM disk (`.vhd`), `"gcp"` a Google Cloud confidential VM image (`.tar.gz`).
+
+### `TdxsType`
+
+*alias*
+
+```python
+TdxsType = Literal['tdx', 'azure', 'gcp', 'simulator']
+```
+
+### `UnitTarget`
+
+*alias*
+
+```python
+UnitTarget = str | Ref
+```
+
+A relation target: a unit name (`"tdxs.socket"`) or a ref to a unit declaration.
+
+### `Unlock`
+
+*alias*
+
+```python
+Unlock = OperatorKey | TpmSeal | BrokerKey
+```
+
+How a `Volume`'s LUKS2 key arrives.

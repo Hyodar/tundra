@@ -47,6 +47,8 @@ from .systemd import (
 )
 
 Target = Literal["qemu", "azure", "gcp"]
+"""Where an image boots: ``"qemu"`` a local QEMU disk, ``"azure"`` an Azure confidential VM
+disk (``.vhd``), ``"gcp"`` a Google Cloud confidential VM image (``.tar.gz``)."""
 Phase = Literal[
     "sync",
     "skeleton",
@@ -61,6 +63,7 @@ Phase = Literal[
     "boot",
 ]
 Pairs = tuple[tuple[str, str], ...]
+"""Unit directives as ``(key, value)`` pairs, in the order a unit file lists them."""
 type Check = Callable[[Resolved], tuple[Diagnostic, ...]]
 
 TARGETS: tuple[str, ...] = get_args(Target)
@@ -3840,6 +3843,8 @@ type Declaration = (
     | Firewall
     | ContainerRoot
 )
+"""One item of a resolved profile: what the image's values and components lowered to, in
+the compiler's words; ``Resolved.bind(value.ref)`` finds the one a value made."""
 
 DECLARATION_TYPES: tuple[type, ...] = (
     Package,

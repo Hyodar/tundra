@@ -84,6 +84,8 @@ from .resolve import locate, resolve
 Scheme = Literal["qemu", "gcp", "azure", "portable"]
 BackendKind = Literal["lima", "local"]
 ProbeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+"""What runs a host probe's command for ``doctor``: ``subprocess.run`` by default, a fake in a
+test."""
 
 
 def _version() -> str:
