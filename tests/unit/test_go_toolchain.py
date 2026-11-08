@@ -274,9 +274,14 @@ def test_the_built_in_key_is_the_verifier_key_go_has() -> None:
 
 @functools.cache
 def _log(size: int) -> tuple[list[bytes], bytes, dict[str, bytes]]:
-    """``(leaves, root, tiles)`` of a log of *size* records, its tiles built bottom up as a
-    tile server stores them: level ``8 * t`` hashes, 256 a tile, the last one partial."""
+    """``(leaves, root, tiles)`` of a log of *size* records."""
     leaves = [hashlib.sha256(b"\x00record %d\n" % n).digest() for n in range(size)]
+    return leaves, _mth(leaves), _tiles(leaves)
+
+
+def _tiles(leaves: list[bytes]) -> dict[str, bytes]:
+    """The tiles of a log of *leaves*, built bottom up as a tile server stores them: level
+    ``8 * t`` hashes, 256 a tile, the last one partial."""
     levels = [leaves]
     while len(levels[-1]) > 1:
         below = levels[-1]
@@ -288,7 +293,7 @@ def _log(size: int) -> tuple[list[bytes], bytes, dict[str, bytes]]:
             row = stored[n : n + 256]
             path = f"{go.SUMDB}/tile/8/{tile_level // 8}/{go._tile_index(n // 256)}"
             tiles[path if len(row) == 256 else f"{path}.p/{len(row)}"] = b"".join(row)
-    return leaves, _mth(leaves), tiles
+    return tiles
 
 
 def _node(left: bytes, right: bytes) -> bytes:
@@ -334,6 +339,113 @@ def test_a_record_is_proven_in_the_tree_from_the_tiles(size: int, index: int) ->
 )
 def test_a_tile_number_is_spelled_as_tlog_spells_it(n: int, path: str) -> None:
     assert go._tile_index(n) == path
+
+
+def _tile_fetcher(tiles: dict[str, bytes]) -> go.Fetcher:
+    def fetch(url: str) -> bytes:
+        if url not in tiles:
+            raise HTTPError(url, 404, "Not Found", Message(), None)
+        return tiles[url]
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [(1, 2), (2, 3), (3, 300), (255, 257), (256, 513), (300, 70000), (65536, 70000)],
+)
+def test_a_tree_is_proven_to_begin_with_an_older_one_from_the_tiles(old: int, new: int) -> None:
+    """RFC 6962's consistency proof, from the larger tree's tiles at every level and partial
+    width, holds for the older tree's root and for no other."""
+    leaves, root, tiles = _log(new)
+    read = go._TileReader(new, _tile_fetcher(tiles))
+    assert go._consistent(old, _mth(leaves[:old]), new, root, read)
+    forked = [hashlib.sha256(b"\x00forked\n").digest(), *leaves[1:old]]
+    assert not go._consistent(old, _mth(forked), new, root, read)
+    assert not go._consistent(old, _mth(leaves[:old]), new, ROOT, read)
+
+
+@functools.cache
+def _database(size: int, *, fork: bool = False) -> tuple[bytes, dict[str, bytes]]:
+    """``(root, tiles)`` of a checksum database of *size* records whose second is
+    :data:`FILES`'s; a fork's first record differs."""
+    first = b"example.com/a v1.0.0 h1:%s=\n" % (b"b" if fork else b"a")
+    rest = [b"example.com/r%d v1.0.0 h1:r=\n" % n for n in range(2, size)]
+    leaves = [hashlib.sha256(b"\x00" + r).digest() for r in [first, _record(_h1(FILES)), *rest]]
+    return _mth(leaves), _tiles(leaves)
+
+
+def _lookup(size: int) -> dict[str, bytes]:
+    """The proxy and a checksum database of *size* records, the lookup signed at that size."""
+    root, tiles = _database(size)
+    note = _note(_tree_text(size, root), SEED)
+    lookup = b"1\n" + _record(_h1(FILES)) + b"\n" + note
+    zipped = f"{go.GO_PROXY}/{PATH}/@v/{VERSION}.zip"
+    return {**tiles, f"{go.SUMDB}/lookup/{MODULE}": lookup, zipped: _zip(FILES)}
+
+
+def _head(size: int, *, fork: bool = False) -> str:
+    root, _ = _database(size, fork=fork)
+    return f"size {size}\nhash {base64.b64encode(root).decode()}\nseen 2026-11-01T09:00:00Z\n"
+
+
+FORK = "that disagrees with the one of {} it signed before"
+
+
+@pytest.mark.parametrize(
+    ("remembered", "served", "outcome"),
+    [
+        (None, _lookup(3), 3),
+        (_head(3), {**_database(300)[1], **_lookup(300)}, 300),
+        (_head(300), {**_database(300)[1], **_lookup(3)}, 300),
+        (_head(3, fork=True), _lookup(3), FORK.format(3)),
+        (_head(3, fork=True), _lookup(300), FORK.format(3)),
+        (_head(300, fork=True), {**_database(300)[1], **_lookup(3)}, FORK.format(300)),
+        ("size 3\n", _lookup(3), "is not a tree head tundravm remembered"),
+    ],
+    ids=["first", "newer", "older", "same-size-fork", "newer-fork", "older-fork", "garbled"],
+)
+def test_every_tree_head_must_agree_with_the_largest_one_remembered(
+    monkeypatch: pytest.MonkeyPatch,
+    remembered: str | None,
+    served: dict[str, bytes],
+    outcome: int | str,
+) -> None:
+    """As ``go``'s sumdb client: the first head is remembered, a larger one that begins with
+    it replaces it, a smaller one it begins with (a lookup cached for hours) leaves it, and
+    any other is refused, naming the file to remove only for a trusted view."""
+    monkeypatch.setattr(go, "SUMDB_KEY", _key(SEED))
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    head = go.toolchains_dir() / go.TREE_HEAD
+    if remembered is not None:
+        head.parent.mkdir(parents=True)
+        head.write_text(remembered, encoding="utf-8")
+    if isinstance(outcome, str):
+        with pytest.raises(SourceError, match=outcome) as failed:
+            go.fetch_go(NAME, fetcher=_fetcher(served))
+        assert f"{head}" in str(failed.value.hint) and "apt" not in str(failed.value.hint)
+        assert head.read_text(encoding="utf-8") == remembered
+        assert not (go.toolchains_dir() / NAME).exists()
+        return
+    go.fetch_go(NAME, fetcher=_fetcher(served))
+    text = head.read_text(encoding="utf-8")
+    hash_line = f"hash {base64.b64encode(_database(outcome)[0]).decode()}\n"
+    assert re.fullmatch(
+        f"size {outcome}\n{re.escape(hash_line)}seen [0-9-]{{10}}T[0-9:]{{8}}Z\n", text
+    )
+    if remembered is not None and remembered.startswith(f"size {outcome}\n"):
+        assert text == remembered
+
+
+def test_a_cached_release_needs_no_network_with_a_head_remembered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(go, "SUMDB_KEY", _key(SEED))
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    root = go.fetch_go(NAME, fetcher=_fetcher(_lookup(3)))
+    head = (go.toolchains_dir() / go.TREE_HEAD).read_text(encoding="utf-8")
+    assert go.fetch_go(NAME, fetcher=_fetcher({})) == root
+    assert (go.toolchains_dir() / go.TREE_HEAD).read_text(encoding="utf-8") == head
 
 
 Entry = tuple[bytes, bytes, int, int]
@@ -440,7 +552,7 @@ def test_a_vouched_zip_unpacks_only_into_its_release_with_plain_modes(
         assert stat.S_ISREG(path.lstat().st_mode) and path.read_bytes() == data
         command = path.is_relative_to(root / "bin") or path.is_relative_to(root / "pkg/tool")
         assert stat.S_IMODE(path.lstat().st_mode) == (0o755 if command else 0o644)
-    assert sorted(p.name for p in go.toolchains_dir().iterdir()) == [NAME]
+    assert sorted(p.name for p in go.toolchains_dir().iterdir()) == [NAME, go.TREE_HEAD]
 
 
 def _plant(root: Path, marker: str | None, *, link: bool, mode: int) -> None:

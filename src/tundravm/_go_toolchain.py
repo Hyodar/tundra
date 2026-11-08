@@ -4,7 +4,9 @@ The release is the module ``golang.org/toolchain@v0.0.1-<go>.linux-<arch>`` from
 proxy. Nothing in it runs before the Go checksum database vouched for it: the database's tree
 head carries an Ed25519 signature by its published key, the module's record is proven in that
 tree from the database's tiles, and the zip's ``h1:`` hash (``golang.org/x/mod/sumdb/dirhash``)
-is the record's. The release is unpacked into ``$XDG_CACHE_HOME/tundravm/toolchains/<go>``.
+is the record's. The largest tree head seen is remembered, as ``go`` remembers it, and every
+later one must be consistent with it. The release is unpacked into
+``$XDG_CACHE_HOME/tundravm/toolchains/<go>``.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import tempfile
 import zipfile
 import zlib
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import IO
@@ -47,6 +50,10 @@ TOOLCHAINS_DIRNAME = "toolchains"
 VERIFIED = ".tundravm-verified"
 """The file in a fetched release naming its module and the ``h1:`` hash it was checked
 against, written last before the release is renamed into place."""
+TREE_HEAD = "sum.golang.org.latest"
+"""The file in the toolchains directory holding the largest tree head sum.golang.org signed
+for this user, as ``go`` keeps ``pkg/sumdb/sum.golang.org/latest``: a ``size``, a ``hash``
+and a ``seen`` line, replaced whole once a fetch verifies a larger tree."""
 
 Fetcher = Callable[[str], bytes]
 """The body at a url; raises ``OSError`` (``HTTPError``, ``URLError``) when it cannot."""
@@ -69,6 +76,7 @@ _HASH_SIZE = 32
 _DECIMAL = re.compile(rb"0|[1-9][0-9]{0,17}")
 _H1 = re.compile(rb"h1:[A-Za-z0-9+/]{43}=")
 _SIGNATURE_PREFIX = "\N{EM DASH} ".encode()
+_HEAD = re.compile(rb"size ([1-9][0-9]{0,17})\nhash ([A-Za-z0-9+/]{43}=)\nseen [0-9:TZ-]+\n")
 _CHUNK = 1 << 20
 _UNZIPPED_LIMIT = 500 << 20
 """Bytes a toolchain zip may unpack to: ``golang.org/x/mod/zip``'s ``MaxZipFile``; Go
@@ -91,6 +99,15 @@ _RELEASE = re.compile(r"go1\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)|(rc|beta)[1-9][0-
 
 class _Refused(Exception):
     """Why a download is not the release it claims to be."""
+
+
+class _Forked(_Refused):
+    """A tree head that contradicts the remembered one, or a remembered head that cannot be
+    read: *hint* is the fix, since no other host or package helps."""
+
+    def __init__(self, reason: str, hint: str) -> None:
+        super().__init__(reason)
+        self.hint = hint
 
 
 def toolchains_dir() -> Path:
@@ -136,8 +153,9 @@ def fetch_go(name: str, *, fetcher: Fetcher | None = None) -> Path:
     if _verified(root, module):
         return root
     get = fetcher or _download
+    head = directory / TREE_HEAD
     try:
-        expected = _sumdb_hash(module, get)
+        expected, newer = _sumdb_hash(module, get, head)
         archive = zipfile.ZipFile(io.BytesIO(get(_zip_url(module))))
         members = _members(archive)
         found = _dirhash(archive, members)
@@ -147,6 +165,11 @@ def fetch_go(name: str, *, fetcher: Fetcher | None = None) -> Path:
             _unpack(archive, members, module, root, expected)
         except OSError as exc:
             raise _Refused(f"cannot unpack it into {directory}: {exc.strerror or exc}") from None
+        if newer is not None:
+            try:
+                _remember(head, *newer)
+            except OSError as exc:
+                raise _Refused(f"cannot write {head}: {exc.strerror or exc}") from None
     except HTTPError as exc:
         exc.close()
         reason = f"{urlsplit(exc.url).netloc} answered HTTP {exc.code} for {exc.url}"
@@ -154,6 +177,8 @@ def fetch_go(name: str, *, fetcher: Fetcher | None = None) -> Path:
     except OSError as exc:
         cause = exc.reason if isinstance(exc, URLError) else exc
         raise _not_fetched(name, module, f"cannot download it: {cause}") from None
+    except _Forked as exc:
+        raise _not_fetched(name, module, str(exc), exc.hint) from None
     except (_Refused, *_ZIP_ERRORS) as exc:
         raise _not_fetched(name, module, str(exc) or type(exc).__name__) from None
     return root
@@ -204,12 +229,13 @@ def _verified(root: Path, module: str) -> bool:
     )
 
 
-def _not_fetched(name: str, module: str, reason: str) -> SourceError:
+def _not_fetched(name: str, module: str, reason: str, hint: str | None = None) -> SourceError:
     return SourceError(
         f"Cannot fetch {name}, the Go toolchain to prefetch Go sources with: {reason}.",
         source=f"{module} from {urlsplit(GO_PROXY).netloc}",
         reason=reason,
-        hint=(
+        hint=hint
+        or (
             "Install golang (sudo apt install golang) to prefetch with the host's go, or give "
             "the host access to proxy.golang.org and sum.golang.org."
         ),
@@ -385,12 +411,14 @@ def _install(staged: Path, root: Path, module: str, aside: Path) -> None:
     staged.rename(root)
 
 
-def _sumdb_hash(module: str, get: Fetcher) -> str:
-    """The ``h1:`` hash of *module*'s zip, as the checksum database's signed tree holds it.
+def _sumdb_hash(module: str, get: Fetcher, latest: Path) -> tuple[str, tuple[int, bytes] | None]:
+    """The ``h1:`` hash of *module*'s zip, as the checksum database's signed tree holds it,
+    and that tree's ``(size, root)`` when it is larger than the one *latest* remembers.
 
     The lookup is ``tlog.ParseRecord``'s: the record's index, its text up to the first blank
     line, the signed tree head. The record must hash to leaf *index* of that tree and hold
-    exactly one ``h1:`` line for *module*'s path and version.
+    exactly one ``h1:`` line for *module*'s path and version; the tree must pass
+    :func:`_check_head`.
     """
     body = get(f"{SUMDB}/lookup/{module}")
     head, sep, rest = body.partition(b"\n")
@@ -402,8 +430,10 @@ def _sumdb_hash(module: str, get: Fetcher) -> str:
     if index >= size:
         raise _Refused(f"sum.golang.org's record {index} is not in its tree of {size}")
     leaf = hashlib.sha256(b"\x00" + text).digest()
-    if _tree_hash(size, index, leaf, _TileReader(size, get)) != root:
+    tiles = _TileReader(size, get)
+    if _tree_hash(size, index, leaf, tiles) != root:
         raise _Refused("sum.golang.org's record is not the one its signed tree holds")
+    newer = _check_head(latest, size, root, tiles)
     path, version = module.split("@", 1)
     prefix = f"{path} {version} ".encode()
     hashes = [line[len(prefix) :] for line in text.split(b"\n") if line.startswith(prefix)]
@@ -411,7 +441,71 @@ def _sumdb_hash(module: str, get: Fetcher) -> str:
         raise _Refused(f"sum.golang.org's record names no hash of {module}")
     if len(hashes) != 1 or _H1.fullmatch(hashes[0]) is None:
         raise _Refused(f"sum.golang.org's record names {module} other than once by an h1: hash")
-    return hashes[0].decode()
+    return hashes[0].decode(), (size, root) if newer else None
+
+
+def _check_head(head: Path, size: int, root: bytes, tiles: _TileReader) -> bool:
+    """Whether the signed tree of *size* records hashing to *root* is larger than the one
+    *head* remembers, or *head* holds none: ``go``'s sumdb client merging a new head.
+
+    Another hash at the remembered size, a larger tree that does not begin with the
+    remembered one, or a smaller tree the remembered one does not begin with is a fork,
+    refused; the consistency proof is built from the larger tree's tiles.
+    """
+    remembered = _remembered(head)
+    if remembered is None:
+        return True
+    known, known_root = remembered
+    if size == known:
+        agree = root == known_root
+    elif size > known:
+        agree = _consistent(known, known_root, size, root, tiles)
+    else:
+        agree = _consistent(size, root, known, known_root, _TileReader(known, tiles.get))
+    if not agree:
+        raise _Forked(
+            f"sum.golang.org signs a tree of {size} records that disagrees with the one of "
+            f"{known} it signed before (remembered in {head}), so this network shows a forked "
+            "checksum database",
+            f"Fetch from another network; remove {head} only if you have reason to trust "
+            "this view of sum.golang.org.",
+        )
+    return size > known
+
+
+def _remembered(head: Path) -> tuple[int, bytes] | None:
+    """``(size, root)`` of the tree head *head* holds in :data:`TREE_HEAD`'s format, or
+    ``None`` when there is no *head*: a first fetch, or a cache wiped since."""
+    try:
+        found = _HEAD.fullmatch(head.read_bytes())
+    except FileNotFoundError:
+        return None
+    except OSError:
+        found = None
+    root = _b64(found.group(2)) if found else None
+    if found is None or root is None:
+        raise _Forked(
+            f"{head} is not a tree head tundravm remembered",
+            f"Remove {head}; the next fetch remembers the tree head sum.golang.org signs then.",
+        )
+    return int(found.group(1)), root
+
+
+def _remember(head: Path, size: int, root: bytes) -> None:
+    """Replace *head* with the tree of *size* records hashing to *root*, seen now: written
+    beside it and renamed over it, so a reader finds the old head or the new one whole."""
+    seen = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = f"size {size}\nhash {base64.b64encode(root).decode()}\nseen {seen}\n"
+    fd, scratch = tempfile.mkstemp(prefix=f".{head.name}.", dir=head.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(text)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(scratch, head)
+    except BaseException:
+        Path(scratch).unlink(missing_ok=True)
+        raise
 
 
 def _verifier() -> tuple[bytes, bytes, bytes]:
@@ -502,6 +596,55 @@ def _tree_hash(size: int, index: int, leaf: bytes, read: Callable[[int, int], by
         return _node(subtree(lo, lo + half), subtree(lo + half, hi))
 
     return subtree(0, size)
+
+
+def _subtree(lo: int, hi: int, read: Callable[[int, int], bytes]) -> bytes:
+    """``MTH(D[lo:hi])``, the hash of records *lo* to *hi*, every complete subtree from *read*."""
+    count = hi - lo
+    if count & (count - 1) == 0:
+        level = count.bit_length() - 1
+        return read(level, lo >> level)
+    half = 1 << ((count - 1).bit_length() - 1)
+    return _node(_subtree(lo, lo + half, read), _subtree(lo + half, hi, read))
+
+
+def _consistent(
+    old: int, old_root: bytes, new: int, new_root: bytes, read: Callable[[int, int], bytes]
+) -> bool:
+    """Whether the tree of *old* records hashing to *old_root* is the first *old* records of
+    the one of *new* (``0 < old < new``) hashing to *new_root*.
+
+    The proof is RFC 6962's ``SUBPROOF(old, D[0:new], true)`` from *read*'s hashes of the
+    larger tree, checked as RFC 9162 2.1.4.2 checks one: both roots are recomputed from it,
+    so a forged hash misses one of them.
+    """
+
+    def subproof(m: int, lo: int, hi: int, complete: bool) -> list[bytes]:
+        if m == hi - lo:
+            return [] if complete else [_subtree(lo, hi, read)]
+        k = 1 << ((hi - lo - 1).bit_length() - 1)
+        if m <= k:
+            return [*subproof(m, lo, lo + k, complete), _subtree(lo + k, hi, read)]
+        return [*subproof(m - k, lo + k, hi, False), _subtree(lo, lo + k, read)]
+
+    proof = subproof(old, 0, new, True)
+    if old & (old - 1) == 0:
+        proof.insert(0, old_root)
+    fn, sn = old - 1, new - 1
+    while fn & 1:
+        fn, sn = fn >> 1, sn >> 1
+    fr = sr = proof[0]
+    for c in proof[1:]:
+        if sn == 0:
+            return False
+        if fn & 1 or fn == sn:
+            fr, sr = _node(c, fr), _node(c, sr)
+            while not fn & 1 and fn:
+                fn, sn = fn >> 1, sn >> 1
+        else:
+            sr = _node(sr, c)
+        fn, sn = fn >> 1, sn >> 1
+    return fr == old_root and sr == new_root and sn == 0
 
 
 class _TileReader:
@@ -637,4 +780,11 @@ def ed25519_verify(public: bytes, message: bytes, signature: bytes) -> bool:
     return point_compress(left) == point_compress(right)
 
 
-__all__ = ["GO_TOOLCHAIN_MODULE", "VERIFIED", "fetch_go", "host_module", "toolchains_dir"]
+__all__ = [
+    "GO_TOOLCHAIN_MODULE",
+    "TREE_HEAD",
+    "VERIFIED",
+    "fetch_go",
+    "host_module",
+    "toolchains_dir",
+]
