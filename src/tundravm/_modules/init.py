@@ -26,6 +26,28 @@ build: mkosi builds unprivileged in a user namespace with one user, where a chow
 fails and every file is root's in the image; not by systemd-tmpfiles, whose boot service the
 debloat masks."""
 
+_STEP_WORDS = {
+    "keys": "generates the keys the volumes are opened with",
+    "disks": "opens and mounts the volumes",
+    "secrets": "waits for the delivered secrets",
+    OWNERS_STEP: "gives each File(owner=) and Tree(owner=) its owner",
+}
+
+
+def step_words(name: str) -> str:
+    """What the runtime-init step *name* does, before any service starts, in the words
+    ``show`` and the findings use: ``opens and mounts the volumes``."""
+    if name in _STEP_WORDS:
+        return _STEP_WORDS[name]
+    if name.startswith(f"{OWNERS_STEP}-"):
+        return f"{_STEP_WORDS[OWNERS_STEP]} in {name.removeprefix(f'{OWNERS_STEP}-')}"
+    if name.startswith("volume-"):
+        return f"prepares the directories on volume {name.removeprefix('volume-')}"
+    if name.startswith("delivery-"):
+        return f"waits for {name.removeprefix('delivery-')} to be delivered"
+    return f"runs {name}"
+
+
 _LOCAL = "After=local-fs.target"
 
 

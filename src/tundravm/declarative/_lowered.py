@@ -98,6 +98,9 @@ class Lowered:
     concerns: Mapping[tuple[str, str], str] = field(default_factory=dict, repr=False)
     """The payload's packages by ``(name, role)``: the concern whose ``mkosi.conf.d`` file
     lists each (absent: the payload's own ``mkosi.conf``)."""
+    step_owners: Mapping[str, str] = field(default_factory=dict, repr=False)
+    """The component class each boot step comes from, by step name (``Lighthouse``), which
+    a finding names instead of the step; a step of the image's own declarations is absent."""
     mirror: str | None = None
     tools_tree_mirror: str | None = None
     snapshot: str | None = None

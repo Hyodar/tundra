@@ -101,6 +101,9 @@ DENYLIST = {
     "a login command as a plain list (Command(runs=[...]))": re.compile(
         r"\bcommands=\{\s*[\"'][a-z][a-z0-9-]*[\"']:\s*\["
     ),
+    "a runtime-init step by its name (the component, or what the step does)": re.compile(
+        r"\bboot step (?:'|$)"
+    ),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -362,6 +365,10 @@ def test_removed_verbs_are_caught(text: str) -> None:
         (
             "Name one Nethermind ships, e.g. config='surge-hoodi'.",
             "removed workload (Raiko) or example (surge; examples/attested-node)",
+        ),
+        (
+            "boot step 'render' writes /etc/systemd/system/a.service at boot",
+            "a runtime-init step by its name (the component, or what the step does)",
         ),
     ],
 )

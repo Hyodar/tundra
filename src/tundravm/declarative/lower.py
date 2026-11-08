@@ -48,6 +48,7 @@ from ._kernel_hardening import hardening_fragment
 from ._lowered import EFI_STUB_SOURCE, Lowered
 from .model import (
     BASE_VARIANT,
+    BootStep,
     Build,
     Debloat,
     Declaration,
@@ -294,6 +295,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
         overlays=tuple(overlays),
         overlay_sandbox_files=overlay_sandbox,
         concerns=_concerns(recipe, default.name, glue),
+        step_owners=_step_owners(recipe),
         deb_files=_efi_stub_debs(recipe),
         secret_allowed={name: _secret_allowed(r.items) for name, r in resolved.items()},
         unreleased=frozenset(variant.name for variant in selected if not variant.release),
@@ -500,6 +502,27 @@ def _fragments(recipe: Recipe) -> Iterator[Fragment]:
             yield from walk(item)
     for variant in recipe.variants:
         yield from walk(variant.add)
+
+
+def _step_owners(recipe: Recipe) -> dict[str, str]:
+    """The component class each boot step comes from, by step name, as an image file writes
+    it (``Lighthouse``); the outermost one for a nested component. A step tundravm adds for
+    one of the image's own declarations has none."""
+
+    def steps(fragment: Fragment) -> Iterator[BootStep]:
+        for item in fragment.items:
+            if isinstance(item, BootStep):
+                yield item
+            elif isinstance(item, Fragment):
+                yield from steps(item)
+
+    found: dict[str, str] = {}
+    for fragment in _fragments(recipe):
+        component = getattr(type(fragment), "__component_class__", None)
+        if component is not None:
+            for step in steps(fragment):
+                found.setdefault(step.name, component.__name__)
+    return found
 
 
 def _backports_sources(recipe: Recipe) -> tuple[tuple[str, str], ...]:

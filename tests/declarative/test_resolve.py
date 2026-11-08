@@ -28,7 +28,7 @@ from tundravm.declarative import (
     resolve,
     resolve_all,
 )
-from tundravm.declarative.resolve import order_boot_steps, order_hooks
+from tundravm.declarative.resolve import describe, order_boot_steps, order_hooks
 from tundravm.errors import ValidationError
 
 
@@ -235,6 +235,23 @@ def test_identity_collisions_fail_and_equal_repeats_dedupe() -> None:
         ("identity-collision", "other"),
     ]
     assert identity(File("/etc//motd", "x")) == ("File", "extra", "/etc/motd")
+
+
+@pytest.mark.parametrize(
+    ("ident", "spelled"),
+    [
+        (("User", "app"), "User('app')"),
+        (("Group", "tdx"), "Group('tdx')"),
+        (("Key", "data-key"), "the key of Volume('data')"),
+        (("Secrets", "tundravm"), "the secrets the attested endpoint delivers"),
+        (("BootStep", "disks"), "the boot step that opens and mounts the volumes"),
+        (("Hook", "mkosi-postinst-1"), "Mkosi(scripts=) postinst script 1"),
+        (("Task", "app-ready"), "the readiness probe of Service('app')"),
+    ],
+    ids=["user", "group", "key", "secrets", "boot-step", "mkosi-script", "probe"],
+)
+def test_describe_names_what_the_image_declared(ident: tuple[str, ...], spelled: str) -> None:
+    assert describe(ident) == spelled
 
 
 def test_a_service_and_a_unit_writing_one_unit_file_collide() -> None:

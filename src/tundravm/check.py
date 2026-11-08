@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._modules.base import TOOLS_LOCAL, TPM_PROGRAMS
-from ._modules.init import is_init_path
+from ._modules.init import is_init_path, step_words
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
@@ -1018,7 +1018,8 @@ def _rule_unit_written_at_runtime(
     for entry in state.init_scripts:
         path = _script_writes(entry.script)
         if path is not None:
-            found.append((entry.name, f"boot step {entry.name!r}", path))
+            owner = image.step_owners.get(entry.name, "")
+            found.append((owner, owner or f"the boot step that {step_words(entry.name)}", path))
     for path, content in _shipped_files(state):
         if not path.startswith(("/etc/tmpfiles.d/", "/usr/lib/tmpfiles.d/")):
             continue

@@ -14,7 +14,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
 from tundravm._location import declared_at, display_location, located
-from tundravm._modules.init import order_steps
+from tundravm._modules.init import order_steps, step_words
+from tundravm._modules.secret_delivery import BUILTIN_SECRET_PROVIDER
 from tundravm._platforms import metadata_units
 from tundravm.diagnostics import Severity
 from tundravm.errors import ValidationError
@@ -141,31 +142,57 @@ _SPOKEN_ALONE = {
 def describe(ident: Identity) -> str:
     """The value an identity names, as an image file spells it: ``Service('app')`` for
     the unit a service (or a scheduled one) lowers to, ``File('/etc/motd')``,
-    ``Tree('/srv/www')``, ``Package('curl')``, ``Volume('data')``, ``Mkosi`` for a setting;
-    what has no public spelling is named in words (``user 'app'``, ``unit ssh.socket``)."""
+    ``Tree('/srv/www')``, ``Package('curl')``, ``Volume('data')``, ``User('app')``,
+    ``Mkosi`` for a setting; what has no public spelling is named by what the image
+    declared that made it (``the key of Volume('data')``, ``unit ssh.socket``)."""
     kind, *key = ident
     if not key:
         return _SPOKEN_ALONE.get(kind, kind.lower())
-    if kind in ("Service", "Task") and key[0].endswith(".service"):
-        return f"Service({key[0].removesuffix('.service')!r})"
+    name = key[0]
+    if kind == "Task" and name.endswith("-ready"):
+        return f"the readiness probe of Service({name.removesuffix('-ready')!r})"
+    if kind in ("Service", "Task"):
+        return f"Service({name.removesuffix('.service')!r})"
     if kind == "Unit":
-        return f"Service.packaged({key[0]!r})" if key[0].endswith(".service") else f"unit {key[0]}"
+        return f"Service.packaged({name!r})" if name.endswith(".service") else f"unit {name}"
     if kind in ("File", "Template"):
         return f"File({key[1]!r})"
     if kind == "FileTree":
         return f"Tree({key[1]!r})"
-    if kind == "Package":
-        return f"Package({key[0]!r})"
+    if kind in ("Package", "User", "Group"):
+        return f"{kind}({name!r})"
     if kind == "Disk":
-        return f"Volume({key[0]!r})"
+        return f"Volume({name!r})"
+    if kind == "Key":
+        volume = name.removesuffix("-key")
+        return f"the key of Volume({volume!r})" if volume != name else f"the volume key {name!r}"
     if kind == "Setting":
         return f"Mkosi(settings={{{key[1]!r}: ...}})"
+    if kind == "Hook":
+        script = re.fullmatch(r"mkosi-([a-z]+)-([0-9]+)", name)
+        if script is not None:
+            return f"Mkosi(scripts=) {script[1]} script {script[2]}"
+        return f"the build script {name!r}"
+    if kind == "BootStep":
+        return f"the boot step that {step_words(name)}"
+    if kind == "ContainerRoot":
+        return f"the root of Container({name!r})"
+    if kind == "Repository":
+        return f"the AptRepository {name!r}"
+    if kind == "Secrets":
+        if name == BUILTIN_SECRET_PROVIDER:
+            return "the secrets the attested endpoint delivers"
+        return f"the secrets {name!r}"
+    if kind == "KernelConfig":
+        return f"the kernel options {name!r}"
+    if kind == "Hosts":
+        return f"the /etc/hosts lines {name!r} pins"
     if kind == "Build":
-        return f"source build {key[0]!r}"
+        return f"source build {name!r}"
     if kind == "Mount":
-        return f"the mount at {key[0]}"
+        return f"the mount at {name}"
     words = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", kind).lower()
-    return f"{words} {key[0]!r}"
+    return f"the {words} {name!r}"
 
 
 @dataclass(slots=True)
@@ -485,8 +512,8 @@ def _check_references(items: Sequence[Declaration]) -> None:
         for edge, refs in (("after", step.after), ("before", step.before)):
             for handle in refs:
                 assert handle.step in step_names, (
-                    f"boot step {step.name!r} runs {edge} {handle.step!r}, which the lowering "
-                    "did not declare"
+                    f"runtime-init step {step.name!r} runs {edge} {handle.step!r}, which the "
+                    "lowering did not declare"
                 )
     finished = {item.unit for item in items if isinstance(item, Task) and item.schedule is None}
     for unit in (item for item in items if isinstance(item, (Unit, Service, Task, Mount))):

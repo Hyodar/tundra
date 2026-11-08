@@ -173,21 +173,38 @@ def test_service_program_missing(items: tuple[Declaration, ...], missing: str | 
         assert "packages=['python3']" in (found[0].hint or "")
 
 
+RENDER_STEP = BootStep("render", "cat /run/x >/etc/systemd/system/a.service.d/v.conf\n")
+
+
+class Render:
+    """A component class: the image lowers one to a fragment whose type names it."""
+
+
+RenderFragment = type("Render", (Fragment,), {"__slots__": (), "__component_class__": Render})
+
+
 @pytest.mark.parametrize(
-    ("item", "written"),
+    ("item", "writer"),
     [
-        (Service("render", "/usr/bin/cp /run/app.service /etc/systemd/system/"), True),
-        (Service("render", "/bin/sh -c 'envsubst < /run/t > /run/systemd/system/a.service'"), True),
-        (BootStep("render", "cat /run/x >/etc/systemd/system/a.service.d/v.conf\n"), True),
-        (File("/etc/tmpfiles.d/a.conf", "L+ /etc/systemd/system/a.service - - - - /run/a\n"), True),
-        (Service("render", "/usr/bin/cat /etc/systemd/system/a.service"), False),
-        (BootStep("render", "echo ok > /run/app.env\n"), False),
+        (Service("render", "/usr/bin/cp /run/app.service /etc/systemd/system/"), "unit "),
+        (
+            Service("render", "/bin/sh -c 'envsubst < /run/t > /run/systemd/system/a.service'"),
+            "unit ",
+        ),
+        (RENDER_STEP, "the boot step that runs render writes"),
+        (RenderFragment("render", items=(RENDER_STEP,)), "Render writes"),
+        (
+            File("/etc/tmpfiles.d/a.conf", "L+ /etc/systemd/system/a.service - - - - /run/a\n"),
+            "the tmpfiles.d line",
+        ),
+        (Service("render", "/usr/bin/cat /etc/systemd/system/a.service"), None),
+        (BootStep("render", "echo ok > /run/app.env\n"), None),
     ],
-    ids=["cp", "sh-redirect", "boot-step", "tmpfiles", "read", "elsewhere"],
+    ids=["cp", "sh-redirect", "boot-step", "component-step", "tmpfiles", "read", "elsewhere"],
 )
-def test_unit_written_at_runtime(item: Declaration, written: bool) -> None:
+def test_unit_written_at_runtime(item: Declaration, writer: str | None) -> None:
     found = [d for d in report(recipe(item)) if d.code == "unit-written-at-runtime"]
-    assert bool(found) is written
+    assert [d.message.startswith(writer or "") for d in found] == ([True] if writer else [])
     assert all(d.severity == "error" for d in found)
 
 

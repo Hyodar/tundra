@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ._modules import instance_key
 from ._modules.devtools import NETWORK_LOGIN_SCRIPT
-from ._modules.init import OWNERS_STEP, runtime_init_order
+from ._modules.init import runtime_init_order, step_words
 from ._options import MkosiOptions
 from .errors import TdxError
 from .lockfile import LockedFetch
@@ -711,7 +711,7 @@ def describe(
         "control_plane": _describe_control_plane(profile_state),
         "build_steps": _describe_build_steps(profile_state, resolved),
         "boot_steps": [
-            _boot_step(entry.name) for entry in runtime_init_order(profile_state.init_scripts)
+            step_words(entry.name) for entry in runtime_init_order(profile_state.init_scripts)
         ],
         "instance_key": sorted(
             unit_name(svc.name)
@@ -1029,27 +1029,6 @@ def _step(name: str | None, script: str, phase: str, strip: str, gcp: Any) -> st
     if name.startswith("mkosi-"):
         return f"runs Mkosi(scripts=) {phase} script {name.rsplit('-', 1)[-1]}"
     return f"runs {name} {when}"
-
-
-_BOOT_STEPS = {
-    "keys": "generates the keys the volumes are opened with",
-    "disks": "opens and mounts the volumes",
-    "secrets": "waits for the delivered secrets",
-    OWNERS_STEP: "gives each File(owner=) and Tree(owner=) its owner",
-}
-
-
-def _boot_step(name: str) -> str:
-    """A runtime-init step by what it does, before any service starts."""
-    if name in _BOOT_STEPS:
-        return _BOOT_STEPS[name]
-    if name.startswith(f"{OWNERS_STEP}-"):
-        return f"{_BOOT_STEPS[OWNERS_STEP]} in {name.removeprefix(f'{OWNERS_STEP}-')}"
-    if name.startswith("volume-"):
-        return f"prepares the directories on volume {name.removeprefix('volume-')}"
-    if name.startswith("delivery-"):
-        return f"waits for {name.removeprefix('delivery-')} to be delivered"
-    return f"runs {name}"
 
 
 def _describe_build_options(options: MkosiOptions) -> dict[str, object]:
