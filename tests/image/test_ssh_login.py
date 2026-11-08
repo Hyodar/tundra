@@ -584,6 +584,8 @@ def _choices(count: int) -> CommandParam:
         (lambda: CommandParam("n"), "takes choices="),
         (lambda: CommandParam("n", choices=["-f"]), "offer '-f'"),
         (lambda: CommandParam("n", choices=["a", "a"]), "a value twice"),
+        (lambda: CommandParam("n", choices=["a", "help"]), "'help', the program's own help"),
+        (lambda: CommandParam("n", choices=["-h"]), "offer '-h'"),
         (lambda: CommandParam("f", type=bool), "is an option"),
         (lambda: CommandParam("--f", type=bool, default=True), "has no default"),
         (lambda: CommandParam("n", choices=["a"], default="a"), "is required"),

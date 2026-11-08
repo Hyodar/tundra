@@ -31,6 +31,7 @@ _CHOICE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _MODE_NAME = re.compile(r"[a-z][a-z0-9]{0,23}")
 _MODE_RESERVED = frozenset({"tdx", "simulated"})
 _HELP_WORDS = frozenset({"help", "-h", "--help", "h"})
+_RUNTIME_HELP = frozenset({"help", "-h", "--help"})
 _INT_MAX = 999_999_999
 _TEMPLATE = re.compile(r"\{\{([^{}]*)\}\}")
 _FLAG_WORD = re.compile(r"\{\{#([^{}]*)\}\}(.*)\{\{/([^{}]*)\}\}", re.DOTALL)
@@ -284,6 +285,13 @@ class CommandParam:
                 f"CommandParam {name}: choices= {said}.",
                 hint=f'List distinct words, none starting with "-": CommandParam("{name}", '
                 'choices=["a", "b"]).',
+            )
+        helped = [v for v in values if v in _RUNTIME_HELP]
+        if helped:
+            raise ValidationError(
+                f"CommandParam {name}: choices= offer {helped[0]!r}, the program's own help, "
+                "which the client could never pass as a value.",
+                hint=f'Spell the choice otherwise: CommandParam("{name}", choices=["usage", ...]).',
             )
         return _Choices(values)
 
