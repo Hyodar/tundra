@@ -123,9 +123,9 @@ func TestCompareMeasurements(t *testing.T) {
 
 	t.Run("matching-fields", func(t *testing.T) {
 		m := &attestation.TDXMeasurements{
-			MrTd:  "aabb",
+			MrTd:   "aabb",
 			MrSeam: "ccdd",
-			Rtmr0: "eeff",
+			Rtmr0:  "eeff",
 		}
 		if err := compareMeasurements(m, m); err != nil {
 			t.Errorf("compareMeasurements() should pass for identical measurements: %v", err)
@@ -134,9 +134,9 @@ func TestCompareMeasurements(t *testing.T) {
 
 	t.Run("partial-match", func(t *testing.T) {
 		actual := &attestation.TDXMeasurements{
-			MrTd:  "aabb",
+			MrTd:   "aabb",
 			MrSeam: "ccdd",
-			Rtmr0: "eeff",
+			Rtmr0:  "eeff",
 		}
 		expected := &attestation.TDXMeasurements{
 			MrTd: "aabb",

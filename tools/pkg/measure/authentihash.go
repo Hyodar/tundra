@@ -61,8 +61,8 @@ func Authentihash(r io.ReaderAt) ([32]byte, error) {
 	// Determine if this is PE32 or PE32+.
 	magic := binary.LittleEndian.Uint16(data[optStart : optStart+2])
 
-	var checksumOffset int    // offset of CheckSum field in the file
-	var certTableOffset int   // offset of the Certificate Table data directory entry
+	var checksumOffset int     // offset of CheckSum field in the file
+	var certTableOffset int    // offset of the Certificate Table data directory entry
 	var certTableEntrySize int // size of one data directory entry (always 8 bytes)
 
 	switch magic {
@@ -237,7 +237,9 @@ func Authentihash(r io.ReaderAt) ([32]byte, error) {
 // readAll reads the entire content from an io.ReaderAt.
 func readAll(r io.ReaderAt) ([]byte, error) {
 	// Try to get the size if the underlying type supports it.
-	if sr, ok := r.(interface{ Stat() (interface{ Size() int64 }, error) }); ok {
+	if sr, ok := r.(interface {
+		Stat() (interface{ Size() int64 }, error)
+	}); ok {
 		info, err := sr.Stat()
 		if err == nil {
 			buf := make([]byte, info.Size())
@@ -268,4 +270,3 @@ func readAll(r io.ReaderAt) ([]byte, error) {
 	}
 	return buf, nil
 }
-

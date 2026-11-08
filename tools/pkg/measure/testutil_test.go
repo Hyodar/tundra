@@ -23,13 +23,13 @@ func buildMinimalPE64(t *testing.T, sections map[string][]byte) []byte {
 
 	// COFF header (20 bytes).
 	coff := make([]byte, 20)
-	binary.LittleEndian.PutUint16(coff[0:2], 0x8664)              // Machine: AMD64
+	binary.LittleEndian.PutUint16(coff[0:2], 0x8664)                // Machine: AMD64
 	binary.LittleEndian.PutUint16(coff[2:4], uint16(len(sections))) // NumberOfSections
-	binary.LittleEndian.PutUint16(coff[16:18], 112)                // SizeOfOptionalHeader (PE32+ minimum)
+	binary.LittleEndian.PutUint16(coff[16:18], 112)                 // SizeOfOptionalHeader (PE32+ minimum)
 
 	// Optional header (PE32+): 112 bytes minimum.
 	opt := make([]byte, 112)
-	binary.LittleEndian.PutUint16(opt[0:2], 0x20b)  // Magic: PE32+
+	binary.LittleEndian.PutUint16(opt[0:2], 0x20b)   // Magic: PE32+
 	binary.LittleEndian.PutUint32(opt[56:60], 0x200) // FileAlignment
 	binary.LittleEndian.PutUint32(opt[60:64], 0)     // CheckSum (offset 64 from opt start)
 	// SizeOfHeaders: round up to alignment.

@@ -29,21 +29,21 @@ type SocketTransportIssueResponse struct {
 
 func main() {
 	var (
-		socketPath = flag.String("socket", "./tdxs.sock", "Path to the Unix socket")
+		socketPath  = flag.String("socket", "./tdxs.sock", "Path to the Unix socket")
 		userDataLen = flag.Int("userdata-len", 32, "Length of random user data in bytes")
-		nonceLen = flag.Int("nonce-len", 32, "Length of random nonce in bytes")
+		nonceLen    = flag.Int("nonce-len", 32, "Length of random nonce in bytes")
 	)
 	flag.Parse()
 
 	// Generate random user data and nonce
 	userData := make([]byte, *userDataLen)
 	nonce := make([]byte, *nonceLen)
-	
+
 	if _, err := rand.Read(userData); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating random user data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	if _, err := rand.Read(nonce); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating random nonce: %v\n", err)
 		os.Exit(1)
@@ -106,7 +106,7 @@ func main() {
 			break
 		}
 		respBuf.Write(buf[:n])
-		
+
 		// Try to parse the response to see if we have a complete JSON object
 		var resp SocketTransportIssueResponse
 		if err := json.Unmarshal(respBuf.Bytes(), &resp); err == nil {
@@ -128,11 +128,11 @@ func main() {
 		fmt.Printf("  Error: %s\n", response.Error)
 	} else {
 		fmt.Printf("  Document (hex): %s\n", response.Document)
-		
+
 		// Try to decode and display the document
 		if docBytes, err := hex.DecodeString(response.Document); err == nil {
 			fmt.Printf("  Document size: %d bytes\n", len(docBytes))
-			
+
 			// If it looks like JSON, try to pretty print it
 			var jsonDoc interface{}
 			if err := json.Unmarshal(docBytes, &jsonDoc); err == nil {
