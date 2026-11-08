@@ -1469,7 +1469,7 @@ Persistent storage: encrypted volumes, the directories services keep on them, an
 BrokerKey(url: str, *, audience: str)
 ```
 
-A key broker that releases a value after it has verified this image's attestation.
+A key broker that releases a value after it has verified this image's attestation, to the *audience* its policy names, over the protocol `tundravm secrets deliver` speaks (plan section 6.3). The image's half is a pull client, which gate 3 builds in tools/, so today the image records *url* and *audience* in its runtime manifest and waits for the value exactly as it waits for an operator's delivery. Until the client lands the value never arrives unattended, but an operator can stand in for the broker over the attested endpoint.
 
 | Member | Does |
 |---|---|
@@ -1502,7 +1502,7 @@ TpmSeal(
 )
 ```
 
-Unlock with a random key sealed to a vTPM the operator trusts.
+Unlock with a random key sealed to a vTPM the operator trusts, so the platform, not an attested release, decides who opens the volume. `key-gen` keeps the key in that vTPM's NV storage rather than on the disk, so a disk moved to another instance finds no key there, an image whose `targets=` boot another vTPM is refused, and a lost vTPM state loses the data. No PCR binds the seal today, so a firmware or kernel update that changes the PCRs still opens the volume, as does a changed image, and the runtime manifest records *pcrs* for gate 3 to enforce.
 
 | Member | Does |
 |---|---|

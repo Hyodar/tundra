@@ -80,18 +80,21 @@ class OperatorKey(Keywords):
 
 @dataclass(frozen=True, slots=True)
 class TpmSeal(Keywords):
-    """Unlock with a random key sealed to a vTPM the operator trusts.
+    """Unlock with a random key sealed to a vTPM the operator trusts, so the platform, not an
+    attested release, decides who opens the volume. ``key-gen`` keeps the key in that vTPM's
+    NV storage rather than on the disk, so a disk moved to another instance finds no key
+    there, an image whose ``targets=`` boot another vTPM is refused, and a lost vTPM state
+    loses the data. No PCR binds the seal today, so a firmware or kernel update that changes
+    the PCRs still opens the volume, as does a changed image, and the runtime manifest
+    records *pcrs* for gate 3 to enforce.
 
     Nothing about the trust boundary is implied, so every field is stated:
 
     - *platform*: the vTPM it seals to (:data:`TPM_PLATFORMS`): ``"azure"`` (the
       paravisor's), ``"gcp"`` (the hypervisor's) or ``"swtpm"`` (a local swtpm with
-      persisted state, development only). They are not interchangeable: an image whose
-      ``targets=`` boot anywhere else is refused, since one payload boots on every target
-      and a key sealed on one platform does not open on another.
-    - *pcrs*: the PCR policy the seal is bound to. Today's ``key-gen`` keeps the key in the
-      vTPM's NV storage without a PCR policy; the runtime manifest records *pcrs* and gate
-      3's tools/ work enforces it.
+      persisted state, development only). They are not interchangeable, since one payload
+      boots on every target and a key sealed on one platform does not open on another.
+    - *pcrs*: the PCRs the seal is to be bound to, ``[]`` for the vTPM alone.
     - *recovery*: what happens when the vTPM state is lost. ``"none"`` is the only method
       today: the data is gone, and the volume is never reformatted for it (plan 6.2: an
       unlock failure is never permission to format).

@@ -56,15 +56,17 @@ def credential_wait_unit(name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class BrokerKey(Located):
-    """A key broker that releases a value after it has verified this image's attestation.
+    """A key broker that releases a value after it has verified this image's attestation,
+    to the *audience* its policy names, over the protocol ``tundravm secrets deliver``
+    speaks (plan section 6.3). The image's half is a pull client, which gate 3 builds in
+    tools/, so today the image records *url* and *audience* in its runtime manifest and
+    waits for the value exactly as it waits for an operator's delivery. Until the client
+    lands the value never arrives unattended, but an operator can stand in for the broker
+    over the attested endpoint.
 
     ``Volume(unlock=BrokerKey(url, audience=...))`` unlocks a volume with the key the
     broker releases, for unattended fleets; ``Secret(name, source=BrokerKey(...))``
-    takes a secret from it instead of from an operator. The broker speaks the same
-    protocol as ``tundravm secrets deliver`` (plan section 6.3) with a pull client in the
-    image; that client is gate 3 (tools/). Until it lands the image records the
-    broker in its runtime manifest and waits for the value exactly as it waits for an
-    operator's delivery, so an operator can stand in for the broker.
+    takes a secret from it instead of from an operator.
     """
 
     url: str
