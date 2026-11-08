@@ -1,14 +1,15 @@
 # The guide
 
-This tutorial builds an Ethereum node on the Hoodi testnet. The node signs its answers
-inside an Intel TDX trust domain. The tutorial has six stages. Each stage is a complete
-image file under [`examples/attested-node/stages/`](../examples/attested-node/stages/), and
-each adds one idea to the one before. Words in bold are defined in [Terms](terms.md).
-Finish the README's [first run](../README.md#first-run) before you start.
+This tutorial builds an Ethereum node on the Hoodi testnet that signs its answers inside an
+Intel TDX trust domain. Each of its six stages is a complete image file under
+[`examples/attested-node/stages/`](../examples/attested-node/stages/), adding one idea to
+the stage before. Words in bold are defined in [Terms](terms.md), and the README's [first
+run](../README.md#first-run) comes first.
 
 ## Before you start
 
-The stages live in the tundravm repository, so clone it first:
+The stages live in the tundravm repository, so clone it and run every command from the
+example's directory:
 
 ```console
 $ git clone https://github.com/Hyodar/tundra
@@ -16,15 +17,14 @@ $ cd tundra/examples/attested-node
 $ tundravm check stages/01-boot.py
 ```
 
-Run every command from that directory. `check` reads an image without building it, and it
-prints one warning, `source-unpinned`, until you lock. `tundravm show --diff OLD NEW` prints
-what one stage adds to another, also without building anything. Unless the text says
-otherwise, the outputs below are excerpts of that command.
+`check` reads an image without building it, and it warns `source-unpinned` until you lock.
+The outputs below are excerpts of `tundravm show --diff OLD NEW`, which prints what one
+stage adds to another, also without building.
 
 ## 1. The boot
 
-In this stage a single `Image` value describes a whole OS. `tundravm new` writes this
-file:
+A single `Image` value describes the whole OS, and its docstring lists what the call
+implies. `tundravm new` writes this file:
 
 <!-- listing: examples/attested-node/stages/01-boot.py -->
 ```python
@@ -48,15 +48,14 @@ image = Image(
 )
 ```
 
-The docstring lists what the call implies. Boot the `dev` profile of this image:
+Boot its `dev` profile:
 
 ```console
 $ tundravm dev stages/01-boot.py
 ```
 
-`dev` builds the profile and boots it under QEMU without TDX. It prints the boot probe and
-then follows the console until you press Ctrl-C. The `boot` job of the CI boots this stage on
-every push. Its console shows:
+`dev` builds the profile, boots it under QEMU without TDX and follows the console until you
+press Ctrl-C. The console shows the boot probe:
 
 ```text
 tundravm-probe: mode ok simulated
@@ -68,9 +67,9 @@ tundravm-probe: key:instance ok root:root 600, pub 034c2400bf28bbc43c8bd283bc0c5
 tundravm-probe: done 5 ok 0 fail
 ```
 
-The line `mode ok simulated` says that the guest found no TDX. A development build runs its
-services anyway, while a production build would start none. The `egress:` line shows the
-firewall refusing traffic that nothing allows.
+`mode ok simulated` means the guest found no TDX, which is also why the `rtmr` check has
+nothing to compare. A development build runs its services anyway, where a production build
+would start none.
 
 ## 2. Nethermind, a component of your own
 
@@ -106,7 +105,7 @@ it comes in four parts.
 
 ### The component
 
-The image file imports `Nethermind` from `components/nethermind.py`. That class shows the
+The image file imports `Nethermind` from `components/nethermind.py`, a class that shows the
 whole Component API:
 
 <!-- listing: examples/attested-node/components/nethermind.py Nethermind -->
@@ -182,23 +181,22 @@ class Nethermind(Component):
         return (Diagnostic("nethermind-volatile-state", "warning", message),)
 ```
 
-- The fields are configuration, because the class is a frozen, keyword-only dataclass.
-- `compose()` yields the pieces the component stands for, which are a `Build` and the
-  `Service` that runs it.
-- `using=Dotnet(...)` builds the program offline, with the SDK named in its `global.json`.
-- `rpc` and `engine_api` are exports. Each is an endpoint that carries the readiness of the
-  service.
-- `outbound()` says what a filtered image lets the component send, here its peers on 30303.
-- `check()` is a lint rule that runs for each profile, and `rules` declares each code it
-  reports.
+- The fields are its configuration, because a component is a frozen, keyword-only
+  dataclass.
+- `compose()` yields what the component stands for, here a `Build` and the `Service` that
+  runs it.
+- `rpc` and `engine_api` are exports: endpoints that carry the service's readiness.
+- `outbound()` says what a filtered image lets it send, and `check()` is a lint rule whose
+  codes `rules` declares.
 
 ### Its storage
 
-The database of Nethermind must survive a reboot, so `data` is a **volume**, which is an
-encrypted disk. With `unlock=OperatorKey()`, an operator sends the passphrase after checking
-the quote, and Nethermind waits until then. The first key to sign a write becomes the
-**owner** of the volume. The instance refuses writes that any other key signs.
-`Generated("jwt")` is a **secret** that the guest makes at each boot.
+Nethermind's database must survive a reboot, so `data` is a **volume**. With
+`unlock=OperatorKey()`, an operator sends its passphrase after checking the quote, and
+Nethermind waits until then. The first key to sign a write becomes the volume's **owner**.
+
+The JWT that Nethermind shares with its consensus client is a **secret** too, but one the
+guest generates at each boot, so `Generated("jwt")` needs no operator.
 
 ### What the volume brings
 
@@ -216,18 +214,18 @@ $ tundravm show --diff stages/01-boot.py stages/02-nethermind.py
     + out  30303/tcp, 30303/udp  nethermind
 ```
 
-Port 8745 is the attested endpoint and port 22 is SSH. The `outbound()` method opened
-30303.
+Port 8745 is the attested endpoint and 22 is SSH, while 30303 is what `outbound()` asked
+for.
 
 ### The root filesystem
 
-The build is large, so the image protects its root. `RootFS.verity()` makes the root a
-read-only disk, and the hash of that disk travels on the measured kernel command line.
+`RootFS.verity()` makes the root a read-only disk whose hash travels on the measured kernel
+command line, so the host cannot change the OS at rest.
 
 ## 3. Lighthouse, wired by an export
 
-Components connect to each other through their exports. Lighthouse, the consensus client,
-drives Nethermind to the head of the chain.
+Components connect through their exports. Lighthouse, the consensus client, drives
+Nethermind to the head of the chain:
 
 <!-- diff: examples/attested-node/stages/02-nethermind.py examples/attested-node/stages/03-lighthouse.py -->
 ```diff
@@ -253,10 +251,10 @@ drives Nethermind to the head of the chain.
      network=Network(egress=Egress()),
 ```
 
-`execution=nethermind.engine_api` is an export, so Lighthouse starts once Nethermind
-answers. Lighthouse shares the same generated secret. The file `components/lighthouse.py`
-has the same shape as the one for Nethermind, except that it uses a pinned download instead
-of a build. Its `outbound()` opens its peers and the checkpoint host:
+Because `execution=` takes `nethermind.engine_api`, Lighthouse starts once Nethermind
+answers. `components/lighthouse.py` has the same shape as the Nethermind component, but it
+downloads a pinned release instead of building one, and its `outbound()` opens its peers and
+the checkpoint host:
 
 ```console
 $ tundravm show --diff stages/02-nethermind.py stages/03-lighthouse.py
@@ -270,8 +268,8 @@ $ tundravm show --diff stages/02-nethermind.py stages/03-lighthouse.py
 
 ## 4. The signer, your own program
 
-A `Service` can run your own program, built from source. The directory `signer/` holds a Go
-proxy that signs the block responses of Nethermind with the **instance key**.
+A `Service` can also run a program you build from source. The directory `signer/` holds a
+Go proxy that signs Nethermind's block responses with the **instance key**:
 
 <!-- diff: examples/attested-node/stages/03-lighthouse.py examples/attested-node/stages/04-signer.py -->
 ```diff
@@ -308,9 +306,8 @@ proxy that signs the block responses of Nethermind with the **instance key**.
      network=Network(egress=Egress()),
 ```
 
-`GoBinary("signer", Local("../signer"))` builds that directory. `credentials=[InstanceKey()]`
-hands the key to the service. `requires=[nethermind.rpc]` makes the service wait until
-Nethermind is ready.
+`GoBinary` builds that directory, `credentials=` hands the service the key, and `requires=`
+holds it back until Nethermind is ready.
 
 ```console
 $ tundravm show --diff stages/03-lighthouse.py stages/04-signer.py
@@ -330,8 +327,8 @@ The signer listens on the loopback, so nothing outside the guest can reach it ye
 
 ## 5. The attested ingress
 
-An **ingress** is the one way in from outside. Here it is attested TLS on port 8546, in
-front of the signer:
+An **ingress** is the one way in from outside, here attested TLS on port 8546 in front of
+the signer:
 
 <!-- diff: examples/attested-node/stages/04-signer.py examples/attested-node/stages/05-attested.py -->
 ```diff
@@ -366,13 +363,11 @@ Ingress:
   + AttestedTLS(8546, upstream=Endpoint("http://127.0.0.1:8547/"))
 ```
 
-Three ports are open now. They are 8546, and 8745 and 22 from the control plane. With
-`quotes=True`, the signer asks the evidence service for a quote over its key, and it starts
-only once the service has issued one. A client can request a quote with
-`GET /quote?nonce=HEX`, so it can check the key it verifies signatures with.
+With `quotes=True` the signer starts only once the evidence service has issued a quote over
+its key. A client fetches that quote with `GET /quote?nonce=HEX` before it trusts the
+signatures.
 
-The quote of the endpoint also binds the certificate of the listener. Either command checks
-it:
+The quote also binds the certificate of the listener on 8546, and either command checks it:
 
 ```console
 $ tundravm attest attested-node-1 --policy FILE --tls 8546
@@ -447,14 +442,14 @@ Profiles:
     + adds Package("fio")
 ```
 
-`Observability` ships the journal and the node metrics. Neither sink names a `url=`, so the
-export goes to a receiver in the guest until you set one, and a production profile warns
-`observability-sink-unset` until then. No `export=` names the **keep-list** of the metrics,
-so the keep-list holds the `health` preset. Every profile warns `observability-export-unset`
-until you pass `export=`. The service `sync-status` runs hourly and logs the sync status of
-Lighthouse. The `staging` profile edits one file. The `bench` profile adds `fio`, and
-`production=False` keeps it out of production builds. `targets=` adds Azure and GCP disks
-that boot the same OS.
+`staging` edits one file, and `bench` adds `fio` but stays out of production builds because
+of `production=False`. The rest of the stage:
+
+- `Observability` ships the journal and the node metrics. No sink names a `url=` yet, so
+  both go to a receiver inside the guest, and with no `export=` the metrics **keep-list** is
+  the `health` preset. `check` warns about each until you set it.
+- `sync-status` runs hourly and logs Lighthouse's sync status.
+- `targets=` adds Azure and GCP disks that boot the same OS.
 
 ## Next
 
@@ -466,7 +461,9 @@ $ tundravm build
 $ tundravm verify latest-production
 ```
 
-`lock` pins every input, and `build` refuses to make a production build without the lock.
-`verify` checks the build against its manifest, offline. [How do I](howto.md) shows how to
-deploy, attest and deliver secrets. The [manual](manual.md) describes every slot and rule.
-The [trust page](trust.md) says what the image defends against.
+`build` refuses a production build without the lock, and `verify` checks the result against
+its manifest, offline. From here:
+
+- [How do I](howto.md) deploys, attests and delivers secrets.
+- The [manual](manual.md) describes every slot and rule.
+- The [trust page](trust.md) says what the image defends against.
