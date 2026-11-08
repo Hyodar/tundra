@@ -249,6 +249,13 @@ def given_image(image: str | os.PathLike[str] | None) -> Iterator[None]:
         _GIVEN_IMAGE.reset(token)
 
 
+def host_cache() -> Path:
+    """``$XDG_CACHE_HOME/tundravm`` (``~/.cache/tundravm`` without it): what every build on
+    this host shares, the packages mkosi downloads and the Go toolchains tundravm fetches."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "tundravm"
+
+
 def lock_command(*flags: str) -> str:
     """``tundravm lock`` with *flags*, naming the image file when the running command was
     given one the project does not configure, so the hint runs as printed."""
@@ -281,6 +288,7 @@ __all__ = [
     "deployment_table",
     "find_project",
     "given_image",
+    "host_cache",
     "lock_command",
     "render_table",
     "settings",

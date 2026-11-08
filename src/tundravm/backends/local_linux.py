@@ -52,6 +52,7 @@ from tundravm.backends.base import (
 from tundravm.compiler.emit_mkosi import UKI_MAX_SIZE, esp_bytes, uki_capacity
 from tundravm.errors import BackendExecutionError
 from tundravm.models import BakeRequest, BakeResult, ProfileBuildResult
+from tundravm.project import host_cache
 from tundravm.toolchain import MkosiTool, ToolsTree, installed_mkosi
 
 if TYPE_CHECKING:
@@ -69,8 +70,7 @@ def package_cache() -> Path:
     """Where every build on this host keeps the packages mkosi downloads:
     ``$XDG_CACHE_HOME/tundravm/packages`` (``~/.cache`` without it), shared by builds with and
     without sudo. apt verifies each package against the snapshot's signed index before use."""
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "tundravm" / "packages"
+    return host_cache() / "packages"
 
 
 LOG_FILENAME = "mkosi.log"
