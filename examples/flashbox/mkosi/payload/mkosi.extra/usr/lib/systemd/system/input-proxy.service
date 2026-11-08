@@ -1,15 +1,16 @@
 [Unit]
-Description=Carry input on 27018/tcp into the searcher's socket, one way
+Description=Carry the owner's TLS input on 27018/tcp into the searcher's socket, one way
 After=runtime-init-volume-data.service tdx-evidence.service
 Requires=runtime-init-volume-data.service tdx-evidence.service
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/input-proxy 0.0.0.0:27018 /persistent/data/input/input.sock
+ExecStart=/usr/bin/input-proxy -listen 0.0.0.0:27018 -socket /persistent/data/input/input.sock -key ${CREDENTIALS_DIRECTORY}/host-key -pin /run/tundravm/containers/bob/keys/authorized_keys
 User=input-proxy
 SupplementaryGroups=bob
 WorkingDirectory=/persistent/data/input
 Environment=STATE_DIRECTORY=/persistent/data/input
+LoadCredential=host-key:/run/tundravm/containers/bob/host/ssh_host_ed25519_key
 ReadWritePaths=-/persistent/data/input
 Restart=on-failure
 RestartSec=5s

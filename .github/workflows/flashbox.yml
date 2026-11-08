@@ -143,14 +143,17 @@ jobs:
 
       - name: Feed the input channel and write a log line the delay holds back
         if: ${{ !cancelled() }}
-        # input-proxy relays tcp 27018 into the socket the container listens on and never
-        # answers, so the socket is group-writable for it (perm=0660); the bot's log line
-        # reaches the menu's `logs` only after the delay.
+        # input-proxy relays TLS on tcp 27018 into the socket the container listens on and
+        # never answers, so the socket is group-writable for it (perm=0660). The owner's key
+        # sends, pinning the container's host key attest wrote, and a plaintext sender
+        # reaches nothing; the bot's log line reaches the menu's `logs` only after the delay.
         run: |
           receipt=.tundravm/instances/$INSTANCE/instance.json
           known=.tundravm/instances/$INSTANCE/known_hosts
           ssh_port=$(jq -r '.ports["10022"]' "$receipt")
           input_port=$(jq -r '.ports["27018"]' "$receipt")
+          go build -C examples/flashbox/channels -o "$RUNNER_TEMP/input-proxy" ./cmd/input-proxy
+          grep -F "[127.0.0.1]:$ssh_port " "$known" > "$RUNNER_TEMP/container-host-key"
           inside() {
             ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
               -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
@@ -159,11 +162,17 @@ jobs:
           inside 'nohup socat -u UNIX-LISTEN:/persistent/data/input/input.sock,fork,perm=0660 \
             OPEN:/persistent/data/searcher/input.out,creat,append > /dev/null 2>&1 &'
           sleep 3
-          printf 'hello-input\n' | timeout 10 bash -c \
-            "exec 3<>/dev/tcp/127.0.0.1/$input_port; cat >&3; sleep 1"
+          printf 'plain-input\n' | timeout 10 bash -c \
+            "exec 3<>/dev/tcp/127.0.0.1/$input_port; cat >&3; sleep 1" || true
+          printf 'hello-input\n' | timeout 20 "$RUNNER_TEMP/input-proxy" \
+            -send "127.0.0.1:$input_port" -key "$RUNNER_TEMP/operator" \
+            -pin "$RUNNER_TEMP/container-host-key"
           sleep 2
           inside 'cat /persistent/data/searcher/input.out' | tee "$RUNNER_TEMP/input.txt"
           grep -Fx hello-input "$RUNNER_TEMP/input.txt"
+          if grep -F plain-input "$RUNNER_TEMP/input.txt"; then
+            echo "a plaintext sender reached the container"; exit 1
+          fi
           inside 'echo bot-line-one >> /persistent/data/searcher/bob.log'
           date +%s > "$RUNNER_TEMP/logged-at"
 

@@ -3,7 +3,10 @@
 ``delay-pipe`` copies the bot's log into ``output.log`` *delay* seconds late, which is what
 the operator's menu shows, so nothing the searcher logs reaches anyone while the trade it
 describes is still live. ``input-proxy`` carries bytes from TCP 27018 into the container's
-``input.sock``, one way. Both are built from ``channels/`` beside the image file.
+``input.sock``, one way, over TLS 1.3 whose two ends pin each other: it answers with the
+container's host key, which attest pins in ``known_hosts``, and lets in only the owner's
+key, the one the container's sshd takes. Both are built from ``channels/`` beside the image
+file.
 """
 
 from __future__ import annotations
@@ -104,11 +107,18 @@ class Searcher(Component):
             "input-proxy",
             [
                 GoBinary(channels, package="./cmd/input-proxy"),
+                "-listen",
                 INPUT_TCP.address,
+                "-socket",
                 self.input / "input.sock",
+                "-key",
+                container.host_key,
+                "-pin",
+                container.authorized_keys,
             ],
             groups=[container.group],
             state=self.input,
             expose=[INPUT_TCP],
-            description=f"Carry input on {INPUT_TCP} into the searcher's socket, one way",
+            description=f"Carry the owner's TLS input on {INPUT_TCP} into the searcher's "
+            "socket, one way",
         )

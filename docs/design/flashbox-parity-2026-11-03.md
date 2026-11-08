@@ -290,7 +290,7 @@ This one says what closed each earlier gap (c) and example fix (d).
 | Container loop loader under a built kernel | c | closed | `loop` is built in, the loader is skipped when `/dev/loop-control` exists |
 | Masked shutdown and reboot targets | c | closed | the whitelist keeps them |
 | Delayed log channel | c | closed | `channels/cmd/delay-pipe`, a `Service` on the container's account, the menu's `logs` |
-| Input-only proxy | c | closed in part | `channels/cmd/input-proxy` on tcp 27018, a bind for the socket; plain TCP, no TLS |
+| Input-only proxy | c | closed | `channels/cmd/input-proxy` on tcp 27018, a bind for the socket; TLS 1.3 pinned both ways, the container's host key and the owner's key (input-proxy-tls) |
 | Writable container layer | c | open | needs a uid-range user namespace: Franco's decision |
 | Jwt in the container | c | open | a control-plane secret cannot be bound |
 | Lighthouse logs in the container | c | ~~open~~ | ~~no log-directory keyword on the example Lighthouse~~ (done: flashbox-lacks) |

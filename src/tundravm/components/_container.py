@@ -29,6 +29,7 @@ from tundravm._image._storage import VolumeDirectory
 from tundravm._image._values import (
     TCP,
     UDP,
+    Credential,
     Egress,
     File,
     KernelFragment,
@@ -709,6 +710,19 @@ class Container(Component):
         if self.ssh is None:
             return None
         return f"{self.name}-ssh.service" if self.argv else self.unit
+
+    @property
+    def host_key(self) -> Credential:
+        """This boot's sshd host key, which every quote binds, as the credential a host
+        service binds to answer as the container: ``[proxy, "-key", bob.host_key]``."""
+        key = f"{container_ssh.host_directory(self.name)}/{container_ssh.KEY}"
+        return Credential("host-key", key)
+
+    @property
+    def authorized_keys(self) -> str:
+        """The file of the keys its sshd lets in, which the attested endpoint writes: the
+        owner's with ``ContainerSsh(owner=True)``."""
+        return container_ssh.authorized_keys(self.name)
 
     def _account(self) -> Iterator[dm.Declaration]:
         """The container's own group and user on the host, their ids pinned."""

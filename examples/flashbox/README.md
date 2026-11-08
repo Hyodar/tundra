@@ -13,6 +13,9 @@ reachable in both modes. The container reads Lighthouse's log files, never write
 the pinned peers and what each mode may reach, and `health.py` the recording rules. The
 attested node's `nethermind.py` and `lighthouse.py` are linked there file by file.
 `channels/` holds the Go programs flashbox ships as `delay-pipe` and `input-only-proxy`.
+The searcher's input reaches its container over TLS 1.3 on 27018, where `input-proxy`
+answers with the container's host key, which `attest` pins, and lets in only the owner's
+key, the one `input-proxy -send` presents.
 
 ## Where each piece went
 
@@ -81,4 +84,3 @@ profile and drives it this way (`.github/workflows/flashbox.yml`).
 - A writable container layer, so the searcher cannot install tools. It needs a uid-range
   user namespace, which is Franco's decision.
 - The jwt in a container, so the searcher cannot run its own execution client.
-- TLS in `input-proxy`: flashbox's pins the searcher's key, and this one relays plain bytes.
