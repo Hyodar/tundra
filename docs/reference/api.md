@@ -1267,7 +1267,7 @@ Container(
 | `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there; `None` on a built kernel, which has it built in. |
 | `Container.metrics` | Its unit's series as PromQL selectors, for a `RecordingRule`: `f"max({searcher.metrics.active})"`. |
 | `Container.namespace` | The `<name>-net.service` that makes its namespace, `None` when it holds `lo` only (`PrivateNetwork=yes`). |
-| `Container.network() -> ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
+| `Container.network() -> ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside third octets 0, 169 and 255. |
 | `Container.relay(endpoint: Endpoint) -> str` | The socket in its namespace that relays *endpoint*, named after the export (`bob-nethermind-rpc.socket` for `nethermind.rpc`), else its port. |
 | `Container.run_user` | The account the program runs as: *user*, else the container's name. |
 | `Container.sshd_unit` | The unit running sshd: the container's own without *argv*, `<name>-ssh` beside it with one; `None` without *ssh*. |
@@ -2652,6 +2652,8 @@ Unit directives as `(key, value)` pairs, in the order a unit file lists them.
 PortValue = TCP | UDP
 ```
 
+A port a service opens or a rule names: `TCP(8080)` or `UDP(53)`.
+
 ### `PresetName`
 
 *alias*
@@ -2699,6 +2701,8 @@ What proves one thing ready: a service's readiness, or a boot step finishing.
 ```python
 Readiness = HttpProbe | TcpProbe | Notify
 ```
+
+What `readiness=` takes: an HTTP or TCP probe dependents wait on, or `Notify()` for a program that calls `sd_notify`.
 
 ### `Requirement`
 
@@ -2784,6 +2788,8 @@ Where an image boots: `"qemu"` a local QEMU disk, `"azure"` an Azure confidentia
 ```python
 TdxsType = Literal['tdx', 'azure', 'gcp', 'simulator']
 ```
+
+The quote kind `tdxs` issues or validates: `"tdx"` a raw TDX quote, `"azure"` and `"gcp"` that cloud's attestation of one, `"simulator"` the development stand-in.
 
 ### `UnitTarget`
 

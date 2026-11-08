@@ -142,6 +142,7 @@ class UDP(Keywords):
 
 
 type PortValue = TCP | UDP
+"""A port a service opens or a rule names: ``TCP(8080)`` or ``UDP(53)``."""
 
 
 def _check_port(owner: object, port: object) -> None:
@@ -1557,6 +1558,8 @@ class Notify(Keywords):
 
 
 type Readiness = HttpProbe | TcpProbe | Notify
+"""What ``readiness=`` takes: an HTTP or TCP probe dependents wait on, or ``Notify()`` for a
+program that calls ``sd_notify``."""
 
 
 _SPAN = re.compile(r"(?:\s*\d+(?:\.\d*)?\s*[A-Za-z\u00b5\u03bc]*)+\s*")

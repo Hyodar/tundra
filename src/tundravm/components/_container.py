@@ -666,7 +666,7 @@ class Container(Component):
 
     def network(self) -> dm.ContainerNetwork | None:
         """Its veth: ``ve-<name>`` (``ve-<first 7>-<4 hex>`` past 12 characters) and a /30 of
-        169.254.0.0/16 the name's sha256 picks, outside :data:`_RESERVED`."""
+        169.254.0.0/16 the name's sha256 picks, outside third octets 0, 169 and 255."""
         if not self.veth:
             return None
         digest = hashlib.sha256(self.name.encode()).digest()

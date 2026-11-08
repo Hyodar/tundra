@@ -69,6 +69,8 @@ if TYPE_CHECKING:
     from .lifecycle import Measurements
 
 TdxsType = Literal["tdx", "azure", "gcp", "simulator"]
+"""The quote kind ``tdxs`` issues or validates: ``"tdx"`` a raw TDX quote, ``"azure"`` and
+``"gcp"`` that cloud's attestation of one, ``"simulator"`` the development stand-in."""
 
 
 @functools.cache
