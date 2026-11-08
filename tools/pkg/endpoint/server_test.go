@@ -295,6 +295,40 @@ func TestDeliveredValuesLandWhereTheConfigSays(t *testing.T) {
 	}
 }
 
+func TestADeliveryLandsInEveryTargetOrInNone(t *testing.T) {
+	cases := []struct {
+		name   string
+		owner  string // the second target's owner
+		status int
+	}{
+		{"every target is written", "", http.StatusOK},
+		{"a failed second target leaves the first unwritten", "no-such-user-tundravm", http.StatusInternalServerError},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := start(t)
+			second := filepath.Join(f.dir, "app", "jwt")
+			f.server.cfg.Credentials = append(f.server.cfg.Credentials, Credential{Name: "jwt", Path: second, Mode: "0600", Owner: c.owner})
+			client := f.session()
+			f.evidence(client, nonce(14))
+			status, body := f.post(client, "/credentials", credentials(nonce(14), map[string]string{"jwt": "token"}))
+			if status != c.status {
+				t.Fatalf("status %d, want %d: %s", status, c.status, body)
+			}
+			for _, path := range []string{filepath.Join(f.dir, "jwt"), second} {
+				data, err := os.ReadFile(path)
+				if written := err == nil && string(data) == "token"; written != (c.status == http.StatusOK) {
+					t.Fatalf("%s holds %q (%v)", path, data, err)
+				}
+				staged, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".jwt.*"))
+				if len(staged) > 0 {
+					t.Fatalf("staged files left behind: %v", staged)
+				}
+			}
+		})
+	}
+}
+
 func TestAnSSHKeyForALoginLandsInItsFileAndNotRoots(t *testing.T) {
 	f := start(t)
 	f.server.cfg.SSH = &SSHConfig{Login: "tenant"}

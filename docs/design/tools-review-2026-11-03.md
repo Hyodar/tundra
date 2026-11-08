@@ -24,7 +24,7 @@ ours, C Codex. **B** breaks a trust claim, **W** weakens it, **H** hygiene.
 | 16 | H | A | `tdxs` `handleConnection` | A malformed request spun forever (sticky decoder error). | Answer once, hang up. | yes |
 | 17 | H | A | `authorize` | A second OperatorKey volume was never pinned, so never created. | Pin every empty owner file. | yes |
 | 18 | H | A | trust.md recovery | It said resend a mistyped passphrase; a boot takes one per volume. | Restart first. | doc |
-| 19 | H | AC | `credentials` | A failed second target leaves a half delivery. | Stage all, then rename. | no |
+| 19 | H | AC | `credentials` | A failed second target leaves a half delivery. | Stage all, then rename. | yes: stage, then rename |
 | 20 | H | A | `formatAndMountEncrypted` | A kill between init token and `mkfs` leaves a volume never formatted. | Token after `mkfs`; close on failure. | no |
 | 21 | H | A | `LuksOps` | Stdin passphrases stop at the first newline. | `--key-file=-`. | no |
 | 22 | H | AC | `evidence`, `/quote`, IMDS, socket, `image-metrics` | Unauthenticated quotes and unbounded reads (DoS); `%q` is not Prometheus escaping. | Limits; escape labels. | no |

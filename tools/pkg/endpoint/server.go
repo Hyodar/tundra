@@ -445,21 +445,45 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request) {
 		}
 		values[name] = value
 	}
-	names := make([]string, 0, len(values))
+	var pending []staged
 	for name, value := range values {
 		for _, target := range known[name] {
 			mode, _ := parseMode(target.Mode)
-			if err := writeAtomic(target.Path, value, mode, target.Owner); err != nil {
+			tmp, err := stage(target.Path, value, mode, target.Owner)
+			if err != nil {
+				discard(pending)
 				s.log.Error("credential not written", "name", name, "error", err)
-				fail(w, http.StatusInternalServerError, "%s not written: %v", name, err)
+				fail(w, http.StatusInternalServerError, "%s not written to %s: %v; nothing was delivered",
+					name, target.Path, err)
 				return
 			}
+			pending = append(pending, staged{tmp, target.Path})
 		}
+	}
+	for i, p := range pending {
+		if err := os.Rename(p.tmp, p.path); err != nil {
+			discard(pending[i:])
+			s.log.Error("credential not renamed", "path", p.path, "error", err)
+			fail(w, http.StatusInternalServerError, "%s not written: %v", p.path, err)
+			return
+		}
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
 		s.delivered[name] = true
 		names = append(names, name)
 		s.log.Info("credential delivered", "name", name)
 	}
 	answer(w, map[string][]string{"delivered": names})
+}
+
+// staged is a value written beside its target, waiting for the rename that delivers it.
+type staged struct{ tmp, path string }
+
+func discard(pending []staged) {
+	for _, p := range pending {
+		os.Remove(p.tmp)
+	}
 }
 
 type unlockRequest struct {
@@ -565,42 +589,57 @@ func (s *Server) sshKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 // writeAtomic writes data to a temporary name beside path, then renames it into place.
 func writeAtomic(path string, data []byte, mode os.FileMode, owner string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o711); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	tmp, err := stage(path, data, mode, owner)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// stage writes data, synced, with its mode and owner, to a temporary name beside path and
+// returns that name; on failure nothing is left behind.
+func stage(path string, data []byte, mode os.FileMode, owner string) (string, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o711); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
+		return "", err
+	}
+	if err := fill(tmp, data, mode, owner); err != nil {
 		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), nil
+}
+
+func fill(tmp *os.File, data []byte, mode os.FileMode, owner string) error {
+	if _, err := tmp.Write(data); err != nil {
 		return err
 	}
 	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
 		return err
 	}
 	if owner != "" {
 		uid, gid, err := lookupOwner(owner)
 		if err != nil {
-			tmp.Close()
 			return err
 		}
 		if err := tmp.Chown(uid, gid); err != nil {
-			tmp.Close()
 			return err
 		}
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return tmp.Sync()
 }
 
 func lookupOwner(owner string) (int, int, error) {

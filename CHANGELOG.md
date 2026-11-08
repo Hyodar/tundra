@@ -207,5 +207,6 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `journal-export` and `metrics-export` sending to a remote sink order `After=time-sync.target`, and `TeeBase(time=True)` enables `systemd-time-wait-sync.service`, so a sink's certificate is judged by the NTS-synced clock, never the host's.
 - **Breaking:** the `tdx`, `azure-tdx` and `gcp-tdx` verifiers refuse a quote whose TD sets `TUD.DEBUG` (TD ATTRIBUTES bit 0); `VerifyIMDS`, `VerifyIdentityToken` and `Tdxs(verify_imds=, verify_identity_token=)` are gone: they checked presence only, and neither the IMDS document nor the identity token binds the quote or the nonce.
 - `POST /owner` answers only once `disk-setup` has written the new owner into every header it holds this boot (and an open volume's copy), as `<owner>.header` records, else 504 after a minute, so a kill after the answer cannot keep the old owner.
+- `POST /credentials` stages every target of a delivery in a temporary file beside it before renaming any, and removes the staged files when one fails, so a delivery lands in all its targets or in none.
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 
