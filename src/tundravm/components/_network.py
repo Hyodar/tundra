@@ -368,14 +368,10 @@ class Firewall(Component):
 
     def _unfiltered(self) -> str | None:
         """Why this firewall accepts every outbound packet, or ``None`` when it filters."""
-        fix = (
-            "list what its services talk to with network=Network(egress=Egress(ports=[...], "
-            "hosts=[...]))"
-        )
         if self.egress is None:
             return (
                 "the production profile accepts every outbound packet, so a compromised "
-                f"service sends what it holds anywhere: {fix}"
+                "service sends what it holds anywhere"
             )
         everywhere = [
             host for host in self.egress.hosts if isinstance(host, str) and host.endswith("/0")
@@ -383,7 +379,7 @@ class Firewall(Component):
         if everywhere:
             return (
                 f"Egress(hosts=[{', '.join(map(repr, everywhere))}]) accepts every "
-                f"destination, so it filters nothing: {fix}"
+                "destination, so it filters nothing"
             )
         return None
 
