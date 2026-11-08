@@ -371,15 +371,15 @@ LLMNR or mDNS. The host can neither read nor forge a lookup.
 Cloudflare's pair by default: no target cloud's resolver speaks TLS. The firewall accepts TCP 853 to them and no plain DNS.
 
 `Observability(logs=JournalExport(url=, credential=), metrics=PrometheusRemoteWrite(url=,
-credential=, export=))` ships the journal and node metrics. Without `url=` each goes to a
-receiver in the guest (`journal-sink`, `metrics-sink`). Once `url=` is set, the delivered
-credential authenticates the export. An `http://` sink warns. Only the series on the
-`export=` keep-list leave, with the image's identity. `rules=[RecordingRule("box:up",
-"min(up)")]` computes series in the guest, so `export=` can name booleans in place of raw
-series ([a task](howto.md#ship-booleans-not-raw-series)). A record name has a colon, and
-`promtool check rules` checks the expressions at build time. With rules Prometheus runs in
-server mode, its query API on the loopback. `image-metrics` logs the digest and RTMR0-3 at
-boot.
+credential=, rules=, export=))` ships the journal and node metrics. A development profile
+sends each to the guest's receiver (`journal-sink`, `metrics-sink`), as a production one
+without `url=` does. Otherwise the delivered credential authenticates it. An `http://` sink
+warns. `rules=[RecordingRule("box:up", "min(up)")]` computes series in the guest
+([a task](howto.md#ship-booleans-not-raw-series)). A rule's series leaves unless it says
+`export=False`. `export=` adds raw series and presets, and the image's identity always
+leaves. A record name has a colon, and `promtool check rules` checks them at build time.
+With rules Prometheus runs in server mode, its query API on the loopback. `image-metrics`
+logs the digest and RTMR0-3 at boot.
 `Observability(proxy="IP:PORT")` reaches every sink through that one address.
 `proxy=Proxy("10.88.0.100", 443, passthrough=True)` is a TCP relay: each sink's name maps to
 the address in `/etc/hosts`, so its TLS, SNI and `Host` stay the sink's.
