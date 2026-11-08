@@ -320,6 +320,12 @@ class Container(Component):
                     "is read-only and every file in it is root's.",
                     hint="Drop owner=; what the program writes goes to its state= directory.",
                 )
+            if posixpath.normpath(item.path) == "/etc/hosts":
+                raise _fail(
+                    "files= writes /etc/hosts, which the container's Host pins render.",
+                    hint="Pin each peer in egress= or modes=: "
+                    'Egress(hosts=[Host("api.example", ["203.0.113.7"], port=443)]).',
+                )
         if self.state is not None and not isinstance(self.state, VolumeDirectory):
             raise _fail(
                 f"state= holds {self.state!r}, not a volume directory.",

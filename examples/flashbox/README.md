@@ -19,7 +19,7 @@ attested node's components. `channels/` holds the two small Go programs flashbox
 | `lighthouse.service` | `Lighthouse(disable_quic=, ...)`, `Generated("jwt")` |
 | the container's execution client | `Nethermind` on the host, `Container(requires=[nethermind.rpc])` |
 | `recording_rules.yml`, SigV4, the 443 proxy | `rules=`, `export=`, `SigV4`, `Proxy(passthrough=True)` |
-| static hosts in `after-init` | `Container(files=[File.text("/etc/hosts", ...)])` |
+| static hosts in `after-init` | `Host(...)` pins in the container's `egress=` and `modes=` |
 | `delay-pipe`, `input-only-proxy` | `channels/`, two `Service`s on the container's account |
 | `config.d/` kernel and BBR | `Kernel.build(..., base=DebianConfig(...))` and a fragment |
 

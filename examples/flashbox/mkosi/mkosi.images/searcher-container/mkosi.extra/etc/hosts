@@ -1,8 +1,11 @@
 127.0.0.1 localhost
-3.149.14.12 tx.tee-searcher.flashbots.net
-3.136.107.142 tx.tee-searcher.flashbots.net
+::1 localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
 18.221.59.61 backruns.tee-searcher.flashbots.net
 3.15.88.156 backruns.tee-searcher.flashbots.net
+3.149.14.12 tx.tee-searcher.flashbots.net
+3.136.107.142 tx.tee-searcher.flashbots.net
 200.225.47.181 fb-om-use1-00.nodes.buildernet.org direct-us.buildernet.org rpc.buildernet.org
 200.225.47.183 fb-om-use1-01.nodes.buildernet.org direct-us.buildernet.org rpc.buildernet.org
 198.203.202.53 fb-om-euw1-00.nodes.buildernet.org direct-eu.buildernet.org rpc.buildernet.org

@@ -69,6 +69,7 @@ def read(out: Path, path: str) -> str:
         (lambda: web(modes={"maintenance": Egress(metadata=True)}), "outlives the window"),
         (lambda: web(user="root"), 'user="root"'),
         (lambda: web(files=[File.text("/srv/a", "a", owner="web")]), "every file in it is root's"),
+        (lambda: web(files=[File.text("/etc/hosts", "1.2.3.4 a\n")]), "Host pins render"),
         (lambda: Container("web", ["busybox", "httpd"], packages=["busybox"]), "program path"),
         (lambda: Container("Web", HTTPD, packages=["busybox"]), "not a container name"),
         (lambda: ContainerSsh(port=22, keys=Secret("web-keys")), "only root binds below 1024"),

@@ -17,7 +17,6 @@ from components.nethermind import Nethermind
 from tundravm import (
     Debian,
     DebianConfig,
-    File,
     Image,
     Kernel,
     KernelFragment,
@@ -26,7 +25,7 @@ from tundravm import (
 )
 from tundravm.components.access import DevAccess, Login, SshAccess, Sudo
 from tundravm.components.container import Bind, Container, ContainerSsh
-from tundravm.components.network import Egress, Firewall, Mode, Network
+from tundravm.components.network import Egress, Firewall, Host, Mode, Network
 from tundravm.components.observability import (
     Observability,
     PrometheusRemoteWrite,
@@ -59,27 +58,21 @@ lighthouse = Lighthouse(
     state_cache_size=32,
 )
 
-BUNDLES = ["18.221.59.61:443", "3.15.88.156:443"]
-TX_STREAM = ["3.136.107.142:443", "3.149.14.12:443"]
-BUILDERNET = {
-    "200.225.47.181": "fb-om-use1-00.nodes.buildernet.org direct-us.buildernet.org",
-    "200.225.47.183": "fb-om-use1-01.nodes.buildernet.org direct-us.buildernet.org",
-    "198.203.202.53": "fb-om-euw1-00.nodes.buildernet.org direct-eu.buildernet.org",
-    "198.203.202.55": "fb-om-euw1-01.nodes.buildernet.org direct-eu.buildernet.org",
-    "34.104.157.101": "fb-gcp-ane1-00.nodes.buildernet.org direct-ap.buildernet.org",
-    "35.213.62.127": "fb-gcp-ane1-01.nodes.buildernet.org direct-ap.buildernet.org",
-}
-HOSTS = "\n".join(
-    [
-        "127.0.0.1 localhost",
-        "3.149.14.12 tx.tee-searcher.flashbots.net",
-        "3.136.107.142 tx.tee-searcher.flashbots.net",
-        "18.221.59.61 backruns.tee-searcher.flashbots.net",
-        "3.15.88.156 backruns.tee-searcher.flashbots.net",
-        *(f"{address} {names} rpc.buildernet.org" for address, names in BUILDERNET.items()),
-        "",
+TX_STREAM = Host("tx.tee-searcher.flashbots.net", ["3.149.14.12", "3.136.107.142"], port=443)
+BUNDLES = Host("backruns.tee-searcher.flashbots.net", ["18.221.59.61", "3.15.88.156"], port=443)
+BUILDERNET = [
+    Host(
+        f"{node}.nodes.buildernet.org", [address], port=443, aliases=[region, "rpc.buildernet.org"]
+    )
+    for node, address, region in [
+        ("fb-om-use1-00", "200.225.47.181", "direct-us.buildernet.org"),
+        ("fb-om-use1-01", "200.225.47.183", "direct-us.buildernet.org"),
+        ("fb-om-euw1-00", "198.203.202.53", "direct-eu.buildernet.org"),
+        ("fb-om-euw1-01", "198.203.202.55", "direct-eu.buildernet.org"),
+        ("fb-gcp-ane1-00", "34.104.157.101", "direct-ap.buildernet.org"),
+        ("fb-gcp-ane1-01", "35.213.62.127", "direct-ap.buildernet.org"),
     ]
-)
+]
 
 input_dir = data.directory("input", mode=0o755)
 delayed = data.directory("delayed")
@@ -87,13 +80,12 @@ searcher_state = data.directory("searcher")
 searcher = Container(
     "searcher-container",
     packages=["ca-certificates", "curl", "socat"],
-    files=[File.text("/etc/hosts", HOSTS)],
     state=searcher_state,
     ssh=ContainerSsh(port=SSH_PORT, keys=Secret("searcher-keys")),
     expose=[UDP(INPUT_UDP)],
-    egress=Egress(hosts=BUNDLES),
+    egress=Egress(hosts=[BUNDLES]),
     modes={
-        "production": Egress(hosts=[*TX_STREAM, *(f"{a}:443" for a in BUILDERNET)]),
+        "production": Egress(hosts=[TX_STREAM, *BUILDERNET]),
         "maintenance": Egress(
             ports=[TCP(53), UDP(53), TCP(80), TCP(443), TCP(853)],
         ),
