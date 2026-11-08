@@ -47,6 +47,9 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check src tests examples
+          # each example is a project of its own whose lock pins this checkout's dependencies
+          uv lock --check --project examples/attested-node
+          uv lock --check --project examples/flashbox
 
       - name: Typecheck
         run: |

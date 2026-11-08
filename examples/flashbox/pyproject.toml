@@ -1,3 +1,13 @@
 # flashbox is a tundravm project: its image file imports attested-node's components/ through the link here.
+[project]
+name = "flashbox"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tundravm"]
+
+[tool.uv.sources]
+# This repository's checkout, where a project of its own pins tundravm from git.
+tundravm = { path = "../..", editable = true }
+
 [tool.tundravm]
 image = "image.py"
