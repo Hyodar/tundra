@@ -19,6 +19,7 @@ through one that speaks TLS itself.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
 from collections.abc import Iterator, Sequence
@@ -64,6 +65,21 @@ METRICS_CONFIG = "/etc/tundravm/metrics-export.yml"
 
 METRICS_RULES = "/etc/tundravm/metrics-rules.yml"
 """The recording rules Prometheus evaluates when ``rules=`` declares some."""
+
+METRICS_WEB_CONFIG = "/etc/tundravm/metrics-export-web.yml"
+"""The web configuration that closes ``metrics-export``'s HTTP API on 127.0.0.1:9090: basic
+auth for one user whose bcrypt hash is :data:`_NO_CLIENT`, so every request is refused and
+no host process reads the raw series the keep-list holds back. Prometheus itself needs no
+request to it: it scrapes, evaluates and writes on its own."""
+
+_BCRYPT_DIGITS = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+_NO_CLIENT = "$2y$10$" + "".join(
+    _BCRYPT_DIGITS[byte % 64]
+    for byte in hashlib.sha512(b"tundravm metrics-export: no client").digest()[:53]
+)
+"""A bcrypt-shaped hash no password was hashed to: its salt and digest are SHA-512 of a
+fixed label, the same bytes in every build, so nothing in the image or outside it holds a
+password that opens the API."""
 
 SINK_SERVICE = "journal-sink"
 """The in-guest receiver a :class:`JournalExport` without a URL uploads to."""
@@ -484,7 +500,8 @@ class PrometheusRemoteWrite(Keywords):
     one group named after the image.
     Each rule says itself whether its series leaves. Agent mode evaluates no rules, so with
     *rules* Prometheus runs in server mode. A local store under ``/var/lib/metrics-export``
-    then keeps *buffer* of samples, and its query API listens on the loopback only.
+    then keeps *buffer* of samples. Its HTTP API on the loopback refuses every request
+    (:data:`METRICS_WEB_CONFIG`): no host process reads what the keep-list holds back.
 
     *export* names the raw series that leave, and the presets of :data:`EXPORT_PRESETS`
     (``"health"``). The agent drops every other series before the write
@@ -657,6 +674,7 @@ class PrometheusRemoteWrite(Keywords):
                 f"--storage.{store}.path=/var/lib/metrics-export",
                 f"--storage.{store}.{retention}={self.buffer}",
                 "--web.listen-address=127.0.0.1:9090",
+                f"--web.config.file={METRICS_WEB_CONFIG}",
             ],
             requires=[self.sink().endpoint(METRICS_SINK_PORT)] if local else [],
             credentials=[] if credential is None else [credential],
@@ -812,6 +830,8 @@ class Observability(Component):
             yield dm.Unit("prometheus.service", masked=True)
             config = self.metrics.config(proxy)
             yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
+            web = {"basic_auth_users": {METRICS_SERVICE: _NO_CLIENT}}
+            yield ConfigFile.yaml(METRICS_WEB_CONFIG, web, sort_keys=False)
             if self.metrics.rules:
                 rules = self.metrics.rules_file(self._image)
                 yield ConfigFile.yaml(METRICS_RULES, rules, sort_keys=False)
