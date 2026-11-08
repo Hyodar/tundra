@@ -102,6 +102,7 @@ def _printed(cli: Cli, found: instances.Instance, *words: str) -> str:
         ({}, ("--login", "bob"), f"-p 10022 {SCRIPT} -- bob@203.0.113.7"),
         ({"platform": "qemu"}, (), f"-p 2222 {SCRIPT} -- searcher@127.0.0.1"),
         ({"platform": "qemu"}, ("--login=bob", "id"), f"-p 10022 {SCRIPT} -- bob@127.0.0.1 id"),
+        ({}, ("--login=bob", "--", "-x", "--"), f"-p 10022 {SCRIPT} -- bob@203.0.113.7 -x --"),
         (
             {"logins": ("searcher", "tenant")},
             ("--login", "tenant"),
@@ -125,6 +126,7 @@ def _printed(cli: Cli, found: instances.Instance, *words: str) -> str:
         "container",
         "local",
         "local-container",
+        "dashes",
         "second-login",
         "dev-root",
         "recorded-identity",

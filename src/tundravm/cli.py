@@ -2090,8 +2090,8 @@ def _may_pin(spec: SourceBuild, pin: str | None, checkouts: Path) -> bool:
 
 
 class _RemoteCommand(argparse.Action):
-    """The words after INSTANCE: ``ssh``'s own options up to the first other word, then the
-    remote command word for word, its own options included."""
+    """The words after INSTANCE: ``ssh``'s own options up to the first other word or a
+    ``--``, then the remote command word for word, its own options included."""
 
     def __call__(
         self,
@@ -2102,14 +2102,14 @@ class _RemoteCommand(argparse.Action):
     ) -> None:
         words = [str(word) for word in values or ()]
         start = 0
-        while start < len(words) and words[start].startswith("-"):
+        while start < len(words) and words[start].startswith("-") and words[start] != "--":
             found = parser._option_string_actions.get(words[start])
             start += 2 if found is not None and found.nargs is None else 1
         if start > len(words):
             parser.error(f"argument {words[-1]}: expected one argument")
         if start:
             parser.parse_args([*words[:start], namespace.instance], namespace)
-        setattr(namespace, self.dest, words[start:])
+        setattr(namespace, self.dest, words[start + (words[start : start + 1] == ["--"]) :])
 
 
 def _cmd_ssh(args: argparse.Namespace, out: TextIO) -> int:
