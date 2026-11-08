@@ -13,11 +13,14 @@ import base64
 import binascii
 import hashlib
 import io
+import os
 import platform
 import re
 import shutil
+import stat
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -38,7 +41,8 @@ SUMDB_KEY = "sum.golang.org+033de0ae+Ac4zctda0e5eza+HJyk9SxEdh+s3Ux18htTTAD8OuAn
 TOOLCHAINS_DIRNAME = "toolchains"
 """``$XDG_CACHE_HOME/tundravm/toolchains``: one directory per fetched Go release."""
 VERIFIED = ".tundravm-verified"
-"""The file in a fetched release holding the ``h1:`` hash it was checked against."""
+"""The file in a fetched release naming its module and the ``h1:`` hash it was checked
+against, written last before the release is renamed into place."""
 
 Fetcher = Callable[[str], bytes]
 """The body at a url; raises ``OSError`` (``HTTPError``, ``URLError``) when it cannot."""
@@ -49,6 +53,21 @@ _HASH_SIZE = 32
 _DECIMAL = re.compile(rb"0|[1-9][0-9]{0,17}")
 _H1 = re.compile(rb"h1:[A-Za-z0-9+/]{43}=")
 _SIGNATURE_PREFIX = "\N{EM DASH} ".encode()
+_CHUNK = 1 << 20
+_UNZIPPED_LIMIT = 500 << 20
+"""Bytes a toolchain zip may unpack to: ``golang.org/x/mod/zip``'s ``MaxZipFile``; Go
+1.25's is 190 MB."""
+_ZIP_METHODS = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
+_ZIP_ERRORS = (
+    zipfile.BadZipFile,
+    zlib.error,
+    EOFError,
+    NotImplementedError,
+    RuntimeError,
+    ValueError,
+)
+"""What reading a hostile zip raises: a bad CRC or header, a broken deflate stream, a
+truncated entry, a method or encryption ``zipfile`` lacks, a name that is not UTF-8."""
 _GOARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
 
@@ -78,20 +97,26 @@ def fetch_go(name: str, *, fetcher: Fetcher | None = None) -> Path:
     """The ``GOROOT`` of Go release *name* (``go1.24.4``) for this host, fetched once.
 
     A release that cannot be downloaded or that the checksum database does not vouch for
-    raises ``SourceError`` naming the fix, and nothing of it is kept.
+    raises ``SourceError`` naming the fix, and nothing of it is kept. One fetched before
+    is used again only as :func:`_verified` finds it.
     """
-    root = toolchains_dir() / name
-    if (root / VERIFIED).is_file() and (root / "bin" / "go").is_file():
-        return root
     module = host_module(name)
+    directory = _toolchains()
+    root = directory / name
+    if _verified(root, module):
+        return root
     get = fetcher or _download
     try:
         expected = _sumdb_hash(module, get)
         archive = zipfile.ZipFile(io.BytesIO(get(_zip_url(module))))
-        found = zip_hash(archive)
+        members = _members(archive)
+        found = _dirhash(archive, members)
         if found != expected:
             raise _Refused(f"the zip hashes to {found}, not the {expected} sum.golang.org signed")
-        _unpack(archive, module, root, expected)
+        try:
+            _unpack(archive, members, module, root, expected)
+        except OSError as exc:
+            raise _Refused(f"cannot unpack it into {directory}: {exc.strerror or exc}") from None
     except HTTPError as exc:
         exc.close()
         reason = f"{urlsplit(exc.url).netloc} answered HTTP {exc.code} for {exc.url}"
@@ -99,9 +124,54 @@ def fetch_go(name: str, *, fetcher: Fetcher | None = None) -> Path:
     except OSError as exc:
         cause = exc.reason if isinstance(exc, URLError) else exc
         raise _not_fetched(name, module, f"cannot download it: {cause}") from None
-    except (_Refused, zipfile.BadZipFile, ValueError) as exc:
-        raise _not_fetched(name, module, str(exc)) from None
+    except (_Refused, *_ZIP_ERRORS) as exc:
+        raise _not_fetched(name, module, str(exc) or type(exc).__name__) from None
     return root
+
+
+def _toolchains() -> Path:
+    """:func:`toolchains_dir`, created, once it is this user's and no one else can write it.
+
+    Another user's directory there (a shared ``XDG_CACHE_HOME``) could hold a release with
+    its marker that this user would run.
+    """
+    directory = toolchains_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    if not _owned(directory.stat()):
+        raise SourceError(
+            f"{directory} belongs to another user or others can write it, so a Go toolchain "
+            "in it cannot be trusted.",
+            source=GO_TOOLCHAIN_MODULE,
+            reason=f"{directory} is not this user's alone",
+            hint=f"Remove {directory} (or set XDG_CACHE_HOME to a directory of your own).",
+        )
+    return directory
+
+
+def _owned(st: os.stat_result) -> bool:
+    return st.st_uid == os.geteuid() and not st.st_mode & stat.S_IWOTH
+
+
+def _verified(root: Path, module: str) -> bool:
+    """Whether *root* is release *module* as :func:`_unpack` left it: a directory (not a
+    link) of this user's whose :data:`VERIFIED` marker, written only after the zip hashed
+    to the checksum database's record, names *module* and an ``h1:`` hash."""
+    try:
+        directory, marker, go = (path.lstat() for path in (root, root / VERIFIED, root / "bin/go"))
+        words = (root / VERIFIED).read_bytes().split(b" ")
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(directory.st_mode)
+        and stat.S_ISREG(marker.st_mode)
+        and stat.S_ISREG(go.st_mode)
+        and _owned(directory)
+        and _owned(marker)
+        and len(words) == 2
+        and words[0] == module.encode()
+        and _H1.fullmatch(words[1].removesuffix(b"\n")) is not None
+        and words[1].endswith(b"\n")
+    )
 
 
 def _not_fetched(name: str, module: str, reason: str) -> SourceError:
@@ -128,49 +198,103 @@ def _zip_url(module: str) -> str:
     return f"{GO_PROXY}/{path}/@v/{version}.zip"
 
 
+Members = list[tuple[bytes, zipfile.ZipInfo]]
+"""A module zip's files, ``(name, entry)`` sorted by name, the name as ``archive/zip`` reads
+it: the central directory's bytes, whatever the UTF-8 flag or a Unicode path field says."""
+
+
+def _members(archive: zipfile.ZipFile) -> Members:
+    """*archive*'s files, refused when ``go`` could read them otherwise or unpack too much.
+
+    Two entries of one name, a name holding a newline or NUL, an encrypted entry, one
+    neither stored nor deflated (all ``archive/zip`` reads), or files adding up past
+    :data:`_UNZIPPED_LIMIT` (``modzip.MaxZipFile``).
+    """
+    members: dict[bytes, zipfile.ZipInfo] = {}
+    total = 0
+    for info in archive.infolist():
+        raw = info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437")
+        if raw in members:
+            raise _Refused(f"the zip names {raw!r} twice")
+        if b"\n" in raw or b"\0" in raw:
+            raise _Refused(f"the zip names a file {raw!r}")
+        if info.flag_bits & 0x1 or info.compress_type not in _ZIP_METHODS:
+            raise _Refused(f"the zip's {raw!r} is encrypted or compressed as go cannot read")
+        total += info.file_size
+        if total > _UNZIPPED_LIMIT:
+            raise _Refused(f"the zip unpacks to more than {_UNZIPPED_LIMIT >> 20} MiB")
+        members[raw] = info
+    return sorted(members.items(), key=lambda member: member[0])
+
+
 def zip_hash(archive: zipfile.ZipFile) -> str:
     """``dirhash.HashZip`` with ``Hash1``: the ``h1:`` hash ``go.sum`` records for a module zip."""
-    names = sorted(info.filename for info in archive.infolist())
-    if len(set(names)) != len(names):
-        raise _Refused("the zip names a file twice")
+    return _dirhash(archive, _members(archive))
+
+
+def _dirhash(archive: zipfile.ZipFile, members: Members) -> str:
+    """``dirhash.Hash1`` of *members*: the sha256 of ``<sha256 hex>  <name>\\n`` per file,
+    in name order, each file read in chunks."""
     summary = hashlib.sha256()
-    for name in names:
-        if "\n" in name:
-            raise _Refused("the zip names a file with a newline")
-        digest = hashlib.sha256(archive.read(name)).hexdigest()
-        summary.update(f"{digest}  {name}\n".encode())
+    for raw, info in members:
+        digest = hashlib.sha256()
+        with archive.open(info) as member:
+            while chunk := member.read(_CHUNK):
+                digest.update(chunk)
+        summary.update(digest.hexdigest().encode() + b"  " + raw + b"\n")
     return "h1:" + base64.b64encode(summary.digest()).decode()
 
 
-def _unpack(archive: zipfile.ZipFile, module: str, root: Path, checksum: str) -> None:
-    """Unpack the module zip *archive* into *root*, its commands executable, as ``go`` does."""
-    prefix = f"{module}/"
-    root.parent.mkdir(parents=True, exist_ok=True)
+def _unpack(
+    archive: zipfile.ZipFile, members: Members, module: str, root: Path, checksum: str
+) -> None:
+    """Unpack *members* of the verified module zip *archive* into *root*, as ``go`` does.
+
+    Every name must lie under ``<module>/`` and name a plain path below it; files are
+    written new (``O_EXCL``, never through a link), mode 0755 under ``bin/`` and
+    ``pkg/tool/`` and 0644 elsewhere, whatever the zip says. All of it is staged in a
+    scratch directory beside *root* with the :data:`VERIFIED` marker, then renamed into
+    place, so a crash leaves nothing :func:`_verified` accepts.
+    """
+    prefix = f"{module}/".encode()
     scratch = Path(tempfile.mkdtemp(prefix=f".{root.name}.", dir=root.parent))
     try:
         staged = scratch / "root"
-        for info in archive.infolist():
-            rel = info.filename.removeprefix(prefix)
-            parts = rel.split("/")
-            if rel == info.filename or "\\" in rel or any(p in ("", ".", "..") for p in parts):
-                raise _Refused(f"the zip holds {info.filename!r}, outside {prefix}")
-            target = staged.joinpath(*parts)
+        staged.mkdir()
+        for raw, info in members:
+            parts = raw.removeprefix(prefix).split(b"/")
+            if not raw.startswith(prefix) or any(p in (b"", b".", b"..") for p in parts):
+                raise _Refused(f"the zip holds {raw!r}, outside {module}/")
+            target = staged.joinpath(*(os.fsdecode(part) for part in parts))
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.read(info))
-            command = parts[0] == "bin" or parts[:2] == ["pkg", "tool"]
-            target.chmod(0o755 if command else 0o644)
+            command = parts[0] == b"bin" or parts[:2] == [b"pkg", b"tool"]
+            mode = 0o755 if command else 0o644
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+            with os.fdopen(fd, "wb") as out, archive.open(info) as member:
+                shutil.copyfileobj(member, out, _CHUNK)
+                os.fchmod(out.fileno(), mode)
         if not (staged / "bin" / "go").is_file():
             raise _Refused("the zip holds no bin/go")
-        (staged / VERIFIED).write_text(f"{checksum}\n", encoding="utf-8")
-        if root.exists():
-            shutil.rmtree(root)
-        try:
-            staged.rename(root)
-        except OSError:
-            if not (root / VERIFIED).is_file():
-                raise
+        (staged / VERIFIED).write_text(f"{module} {checksum}\n", encoding="utf-8")
+        _install(staged, root, module, scratch / "stale")
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _install(staged: Path, root: Path, module: str, aside: Path) -> None:
+    """Rename *staged* to *root*, first moving to *aside* whatever *root* holds that is not
+    a verified *module* (a half copy, a link, an older layout); a concurrent fetch's
+    verified *root* is kept, never removed under the ``go`` running from it."""
+    try:
+        staged.rename(root)
+        return
+    except OSError:
+        if not root.is_symlink() and not root.exists():
+            raise
+    if _verified(root, module):
+        return
+    root.rename(aside)
+    staged.rename(root)
 
 
 def _sumdb_hash(module: str, get: Fetcher) -> str:

