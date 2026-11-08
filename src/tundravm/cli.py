@@ -1,4 +1,4 @@
-"""The ``tundravm`` command line: the operator's loop in thirteen commands.
+"""The ``tundravm`` command line: the operator's loop in fourteen commands.
 
 ``new`` scaffolds a project; ``check`` validates an image without building it; ``lock``
 pins its inputs; ``build`` makes an immutable build directory (``tundravm.builds``); ``show``
@@ -8,7 +8,7 @@ loop as one verb, a dev build run with its probe (``tundravm.dev``); ``attest`` 
 instance's evidence and ``secrets`` delivers credentials and unlocks volumes after a fresh
 check (``tundravm.bootstrap``); ``verify`` checks a build directory against its manifest;
 ``convert`` turns an mkosi tree or unit files into source; ``doctor`` says what this host
-can do.
+can do; ``ssh`` logs in to an instance with the host key ``attest`` pinned (``tundravm._ssh``).
 
 Exit codes: 0 success; 1 a failed check (``check`` errors, ``lock --check`` drift, a
 failing ``verify``, an ``attest`` that does not pass, a ``build --reproduce`` that differs,
@@ -29,6 +29,7 @@ import difflib
 import json
 import os
 import re
+import shlex
 import sys
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
@@ -36,7 +37,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TextIO, cast
 
-from . import __version__, bootstrap, builds, deployments, instances, show
+from . import __version__, _ssh, bootstrap, builds, deployments, instances, show
 from . import manifest as mf
 from . import templates as scaffold
 from ._image._lower import component_classes
@@ -120,6 +121,7 @@ COMMANDS = (
     "verify",
     "convert",
     "doctor",
+    "ssh",
 )
 RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "switch", "probe")
 DEPLOY_ACTIONS = ("status", "logs", "mode", "switch", "upgrade", "rollback")
@@ -132,7 +134,7 @@ tundravm builds, runs and verifies confidential VM images declared as one Image.
   uv run tundravm check         the image without a build: lint, lock and tree drift
   uv run tundravm dev           build the dev profile, boot it without TDX, probe it, follow it
 
-`tundravm --help` lists all thirteen commands."""
+`tundravm --help` lists all fourteen commands."""
 """What ``tundravm`` with no arguments prints: the first four commands of a new project."""
 
 
@@ -844,6 +846,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument(
         "--for", dest="area", choices=DOCTOR_AREAS, default=None, help="One capability."
+    )
+
+    ssh_cmd = command(
+        "ssh",
+        _cmd_ssh,
+        "Log in to an instance as its image's login, with the host key attest pinned.",
+        "tundravm ssh INSTANCE [--login NAME] [--identity KEY] [--print] [COMMAND ...]\n\n"
+        + _wrapped(
+            "Run ssh against the instance's address and port from its receipt (a local "
+            "instance's forward), checking the host key strictly against the known_hosts the "
+            "last passing `attest` wrote, which it refuses without. The account is the "
+            "image's one Login; --login names another, or a ContainerSsh user on its own "
+            "port. The key is the one `attest --identity` recorded, else ssh's defaults. "
+            "COMMAND and its words go to the login's program as typed, and none lists its "
+            "commands; a terminal gets -t when COMMAND is empty or the build is a "
+            "development one. --print prints the ssh command line instead of running it."
+        ),
+    )
+    ssh_cmd.add_argument("instance", metavar="INSTANCE")
+    ssh_cmd.add_argument(
+        "remote",
+        nargs=argparse.REMAINDER,
+        action=_RemoteCommand,
+        metavar="COMMAND",
+        help="The login's command and its words (none: the program lists its commands).",
+    )
+    ssh_cmd.add_argument(
+        "--login", default=None, metavar="NAME", help="The account (default: the one Login)."
+    )
+    ssh_cmd.add_argument(
+        "--identity",
+        type=Path,
+        default=None,
+        metavar="KEY",
+        help="The SSH key (default: the one `attest --identity` recorded).",
+    )
+    ssh_cmd.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="Print the ssh command line; run nothing.",
     )
     return parser
 
@@ -2023,6 +2066,51 @@ def _may_pin(spec: SourceBuild, pin: str | None, checkouts: Path) -> bool:
         return checkout_rust_toolchain(spec, checkout) is not None
     except SourceError:
         return True
+
+
+# ── ssh ──────────────────────────────────────────────────────────────────
+
+
+class _RemoteCommand(argparse.Action):
+    """The words after INSTANCE: ``ssh``'s own options up to the first other word, then the
+    remote command word for word, its own options included."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[object] | None,
+        option_string: str | None = None,
+    ) -> None:
+        words = [str(word) for word in values or ()]
+        start = 0
+        while start < len(words) and words[start].startswith("-"):
+            found = parser._option_string_actions.get(words[start])
+            start += 2 if found is not None and found.nargs is None else 1
+        if start > len(words):
+            parser.error(f"argument {words[-1]}: expected one argument")
+        if start:
+            parser.parse_args([*words[:start], namespace.instance], namespace)
+        setattr(namespace, self.dest, words[start:])
+
+
+def _cmd_ssh(args: argparse.Namespace, out: TextIO) -> int:
+    instance = instances.open_instance(settings(None).instances, args.instance)
+    build = instance.build
+    account = _ssh.choose(instance, _ssh.accounts(build), args.login)
+    terminal = sys.stdin is not None and sys.stdin.isatty()
+    argv = _ssh.argv(
+        instance,
+        account,
+        args.remote,
+        identity=args.identity or _ssh.recorded_identity(instance),
+        tty=terminal and (not args.remote or not build.production),
+    )
+    if args.print_only:
+        print(shlex.join(argv), file=out)
+        return EXIT_OK
+    out.flush()
+    os.execvp(argv[0], argv)
 
 
 __all__ = [

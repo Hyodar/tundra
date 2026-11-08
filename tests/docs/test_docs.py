@@ -212,7 +212,7 @@ def test_documented_commands_parse(page: str, line: int, words: list[str]) -> No
     stderr = io.StringIO()
     try:
         with contextlib.redirect_stderr(stderr):
-            _, extras = build_parser().parse_known_args(words)
+            parsed, extras = build_parser().parse_known_args(words)
     except SystemExit as exc:
         if words and words[-1] in ("-h", "--help") and exc.code == 0:
             return
@@ -220,7 +220,10 @@ def test_documented_commands_parse(page: str, line: int, words: list[str]) -> No
     unknown = [word for word in extras if word.startswith("-")]
     assert unknown == [], f"{where}: unknown flags {unknown}"
     own = _command_parser(words)._option_string_actions
-    flags = [word.split("=", 1)[0] for word in words if word.startswith("--")]
+    remote = len(getattr(parsed, "remote", None) or ())
+    flags = [
+        word.split("=", 1)[0] for word in words[: len(words) - remote] if word.startswith("--")
+    ]
     assert [flag for flag in flags if flag not in own] == [], where
 
 

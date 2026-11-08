@@ -1,4 +1,4 @@
-"""The command surface: thirteen commands, nothing else, and how a usage error reads."""
+"""The command surface: fourteen commands, nothing else, and how a usage error reads."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from tundravm import __version__
 from tundravm.cli import COMMANDS, EXIT_BROKEN_PIPE, EXIT_ERROR, EXIT_OK, build_parser
 from tundravm.completion import verbs_of
 
-THIRTEEN = (
+FOURTEEN = (
     "new",
     "check",
     "lock",
@@ -28,6 +28,7 @@ THIRTEEN = (
     "verify",
     "convert",
     "doctor",
+    "ssh",
 )
 REMOVED = (
     "init",
@@ -56,9 +57,9 @@ REMOVED = (
 )
 
 
-def test_the_parser_has_exactly_the_thirteen_commands() -> None:
-    assert COMMANDS == THIRTEEN
-    assert tuple(verb.name for verb in verbs_of(build_parser())) == THIRTEEN
+def test_the_parser_has_exactly_the_fourteen_commands() -> None:
+    assert COMMANDS == FOURTEEN
+    assert tuple(verb.name for verb in verbs_of(build_parser())) == FOURTEEN
 
 
 def test_no_arguments_prints_the_first_four_commands(cli: Cli) -> None:
@@ -71,7 +72,7 @@ def test_no_arguments_prints_the_first_four_commands(cli: Cli) -> None:
         "uv run tundravm check",
         "uv run tundravm dev",
     ]
-    assert result.out.rstrip().endswith("`tundravm --help` lists all thirteen commands.")
+    assert result.out.rstrip().endswith("`tundravm --help` lists all fourteen commands.")
 
 
 def test_version(capsys: pytest.CaptureFixture[str], cli: Cli) -> None:

@@ -17,6 +17,7 @@ Generated from the `tundravm` argument parser by `uv run python -m tundravm._ref
 | [`verify`](#tundravm-verify) | Check a build directory against its manifest. |
 | [`convert`](#tundravm-convert) | Turn an mkosi tree or systemd unit files into source. |
 | [`doctor`](#tundravm-doctor) | Report what this host can build, run, deploy and verify. |
+| [`ssh`](#tundravm-ssh) | Log in to an instance as its image's login, with the host key attest pinned. |
 
 ## tundravm
 
@@ -40,6 +41,7 @@ positional arguments:
     verify    Check a build directory against its manifest.
     convert   Turn an mkosi tree or systemd unit files into source.
     doctor    Report what this host can build, run, deploy and verify.
+    ssh       Log in to an instance as its image's login, with the host key attest pinned.
 
 options:
   -h, --help  show this help message and exit
@@ -583,6 +585,36 @@ loading the image file:
   --attr NAME           The name the image (or a zero-argument factory) is bound to in the file.
   --pythonpath DIR      Extra import directory for the file (repeatable); the working directory is
                         one.
+```
+
+## tundravm ssh
+
+Log in to an instance as its image's login, with the host key attest pinned.
+
+```text
+usage: tundravm ssh [-h] [--traceback] [--login NAME] [--identity KEY] [--print] INSTANCE ...
+
+tundravm ssh INSTANCE [--login NAME] [--identity KEY] [--print] [COMMAND ...]
+
+Run ssh against the instance's address and port from its receipt (a local instance's
+forward), checking the host key strictly against the known_hosts the last passing
+`attest` wrote, which it refuses without. The account is the image's one Login;
+--login names another, or a ContainerSsh user on its own port. The key is the one
+`attest --identity` recorded, else ssh's defaults. COMMAND and its words go to the
+login's program as typed, and none lists its commands; a terminal gets -t when COMMAND
+is empty or the build is a development one. --print prints the ssh command line
+instead of running it.
+
+positional arguments:
+  INSTANCE
+  COMMAND         The login's command and its words (none: the program lists its commands).
+
+options:
+  -h, --help      show this help message and exit
+  --traceback     Raise errors with the Python traceback.
+  --login NAME    The account (default: the one Login).
+  --identity KEY  The SSH key (default: the one `attest --identity` recorded).
+  --print         Print the ssh command line; run nothing.
 ```
 
 ## Shell completion

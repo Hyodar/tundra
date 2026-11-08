@@ -39,7 +39,7 @@ NAMESPACED = sorted(
 """Public names whose one home is a namespace, so the root never spells them."""
 
 REMOVED_VERB = "removed CLI verb (new, check, lock, build, show, run, deploy, attest, ...)"
-"""The verbs folded into the thirteen commands (plan 3.4): no hint, template or doc names one."""
+"""The verbs folded into the fourteen commands (plan 3.4): no hint, template or doc names one."""
 
 DENYLIST = {
     "fluent method call": re.compile(r"\bimg\.[a-z_]+\("),
@@ -314,7 +314,7 @@ def test_examples_cite_only_the_declarative_api() -> None:
 
 
 @pytest.mark.parametrize("path", CLI_DOCS, ids=lambda path: str(path.relative_to(REPO_ROOT)))
-def test_cli_docs_cite_only_the_thirteen_commands(path: Path) -> None:
+def test_cli_docs_cite_only_the_fourteen_commands(path: Path) -> None:
     found = [
         f"{number}: {line.strip()[:80]}"
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
@@ -390,7 +390,7 @@ def test_removed_docs_are_caught() -> None:
         "profile=dev  debian/trixie (x86_64)  reproducible=yes",
     ],
 )
-def test_the_thirteen_commands_pass(text: str) -> None:
+def test_the_fourteen_commands_pass(text: str) -> None:
     assert _hits(text) == []
 
 

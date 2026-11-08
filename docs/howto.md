@@ -152,9 +152,13 @@ ssh = SshAccess(login=Login("tenant", owner=True, commands={
 }))
 ```
 
-`ssh tenant@HOST` lists the commands, `logs --lines 500 --follow` runs one and `logs --help`
-prints its params. `sudo=True` runs a command as root, `dev=True` keeps one out of
-production, and `owner=True` gives the login the key `attest` hands over.
+```console
+$ tundravm ssh attested-node-1 logs --lines 500 --follow
+```
+
+Without a command it lists the login's commands. `sudo=True` runs one as root,
+`dev=True` keeps one out of production, and `owner=True` gives the login the key `attest`
+hands over.
 
 ## Run a container
 
