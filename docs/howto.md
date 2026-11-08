@@ -87,7 +87,8 @@ $ tundravm run stop demo-1
 ```
 
 `run` boots a build as a numbered instance and forwards its ports to `127.0.0.1`, and
-`run ssh` opens a shell on a dev build that has SSH. [Run](manual.md#run) covers both modes.
+`tundravm ssh demo-1 --login root` opens a shell on a dev build. [Run](manual.md#run)
+covers both modes.
 
 ## Deploy
 
@@ -214,7 +215,7 @@ Pass it in `components=`. Attest first, then open the window, use it and close i
 
 ```console
 $ tundravm run switch demo-1 maintenance
-$ tundravm run ssh demo-1
+$ tundravm ssh demo-1 --login root
 $ tundravm run switch demo-1 production
 ```
 

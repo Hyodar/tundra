@@ -165,6 +165,7 @@ RENAMED = {
         r"\b(?:fragment_plan|fake_fragment|recipe_file|compile_tree|assert_tree_matches)\b"
     ),
     "Component fragment= (name=)": re.compile(r"\(Component, fragment="),
+    "run ssh (tundravm ssh INSTANCE --login root)": re.compile(r"\brun ssh\b"),
     "service-command-not-shipped (service-program-missing)": re.compile(
         r"\bservice-command-not-shipped\b"
     ),
@@ -525,6 +526,7 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         'Diagnostic("app-x", "error", "m", variant=resolved.variant)',
         "the variant-empty finding",
         'Secret("jwt", rotation="restart")',
+        "`tundravm run ssh demo-1` opens a shell",
         '"reboot": Sudo("/usr/bin/systemctl", "reboot"),',
         '"toggle": firewall.switch,',
         'Int("lines", 1, 1000)',

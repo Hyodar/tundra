@@ -100,14 +100,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           receipt=.tundravm/instances/$INSTANCE/instance.json
-          known=.tundravm/instances/$INSTANCE/known_hosts
-          port=$(jq -r '.ports["22"]' "$receipt")
           ssh_port=$(jq -r '.ports["10022"]' "$receipt")
-          as() {
-            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
-              -o ServerAliveInterval=3 -o ServerAliveCountMax=3 \
-              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes searcher@127.0.0.1 "$@"
-          }
+          as() { uv run tundravm ssh "$INSTANCE" "$@"; }
           as | tee "$RUNNER_TEMP/menu.txt"
           for word in status 'logs <lines>' 'toggle <mode>' reboot; do
             grep -F "  $word" "$RUNNER_TEMP/menu.txt"
@@ -124,19 +118,9 @@ jobs:
       - name: Open the maintenance window from the menu and enter the container
         if: ${{ !cancelled() }}
         run: |
-          receipt=.tundravm/instances/$INSTANCE/instance.json
-          known=.tundravm/instances/$INSTANCE/known_hosts
-          port=$(jq -r '.ports["22"]' "$receipt")
-          ssh_port=$(jq -r '.ports["10022"]' "$receipt")
-          ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
-            searcher@127.0.0.1 toggle maintenance
+          uv run tundravm ssh "$INSTANCE" toggle maintenance
           sleep 3
-          inside() {
-            ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
-              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
-              bob@127.0.0.1 "$@"
-          }
+          inside() { uv run tundravm ssh "$INSTANCE" --login bob "$@"; }
           inside true
           inside 'id -un; ls -d /persistent/data/searcher /persistent/data/input'
           echo "inside the container over 10022"
@@ -154,11 +138,7 @@ jobs:
           input_port=$(jq -r '.ports["27018"]' "$receipt")
           go build -C examples/flashbox/channels -o "$RUNNER_TEMP/input-proxy" ./cmd/input-proxy
           grep -F "[127.0.0.1]:$ssh_port " "$known" > "$RUNNER_TEMP/container-host-key"
-          inside() {
-            ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
-              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
-              bob@127.0.0.1 "$@"
-          }
+          inside() { uv run tundravm ssh "$INSTANCE" --login bob "$@"; }
           inside 'nohup socat -u UNIX-LISTEN:/persistent/data/input/input.sock,fork,perm=0660 \
             OPEN:/persistent/data/searcher/input.out,creat,append > /dev/null 2>&1 &'
           sleep 3
@@ -180,15 +160,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           receipt=.tundravm/instances/$INSTANCE/instance.json
-          known=.tundravm/instances/$INSTANCE/known_hosts
-          port=$(jq -r '.ports["22"]' "$receipt")
           ssh_port=$(jq -r '.ports["10022"]' "$receipt")
           policy="$TUNDRAVM_BUILD/flashbox/latest-development/measurements.json"
-          as() {
-            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
-              -o ServerAliveInterval=3 -o ServerAliveCountMax=3 \
-              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes searcher@127.0.0.1 "$@"
-          }
+          as() { uv run tundravm ssh "$INSTANCE" "$@"; }
           if as logs 50 | grep -F bot-line-one; then
             echo "the delayed log showed the line at once"; exit 1
           fi
