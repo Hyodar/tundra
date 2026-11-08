@@ -1334,8 +1334,6 @@ def test_unpinned_efi_stub_is_reported_until_locked() -> None:
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
     assert [(d.severity, d.subject) for d in found] == [("warning", "sources.efi-stub")]
     assert "systemd-boot-efi_257.8-1~deb13u1_amd64.deb" in found[0].message
-    strict = _recipe(_stub("20251113T083151Z"), policy=Policy(mutable_ref_policy="error"))
-    assert [d.severity for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
     locked = lock(recipe, resolver=lambda source: "b" * 64)
     assert not [d for d in lint(recipe, lock=locked) if d.code == "source-unpinned"]
     report = check_report(recipe, None, variants=None)

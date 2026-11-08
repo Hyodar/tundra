@@ -452,8 +452,6 @@ def test_check_rule_source_unpinned() -> None:
     recipe = _recipe(_build())
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
     assert [(d.severity, d.subject) for d in found] == [("warning", "sources.tool")]
-    strict = _recipe(_build(), policy=Policy(mutable_ref_policy="error"))
-    assert [d.severity for d in lint(strict) if d.code == "source-unpinned"] == ["error"]
     # lint reads the pins of ./build/tundravm.lock, as `tundravm lint` does.
     write_lock(lock(recipe, resolver=_Fixed(SHA_A)), Path("build") / "tundravm.lock")
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]

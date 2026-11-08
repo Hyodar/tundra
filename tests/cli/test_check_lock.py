@@ -74,7 +74,7 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     codes = ("source-unpinned", "tree-drift")
     result = cli("check", *(f"--explain={code}" for code in codes), "demo.py")
     assert result.code == EXIT_OK, result.err
-    assert result.out.startswith("source-unpinned: warning (error when moving refs are refused")
+    assert result.out.startswith("source-unpinned: warning\n")
     assert "\n    fix: Run `tundravm lock` to pin every source" in result.out
     assert "\n\ntree-drift: error\n" in result.out
     unknown = cli("check", "--explain", "source-unpined")

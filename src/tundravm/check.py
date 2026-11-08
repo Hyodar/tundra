@@ -28,7 +28,7 @@ from ._modules.init import is_init_path
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
 from .compiler.emit_mkosi import _systemd_unit_content
-from .diagnostics import Diagnostic, Rule, RuleCheck, Severity
+from .diagnostics import Diagnostic, Rule, RuleCheck
 from .errors import ValidationError
 from .formats import annotation_path, workflow_command
 from .kernel_modules import (
@@ -608,15 +608,13 @@ def _rule_source_unpinned(
     if not sources:
         return
     pins = image.source_pins()
-    policy = image.policy.mutable_ref_policy
-    severity: Severity = "error" if policy == "error" else "warning" if policy == "warn" else "info"
     for spec in sources.values():
         if spec.pin_from(pins) is not None:
             continue
         message, hint = _unpinned_advice(spec)
         tools = isinstance(spec.source, LocalSource) and spec.source.path == TOOLS_LOCAL
         yield Diagnostic(
-            severity=severity,
+            severity="warning",
             code="source-unpinned",
             message=message,
             hint=hint,
@@ -1443,18 +1441,14 @@ _REGISTRY: tuple[Rule, ...] = (
     ),
     Rule(
         "source-unpinned",
-        ("warning", "error", "info"),
+        "warning",
         "A source build, built kernel or downloaded package has no pin in the lockfile, so "
-        "a moving ref builds different bytes.",
+        "a moving ref builds different bytes; a production build stops until it is pinned.",
         "Run `tundravm lock` to pin every source at once (`tundravm build` then "
         "fetches each on the host), or declare an immutable source: Git(url, ref) with a "
         "40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, "
         "with every other source it cannot resolve, before anything is written.",
         (_rule_source_unpinned,),
-        when=(
-            "when moving refs are refused",
-            "when they are allowed",
-        ),
     ),
     Rule(
         "kernel-unhardened",
