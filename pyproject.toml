@@ -94,9 +94,19 @@ allow-direct-references = true
 packages = ["src/tundravm"]
 exclude = ["/tools"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# the runtime a Login's generated program copies, and the go.mod whose go line it takes
+"tools/logincli/cli.go" = "tundravm/_logincli/cli.go"
+"tools/go.mod" = "tundravm/_logincli/go.mod"
+
 [tool.hatch.build.targets.sdist]
 # tools/ is the Go module images build from this repository, never part of the package
 exclude = ["/tools"]
+
+[tool.hatch.build.targets.sdist.force-include]
+# but for the two the wheel ships, where its force-include reads them building from the sdist
+"tools/logincli/cli.go" = "tools/logincli/cli.go"
+"tools/go.mod" = "tools/go.mod"
 
 [tool.uv]
 # A commit or a tag changes the version, so uv reinstalls the editable checkout on either.

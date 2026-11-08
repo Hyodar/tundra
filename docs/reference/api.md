@@ -1168,7 +1168,7 @@ An account other than root that logs in over SSH into its commands: `Login("tena
 | `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
 | `Login.listing() -> list[str]` | What its program prints for an empty request, every command of this build. |
 | `Login.options` | The `authorized_keys` options every baked key carries: the program's allow a terminal (`pty`) only with `terminal`. |
-| `Login.program() -> dict[str, str]` | The files of its program, by name: `main.go`, `dev.go` with `dev=True` commands, `cli.go` (the runtime, `tools/logincli/cli.go` of the tundravm that runs) and `go.mod` (no dependency, the tools' `go` line). |
+| `Login.program() -> dict[str, str]` | The files of its program, by name: `main.go`, `dev.go` with `dev=True` commands, `cli.go` (the runtime, `tools/logincli/cli.go`, which the package ships) and `go.mod` (no dependency, the tools' `go` line). |
 | `Login.program_path` | `/usr/libexec/tundravm/cli/<name>`, or `None` for a shell login. |
 | `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: every argv each root command of this build can produce. |
 | `Login.sudoers() -> str` | The `sudoers.d` file: exactly `sudo_rules`. |

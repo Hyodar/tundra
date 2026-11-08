@@ -44,7 +44,8 @@ def test_core_package_layout_modules_importable() -> None:
 
 @pytest.mark.boundary
 def test_the_sdist_and_the_wheel_hold_no_go_module(tmp_path: Path) -> None:
-    """tools/ is the Go module images build from this repository, never package data."""
+    """tools/ is the Go module images build from this repository, never package data: the
+    distributions hold only the login runtime and the go.mod its program takes a line of."""
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv builds the distributions")
@@ -55,4 +56,8 @@ def test_the_sdist_and_the_wheel_hold_no_go_module(tmp_path: Path) -> None:
         names = [name.split("/", 1)[1] for name in archive.getnames() if "/" in name]
     names += zipfile.ZipFile(wheel).namelist()
     assert "src/tundravm/__init__.py" in names
-    assert not [name for name in names if name.startswith("tools/")]
+    assert sorted(name for name in names if name.startswith("tools/")) == [
+        "tools/go.mod",
+        "tools/logincli/cli.go",
+    ]
+    assert {"tundravm/_logincli/cli.go", "tundravm/_logincli/go.mod"} <= set(names)

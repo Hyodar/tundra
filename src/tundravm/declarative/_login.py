@@ -15,8 +15,12 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from tundravm.errors import ValidationError
+
+if TYPE_CHECKING:
+    from importlib.resources.abc import Traversable
 
 _POSITIONAL = re.compile(r"[a-z][a-z0-9_]{0,31}")
 _OPTION = re.compile(r"--[a-z][a-z0-9-]{0,31}")
@@ -961,26 +965,37 @@ def _aligned(indent: str, entries: Sequence[tuple[str, list[str], bool]]) -> lis
     return found
 
 
-RUNTIME = "logincli/cli.go"
-"""The runtime every login's program copies, in the tools of the running tundravm."""
+RUNTIME_FILES = {"cli.go": "logincli/cli.go", "go.mod": "go.mod"}
+"""The files a login's program takes from ``tools/``, by the name the installed package
+ships each under in :data:`PACKAGED_RUNTIME`: the runtime, and the ``go.mod`` whose ``go``
+line it takes. ``pyproject.toml`` force-includes them."""
+PACKAGED_RUNTIME = "_logincli"
+"""The directory of the installed package holding :data:`RUNTIME_FILES`."""
 
 
 def runtime() -> tuple[str, str]:
-    """``(cli.go, go)``: the runtime and the ``go`` line of ``tools/go.mod``, from the
-    tools of the checkout tundravm runs from."""
+    """``(cli.go, go)``: the runtime and the ``go`` line of the tools' ``go.mod``, read from
+    the checkout tundravm runs from, else from the copy the installed package ships."""
+    from importlib.resources import files
+
     from tundravm._modules.base import tools_checkout
 
     tools = tools_checkout()
-    if tools is None:
+    cli: Traversable
+    mod: Traversable
+    if tools is not None:
+        cli, mod = (tools / RUNTIME_FILES[name] for name in ("cli.go", "go.mod"))
+    else:
+        packaged = files("tundravm").joinpath(PACKAGED_RUNTIME)
+        cli, mod = (packaged.joinpath(name) for name in ("cli.go", "go.mod"))
+    try:
+        runtime, module = cli.read_text(encoding="utf-8"), mod.read_text(encoding="utf-8")
+    except OSError:
         raise ValidationError(
-            "A Login's program is generated against the runtime in tools/logincli, and this "
-            "tundravm runs from no checkout holding it.",
-            hint="Run tundravm from a checkout of its repository (uv add --editable "
-            "PATH/TO/tundravm).",
-        )
-    go = next(
-        line.split()[1]
-        for line in (tools / "go.mod").read_text(encoding="utf-8").splitlines()
-        if line.startswith("go ")
-    )
-    return (tools / RUNTIME).read_text(encoding="utf-8"), go
+            f"This tundravm install lacks the login runtime ({cli}), so it cannot write a "
+            "Login's program.",
+            hint="Reinstall tundravm (uv tool install --reinstall git+...), or run it from a "
+            "checkout of its repository.",
+        ) from None
+    go = next(line.split()[1] for line in module.splitlines() if line.startswith("go "))
+    return runtime, go

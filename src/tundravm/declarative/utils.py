@@ -1322,8 +1322,8 @@ class Login(Keywords):
 
     def program(self) -> dict[str, str]:
         """The files of its program, by name: ``main.go``, ``dev.go`` with ``dev=True``
-        commands, ``cli.go`` (the runtime, ``tools/logincli/cli.go`` of the tundravm that
-        runs) and ``go.mod`` (no dependency, the tools' ``go`` line)."""
+        commands, ``cli.go`` (the runtime, ``tools/logincli/cli.go``, which the package
+        ships) and ``go.mod`` (no dependency, the tools' ``go`` line)."""
         assert self.commands is not None
         main, dev = _login.program(self.name, self.help, self.commands, self.source or "image.py")
         runtime, go = _login.runtime()
