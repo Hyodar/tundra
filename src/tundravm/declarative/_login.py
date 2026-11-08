@@ -835,10 +835,12 @@ def program(
 ) -> tuple[str, str | None]:
     """``(main.go, dev.go)`` of *login*'s program: every command but a ``dev=True`` one in
     ``main.go``, those in ``dev.go`` (``//go:build dev``, ``None`` without one), each
-    sorted by name. *source* is the file that declares the login."""
+    sorted by name. *source* is the file that declares the login, escaped as a JSON string
+    is so it stays on the comment's line."""
     shipped = [(n, c) for n, c in sorted(commands.items()) if not c.dev]
     developed = [(n, c) for n, c in sorted(commands.items()) if c.dev]
-    lines = [GENERATED.format(source=source) + "package main", "", "var program = Program{"]
+    named = GENERATED.format(source=json.dumps(source)[1:-1])
+    lines = [named + "package main", "", "var program = Program{"]
     lines.append(f"\tLogin: {_go(login)},")
     if help is not None:
         lines.append(f"\tHelp:  {_go(help)},")
