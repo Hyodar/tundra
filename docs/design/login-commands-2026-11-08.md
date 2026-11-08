@@ -131,3 +131,8 @@ the first rejection above no longer holds. The menu and sudoers bytes are unchan
 The firewall's menu moved under one namespace ("Also Firewall.commands.switch and status"):
 `firewall.commands.status` and `firewall.commands.switch`, so a `Firewall` has one attribute
 about its menu, and `show` spells both by that path.
+
+## Superseded 2026-11-08
+
+`login-cli-2026-11-08.md` replaces the typed holes, the menu file and `login-menu` with
+argparse-like params over an argv template and a Go program generated per login.
