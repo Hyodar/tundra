@@ -314,7 +314,6 @@ jobs:
           console=.tundravm/instances/fixture-1/console.log
           uv run tundravm attest fixture-1 --policy "$policy" --identity "$RUNNER_TEMP/operator"
           jq -e '.attested.verdict == "simulated"' "$receipt"
-          test -s .tundravm/instances/fixture-1/known_hosts
           uv run tundravm attest fixture-1 --policy "$policy" --tls 8443 | tee "$RUNNER_TEMP/attest-tls.txt"
           grep -E '^certificate   :8443  sha256:[0-9a-f]{64}  \(key bound to the quote\)$' "$RUNNER_TEMP/attest-tls.txt"
           grep -E 'tundravm-attested-tls: :8443 sha256:[0-9a-f]{64}' "$console"
@@ -338,40 +337,31 @@ jobs:
 
       - name: Log in to the container's sshd with its delivered key
         # ContainerSsh: box's own sshd, run as box in its root, on 10022 through the host's
-        # forward. attest pinned the host key the quote binds for box in known_hosts; the
-        # key ssh-keyscan sees must be that one. Only box logs in, by key: root and a
-        # password are refused. Success first, once each: OpenSSH 10 penalises failures.
+        # forward. `tundravm ssh --login box` checks it strictly against the host key the
+        # quote binds for box, which the boot pinned in known_hosts. Only box logs in, by
+        # key: root and a password are refused. Success first, once each: OpenSSH 10
+        # penalises failures.
         run: |
           policy="$TUNDRAVM_BUILD/fixture/latest-development/measurements.json"
-          receipt=.tundravm/instances/fixture-1/instance.json
-          known=.tundravm/instances/fixture-1/known_hosts
           probe=.tundravm/instances/fixture-1/probe.json
           console=.tundravm/instances/fixture-1/console.log
           jq -r '.results[] | select(.check == "container-ssh:box") | "\(.check) \(.verdict) \(.detail)"' "$probe"
           jq -e '.results[] | select(.check == "container-ssh:box") | .verdict == "ok"' "$probe"
           grep -E 'tundravm-container-ssh: box SHA256:[A-Za-z0-9+/]{43}' "$console"
-          port=$(jq -r '.ports["10022"]' "$receipt")
-          pinned=$(grep -F "[127.0.0.1]:$port " "$known" | cut -d ' ' -f 2,3)
-          echo "pinned for box: $pinned"
-          test -n "$pinned"
-          seen=$(ssh-keyscan -p "$port" -t ed25519 127.0.0.1 2>/dev/null | cut -d ' ' -f 2,3)
-          echo "box's sshd shows: $seen"
-          test "$seen" = "$pinned"
           uv run tundravm secrets deliver fixture-1 --policy "$policy" \
             "box-keys=@$RUNNER_TEMP/operator.pub"
-          as() {
-            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
-              -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes "$@"
-          }
-          as box@127.0.0.1 'true && id -un' | tee "$RUNNER_TEMP/box-ssh.txt"
+          inside() { uv run tundravm ssh fixture-1 --login box "$@"; }
+          inside 'true && id -un' | tee "$RUNNER_TEMP/box-ssh.txt"
           grep -Fx box "$RUNNER_TEMP/box-ssh.txt"
-          if as root@127.0.0.1 true 2>"$RUNNER_TEMP/box-root.txt"; then
+          # tundravm ssh lets only box into box's sshd: the refusals edit its command line
+          eval "box=($(inside --print))"
+          if "${box[@]:0:${#box[@]}-1}" root@127.0.0.1 true 2>"$RUNNER_TEMP/box-root.txt"; then
             echo "root logged in to box's sshd"; exit 1
           fi
           cat "$RUNNER_TEMP/box-root.txt"
           grep -F 'Permission denied (publickey)' "$RUNNER_TEMP/box-root.txt"
-          if as -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive \
-            box@127.0.0.1 true 2>"$RUNNER_TEMP/box-password.txt"; then
+          if "${box[0]}" -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive \
+            "${box[@]:1}" true 2>"$RUNNER_TEMP/box-password.txt"; then
             echo "box's sshd let a login in without a key"; exit 1
           fi
           cat "$RUNNER_TEMP/box-password.txt"
@@ -417,22 +407,19 @@ jobs:
 
       - name: Log in as the tenant into its program, refuse root, close the window from it
         # The dev profile's Login("tenant", owner=True): attest handed it the operator's key
-        # instead of root. Against the host key the quote bound (attest's known_hosts), an
-        # empty request lists the commands, which run with typed params as the login or
-        # through the sudoers lines of their argvs, and what the program does not declare is
-        # refused. Root
-        # has no key and PermitRootLogin no. Its `switch production` runs mode-switch locally,
-        # which drops the session's own flow, so the client sees no answer.
+        # instead of root. `tundravm ssh` checks the host key the quote bound (the boot's
+        # known_hosts) with the key attest recorded; an empty request lists the commands, which
+        # run with typed params as the login or through the sudoers lines of their argvs, and
+        # what the program does not declare is refused. Root (a development build's, so
+        # `--login root` is allowed) has no key and PermitRootLogin no. Its `switch
+        # production` runs mode-switch locally, which drops the session's own flow, so the
+        # client sees no answer until the keepalive ends it.
         run: |
           probe=.tundravm/instances/fixture-1/probe.json
-          port=$(jq -r '.ports["22"]' .tundravm/instances/fixture-1/instance.json)
           as() {
-            user=$1
+            login=$1
             shift
-            ssh -i "$RUNNER_TEMP/operator" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes \
-              -o ServerAliveInterval=3 -o ServerAliveCountMax=3 \
-              -o UserKnownHostsFile=.tundravm/instances/fixture-1/known_hosts \
-              -o StrictHostKeyChecking=yes "$user@127.0.0.1" "$@"
+            uv run tundravm ssh fixture-1 --login "$login" "$@"
           }
           as tenant | tee "$RUNNER_TEMP/menu.txt"
           grep -E '^  greeting +the greeting$' "$RUNNER_TEMP/menu.txt"
