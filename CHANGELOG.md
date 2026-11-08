@@ -161,6 +161,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - New: `egress-unfiltered`, `service-metadata`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`, `kernel-cmdline-repeated`, `kernel-unhardened`, `ssh-login-shell`, `container-shell`.
 - A finding's message speaks the image file too: no mkosi tree, build stage or internal spelling (`file-path-duplicate`, `debloat-removes-declared-file`, `service-runs-as-root`, `hardening-relaxed`), and an order only a shipped component writes says to report it.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.
+- A component's finding whose `check()` passes no hint prints its rule's fix as `hint:` (`egress-unfiltered`, `lighthouse-checkpoint-missing`, `nethermind-volatile-state`), the text `--explain` shows.
 
 ### Docs
 

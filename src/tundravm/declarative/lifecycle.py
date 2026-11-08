@@ -525,6 +525,7 @@ def check_report(
             if d.severity == "error" and (d.code, d.subject, d.location) not in seen:
                 seen.add((d.code, d.subject, d.location))
                 found.append(d)
+        found = _with_fixes(recipe, found)
         if any(d.severity == "error" for d in found):
             return found
         img = lower(recipe, variants=names)
@@ -548,6 +549,18 @@ def check_report(
 
 
 _SEVERITY = {"error": 0, "warning": 1, "info": 2}
+
+
+def _with_fixes(recipe: Recipe, diagnostics: Sequence[Diagnostic]) -> list[Diagnostic]:
+    """*diagnostics*, a component's finding without a hint given the fix of the rule its
+    class declares for the code (what ``--explain`` prints)."""
+    from tundravm._image._lower import component_classes
+
+    rules = _check.component_rules(component_classes(recipe))
+    return [
+        replace(d, hint=rules[d.code].rule.fix) if not d.hint and d.code in rules else d
+        for d in diagnostics
+    ]
 
 
 def _located(recipe: Recipe, diagnostics: Sequence[Diagnostic]) -> list[Diagnostic]:

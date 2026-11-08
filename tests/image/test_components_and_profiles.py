@@ -70,6 +70,13 @@ class Picky(Sloppy):
     rules = (Rule("picky-privileged-port", "error", "Below 1024 needs root.", "Use 8080."),)
 
 
+class Hinted(Picky):
+    """The declared rule, its finding carrying a hint of its own."""
+
+    def check(self, resolved: Resolved) -> tuple[Diagnostic, ...]:
+        return (Diagnostic("picky-privileged-port", "error", "needs root", hint="Use 443."),)
+
+
 # ── components ──────────────────────────────────────────────────────────
 
 
@@ -157,6 +164,19 @@ def test_a_components_check_is_its_lint_rule_of_the_codes_it_declares(
     assert sorted(d.code for d in found) == errors
     undeclared = "Sloppy reports 'picky-privileged-port', which its class does not declare"
     assert (undeclared in {d.message for d in found}) == ("rule-undeclared" in errors)
+
+
+@pytest.mark.parametrize(
+    ("component", "hint"),
+    [(Hinted(port=80), "Use 443."), (Picky(port=80), "Use 8080."), (Sloppy(port=80), None)],
+)
+def test_a_components_finding_without_a_hint_gets_its_rules_fix(
+    component: Component, hint: str | None
+) -> None:
+    from tundravm.declarative import lint
+
+    found = lint(recipe_of(Image("x", components=[component])))
+    assert [d.hint for d in found if d.code == "picky-privileged-port"] == [hint]
 
 
 def test_a_nested_component_is_composed_too() -> None:

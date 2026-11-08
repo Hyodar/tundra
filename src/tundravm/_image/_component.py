@@ -323,7 +323,8 @@ class Component(Located, metaclass=_ComponentMeta):
     rules: ClassVar[tuple[Rule, ...]] = ()
     """The codes :meth:`check` reports, one :class:`~tundravm.components.Rule` each:
     ``rules = (Rule("app-privileged-port", "error", summary, fix),)``. A finding of a code
-    the class does not declare is a ``rule-undeclared`` error."""
+    the class does not declare is a ``rule-undeclared`` error; one with no ``hint=`` prints its
+    rule's fix as the hint."""
 
     def compose(self) -> Iterable[object]:
         """The declarations and nested components this component stands for."""
