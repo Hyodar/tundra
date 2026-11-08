@@ -137,7 +137,7 @@ receipt, and a lost key means a new volume.
 On TDX the endpoint takes an SSH key, root's or a `Login`'s, only from an owner that the
 encrypted copy confirmed during this boot, so unlock first and then attest again. An image
 without an `OperatorKey` volume takes no key there. A `Login` reaches only its menu or its
-shell, plus one exact sudoers line for each root entry, and with `Login(owner=True)` the
+shell, plus one exact sudoers line for each root command, and with `Login(owner=True)` the
 owner's key logs in as that login while root never takes it.
 
 | Issuer | First contact proves | It does not prove |

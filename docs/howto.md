@@ -145,17 +145,20 @@ ssh = SshAccess(login=Login(
     "tenant",
     owner=True,
     commands={
-        "status": ["/usr/bin/app-status"],
-        "logs": Sudo(["/usr/bin/journalctl", "-u", "app", "-n", "{lines:int:1-1000}"]),
+        "status": Command("/usr/bin/app-status"),
+        "logs": Sudo("/usr/bin/journalctl", "-u", "app", "-n", Int("lines", 1, 1000)),
         "toggle": firewall.switch,
+        "shell": Command("/usr/bin/bash", dev=True),
     },
 ))
 ```
 
 Pass both in `components=`. `ssh tenant@HOST` lists the menu and `ssh tenant@HOST logs 50`
-runs one entry, while `firewall.switch` is the entry the firewall hands out for its modes.
-The account has no password, no shell and no forwarding. With `owner=True` it takes the key
-`attest` hands over, in place of root, and `keys=` takes baked keys or a `Secret` instead.
+runs one command. A `Command` runs as the login and a `Sudo` as root, while `firewall.switch`
+is the command the firewall hands out for its modes. `modes=["maintenance"]` offers a command
+in that mode only, and `dev=True` keeps `shell` out of production builds. The account has no
+password, no shell and no forwarding. With `owner=True` it takes the key `attest` hands over,
+in place of root, and `keys=` takes baked keys or a `Secret` instead.
 
 ## Run a container
 
