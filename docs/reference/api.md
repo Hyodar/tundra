@@ -954,6 +954,7 @@ The network baseline every image implies: `Network` (also `image.network`, confi
 Egress(
     ports: Sequence[PortValue] = (),
     hosts: Sequence[str | Host] = (),
+    deny: Sequence[str | Host] = (),
     metadata: bool = False,
 )
 ```
@@ -962,7 +963,7 @@ Outbound traffic the image, or one service, may send; everything else is dropped
 
 | Member | Does |
 |---|---|
-| `Egress.pinned` | The `Host` entries of *hosts*, in order. |
+| `Egress.pinned` | The `Host` entries of *hosts*, then of *deny*, in order. |
 
 ### `Firewall`
 

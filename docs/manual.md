@@ -478,7 +478,9 @@ answer comes. `Host("api.example", ["203.0.113.7"], port=443, aliases=[...])` pi
 instead: the firewall accepts those addresses alone, and the name resolves to them in
 `/etc/hosts`, which `systemd-resolved` reads first (`ReadEtcHosts=yes` by default). The
 image's, a service's and a mode's pins fill the image's file, a container's fill its
-root's, and a name is pinned once, never also left to DNS.
+root's, and a name is pinned once, never also left to DNS. `Egress(ports=[TCP(443)],
+deny=[peer])` reaches the web but never `peer`: `deny=` drops ahead of every accept of its
+chain, a `Host` at every port.
 
 `TeeBase` resolves through `systemd-resolved` over strict DNS over TLS, with no fallback,
 LLMNR or mDNS, so the host can neither read nor forge a lookup.

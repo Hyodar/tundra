@@ -5,7 +5,8 @@ container beside an L1 node, on a volume the operator's passphrase opens once th
 has attested, with the searcher's key signing the unlock. The firewall boots into
 production, where the container reaches the bundle endpoint, the transaction stream and
 BuilderNet. A maintenance window opens the container's SSH and lets it reach DNS and any
-host on the web ports, and the bundle endpoint stays reachable in both modes.
+host on the web ports except the transaction stream, and the bundle endpoint stays
+reachable in both modes.
 
 `image.py` ports it from flashbots-images at `09c7576` and composes the parts in
 `components/`. `searcher.py` is the container with flashbox's two channels, `orderflow.py`
@@ -24,7 +25,7 @@ attested node's `nethermind.py` and `lighthouse.py` are linked there file by fil
 | `lighthouse.service` | `Lighthouse(disable_quic=, ...)`, `Generated("jwt")` |
 | the container's execution client | `Nethermind(expose_p2p=True)` on the host, `Searcher(rpc=nethermind.rpc)` |
 | `recording_rules.yml`, SigV4, the 443 proxy | `health_rules(searcher, data)` over `.metrics` selectors, `SigV4`, `Proxy(passthrough=True)` |
-| static hosts in `after-init` | `Host(...)` pins in `orderflow.py` |
+| static hosts in `after-init`, the tx stream's DROP | `Host(...)` pins in `orderflow.py`, `Egress(deny=)` |
 | `delay-pipe`, `input-only-proxy` | `channels/`, two `Service`s in the container's group |
 | `config.d/` kernel and BBR | `Kernel.build(..., base=DebianConfig(...))` and a fragment |
 
@@ -80,6 +81,4 @@ this way (`.github/workflows/flashbox.yml`).
 - The jwt in a container, so the searcher cannot run its own execution client.
 - Lighthouse's logs in the container, which flashbox mounts read-only: the example
   Lighthouse has no log-directory keyword.
-- Egress that excludes: maintenance allows 443 everywhere, where flashbox drops the tx
-  stream.
 - TLS in `input-proxy`: flashbox's pins the searcher's key, and this one relays plain bytes.

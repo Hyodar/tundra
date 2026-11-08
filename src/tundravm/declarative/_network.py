@@ -196,16 +196,27 @@ def _container_input(networks: list[tuple[str, ContainerNetwork]]) -> list[str]:
 def _container_forward(
     firewall: Firewall, networks: list[tuple[str, ContainerNetwork]]
 ) -> list[str]:
-    """The forward chain: what each container sends (its egress, the metadata servers only
-    when it names them, the rest refused), then each port DNATed to it, a moded one through
-    ``mode_input``."""
+    """The forward chain: what each container sends (what it denies dropped, in every
+    mode or in one, then its egress, the metadata servers only when it names them, the rest
+    refused), then each port DNATed to it, a moded one through ``mode_input``."""
     if not networks:
         return []
     rules = [*_established(firewall), "ct state invalid drop"]
     marks = mode_marks(firewall)
     for name, network in networks:
         sent = f'iifname "{network.interface}"'
-        own = network.egress_rules
+        own = tuple(rule for rule in network.egress_rules if not rule.drop)
+        for rule in network.egress_rules:
+            if rule.drop:
+                why = _comment([rule.comment])
+                rules += [f'{sent} {m} drop comment "{why}"' for m in egress_matches(rule)]
+        for mode, rule in network.modes:
+            if rule.drop and mode in marks:
+                why = _comment([rule.comment])
+                rules += [
+                    f'{sent} {_in_mode(m, marks[mode])} drop comment "{why}"'
+                    for m in egress_matches(rule)
+                ]
         for rule in own:
             if rule.host in CLOUD_METADATA:
                 rules += [f'{sent} {m} accept comment "{name}"' for m in egress_matches(rule)]
@@ -224,8 +235,10 @@ def _container_forward(
                     f"does not declare ({', '.join(marks) or 'it has no modes'}).",
                     hint='Firewall(modes={"production": Mode(), "' + mode + '": Mode(...)})',
                 )
+            if rule.drop:
+                continue
             rules += [
-                f"{sent} {m} meta mark set {_mark(marks[mode])} meta mark @current_mode "
+                f"{sent} {_in_mode(m, marks[mode])} "
                 f'ct mark set meta mark accept comment "{_comment([rule.comment])}"'
                 for m in egress_matches(rule)
             ]
@@ -332,6 +345,12 @@ def moded_ports(firewall: Firewall) -> set[Port]:
     return {port for mode in firewall.modes for port in mode.ingress if isinstance(port, Port)}
 
 
+def _in_mode(match: str, mark: int) -> str:
+    """*match* while the mode of *mark* is in force: the packet takes the mark, and
+    ``current_mode`` holds it."""
+    return f"{match} meta mark set {_mark(mark)} meta mark @current_mode"
+
+
 def _mark(value: int) -> str:
     return f"0x{value:08x}"
 
@@ -370,7 +389,7 @@ def _mode_chains(
                     f'accept comment "{why}"'
                 )
         else:
-            for rule in mode.egress_rules:
+            for rule in (rule for rule in mode.egress_rules if not rule.drop):
                 why = _comment([rule.comment if rule.origins else f"{mode.name} mode"])
                 rules += [
                     f'{match} ct mark set {_mark(marks[mode.name])} accept comment "{why}"'
@@ -489,8 +508,9 @@ def unit_egress(items: Iterable[Declaration]) -> list[tuple[str, str, EgressRule
 
 def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]:
     """The output chain: with ``egress="filter"`` the baseline accepts, then the cloud
-    metadata servers for the units that declare them and dropped for the rest, then each
-    unit's other egress and *firewall*'s rules; unfiltered, the metadata part alone."""
+    metadata servers for the units that declare them and dropped for the rest, then what
+    each unit, *firewall* and each of its modes deny, dropped, then each unit's other
+    egress and *firewall*'s rules; unfiltered, the metadata part and the drops alone."""
     filtered = firewall.egress == "filter"
     rules = (
         [
@@ -516,10 +536,11 @@ def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]
         servers = sorted(host for host in CLOUD_METADATA if _family(host) == family)
         spelled = servers[0] if len(servers) == 1 else "{ " + ", ".join(servers) + " }"
         rules.append(f'{family} daddr {spelled} drop comment "cloud metadata"')
+    rules += _drops(firewall, own)
     if not filtered:
         return rules
     for unit, owner, rule in own:
-        if rule.host not in CLOUD_METADATA:
+        if rule.host not in CLOUD_METADATA and not rule.drop:
             rules += [f'{owner} {m} accept comment "{unit}"' for m in egress_matches(rule)]
     for name, network in container_networks(items):
         for port in network.serves:
@@ -527,14 +548,40 @@ def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]
                 f'oifname "{network.interface}" ip daddr {network.address} '
                 f'{port.protocol} dport {port.number} accept comment "{name}: serves"'
             )
-    anywhere = [rule for rule in firewall.egress_rules if rule.host is None and rule.name is None]
-    hosts = [rule for rule in firewall.egress_rules if rule not in anywhere]
+    accepted = [rule for rule in firewall.egress_rules if not rule.drop]
+    anywhere = [rule for rule in accepted if rule.host is None and rule.name is None]
+    hosts = [rule for rule in accepted if rule not in anywhere]
     for rule in [*sorted(anywhere, key=_port_order), *hosts]:
         comment = _comment([rule.comment]) if rule.origins else "egress"
         rules += [f'{m} accept comment "{comment}"' for m in egress_matches(rule)]
     if firewall.modes:
         rules.append("jump mode_output")
     return rules
+
+
+def _drops(firewall: Firewall, own: list[tuple[str, str, EgressRule]]) -> list[str]:
+    """What the units of *own*, *firewall* and each of its modes (while in force) deny, as
+    the output chain's drops, ahead of every accept they would beat."""
+    rules = [
+        f'{owner} {m} drop comment "{unit}"'
+        for unit, owner, rule in own
+        if rule.drop
+        for m in egress_matches(rule)
+    ]
+    rules += [
+        f'{m} drop comment "{_comment([rule.comment])}"'
+        for rule in firewall.egress_rules
+        if rule.drop
+        for m in egress_matches(rule)
+    ]
+    marks = mode_marks(firewall)
+    return rules + [
+        f'{_in_mode(m, marks[mode.name])} drop comment "{_comment([rule.comment])}"'
+        for mode in firewall.modes
+        for rule in mode.egress_rules
+        if rule.drop
+        for m in egress_matches(rule)
+    ]
 
 
 def egress_matches(rule: EgressRule) -> tuple[str, ...]:

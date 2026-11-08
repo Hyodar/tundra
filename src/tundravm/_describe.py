@@ -770,7 +770,8 @@ def _describe_firewall(
     it; outbound when its output chain drops what no rule accepts (``None`` there:
     unfiltered); and what each container may send (``containers``). Each rule names who
     asked: a unit (a component by the units *senders* name for it), a mode, or the
-    ``Firewall``'s own ``allow=``. A host name stands for the sets of its addresses."""
+    ``Firewall``'s own ``allow=``; an ``Egress(deny=)`` drop is marked ``deny``. A host
+    name stands for the sets of its addresses."""
     conf = next((f for f in profile_state.files if f.path == _FIREWALL), None)
     if conf is None:
         return None
@@ -794,9 +795,12 @@ def _describe_firewall(
         if chain == "prerouting" and "dnat" in words:
             forwarded[_rule(words[: words.index("dnat")])] = who
             continue
-        if "accept" not in words or who.startswith("DHCP"):
+        verdict = next((word for word in ("accept", "drop") if word in words), None)
+        if verdict is None or who.startswith("DHCP") or who == "cloud metadata":
             continue
-        rule = {"rule": _rule(words[: words.index("accept")], pinned), "for": who}
+        rule = {"rule": _rule(words[: words.index(verdict)], pinned), "for": who}
+        if verdict == "drop":
+            rule["deny"] = "yes"
         hook = chain.rpartition("_")[2]
         if chain == "forward" and words[0] == "iifname":
             name, _, mode = who.partition(": ")
@@ -849,15 +853,16 @@ def _unit(name: str, units: Collection[str]) -> str:
 def _merged(rules: list[dict[str, str]]) -> list[dict[str, str]]:
     """*rules* once each, the addresses of one pinned name on one rule:
     ``api.example:443/tcp (203.0.113.7, 203.0.113.8)``."""
-    found: dict[tuple[str, str], list[str]] = {}
+    found: dict[tuple[str, str, str], list[str]] = {}
     for row in rules:
         rule, _, address = row["rule"].partition(" (")
-        held = found.setdefault((rule, row["for"]), [])
+        held = found.setdefault((rule, row["for"], row.get("deny", "")), [])
         if address and address.rstrip(")") not in held:
             held.append(address.rstrip(")"))
     return [
         {"rule": f"{rule} ({', '.join(held)})" if held else rule, "for": who}
-        for (rule, who), held in found.items()
+        | ({"deny": deny} if deny else {})
+        for (rule, who, deny), held in found.items()
     ]
 
 
@@ -1315,15 +1320,15 @@ def _firewall_items(firewall: Mapping[str, Any]) -> list[Item]:
 
 
 def _grouped(rules: Sequence[Mapping[str, str]]) -> list[Item]:
-    """``out`` rows, one per who asked, its rules joined up to :data:`PROGRAM_WIDTH`
-    characters a row."""
-    grouped: dict[str, list[list[str]]] = {}
+    """``out`` rows (``deny`` for drops), one per who asked, its rules joined up to
+    :data:`PROGRAM_WIDTH` characters a row."""
+    grouped: dict[tuple[str, str], list[list[str]]] = {}
     for rule in rules:
-        rows = grouped.setdefault(rule["for"], [[]])
+        rows = grouped.setdefault(("deny" if rule.get("deny") else "out", rule["for"]), [[]])
         if rows[-1] and len(", ".join([*rows[-1], rule["rule"]])) > PROGRAM_WIDTH:
             rows.append([])
         rows[-1].append(rule["rule"])
-    return [("out", ", ".join(row), who) for who, rows in grouped.items() for row in rows]
+    return [(way, ", ".join(row), who) for (way, who), rows in grouped.items() for row in rows]
 
 
 def _control_plane_items(control: Mapping[str, Any]) -> list[Item]:

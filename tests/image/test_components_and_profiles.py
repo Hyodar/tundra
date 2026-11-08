@@ -13,6 +13,7 @@ from tundravm._image._component import composed
 from tundravm._image._values import RESERVED_SETTINGS
 from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
 from tundravm.components.access import DevAccess
+from tundravm.components.container import Container
 from tundravm.components.network import Egress, Firewall, Host, Mode, Network
 from tundravm.declarative._network import HOSTS_HEADER
 from tundravm.errors import ValidationError
@@ -635,6 +636,91 @@ def test_a_host_pins_a_name_to_addresses_or_is_refused(
     assert raised.value.hint
     assert PEER.names == ("api.example", "rpc.example")
     assert PEER.entries == ("203.0.113.7:443", "203.0.113.8:443")
+
+
+@pytest.mark.parametrize(
+    ("make", "message"),
+    [
+        (lambda: Egress(deny="203.0.113.7"), "deny= takes a list of hosts"),
+        (lambda: Egress(deny=[443]), "deny= holds 443"),  # type: ignore[list-item]
+        (lambda: Egress(deny=["api.example:443"]), "is a host name, whose addresses DNS"),
+        (lambda: Egress(hosts=[PEER], deny=[PEER]), "deny= and hosts= both name"),
+        (
+            lambda: Egress(hosts=[PEER], deny=["203.0.113.7:443"]),
+            "both name 203.0.113.7:443",
+        ),
+    ],
+)
+def test_a_deny_names_addresses_hosts_does_not_accept(
+    make: Callable[[], object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message) as raised:
+        make()
+    assert raised.value.hint
+
+
+MODED = "meta mark set 0x00000002 meta mark @current_mode"
+
+
+@pytest.mark.parametrize(
+    ("image", "drop", "accept"),
+    [
+        (
+            lambda: Image("x", network=Network(egress=Egress(ports=[TCP(443)], deny=[PEER]))),
+            'ip daddr 203.0.113.8 drop comment "image (api.example)"',
+            'tcp dport 443 accept comment "image"',
+        ),
+        (
+            lambda: Image(
+                "x",
+                components=[Sink(host="10.0.0.5:8545")],
+                network=Network(egress=Egress(deny=["10.0.0.5"])),
+            ),
+            'ip daddr 10.0.0.5 drop comment "image"',
+            'meta skuid "shipper" ip daddr 10.0.0.5 tcp dport 8545 accept comment "sink"',
+        ),
+        (
+            lambda: Image(
+                "x",
+                network=Network(egress=Egress()),
+                components=[
+                    Firewall(
+                        modes={
+                            "production": Mode(),
+                            "maintenance": Mode(egress=Egress(ports=[TCP(443)], deny=[PEER])),
+                        }
+                    )
+                ],
+            ),
+            f'ip daddr 203.0.113.7 {MODED} drop comment "maintenance mode (api.example)"',
+            "jump mode_output",
+        ),
+        (
+            lambda: Image(
+                "x",
+                network=Network(egress=Egress()),
+                components=[
+                    Firewall(modes={"production": Mode(), "maintenance": Mode()}),
+                    Container(
+                        "web",
+                        ["/usr/bin/busybox", "httpd", "-f"],
+                        packages=["busybox"],
+                        egress=Egress(hosts=["203.0.113.7:443"]),
+                        modes={"maintenance": Egress(ports=[TCP(443)], deny=[PEER])},
+                    ),
+                ],
+            ),
+            f'iifname "ve-web" ip daddr 203.0.113.7 {MODED} drop comment '
+            '"web: maintenance (api.example)"',
+            'iifname "ve-web" ip daddr 203.0.113.7 tcp dport 443 accept comment "web"',
+        ),
+    ],
+)
+def test_a_deny_drops_ahead_of_every_accept_of_its_chain(
+    image: Callable[[], Image], drop: str, accept: str
+) -> None:
+    lines = [line.strip() for line in plan(image()).file("/etc/nftables.conf").text.splitlines()]
+    assert lines.index(drop) < lines.index(accept)
 
 
 OTHER = Host("api.example", ["203.0.113.9"], port=443)

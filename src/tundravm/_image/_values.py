@@ -959,6 +959,12 @@ class Egress(Keywords):
     is unreachable. A ``Host`` pins a name to its addresses instead: the firewall accepts
     exactly those, and the name resolves to them in ``/etc/hosts``, so no resolver is asked.
 
+    *deny* drops what *ports*, *hosts* or any other accept of the same chain would let
+    through: ``Egress(ports=[TCP(443)], deny=[TX_STREAM])`` reaches the web but never that
+    peer. Its entries are those of *hosts*, lowered to drops ahead of the chain's accepts:
+    a :class:`Host` at every port of its addresses, to which its name then resolves. A
+    ``"NAME:PORT"`` is refused, since DNS gives its addresses only at boot.
+
     *metadata* lets a service reach the cloud metadata servers
     (:data:`~tundravm.declarative.model.CLOUD_METADATA`), where the instance's identity
     token lives. Nothing else in the image can, filtered or not: the cloud glue tundravm
@@ -967,6 +973,7 @@ class Egress(Keywords):
 
     ports: Sequence[PortValue] = ()
     hosts: Sequence[str | Host] = ()
+    deny: Sequence[str | Host] = ()
     metadata: bool = False
 
     def __post_init__(self) -> None:
@@ -974,8 +981,11 @@ class Egress(Keywords):
             raise _fail(self, "ports= takes a list of ports.", hint="Pass ports=[TCP(443)].")
         if isinstance(self.hosts, str):
             raise _fail(self, "hosts= takes a list of hosts.", hint="Pass hosts=['10.0.0.5'].")
+        if isinstance(self.deny, (str, Host)):
+            raise _fail(self, "deny= takes a list of hosts.", hint="Pass deny=['10.0.0.5'].")
         object.__setattr__(self, "ports", tuple(self.ports))
         object.__setattr__(self, "hosts", tuple(self.hosts))
+        object.__setattr__(self, "deny", tuple(self.deny))
         for port in self.ports:
             if not isinstance(port, (TCP, UDP)):
                 raise _fail(
@@ -993,6 +1003,29 @@ class Egress(Keywords):
                         hint="Egress(metadata=True), on the one service that reads it: "
                         "Service(..., egress=Egress(metadata=True)).",
                     )
+        accepted = {text for entry in self.hosts for text, _pinned in host_entries(self, entry)}
+        for entry in self.deny:
+            if entry in self.hosts:
+                raise _fail(
+                    self,
+                    f"deny= and hosts= both name {shown(entry)}.",
+                    hint="Name it in one of them: deny= drops it, hosts= accepts it.",
+                )
+            for text, _pinned in host_entries(self, entry, keyword="deny"):
+                if egress_host(self, text, keyword="deny")[2]:
+                    raise _fail(
+                        self,
+                        f"deny= entry {text!r} is a host name, whose addresses DNS gives at "
+                        "boot, so the drop would hold nothing until then.",
+                        hint=f"Pin the peer: deny=[Host({text.partition(':')[0]!r}, "
+                        "['203.0.113.7'], port=443)].",
+                    )
+                if text in accepted:
+                    raise _fail(
+                        self,
+                        f"deny= and hosts= both name {text}.",
+                        hint="Name it in one of them: deny= drops it, hosts= accepts it.",
+                    )
         if not isinstance(self.metadata, bool):
             raise _fail(
                 self, f"metadata= holds {self.metadata!r}.", hint="Pass metadata=True or drop it."
@@ -1000,8 +1033,8 @@ class Egress(Keywords):
 
     @property
     def pinned(self) -> tuple[Host, ...]:
-        """The :class:`Host` entries of *hosts*, in order."""
-        return tuple(host for host in self.hosts if isinstance(host, Host))
+        """The :class:`Host` entries of *hosts*, then of *deny*, in order."""
+        return tuple(host for host in (*self.hosts, *self.deny) if isinstance(host, Host))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1163,26 +1196,30 @@ class Mode(Keywords):
 _HOST_NAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?)+")
 
 
-def host_entries(owner: object, entry: object) -> tuple[tuple[str, Host | None], ...]:
-    """An ``Egress(hosts=)`` entry as the ``(text, host)`` pairs the firewall lowers: a string
-    as itself, a :class:`Host` as one ``ADDRESS:PORT`` string per address with the Host
-    that pins it."""
+def host_entries(
+    owner: object, entry: object, *, keyword: str = "hosts"
+) -> tuple[tuple[str, Host | None], ...]:
+    """An ``Egress(hosts=)`` (or *keyword*) entry as the ``(text, host)`` pairs the firewall
+    lowers: a string as itself, a :class:`Host` as one ``ADDRESS:PORT`` string per address
+    with the Host that pins it."""
     if isinstance(entry, Host):
         return tuple((text, entry) for text in entry.entries)
     if isinstance(entry, str):
         return ((entry, None),)
     raise _fail(
         owner,
-        f"hosts= holds {shown(entry)}, not a host.",
+        f"{keyword}= holds {shown(entry)}, not a host.",
         hint="Pass '10.0.0.5', '10.0.0.0/8', 'logs.example:443' or "
         "Host('api.example', ['203.0.113.7'], port=443).",
     )
 
 
-def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
-    """An ``Egress(hosts=)`` entry as ``(host, port, named)``: *port* ``None`` for an address
-    or CIDR block, *named* when *host* is a name, which the firewall matches by the
-    addresses it resolves to at boot."""
+def egress_host(
+    owner: object, host: object, *, keyword: str = "hosts"
+) -> tuple[str, int | None, bool]:
+    """An ``Egress(hosts=)`` (or *keyword*) entry as ``(host, port, named)``: *port* ``None``
+    for an address or CIDR block, *named* when *host* is a name, which the firewall matches
+    by the addresses it resolves to at boot."""
     text = host if isinstance(host, str) else ""
     name, port = text, None
     if text.startswith("[") and "]:" in text:
@@ -1198,16 +1235,16 @@ def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:
         named = True
     hint = "Pass '10.0.0.5', '10.0.0.0/8', '10.0.0.5:8545' or 'logs.example:443'."
     if port is not None and not 0 < port < 65536:
-        raise _fail(owner, f"hosts= entry {host!r} has no port in 1..65535.", hint=hint)
+        raise _fail(owner, f"{keyword}= entry {host!r} has no port in 1..65535.", hint=hint)
     if named and (port is None or not _HOST_NAME.fullmatch(name)):
         problem = (
             "is not an address, a CIDR block or HOST:PORT"
             if port is not None or not _HOST_NAME.fullmatch(name)
             else "is a host name without a port, which the firewall needs to match it"
         )
-        raise _fail(owner, f"hosts= entry {host!r} {problem}.", hint=hint)
+        raise _fail(owner, f"{keyword}= entry {host!r} {problem}.", hint=hint)
     if port is not None and "/" in name:
-        raise _fail(owner, f"hosts= entry {host!r} gives a CIDR block a port.", hint=hint)
+        raise _fail(owner, f"{keyword}= entry {host!r} gives a CIDR block a port.", hint=hint)
     return name, port, named
 
 

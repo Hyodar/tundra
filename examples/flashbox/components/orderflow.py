@@ -2,7 +2,8 @@
 
 ``EGRESS`` is what the searcher reaches in every mode, and ``MODES`` what each firewall
 mode adds: the transaction stream and BuilderNet in production, DNS, DNS over TLS and the
-web in maintenance, when the searcher fetches what its bot needs.
+web in maintenance, when the searcher fetches what its bot needs but cannot trade, so the
+web stops short of the transaction stream.
 """
 
 from tundravm.components.network import Egress, Host
@@ -27,5 +28,5 @@ BUILDERNET = [
 EGRESS = Egress(hosts=[BUNDLES])
 MODES = {
     "production": Egress(hosts=[TX_STREAM, *BUILDERNET]),
-    "maintenance": Egress(ports=[TCP(53), UDP(53), TCP(80), TCP(443), TCP(853)]),
+    "maintenance": Egress(ports=[TCP(53), UDP(53), TCP(80), TCP(443), TCP(853)], deny=[TX_STREAM]),
 }

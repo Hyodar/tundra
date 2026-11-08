@@ -3509,6 +3509,8 @@ class EgressRule:
 
     *user* accepts it for one system user's sockets alone (``meta skuid``): a packaged
     daemon's, such as chrony's NTP, where a ``Service`` names its own in ``egress``.
+    *drop* makes it a drop instead, which its chain holds ahead of every accept: what an
+    ``Egress(deny=)`` names.
     """
 
     port: Port | None = None
@@ -3517,6 +3519,7 @@ class EgressRule:
     name: str | None = None
     user: str | None = None
     pinned: str | None = None
+    drop: bool = False
 
     def __post_init__(self) -> None:
         if self.port is not None and not isinstance(self.port, Port):
@@ -3561,10 +3564,23 @@ class EgressRule:
                 f"pinned name {self.pinned!r} needs a host name and one address.",
                 hint="EgressRule(Port(443), '203.0.113.7', pinned='api.example')",
             )
+        if not isinstance(self.drop, bool):
+            raise _fail(self, f"drop {self.drop!r} is not True or False.", hint="drop=True")
+        if self.drop and self.name is not None:
+            raise _fail(
+                self,
+                f"a drop of {self.name} would hold nothing until DNS answers at boot.",
+                hint="Drop the addresses: EgressRule(Port(443), '203.0.113.7', drop=True)",
+            )
         object.__setattr__(self, "origins", tuple(self.origins))
         for who in self.origins:
             if not isinstance(who, str) or not who:
                 raise _fail(self, f"origin {who!r} is not who asked.", hint="origins=('image',)")
+
+    @property
+    def verdict(self) -> str:
+        """The rule's nftables verdict: ``drop`` or ``accept``."""
+        return "drop" if self.drop else "accept"
 
     @property
     def comment(self) -> str:
@@ -3573,7 +3589,8 @@ class EgressRule:
         return text if self.pinned is None else f"{text} ({self.pinned})"
 
     def __str__(self) -> str:
-        return self._destination() + ("" if self.user is None else f" as {self.user}")
+        user = "" if self.user is None else f" as {self.user}"
+        return ("deny " if self.drop else "") + self._destination() + user
 
     def _destination(self) -> str:
         if self.name is not None:

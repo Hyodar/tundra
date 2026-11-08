@@ -392,40 +392,58 @@ def egress_rules(
     destination, with everyone who asked for it, in the order asked; a host name is its
     own destination, matched by the addresses it resolves to at boot; a :class:`Host` is
     one address rule per address, commented with its name; *metadata* is one rule per
-    cloud metadata server.
+    cloud metadata server. What *deny* names comes first, as drop rules.
 
     *senders* maps a contributor to the users whose sockets send what it asks for: its
     rules match each of them (``meta skuid``), one rule per user. A contributor it does not
     map (the image's own ``Egress``, a mode's) sends from any process, and a destination it
     asks for is accepted for every process, whoever else asked for it too."""
     owners = {} if senders is None else senders
-    found: dict[tuple[dm.Port | None, str | None, str | None, str | None], list[str]] = {}
+    found: dict[tuple[bool, dm.Port | None, str | None, str | None, str | None], list[str]] = {}
+    for who, egress in contributions:
+        for host, port, label in denied(egress):
+            found.setdefault((True, port, host, None, label), []).append(who)
     for who, egress in contributions:
         if egress.metadata:
             for host in dm.CLOUD_METADATA:
-                found.setdefault((None, host, None, None), []).append(who)
+                found.setdefault((False, None, host, None, None), []).append(who)
         for value in egress.ports:
-            found.setdefault((dm.Port(value.port, value.protocol), None, None, None), []).append(
-                who
-            )
+            port = dm.Port(value.port, value.protocol)
+            found.setdefault((False, port, None, None, None), []).append(who)
         for entry in egress.hosts:
             for text, pinned in host_entries(egress, entry):
                 host, number, named = egress_host(egress, text)
                 port = None if number is None else dm.Port(number)
                 label = None if pinned is None else pinned.name
-                key = (port, None, host, None) if named else (port, host, None, label)
+                key = (False, port, None, host, None) if named else (False, port, host, None, label)
                 found.setdefault(key, []).append(who)
     rules: list[dm.EgressRule] = []
-    for (to, address, name, label), asked in found.items():
+    for (drop, to, address, name, label), asked in found.items():
         origins = tuple(dict.fromkeys(asked))
         if any(not owners.get(who) for who in origins):
-            rules.append(dm.EgressRule(to, address, origins, name=name, pinned=label))
+            rules.append(dm.EgressRule(to, address, origins, name=name, pinned=label, drop=drop))
             continue
         users = dict.fromkeys(user for who in origins for user in owners[who])
         for user in users:
             mine = tuple(who for who in origins if user in owners[who])
-            rules.append(dm.EgressRule(to, address, mine, name=name, user=user, pinned=label))
+            rules.append(
+                dm.EgressRule(to, address, mine, name=name, user=user, pinned=label, drop=drop)
+            )
     return tuple(rules)
+
+
+def denied(egress: Egress) -> tuple[tuple[str, dm.Port | None, str | None], ...]:
+    """``(address, port, pinned name)`` of each drop *egress*'s *deny* asks for: a
+    :class:`Host` at every port of each of its addresses, a string as it reads."""
+    found: list[tuple[str, dm.Port | None, str | None]] = []
+    for entry in egress.deny:
+        if isinstance(entry, Host):
+            found += [(address, None, entry.name) for address in entry.addresses]
+            continue
+        for text, _pinned in host_entries(egress, entry, keyword="deny"):
+            host, number, _named = egress_host(egress, text, keyword="deny")
+            found.append((host, None if number is None else dm.Port(number), None))
+    return tuple(found)
 
 
 def pinned_hosts(contributions: Iterable[tuple[str, Egress]]) -> tuple[HostsEntry, ...]:
@@ -446,7 +464,7 @@ def check_pinned(contributions: Iterable[tuple[str, Egress]]) -> None:
     pins: dict[str, tuple[tuple[str, ...], str]] = {}
     resolved: list[tuple[str, str, str]] = []
     for where, egress in contributions:
-        for entry in egress.hosts:
+        for entry in (*egress.hosts, *egress.deny):
             if isinstance(entry, Host):
                 for alias in entry.names:
                     pins.setdefault(alias, (tuple(entry.addresses), where))
