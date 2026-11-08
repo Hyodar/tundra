@@ -60,7 +60,7 @@ kernel](manual.md#the-kernel) gives the merge order.
 
 <!-- fragment -->
 ```python
-app = GoBinary("app", Git("https://github.com/acme/app", "v1.4.0", auth="GITHUB_TOKEN"))
+app = GoBinary(Git("https://github.com/acme/app", "v1.4.0", auth="GITHUB_TOKEN"))
 ```
 
 `auth=` names the host variable that holds the token. `lock` and `build` hand it to git as a
