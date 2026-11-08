@@ -326,3 +326,16 @@ def test_diff_of_two_image_files(project: Path, cli: Cli) -> None:
     assert cli("show", "--diff", "demo.py", "demo.py").out == "demo.py -> demo.py: no difference\n"
     mixed = cli("show", "--diff", "demo.py", "latest")
     assert mixed.code == EXIT_ERROR and "two image files or two builds" in mixed.err
+
+
+def test_diff_says_a_profile_one_side_builds_in_one_line(project: Path, cli: Cli) -> None:
+    """A program line is cut past where the two differ, so the difference shows."""
+    long = '"/srv/www", "' + "x" * 90 + '", "old"'
+    (project / "old.py").write_text(STARTER.replace('"/srv/www"', long), encoding="utf-8")
+    new = STARTER.replace('"/srv/www"', long.replace("old", "new"))
+    (project / "new.py").write_text(new.replace('dev=DevAccess(password="tdx"),', ""))
+    lines = cli("show", "--diff", "old.py", "new.py").out.splitlines()
+    assert [line.split(" (")[0] for line in lines if "profile" in line] == ["  - profile dev"]
+    programs = [line for line in lines if " program " in line]
+    assert [line.split()[0] for line in programs] == ["-", "+"]
+    assert programs[0].endswith("old") and programs[1].endswith("new")

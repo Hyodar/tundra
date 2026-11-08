@@ -618,9 +618,9 @@ def describe(
     summarized as short sha256 digests; sources show the pins of the lockfile *image*
     reads. *probes* are the probe units of the image's services (:func:`probe_units`),
     which are their service's ``probe``, not units or users of their own. *resolved* (the
-    profile resolved) names each build step, which is then said by what it does.
-    *senders* (:func:`senders`) name the units behind each component a firewall rule
-    names.
+    profile resolved) names each build step, which is then said by what it does, and counts
+    its declarations. *senders* (:func:`senders`) name the units behind each component a
+    firewall rule names.
     """
     selected = image.profile(profile)
     pins = image.build_pins()
@@ -632,6 +632,7 @@ def describe(
     probe_users = {unit.removesuffix(".service") for unit in probes}
     return {
         "profile": selected,
+        "declarations": None if resolved is None else len(resolved.items),
         "extends": profile_state.extends,
         "targets": list(image.targets.get(selected, profile_state.output_targets)),
         "kernel": None
@@ -1130,7 +1131,7 @@ def _service_row(row: Mapping[str, Any]) -> Row:
     if row["package"]:
         items.append(("program", f"the unit Debian package {row['package']} ships"))
     else:
-        items.append(("program", _truncate(" ".join(row["program"]), PROGRAM_WIDTH)))
+        items.append(("program", _Cut(" ".join(row["program"]))))
     items += [("source", source) for source in row["sources"]]
     if row["ports"]:
         items.append(("ports", ", ".join(row["ports"])))
@@ -1378,19 +1379,54 @@ def _aligned(items: Sequence[Item]) -> list[str]:
         if isinstance(item, str):
             continue
         for index, cell in enumerate(item[:-1]):
-            widths[index] = max(widths.get(index, 0), len(cell))
+            widths[index] = max(widths.get(index, 0), len(_shown(cell)))
     lines: list[str] = []
     for item in items:
         if isinstance(item, str):
             lines.append(item)
             continue
-        cells = [f"{cell:<{widths[i]}}" for i, cell in enumerate(item[:-1])] + list(item[-1:])
-        lines.append("  ".join(cells).rstrip())
+        cells = [f"{_shown(cell):<{widths[i]}}" for i, cell in enumerate(item[:-1])]
+        lines.append("  ".join([*cells, *map(_shown, item[-1:])]).rstrip())
     return lines
 
 
-def _text(item: Item) -> str:
-    return item if isinstance(item, str) else "  ".join(item)
+class _Cut(str):
+    """A cell ``show`` cuts to :data:`PROGRAM_WIDTH` characters: a program line."""
+
+    __slots__ = ()
+
+
+def _shown(cell: str, width: int = PROGRAM_WIDTH) -> str:
+    return _truncate(cell, width) if isinstance(cell, _Cut) else cell
+
+
+def _text(item: Item, width: int = PROGRAM_WIDTH) -> str:
+    return item if isinstance(item, str) else "  ".join(_shown(cell, width) for cell in item)
+
+
+_AFTER = 20
+"""How much of two program lines ``show --diff`` keeps past where they first differ."""
+
+
+def _cut_after(gone: Sequence[Item], came: Sequence[Item]) -> int:
+    """Where a changed row cuts its program lines: past the first character an old one and
+    its new one (the cells before it alike) differ in, so the difference shows."""
+    width = PROGRAM_WIDTH
+    for old in gone:
+        for new in came:
+            if isinstance(old, str) or isinstance(new, str) or old[:-1] != new[:-1]:
+                continue
+            if isinstance(old[-1], _Cut) and isinstance(new[-1], _Cut):
+                at = next(
+                    (
+                        i
+                        for i, pair in enumerate(zip(old[-1], new[-1], strict=False))
+                        if len(set(pair)) > 1
+                    ),
+                    min(len(old[-1]), len(new[-1])),
+                )
+                width = max(width, at + _AFTER)
+    return width
 
 
 def diff_rows(old: Sequence[Row], new: Sequence[Row]) -> list[Row]:
@@ -1409,8 +1445,11 @@ def diff_rows(old: Sequence[Row], new: Sequence[Row]) -> list[Row]:
             continue
         if known == row:
             continue
-        removed = [f"- {_text(i)}" for i in known.items if i not in row.items]
-        added = [f"+ {_text(i)}" for i in row.items if i not in known.items]
+        gone = [i for i in known.items if i not in row.items]
+        came = [i for i in row.items if i not in known.items]
+        width = _cut_after(gone, came)
+        removed = [f"- {_text(i, width)}" for i in gone]
+        added = [f"+ {_text(i, width)}" for i in came]
         if row.inline:
             words = [f"-{_text(i)}" for i in known.items if i not in row.items]
             words += [f"+{_text(i)}" for i in row.items if i not in known.items]

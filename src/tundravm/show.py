@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import manifest as mf
 from ._describe import (
+    Row,
     Section,
     declared_sections,
     describe,
@@ -215,8 +216,21 @@ def _base_line(base: Mapping[str, Any]) -> str:
 
 def diff_images(old: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, object]:
     """What differs from the image *old* describes to *new*: the sections ``show`` prints,
-    each with only the lines that differ."""
-    changed = diff_sections(image_sections(old, beyond=False), image_sections(new, beyond=False))
+    each with only the lines that differ, and a profile only one side builds as one line,
+    ``+ profile staging (61 declarations)``."""
+    shared = [name for name in old["resolved"] if name in new["resolved"]]
+    changed = diff_sections(
+        image_sections(_built(old, shared), beyond=False),
+        image_sections(_built(new, shared), beyond=False),
+    )
+    alone = [
+        Row(f"{sign} profile {name} ({report['resolved'][name]['declarations']} declarations)")
+        for sign, report, other in (("-", old, new), ("+", new, old))
+        for name in report["resolved"]
+        if name not in other["resolved"]
+    ]
+    if alone:
+        changed.append(Section("Built into", tuple(alone)))
     before, after = old["base"], new["base"]
     return {
         "old": {"image": old["image"], "file": old.get("file")},
@@ -224,6 +238,12 @@ def diff_images(old: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, obj
         "base": [f"{k}: {before[k]} -> {after[k]}" for k in before if before[k] != after[k]],
         "sections": section_payload(changed),
     }
+
+
+def _built(report: Mapping[str, Any], profiles: Collection[str]) -> dict[str, Any]:
+    """*report* building only *profiles*."""
+    resolved = {name: row for name, row in report["resolved"].items() if name in profiles}
+    return {**report, "resolved": resolved}
 
 
 def render_image_diff(diff: Mapping[str, Any]) -> str:
