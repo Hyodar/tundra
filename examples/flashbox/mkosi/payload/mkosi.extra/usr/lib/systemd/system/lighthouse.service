@@ -1,5 +1,5 @@
 [Unit]
-Description=lighthouse.service
+Description=A beacon node of network driving execution (an Engine API) with jwt
 After=nethermind-ready.service tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
 Requires=nethermind-ready.service tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
 

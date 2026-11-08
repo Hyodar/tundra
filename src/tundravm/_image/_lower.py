@@ -57,7 +57,7 @@ from ._runtime import (
     services_of,
 )
 from ._secrets import InstanceKey, Secret
-from ._service import Binding, Service
+from ._service import Binding, Service, unit_description
 from ._storage import VolumeDirectory
 from ._values import (
     Credential,
@@ -149,6 +149,8 @@ class _Lowering:
     image: Image
     owned: list[tuple[str, str]] = field(default_factory=list)
     owner_steps: tuple[dm.Ready, ...] = ()
+    composer: Component | None = None
+    """The component whose items are being lowered: its services' ``Description=``."""
     curl: bool = False
     curl_shipped: bool = False
     """Whether the image itself ships curl, which an HTTP probe runs."""
@@ -1022,8 +1024,10 @@ class _Lowering:
     def component(self, item: Component) -> dm.Fragment:
         """A ``Component`` as the fragment it is, nested components included."""
         items: list[dm.Declaration | dm.Fragment] = []
+        outer, self.composer = self.composer, item
         for child in composed(item):
             items.extend(self.content(child))
+        self.composer = outer
         check = getattr(item, "check", None)
         checks: tuple[dm.Check, ...] = () if check is None else (_collected(item),)
         return _fragment_type(type(item))(
@@ -1071,6 +1075,7 @@ class _Lowering:
         return dm.Service(
             item.unit_name,
             item.command(),
+            description=unit_description(item, self.composer),
             wants=self.resolution(item),
             type="notify" if isinstance(item.readiness, Notify) else "exec",
             user=item.user,
@@ -1177,6 +1182,7 @@ class _Lowering:
         return dm.Task(
             item.unit_name,
             item.command(),
+            description=unit_description(item, self.composer),
             wants=self.resolution(item),
             schedule=item.timer,
             user=item.user,

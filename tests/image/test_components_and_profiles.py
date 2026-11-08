@@ -244,7 +244,7 @@ def test_an_owned_file_beside_a_built_binary_lowers() -> None:
     image = Image(
         "x",
         files=[File.text("/srv/x", "x\n", owner="app")],
-        services=[Service("app", [GoBinary("app", Local("."))])],
+        services=[Service("app", [GoBinary(Local("."), name="app")])],
     )
     after = plan(image, "production").service("app").get("Unit", "After") or ""
     assert "runtime-init-owners.service" in after
@@ -331,7 +331,7 @@ def test_a_profile_edits_a_service_by_its_public_keywords(
     ("target", "fields", "expected"),
     [
         ("app", {"name": "web"}, "cannot set Service name=: it names the service"),
-        ("bin", {"argv": [GoBinary("other", Local("."))]}, "changes the built binary"),
+        ("bin", {"argv": [GoBinary(Local("."), name="other")]}, "changes the built binary"),
         ("app", {"argv": ["/usr/bin/app", Secret("jwt")]}, "unbinds jwt through argv="),
         ("app", {"environment": {"JWT": Secret("jwt")}}, "unbinds jwt through argv="),
         ("vol", {"user": "www"}, "prepares its directory on volume 'data' at boot for 'vol'"),
@@ -354,7 +354,7 @@ def test_what_a_service_edit_still_refuses(
         "vol", ["/usr/bin/vol"], state=Volume("data", unlock=OperatorKey()).directory("vol")
     )
     app = Service("app", ["/usr/bin/app"])
-    built = Service("bin", [GoBinary("bin", Local("."))])
+    built = Service("bin", [GoBinary(Local("."), name="bin")])
     ghost = Service("ghost", ["/usr/bin/ghost"])
     refs = {"app": app.ref, "bin": built.ref, "db": db.ref, "vol": vol.ref, "ghost": ghost.ref}
     try:

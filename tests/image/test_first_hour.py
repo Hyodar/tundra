@@ -96,7 +96,7 @@ ROWS: list[tuple[str, Callable[[Path], object], str, str]] = [
     (
         "local-missing",
         lambda here: tundravm.lower(
-            Image("x", services=[Service("app", [GoBinary("app", Local("nope"))])])
+            Image("x", services=[Service("app", [GoBinary(Local("nope"))])])
         ),
         "is not a directory",
         "relative to the image file",
@@ -115,7 +115,12 @@ ROWS: list[tuple[str, Callable[[Path], object], str, str]] = [
         'Service("app") needs argv=',
         'argv=["/usr/bin/app"',
     ),
-    ("service-empty-argv", lambda _: Service("app", []), "argv= is empty", 'GoBinary("app"'),
+    (
+        "service-empty-argv",
+        lambda _: Service("app", []),
+        "argv= is empty",
+        'GoBinary(Local("app"))',
+    ),
     (
         "program-not-a-path",
         lambda _: Service("app", ["app"]),

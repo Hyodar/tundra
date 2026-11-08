@@ -12,8 +12,9 @@ from tundravm.components.tee import EVIDENCE
 from tundravm.declarative import Root, Task
 from tundravm.declarative.systemd import PRESETS
 from tundravm.errors import ValidationError
-from tundravm.ports import TCP
+from tundravm.ports import TCP, UDP
 from tundravm.secrets import Credential, Secret
+from tundravm.sources import GoBinary, Local
 from tundravm.storage import OperatorKey, Volume
 from tundravm.systemd import (
     DropIn,
@@ -376,6 +377,75 @@ def test_state_logs_and_runtime_stay_typed() -> None:
 
 
 # ── the argv contract ───────────────────────────────────────────────────
+
+
+DATA = Volume("data", mount="/data", unlock=OperatorKey()).directory("app")
+
+
+@pytest.mark.parametrize(
+    ("argv", "words"),
+    [
+        (["/usr/bin/app", "--flag"], ("/usr/bin/app", "--flag")),
+        (["/usr/bin/app", 300], ("/usr/bin/app", "300")),
+        (["/usr/bin/app", Endpoint("127.0.0.1", 5432)], ("/usr/bin/app", "http://127.0.0.1:5432/")),
+        (["/usr/bin/app", Secret("jwt")], ("/usr/bin/app", "${CREDENTIALS_DIRECTORY}/jwt")),
+        ([GoBinary(Local("."), name="app")], ("/usr/bin/app",)),
+        (["/usr/bin/app", DATA / "out.log"], ("/usr/bin/app", "/data/app/out.log")),
+        (["/usr/bin/app", TCP(8080).address], ("/usr/bin/app", "0.0.0.0:8080")),
+        (["/usr/bin/app", UDP(53).address], ("/usr/bin/app", "0.0.0.0:53")),
+    ],
+)
+def test_each_argv_word_renders_as_one_word(argv: list[object], words: tuple[str, ...]) -> None:
+    assert Service("app", argv).command() == words  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "word",
+    [True, 2.5, None, b"bytes", TCP(8080), DATA, GoBinary(Local("."), name="app")],
+)
+def test_a_word_of_another_kind_is_refused_with_every_accepted_kind(word: object) -> None:
+    with pytest.raises(ValidationError, match="which is not a word") as caught:
+        Service("app", ["/usr/bin/app", word])  # type: ignore[list-item]
+    hint = caught.value.hint or ""
+    for example in ('"--flag"', "300", "db.endpoint(5432)", "jwt", "GoBinary(Local(", "state / "):
+        assert example in hint, example
+    assert "TCP(8080).address" in hint
+
+
+class Store(Component):
+    """A store of *things* for :class:`~tundravm.Image`, 100% local: the rest.
+
+    The second paragraph."""
+
+    described: str | None = None
+
+    def compose(self) -> Iterator[Service]:
+        yield Service("app", ["/usr/bin/app"], description=self.described)
+
+
+class Bare(Component):
+    def compose(self) -> Iterator[Service]:
+        yield Service("app", ["/usr/bin/app"])
+
+
+@pytest.mark.parametrize(
+    ("image", "description"),
+    [
+        (Image("x", services=[Service("app", ["/usr/bin/app"])]), "app.service"),
+        (Image("x", services=[Service("app", ["/usr/bin/a"], description="Serve")]), "Serve"),
+        (Image("x", components=[Store()]), "A store of things for Image, 100%% local"),
+        (Image("x", components=[Store(described="Keep it")]), "Keep it"),
+        (Image("x", components=[Bare()]), "app.service"),
+    ],
+)
+def test_the_description_is_given_or_the_components_summary(image: Image, description: str) -> None:
+    assert plan(image, "production").service("app").get("Unit", "Description") == description
+
+
+@pytest.mark.parametrize("description", ["", "two\nlines", 3])
+def test_a_description_is_one_line_of_text(description: object) -> None:
+    with pytest.raises(ValidationError, match="is not one line of text"):
+        Service("app", ["/usr/bin/app"], description=description)  # type: ignore[arg-type]
 
 
 def test_the_shell_escape_is_explicit() -> None:

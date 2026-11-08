@@ -1,5 +1,5 @@
 [Unit]
-Description=metrics-export.service
+Description=The export path for logs and metrics
 After=credential-metrics-aws.service tdx-evidence.service
 Requires=credential-metrics-aws.service tdx-evidence.service
 

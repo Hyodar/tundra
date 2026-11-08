@@ -532,8 +532,8 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     # Nothing waits for the exporters: an unreachable sink never holds an application back.
     units = [path for path in planned.files if path.startswith("/usr/lib/systemd/system/")]
     for unit in ("journal-export.service", "metrics-export.service"):
-        dependents = [path for path in units if unit in planned.file(path).text]
-        assert dependents == [f"/usr/lib/systemd/system/{unit}"], unit
+        others = [path for path in units if not path.endswith(f"/{unit}")]
+        assert [path for path in others if unit in planned.file(path).text] == [], unit
     assert "max_shards: 4" in config_text
     plaintext = Image("x", observability=Observability(logs=JournalExport("http://logs:19532")))
     assert "observability-plaintext" in {d.code for d in plan(plaintext).lint()}

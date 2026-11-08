@@ -23,7 +23,7 @@ from tundravm.sources import GoBinary, Local
 
 image = Image(
     "demo",
-    services=[Service("app", [GoBinary("app", Local("app"))])],
+    services=[Service("app", [GoBinary(Local("app"))])],
     dev=DevAccess(password="tdx"),
 )
 """

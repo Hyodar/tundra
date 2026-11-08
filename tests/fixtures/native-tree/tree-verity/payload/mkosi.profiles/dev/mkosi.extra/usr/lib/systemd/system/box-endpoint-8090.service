@@ -1,5 +1,5 @@
 [Unit]
-Description=box-endpoint-8090.service
+Description=argv run in a Debian root of its own
 After=runtime-init-owners.service box-endpoint-8090.socket web-loopback-ready.service tdx-evidence.service
 Requires=runtime-init-owners.service box-endpoint-8090.socket web-loopback-ready.service tdx-evidence.service
 

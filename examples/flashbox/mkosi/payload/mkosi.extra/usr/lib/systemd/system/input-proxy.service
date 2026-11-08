@@ -1,5 +1,5 @@
 [Unit]
-Description=input-proxy.service
+Description=Carry input on 27018/tcp into the searcher's socket, one way
 After=runtime-init-volume-data.service tdx-evidence.service
 Requires=runtime-init-volume-data.service tdx-evidence.service
 

@@ -143,10 +143,10 @@ and the gcp target's ACPI patch. A fragment that sets a hardening option itself 
 
 A `Service` is an argv, never a command line. A bare `Service(name, argv)` gets
 `Type=exec`, `Restart=on-failure` with `RestartSec=5s`, a system user named after the
-service, `hardening="static"`, and `WantedBy=minimal.target`. Each argv element is quoted
-the way systemd parses it. The one spelling for a shell is
-`["/bin/sh", "-eu", "-c", script]`. A built binary is a valid argv element too
-([Sources and toolchains](#sources-and-toolchains)).
+service, `hardening="static"`, and `WantedBy=minimal.target`. An argv word is a string, an
+int, an endpoint, a secret, `directory / "file"` or `port.address`, quoted as systemd parses
+it; a [built binary](#sources-and-toolchains) goes first. The one shell is
+`["/bin/sh", "-eu", "-c", script]`. `description=` defaults to a component's docstring.
 
 Every image generates an instance key at boot: a fresh secp256k1 key on tmpfs, root-only.
 A service takes it with `credentials=[InstanceKey()]`, and nothing else may name it.
@@ -415,12 +415,11 @@ SSH.
 
 ## Sources and toolchains
 
-`GoBinary`, `CargoBinary` and `Build` (from `tundravm.sources`) are valid argv elements:
-they pull their build and install into the image, and `binary.executable` is the installed
-path. Go builds the module root (`package="./cmd/server"` for a sub-command) with
-`-trimpath -buildvcs=false` and `CGO_ENABLED=0`. Rust builds with
-`cargo auditable build --frozen` and reproducible `rustflags`, so the SBOM can read the
-crate graph from the binary.
+`GoBinary`, `CargoBinary` and `Build` (`tundravm.sources`) are valid argv elements:
+they add their build. A binary is named after its package (`package="./cmd/server"` is
+`server`) or source directory. Go builds with `-trimpath -buildvcs=false` and
+`CGO_ENABLED=0`. Rust builds with `cargo auditable build --frozen` and reproducible
+`rustflags`, so the SBOM reads the crate graph from the binary.
 
 `Build(name, source, command=["hugo", "--minify"], packages=["hugo"], install=[...])` runs
 one program in the build environment, never in the image. `files=[build]` ships what its

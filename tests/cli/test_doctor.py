@@ -200,7 +200,7 @@ from dataclasses import replace
 from tundravm import Service
 from tundravm.sources import CargoBinary, Git
 
-probe = CargoBinary("probe", Git("https://example.com/probe.git", "b" * 40))
+probe = CargoBinary(Git("https://example.com/probe.git", "b" * 40))
 image = replace(image, services=[*image.services, Service("probe", [probe])])
 """
 

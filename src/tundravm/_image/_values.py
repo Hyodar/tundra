@@ -110,6 +110,12 @@ class TCP(Keywords):
     def __str__(self) -> str:
         return f"{self.port}/tcp"
 
+    @property
+    def address(self) -> str:
+        """``0.0.0.0:<port>``: the listen address an argv word names, so the port is
+        typed once (``[app, port.address]`` beside ``expose=[port]``)."""
+        return f"0.0.0.0:{self.port}"
+
 
 @dataclass(frozen=True, slots=True)
 class UDP(Keywords):
@@ -124,6 +130,12 @@ class UDP(Keywords):
 
     def __str__(self) -> str:
         return f"{self.port}/udp"
+
+    @property
+    def address(self) -> str:
+        """``0.0.0.0:<port>``: the listen address an argv word names, so the port is
+        typed once (``[app, port.address]`` beside ``expose=[port]``)."""
+        return f"0.0.0.0:{self.port}"
 
 
 type PortValue = TCP | UDP

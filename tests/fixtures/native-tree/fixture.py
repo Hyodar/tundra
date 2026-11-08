@@ -61,7 +61,6 @@ class Greeter(Component):
 
 
 REVIEW = GoBinary(
-    "git-codereview",
     Git("https://github.com/golang/review", "6c2c97b0f412fc91be975ada5e0628294794e570"),
     package="./git-codereview",
 )
@@ -69,13 +68,13 @@ REVIEW = GoBinary(
 commit that says ``go 1.26.0`` and requires no module. The build fetches go1.26.0 on the
 host and builds offline with it."""
 
-RUST_PROBE = CargoBinary("rust-probe", Local("../rust-probe"))
+RUST_PROBE = CargoBinary(Local("../rust-probe"))
 """A Rust program whose rust-toolchain.toml pins 1.91.0 (trixie's Rust is 1.85) and which
 needs 1.88: ``tests/fixtures/rust-probe`` beside this directory, a local source pinned by
 its content digest. The build installs 1.91.0 on the host with rustup and builds offline
 with it; the program prints the release of the rustc that built it."""
 
-SINK = GoBinary("sink", Local("../sink"))
+SINK = GoBinary(Local("../sink"))
 """A Go program from a local directory, ``tests/fixtures/sink``: the proxy and the receiver
 the ``dev`` profile's :data:`OBSERVABILITY` delivers through and to, on the loopback,
 printing ``sink:`` console lines for what it carries and receives. Every profile shares the

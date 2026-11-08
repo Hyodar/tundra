@@ -32,8 +32,8 @@ CASES = [
         'Hardening(devices=["/dev/kvm"], capabilities=["CAP_SYS_TIME"], syscalls=["@clock"])',
         ("devices", "capabilities", "syscalls"),
     ),
-    ('GoBinary("app", SOURCE, tags=["netgo"])', ("tags",)),
-    ('CargoBinary("app", SOURCE, features=["tls"])', ("features",)),
+    ('GoBinary(SOURCE, name="app", tags=["netgo"])', ("tags",)),
+    ('CargoBinary(SOURCE, name="app", features=["tls"])', ("features",)),
 ]
 
 

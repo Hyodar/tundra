@@ -477,22 +477,73 @@ def _install_path(kind: str, name: str, install: str | None) -> str:
     return path
 
 
+_MAJOR_VERSION = re.compile(r"v[0-9]+")
+
+
+def _last_element(path: str) -> str | None:
+    """The last element of *path* (``./cmd/server`` is ``server``), skipping a Go major
+    version suffix as ``go build`` does; ``None`` for ``.`` or a path up only."""
+    parts = [part for part in re.split(r"[/:]", path) if part not in ("", ".")]
+    if len(parts) > 1 and _MAJOR_VERSION.fullmatch(parts[-1]):
+        parts.pop()
+    last = parts[-1].removesuffix(".git") if parts else ""
+    return last if last and last != ".." else None
+
+
+def _source_name(source: object) -> str | None:
+    """The directory *source* builds, by name: a ``Local``'s last path element, a ``Git``
+    checkout's *subdir* or else its repository's; ``None`` for an ``Http`` download."""
+    if isinstance(source, Local):
+        return _last_element(source.path)
+    if isinstance(source, Git):
+        return _last_element(source.subdir or source.url)
+    return None
+
+
+def binary_name(kind: str, owner: object, source: object, target: str | None) -> str:
+    """The name a built binary of *kind* takes: ``name=``, else *target*'s last element (its
+    package or bin), else the name of the directory *source* builds."""
+    given = getattr(owner, "name", None)
+    if given is not None:
+        return given  # type: ignore[no-any-return]
+    if isinstance(source, str):
+        raise ValidationError(
+            f"{kind} takes its source first, not the name {source!r}.",
+            hint=f'{kind}(Local("{source}")): it names itself after its source; name= '
+            "only for a clash.",
+        )
+    found = (None if target is None else _last_element(target)) or _source_name(source)
+    if found is None:
+        raise ValidationError(
+            f"{kind} of {source!r} takes no name from its source.",
+            hint=f'{kind}(source, name="app"): a download names no directory.'
+            if isinstance(source, Http)
+            else f'{kind}(source, name="app"), or build a named directory: Local("app").',
+        )
+    return found
+
+
 @dataclass(frozen=True, slots=True)
 class GoBinary(Composite):
-    """A Go program built from *source* and installed at :attr:`executable`.
+    """A Go program built from *source* and installed at :attr:`executable`, named after
+    *package*'s last element (``"./cmd/server"`` is ``server``), else after the directory
+    *source* builds (``Local("signer")`` is ``signer``; ``name=`` for a clash).
 
-    The ``Build`` named *name* runs ``go build -trimpath -buildvcs=false`` of *package*
-    (the module root by default, ``"./cmd/server"`` for a sub-command; ``Go``;
-    ``CGO_ENABLED=0`` unless *cgo*) into ``build/<file name of install>`` and
-    installs it at *install* (``/usr/bin/<name>`` by default). ``executable`` is that path,
-    the first element of a ``Service`` argv: ``Service(name, [binary.executable, "--flag"])``.
-    Component name: *name*.
+    The ``Build`` runs ``go build -trimpath -buildvcs=false`` of *package* (the module
+    root by default, ``"./cmd/server"`` for a sub-command; ``Go``; ``CGO_ENABLED=0`` unless
+    *cgo*) into ``build/<file name of install>`` and installs it at *install*
+    (``/usr/bin/<name>`` by default). ``executable`` is that path, the first element of a
+    ``Service`` argv: ``Service("server", [GoBinary(source, package="./cmd/server")])``.
+
+    The name names the build, the lock entry and the component. A ``Git`` source's
+    directory is its *subdir*, else its repository; an ``Http`` download names none, so it
+    takes ``name=``.
     """
 
-    name: str
     source: Git | Http | Local
     _: KW_ONLY
     package: str = "."
+    name: str | None = None  # type: ignore[assignment]
     install: str | None = None
     env: Mapping[str, str] = field(default_factory=FrozenMap)
     tags: Sequence[str] = ()
@@ -500,10 +551,15 @@ class GoBinary(Composite):
     cgo: bool = False
     cache_namespace: str | None = None
 
+    def __post_init__(self) -> None:
+        name = binary_name("GoBinary", self, self.source, self.package)
+        object.__setattr__(self, "name", name)
+        Composite.__post_init__(self)
+
     @property
     def executable(self) -> str:
         """The absolute path the binary is installed at."""
-        return _install_path("GoBinary", self.name, self.install)
+        return _install_path("GoBinary", str(self.name), self.install)
 
     def compose(self) -> Fragment:
         destination = self.executable
@@ -516,31 +572,32 @@ class GoBinary(Composite):
             cgo=self.cgo,
         )
         build = Build(
-            self.name,
+            str(self.name),
             self.source,
             using=go,
             install=(Install(go.artifact, destination),),
             cache_namespace=self.cache_namespace,
         )
-        return Fragment(self.name, items=(build,))
+        return Fragment(str(self.name), items=(build,))
 
 
 @dataclass(frozen=True, slots=True)
 class CargoBinary(Composite):
-    """A Rust program built from *source* and installed at :attr:`executable`.
+    """A Rust program built from *source* and installed at :attr:`executable`, named after
+    *bin*, else *package*, else the directory *source* builds, as :class:`GoBinary` is.
 
-    The ``Build`` named *name* runs ``cargo auditable build --frozen`` (``Cargo``; plain
-    ``cargo build`` with ``auditable=False``; *bin* or *package* selects the target,
-    *profile* its directory) with reproducible ``rustflags`` and installs
+    The ``Build`` runs ``cargo auditable build --frozen`` (``Cargo``; plain ``cargo
+    build`` with ``auditable=False``; *bin* or *package* selects the target, *profile* its
+    directory) with reproducible ``rustflags`` and installs
     ``target/<profile>/<bin, package or install file name>`` at *install*
-    (``/usr/bin/<name>`` by default). Component name: *name*.
+    (``/usr/bin/<name>`` by default).
     """
 
-    name: str
     source: Git | Http | Local
     _: KW_ONLY
     bin: str | None = None
     package: str | None = None
+    name: str | None = None  # type: ignore[assignment]
     install: str | None = None
     features: Sequence[str] = ()
     profile: str = "release"
@@ -548,10 +605,15 @@ class CargoBinary(Composite):
     auditable: bool | None = None
     cache_namespace: str | None = None
 
+    def __post_init__(self) -> None:
+        name = binary_name("CargoBinary", self, self.source, self.bin or self.package)
+        object.__setattr__(self, "name", name)
+        Composite.__post_init__(self)
+
     @property
     def executable(self) -> str:
         """The absolute path the binary is installed at."""
-        return _install_path("CargoBinary", self.name, self.install)
+        return _install_path("CargoBinary", str(self.name), self.install)
 
     def compose(self) -> Fragment:
         destination = self.executable
@@ -565,13 +627,13 @@ class CargoBinary(Composite):
             auditable=self.auditable,
         )
         build = Build(
-            self.name,
+            str(self.name),
             self.source,
             using=cargo,
             install=(Install(cargo.artifact, destination),),
             cache_namespace=self.cache_namespace,
         )
-        return Fragment(self.name, items=(build,))
+        return Fragment(str(self.name), items=(build,))
 
 
 _FB = "flashbots-images shared/mkosi.extra"

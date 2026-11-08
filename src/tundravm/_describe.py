@@ -152,6 +152,7 @@ def _service(service: Service, owner: str | None) -> dict[str, object]:
     hardening = preset[0] if preset else "none" if sandbox == Hardening.none() else "custom"
     return {
         "name": service.name,
+        "description": service.description,
         "component": owner,
         "program": list(service.command()),
         "package": service.package,
@@ -704,6 +705,7 @@ def _service_row(row: Mapping[str, Any]) -> Row:
     if row.get("quotes"):
         items.append(("quotes", "yes"))
     head = row["name"] + (f"  {row['component']}" if row["component"] else "")
+    head += f"  {row['description']}" if row.get("description") else ""
     return Row(head, tuple(items))
 
 

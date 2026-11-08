@@ -1,5 +1,5 @@
 [Unit]
-Description=metrics-export.service
+Description=The export path for logs and metrics
 After=metrics-sink-ready.service tdx-evidence.service
 Requires=metrics-sink-ready.service tdx-evidence.service
 

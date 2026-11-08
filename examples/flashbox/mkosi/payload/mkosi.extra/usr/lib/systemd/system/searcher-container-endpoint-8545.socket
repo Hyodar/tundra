@@ -1,5 +1,5 @@
 [Unit]
-Description=searcher-container-endpoint-8545
+Description=argv run in a Debian root of its own
 
 [Socket]
 ListenStream=127.0.0.1:8545

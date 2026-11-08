@@ -1,5 +1,5 @@
 [Unit]
-Description=nethermind.service
+Description=Nethermind on config, its JSON-RPC and Engine API on the loopback
 After=tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
 Requires=tundravm-generated-jwt.service runtime-init-volume-data.service tdx-evidence.service
 

@@ -375,6 +375,7 @@ Service(
     runtime: str | None = None,
     package: str | None = None,
     egress: Egress | None = None,
+    description: str | None = None,
 )
 ```
 
@@ -464,6 +465,10 @@ TCP(port: int)
 
 An inbound TCP port: `Service(expose=[TCP(8080)])` opens it in the firewall.
 
+| Member | Does |
+|---|---|
+| `TCP.address` | `0.0.0.0:<port>`: the listen address an argv word names, so the port is typed once (`[app, port.address]` beside `expose=[port]`). |
+
 ### `TLS`
 
 *dataclass*
@@ -488,6 +493,10 @@ UDP(port: int)
 ```
 
 An inbound UDP port: `Service(expose=[UDP(53)])` opens it in the firewall.
+
+| Member | Does |
+|---|---|
+| `UDP.address` | `0.0.0.0:<port>`: the listen address an argv word names, so the port is typed once (`[app, port.address]` beside `expose=[port]`). |
 
 ## tundravm.systemd
 
@@ -1533,9 +1542,9 @@ Cargo(
 
 ```python
 CargoBinary(
-    name: str,
     source: Git | Http | Local,
     *,
+    name: str | None = None,
     bin: str | None = None,
     package: str | None = None,
     install: str | None = None,
@@ -1547,7 +1556,7 @@ CargoBinary(
 )
 ```
 
-A Rust program built from *source* and installed at `executable`.
+A Rust program built from *source* and installed at `executable`, named after *bin*, else *package*, else the directory *source* builds, as `GoBinary` is.
 
 | Member | Does |
 |---|---|
@@ -1627,9 +1636,9 @@ Go(
 
 ```python
 GoBinary(
-    name: str,
     source: Git | Http | Local,
     *,
+    name: str | None = None,
     package: str = '.',
     install: str | None = None,
     env: Mapping[str, str] = {},
@@ -1640,7 +1649,7 @@ GoBinary(
 )
 ```
 
-A Go program built from *source* and installed at `executable`.
+A Go program built from *source* and installed at `executable`, named after *package*'s last element (`"./cmd/server"` is `server`), else after the directory *source* builds (`Local("signer")` is `signer`; `name=` for a clash).
 
 | Member | Does |
 |---|---|
@@ -2364,10 +2373,10 @@ AddressFamilies = Literal['inet', 'inet+netlink', 'unix', 'none', 'any']
 *alias*
 
 ```python
-Argument = str | Endpoint | Binding | Built
+Argument = str | int | Endpoint | Binding | Built
 ```
 
-What an argv element may be: a word, an `Endpoint` rendered as its URL, a `Secret` (or `Credential`) rendered as the path the service reads it at, which binds it, or a built binary as the first element.
+What an argv element may be: a word (`port.address` and `state / "file"` are words), an `int` rendered in decimal, an `Endpoint` rendered as its URL, a `Secret` (or `Credential`) rendered as the path the service reads it at, which binds it, or a built binary as the first element.
 
 ### `Binding`
 

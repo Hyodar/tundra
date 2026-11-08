@@ -40,7 +40,7 @@ from tundravm.storage import OperatorKey, Volume
 
 SSH_PORT = 10022
 INPUT_UDP = 27017
-INPUT_TCP = 27018
+INPUT_TCP = TCP(27018)
 DELAY = 300
 
 data = Volume("data", unlock=OperatorKey())
@@ -98,24 +98,26 @@ channels = Local("channels")
 delay_pipe = Service(
     "delay-pipe",
     [
-        GoBinary("delay-pipe", channels, package="./cmd/delay-pipe"),
+        GoBinary(channels, package="./cmd/delay-pipe"),
         searcher_state / "bob.log",
         delayed / "output.log",
-        str(DELAY),
+        DELAY,
     ],
     user=searcher.run_user,
     state=delayed,
+    description=f"Copy the searcher's log to output.log, each line {DELAY} seconds late",
 )
 input_proxy = Service(
     "input-proxy",
     [
-        GoBinary("input-proxy", channels, package="./cmd/input-proxy"),
-        f"0.0.0.0:{INPUT_TCP}",
+        GoBinary(channels, package="./cmd/input-proxy"),
+        INPUT_TCP.address,
         input_dir / "input.sock",
     ],
     user=searcher.run_user,
     state=input_dir,
-    expose=[TCP(INPUT_TCP)],
+    expose=[INPUT_TCP],
+    description=f"Carry input on {INPUT_TCP} into the searcher's socket, one way",
 )
 
 firewall = Firewall(

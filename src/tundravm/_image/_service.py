@@ -89,10 +89,24 @@ class Built(Protocol):
 type Binding = Credential | Secret
 """What ``credentials=`` takes: a delivered :class:`Secret`, or a fixed-path credential."""
 
-type Argument = str | Endpoint | Binding | Built
-"""What an argv element may be: a word, an :class:`Endpoint` rendered as its URL, a
+type Argument = str | int | Endpoint | Binding | Built
+"""What an argv element may be: a word (``port.address`` and ``state / "file"`` are
+words), an ``int`` rendered in decimal, an :class:`Endpoint` rendered as its URL, a
 :class:`Secret` (or :class:`Credential`) rendered as the path the service reads it at,
 which binds it, or a built binary as the first element."""
+
+_WORDS = (
+    ("a string", '"--flag"'),
+    ("an int", "300"),
+    ("an Endpoint", "db.endpoint(5432)"),
+    ("a Secret", "jwt"),
+    ("a built binary, first", 'GoBinary(Local("app"))'),
+    ("a file in a volume directory", 'state / "output.log"'),
+    ("a listen address", "TCP(8080).address"),
+)
+_WORD_TABLE = "an argv word is one of:" + "".join(
+    f"\n  {kind:<30}{example}" for kind, example in _WORDS
+)
 
 type Requirement = ServiceReady | ComponentReady | BootReady | Endpoint | ServiceRef | UnitOutput
 """What ``requires=`` takes: a readiness handle, an export that carries one, or a setup
@@ -128,6 +142,30 @@ def executable_of(value: object) -> str | None:
     if isinstance(value, Fragment) and isinstance(path, str) and path.startswith("/"):
         return path
     return None
+
+
+def summary(owner: object) -> str | None:
+    """The summary of *owner*'s class docstring: its first sentence, up to a colon, on one
+    line without reST markup; ``None`` without one (a dataclass writes its signature
+    there instead)."""
+    if owner is None:
+        return None
+    cls = type(owner)
+    doc = cls.__dict__.get("__doc__")
+    if not isinstance(doc, str) or doc.startswith(f"{cls.__name__}("):
+        return None
+    text = " ".join(doc.strip().partition("\n\n")[0].split())
+    text = re.sub(r":[a-z]+:`(?:~[\w.]*\.)?([^`]+)`", r"\1", text)
+    text = re.split(r"[.:](?:\s|$)", re.sub(r"[`*]", "", text), maxsplit=1)[0].strip()
+    return text or None
+
+
+def unit_description(service: Service, owner: Component | None) -> str | None:
+    """The ``Description=`` *service* renders, ``%`` escaped: its ``description=``, else the
+    :func:`summary` of *owner*, the component that composes it, else ``None`` (the unit
+    name)."""
+    text = service.description if service.description is not None else summary(owner)
+    return None if text is None else text.replace("%", "%%")
 
 
 def _listed(name: str, value: object) -> str:
@@ -245,6 +283,10 @@ class Service(Located):
     egress: Egress | None = None
     """What this service alone may send, beyond the image's ``Egress``: matched by its
     user, so it needs one of its own (not ``user="root"``)."""
+    description: str | None = None
+    """Its ``Description=``, one line. Without it a component's service takes the first
+    sentence of the component's docstring (up to a colon), and any other service's is its
+    unit name alone: the argv words after the program would be noise."""
 
     def __post_init__(self) -> None:
         self._freeze()
@@ -287,7 +329,7 @@ class Service(Located):
                 self,
                 "argv= is empty, so nothing runs.",
                 hint=f'Service("{self.name}", ["/usr/bin/app", "--flag"]), or a built binary: '
-                f'Service("{self.name}", [GoBinary("app", Local("app"))]).',
+                f'Service("{self.name}", [GoBinary(Local("app"))]).',
             )
         first = self.argv[0]
         if executable_of(first) is None:
@@ -302,11 +344,11 @@ class Service(Located):
                     "binary such as GoBinary(...).",
                 )
         for argument in self.argv[1:]:
-            if not isinstance(argument, (str, Endpoint, Secret, Credential)):
+            if isinstance(argument, bool) or not isinstance(
+                argument, (str, int, Endpoint, Secret, Credential)
+            ):
                 raise _fail(
-                    self,
-                    f"argv= holds {argument!r}, which is not a word.",
-                    hint="Pass strings, an Endpoint a component exported, or a Secret.",
+                    self, f"argv= holds {argument!r}, which is not a word.", hint=_WORD_TABLE
                 )
             if isinstance(argument, str) and "\n" in argument:
                 raise _fail(
@@ -376,6 +418,7 @@ class Service(Located):
             "resources": self.resources,
             "shutdown": self.shutdown,
             "egress": self.egress,
+            "description": self.description,
         }
         for keyword, value in given.items():
             if value:
@@ -567,6 +610,16 @@ class Service(Located):
                     hint="Pass a string, a Secret to name the path it is read at, or an "
                     "Endpoint for its URL.",
                 )
+        if self.description is not None and (
+            not isinstance(self.description, str)
+            or not self.description.strip()
+            or "\n" in self.description
+        ):
+            raise _fail(
+                self,
+                f"description= {self.description!r} is not one line of text.",
+                hint='description="Serve the shop API"',
+            )
         if self.timer is not None:
             self._check_timer()
         if self.egress is not None and self.user == "root":

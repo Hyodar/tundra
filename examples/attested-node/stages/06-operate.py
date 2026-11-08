@@ -29,7 +29,7 @@ lighthouse = Lighthouse(
     checkpoint_sync_url="https://checkpoint-sync.hoodi.ethpandaops.io",
     state=data.directory("lighthouse"),
 )
-program = GoBinary("signer", Local("../signer"))
+program = GoBinary(Local("../signer"))
 signer = Service(
     "signer",
     [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc, "-quotes"],

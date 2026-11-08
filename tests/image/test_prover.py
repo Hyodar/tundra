@@ -35,7 +35,7 @@ from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 config = Secret("prover-config")
-binary = GoBinary("prover", Git("https://github.com/example/prover.git", "v1.0.0"))
+binary = GoBinary(Git("https://github.com/example/prover.git", "v1.0.0"))
 prover = Service(
     "prover",
     [binary, "--config", config, "--listen", "127.0.0.1:8080"],

@@ -1,5 +1,5 @@
 [Unit]
-Description=delay-pipe.service
+Description=Copy the searcher's log to output.log, each line 300 seconds late
 After=runtime-init-volume-data.service tdx-evidence.service
 Requires=runtime-init-volume-data.service tdx-evidence.service
 

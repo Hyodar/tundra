@@ -1,5 +1,5 @@
 [Unit]
-Description=journal-export.service
+Description=The export path for logs and metrics
 After=journal-sink-ready.service tdx-evidence.service
 Requires=journal-sink-ready.service tdx-evidence.service
 

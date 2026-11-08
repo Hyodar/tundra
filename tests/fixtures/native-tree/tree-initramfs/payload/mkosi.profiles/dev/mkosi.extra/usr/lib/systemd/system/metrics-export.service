@@ -1,5 +1,5 @@
 [Unit]
-Description=metrics-export.service
+Description=The export path for logs and metrics
 After=runtime-init-owners.service tdx-evidence.service
 Requires=runtime-init-owners.service tdx-evidence.service
 

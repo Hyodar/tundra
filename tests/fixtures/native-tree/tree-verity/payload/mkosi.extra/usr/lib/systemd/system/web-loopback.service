@@ -1,5 +1,5 @@
 [Unit]
-Description=web-loopback.service
+Description=A page busybox httpd serves on WEB_PORT, so a boot proves the network (the image's Network) and a sandboxed service
 After=runtime-init-owners.service tdx-evidence.service
 Requires=runtime-init-owners.service tdx-evidence.service
 

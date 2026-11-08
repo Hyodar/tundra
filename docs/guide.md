@@ -289,7 +289,7 @@ Go proxy that signs Nethermind's block responses with the **instance key**:
  
 @@
  )
-+program = GoBinary("signer", Local("../signer"))
++program = GoBinary(Local("../signer"))
 +signer = Service(
 +    "signer",
 +    [program, "-listen", "127.0.0.1:8547", "-upstream", nethermind.rpc],
@@ -317,7 +317,7 @@ $ tundravm show --diff stages/03-lighthouse.py stages/04-signer.py
 Services:
   + signer
     + program  /usr/bin/signer -listen 127.0.0.1:8547 -upstream http://127.0.0.1:8545/
-    + source  GoBinary("signer", Local("../signer"))
+    + source  GoBinary(Local("../signer"))
     + hardening  static
     + credentials  InstanceKey()
     + probe  yes, TcpProbe(8547)

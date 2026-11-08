@@ -22,6 +22,7 @@ from tundravm.declarative import (
     Go,
     Http,
     Install,
+    Local,
     Package,
     Recipe,
     Service,
@@ -118,8 +119,8 @@ def test_go_binary_lowers_like_the_hand_written_build() -> None:
         cache_namespace="node-exporter-1.8.2",
     )
     binary = GoBinary(
-        "node-exporter",
         TARBALL,
+        name="node-exporter",
         install="/usr/bin/node_exporter",
         env={"CGO_ENABLED": "0"},
         cache_namespace="node-exporter-1.8.2",
@@ -131,19 +132,19 @@ def test_go_binary_lowers_like_the_hand_written_build() -> None:
 
 
 def test_go_binary_installs_at_usr_bin_name_by_default() -> None:
-    binary = GoBinary("tool", TARBALL, package="./cmd/tool", tags=("netgo",))
+    binary = GoBinary(TARBALL, package="./cmd/tool", tags=("netgo",))
     (build,) = binary.items
     assert isinstance(build, Build) and build.install == (Install("build/tool", "/usr/bin/tool"),)
     assert binary.executable == "/usr/bin/tool" and binary.name == "tool"
     with pytest.raises(ValidationError, match="absolute file path"):
-        GoBinary("tool", TARBALL, install="bin/tool")
+        GoBinary(TARBALL, name="tool", install="bin/tool")
 
 
 def test_editing_the_build_behind_an_executable_is_reported() -> None:
     from tundravm.declarative import Variant
     from tundravm.declarative.resolve import lint
 
-    binary = GoBinary("tool", TARBALL)
+    binary = GoBinary(TARBALL, name="tool")
     service = Service("tool", f"{binary.executable} --serve")
     moved = Install("build/tool", "/opt/tool")
     variants = (
@@ -168,7 +169,7 @@ def test_editing_the_build_behind_an_executable_is_reported() -> None:
 
 def test_cargo_binary_lowers_like_the_hand_written_build() -> None:
     source = Git("https://github.com/example/prover", "v1.0.0")
-    binary = CargoBinary("prover", source, bin="prover-host", install="/usr/bin/prover")
+    binary = CargoBinary(source, bin="prover-host", name="prover", install="/usr/bin/prover")
     by_hand = Build(
         "prover",
         source,
@@ -177,3 +178,41 @@ def test_cargo_binary_lowers_like_the_hand_written_build() -> None:
     )
     assert binary.items == (by_hand,)
     _same_lowering(_recipe(binary), _recipe(by_hand))
+
+
+SINK = Local("../fixtures/sink")
+APP = Git("https://github.com/acme/app.git", "v1.0.0")
+
+
+@pytest.mark.parametrize(
+    ("kind", "source", "keywords", "name", "refused"),
+    [
+        (GoBinary, SINK, {}, "sink", None),
+        (GoBinary, SINK, {"package": "./cmd/delay-pipe"}, "delay-pipe", None),
+        (GoBinary, APP, {}, "app", None),
+        (GoBinary, Git("git@github.com:acme/app.git", "v1.0.0"), {}, "app", None),
+        (GoBinary, Git("https://github.com/acme/tools", "v1", subdir="cmd/sync"), {}, "sync", None),
+        (GoBinary, APP, {"package": "github.com/acme/app/cmd/tool/v2"}, "tool", None),
+        (GoBinary, SINK, {"package": "./cmd/x", "name": "other"}, "other", None),
+        (CargoBinary, APP, {"bin": "app-cli"}, "app-cli", None),
+        (CargoBinary, APP, {"package": "app-core"}, "app-core", None),
+        (CargoBinary, SINK, {}, "sink", None),
+        (GoBinary, TARBALL, {}, None, "a download names no directory"),
+        (GoBinary, Local("."), {}, None, "build a named directory"),
+        (GoBinary, "app", {}, None, 'GoBinary(Local("app"))'),
+    ],
+)
+def test_a_built_binary_names_itself_after_its_package_or_source(
+    kind: type[GoBinary | CargoBinary],
+    source: object,
+    keywords: dict[str, str],
+    name: str | None,
+    refused: str | None,
+) -> None:
+    if refused is not None:
+        with pytest.raises(ValidationError) as caught:
+            kind(source, **keywords)  # type: ignore[arg-type]
+        assert refused in str(caught.value)
+        return
+    binary = kind(source, **keywords)  # type: ignore[arg-type]
+    assert (binary.name, binary.executable) == (name, f"/usr/bin/{name}")

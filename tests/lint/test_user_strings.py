@@ -610,7 +610,7 @@ def test_resolve_messages_name_the_value_an_image_file_wrote() -> None:
 def test_show_json_provenance_names_the_public_objects() -> None:
     class App(Component):
         def compose(self) -> Iterator[object]:
-            server = [GoBinary("server", Local("."))]
+            server = [GoBinary(Local("."), name="server")]
             yield Service("server", server, readiness=TcpProbe(8080))
 
     image = Image("x", components=[App()])
