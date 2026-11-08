@@ -173,12 +173,16 @@ and `show`. The generated workflow was parsed as YAML.
 
 ### Not fixed, ranked
 
-7. `show` names the probe unit `app-ready` beside `app.service`, and its Hooks lines are
-   shell internals (S; `_describe.py`).
-8. `lock` prints the toolchain but not what it pinned; `build --tree-only` before `lock`
-   writes a tree that drifts once locked, without a word (S; `cli.py`).
-9. `convert --from mkosi` of a tundravm tree lists implied packages (`chrony`, `nftables`)
-   as the image's own (S; `convert.py`).
+7. ~~`show` names the probe unit `app-ready` beside `app.service`, and its Hooks lines are
+   shell internals (S; `_describe.py`).~~ (fixed on `020038b2`: `show` prints a service's
+   probe as its own row and says each build step by what it does.)
+8. ~~`lock` prints the toolchain but not what it pinned; `build --tree-only` before `lock`
+   writes a tree that drifts once locked, without a word (S; `cli.py`).~~ (fixed on
+   `769303bb`: `lock` prints what it pinned, and a tree written before it says it will
+   drift.)
+9. ~~`convert --from mkosi` of a tundravm tree lists implied packages (`chrony`, `nftables`)
+   as the image's own (S; `convert.py`).~~ (fixed on `b15ee567`: it lists only the image's
+   own packages.)
 10. ~~`Observability(proxy=)` is plain HTTP CONNECT: a proxy that speaks TLS itself needs its name to resolve to its fixed address, an `/etc/hosts` entry the image does not write~~
     (fixed on `leftovers-5`: `Proxy(address, port, tls_name=)` gives both exporters an
     `https://` proxy URL and writes the name's address through the component's own
@@ -232,14 +236,16 @@ demo's and surge's trees; surge through `check --tree` and `show`.
 - Item 14: `show IMAGE` lists the components the file wrote, what they composed nested.
 - Item 16: `show --dev` is always a build; a dev profile is `--profile dev`.
 
-### Not fixed, ranked (items 7 to 10 above still stand)
+### Not fixed, ranked (items 7 to 10 above are fixed since)
 
 15. `egress-unfiltered` puts its fix in the message and prints no `hint:` (S;
-    `components/_base.py`).
+    `components/_network.py`, where `Firewall` now lives). The example's Lighthouse and
+    Nethermind findings print no fix either (status item 62).
 17. ~~The API reference: `File(mode=420)` in decimal, `Firewall.check(resolved:
     dm.Resolved)`, `FakeMkosi.invoke`/`verbs` and `FakeSources.*` without a line
     (S; `_reference.py`, `components/_base.py`, `testing/`).~~ (done: reference-polish)
-18. `tundravm.bake` keeps the old verb in the API beside `build` (S, breaking).
+18. ~~`tundravm.bake` keeps the old verb in the API beside `build` (S, breaking).~~ (fixed on
+    `30297232`: `tundravm.bake` is `tundravm.build`.)
 
 ## 7. First run
 
@@ -326,6 +332,7 @@ or a Go from go.dev/dl, and neither `doctor` nor the README names the package.
 ### Not fixed
 
 19. The documented `@v2.0.0` does not exist: cutting the release (`docs/release.md`) fixes
-    the install line and `--version` (S; a release step).
+    the install line and `--version` (S; a release step). Still true on 2026-11-08: the
+    repository has no tags, and `--version` prints `0.0.post1.dev753+gb0a5afbaf`.
 20. ~~The build needs a host `go` 1.21+ to prefetch Go sources; fetching the Go toolchain
     without one would make `golang` optional (M; `_source.py`).~~ (done: go-toolchain-optional)

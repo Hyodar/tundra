@@ -298,12 +298,12 @@ This one says what closed each earlier gap (c) and example fix (d).
 | Egress that excludes (maintenance drops the tx stream) | c | open | `Egress` only adds |
 | Kernel v6.18.57 at `2ff600d29ee4` | d | closed | `Kernel.build("6.18.57", Git(...), base=DebianConfig(...))` |
 | BBR | d | closed | fragment `TCP_CONG_BBR`, `DEFAULT_BBR` |
-| `vm.max_map_count` | d | closed | `/etc/sysctl.d/60-flashbox.conf` |
+| `vm.max_map_count` | d | closed | `Image(sysctl={"vm.max_map_count": 2097152})` (`9b90896a`), which writes the same `/etc/sysctl.d/60-flashbox.conf` |
 | Lighthouse flags | d | closed | `disable_quic`, `disable_optimistic_finalized_sync`, `state_cache_size` |
 | `ca-certificates` | d | closed | dropped from the image's packages |
 | Snapshot `20261018T143805Z` | d | closed | `Debian("trixie", snapshot=...)` |
 | Order-flow `/etc/hosts` | d | closed | `Container(files=)` |
-| Dev profile points metrics at the in-guest sink | new | open | a profile cannot edit `Observability` |
+| Dev profile points metrics at the in-guest sink | new | closed | a development profile ships observability to the in-guest receivers (`06001135`) |
 | Nethermind's single-file bundle needs a writable extraction directory | new | closed | `DOTNET_BUNDLE_EXTRACT_BASE_DIR` in its data directory; found by the CI boot, where it crash-looped |
 | Nethermind reads its configs and chainspecs beside its executable | new | closed | the component installs `configs`, `Data` and `chainspec` from the source tree |
 | .NET lists network interfaces over netlink | new | closed | the `dotnet` preset allows `AF_NETLINK` |
