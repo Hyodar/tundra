@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -89,6 +91,17 @@ def test_an_http_probe_polls_the_url_and_brings_curl_in() -> None:
     probe = planned.service("api-ready")
     assert "http://127.0.0.1:8080/health" in (probe.get("Service", "ExecStart") or "")
     assert planned.packages["curl"] == "runtime"
+
+
+@pytest.mark.parametrize(("status", "ready"), [("200", True), ("302", False), ("404", False)])
+def test_an_http_probe_is_ready_on_a_2xx_only(tmp_path: Path, status: str, ready: bool) -> None:
+    curl = tmp_path / "curl"
+    curl.write_text(f"#!/bin/sh\nprintf {status}\n", encoding="utf-8")
+    curl.chmod(0o755)
+    argv = HttpProbe("http://127.0.0.1:8080/health", interval="100ms").command()
+    env = {"PATH": f"{tmp_path}:/usr/bin:/bin"}
+    done = subprocess.run(["timeout", "1", *argv], env=env, check=False)
+    assert (done.returncode == 0) is ready
 
 
 @pytest.mark.parametrize(

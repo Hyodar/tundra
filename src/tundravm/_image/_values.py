@@ -1542,10 +1542,10 @@ class HttpProbe(Keywords):
         _check_span(self, self.timeout, self.interval)
 
     def command(self) -> tuple[str, ...]:
-        """The argv of the probe unit."""
+        """The argv of the probe unit: curl follows no redirect, so a 3xx is not ready."""
         loop = (
-            f"until curl -fsS --max-time 5 '{self.url}' >/dev/null 2>&1; "
-            f"do sleep {_sleep(self.interval)}; done"
+            f"until curl -sS --max-time 5 -o /dev/null -w '%{{http_code}}' '{self.url}' "
+            f"2>/dev/null | grep -qx '2[0-9][0-9]'; do sleep {_sleep(self.interval)}; done"
         )
         return ("/bin/bash", "-c", loop)
 

@@ -626,7 +626,7 @@ Readiness: the service answers *url* with a 2xx, polled every *interval* until *
 
 | Member | Does |
 |---|---|
-| `HttpProbe.command() -> tuple[str, ...]` | The argv of the probe unit. |
+| `HttpProbe.command() -> tuple[str, ...]` | The argv of the probe unit: curl follows no redirect, so a 3xx is not ready. |
 
 ### `Listen`
 

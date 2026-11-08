@@ -6,7 +6,7 @@ Requires=lighthouse.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c "until curl -fsS --max-time 5 'http://127.0.0.1:5052/eth/v1/node/health' >/dev/null 2>&1; do sleep 0.5; done"
+ExecStart=/bin/bash -c "until curl -sS --max-time 5 -o /dev/null -w '%%{http_code}' 'http://127.0.0.1:5052/eth/v1/node/health' 2>/dev/null | grep -qx '2[0-9][0-9]'; do sleep 0.5; done"
 User=lighthouse-ready
 TimeoutStartSec=10min
 ProtectSystem=strict
