@@ -293,6 +293,7 @@ _L = 2**252 + 27742317777372353535851937790883648493
 _D = -121665 * pow(121666, _P - 2, _P) % _P
 _SQRT_M1 = pow(2, (_P - 1) // 4, _P)
 _Point = tuple[int, int, int, int]
+_IDENTITY: _Point = (0, 1, 1, 0)
 
 
 def _recover_x(y: int, sign: int) -> int | None:
@@ -325,7 +326,7 @@ def point_add(p: _Point, q: _Point) -> _Point:
 
 
 def point_mul(s: int, p: _Point) -> _Point:
-    q: _Point = (0, 1, 1, 0)
+    q = _IDENTITY
     while s > 0:
         if s & 1:
             q = point_add(q, p)
@@ -340,6 +341,13 @@ def point_compress(p: _Point) -> bytes:
     return (y | ((x & 1) << 255)).to_bytes(32, "little")
 
 
+def _small_order(p: _Point) -> bool:
+    """Whether ``[8]p`` is the identity: *p* lies in the curve's torsion, eight points whose
+    multiples ``[k]p`` a forger predicts without the secret key."""
+    x, y, z, _ = point_mul(8, p)
+    return x % _P == 0 and (y - z) % _P == 0
+
+
 def _decompress(data: bytes) -> _Point | None:
     y = int.from_bytes(data, "little")
     sign, y = y >> 255, y & ((1 << 255) - 1)
@@ -348,12 +356,17 @@ def _decompress(data: bytes) -> _Point | None:
 
 
 def ed25519_verify(public: bytes, message: bytes, signature: bytes) -> bool:
-    """Whether *signature* is *public*'s Ed25519 signature of *message* (RFC 8032)."""
+    """Whether *signature* is *public*'s Ed25519 signature of *message* (RFC 8032 5.1.7).
+
+    Stricter than the RFC where it costs an honest signer nothing: a public key or ``R``
+    of small order (the all-zero key among them) is refused, as are non-canonical
+    encodings and ``S >= L``.
+    """
     if len(public) != 32 or len(signature) != 64:
         return False
     a, r = _decompress(public), _decompress(signature[:32])
     s = int.from_bytes(signature[32:], "little")
-    if a is None or r is None or s >= _L:
+    if a is None or r is None or s >= _L or _small_order(a) or _small_order(r):
         return False
     k = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little")
     left, right = point_mul(s, BASE), point_add(r, point_mul(k % _L, a))
