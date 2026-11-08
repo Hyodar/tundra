@@ -26,7 +26,7 @@ secrets reach only that.
 | TDX | the host reading or changing guest memory and registers | side channels beyond `mitigations=auto,nosmt`, denial of service, a broken TDX module or firmware | implemented: images boot with a `tdx-guest` object under `run --mode tdx`, and as TDX confidential VMs under `deploy` |
 | Measured UKI (unified kernel image) | the host swapping the kernel, the initrd or the command line unnoticed, because they form one PE file that the firmware measures into RTMR1 and RTMR2 (runtime measurement registers) | a verifier that does not check, or that approves the wrong values | implemented; the predictions are offline replays |
 | dm-verity root (`RootFS.verity()`) | changes to the root partition at rest, because the root hash is on the measured command line | runtime writes, which land in a volatile overlay and vanish at reboot, and volume data | proven: CI boots from dm-verity |
-| Firewall | inbound connections to anything not exposed | outbound traffic unless `Egress` is set, and requests on exposed plaintext ports | implemented; the rendered rules are asserted |
+| Firewall | inbound connections to anything not exposed, and with `Egress`, a unit sending beyond its own rules, which match its user | outbound traffic unless `Egress` is set, the image's and a mode's `egress=`, open to every process, and requests on exposed plaintext ports | implemented; the rendered rules are asserted |
 | Service sandbox | a compromised service reaching the rest of the guest | kernel exploits, and the service's own data and credentials | implemented; the directives of each preset are asserted |
 | LUKS2 volumes | the host reading data at rest | rollback to an older disk, deletion, and a key released to the wrong TD | implemented; unlocked over the attested endpoint |
 | Secrets as credentials | values leaking through the image, the tree, the manifest, receipts or argv | a compromised service that holds the secret | implemented |
@@ -61,6 +61,11 @@ A development profile also carries a boot probe, which `run --probe` runs to che
 inside the guest that what the image declares holds ([the checks](manual.md#the-boot-probe)).
 It catches a broken image but not an attacker, because a compromised guest can print `ok`,
 so the evidence is the quote that `attest` verifies. A production profile carries no probe.
+
+The keep-list holds inside the guest too. With recording rules, `metrics-export` runs
+Prometheus in server mode, whose HTTP API on `127.0.0.1:9090` would serve every raw series,
+so its web config asks for basic auth with a bcrypt hash no password was hashed to. It
+refuses every request, and no process in the guest reads what the keep-list holds back.
 
 ### What the quote covers
 
@@ -126,7 +131,9 @@ DER SubjectPublicKeyInfo and the ports ascending (`Binding` in `tools/pkg/endpoi
 
 Only then does it judge the quote, and on success it writes the bound host keys as
 `known_hosts`. `secrets deliver` and `unlock` verify again and write only in that session,
-with its nonce, once per value per boot, so the first writer wins.
+with its nonce, once per value per boot, so the first writer wins. The endpoint also takes
+only the secrets the instance's profile reads and refuses any other name, so no value lands
+where no unit uses it.
 
 With an `OperatorKey` volume, the owner signs each write over the quote's user data, and the
 first signed write pins that SSH key in the volume's LUKS2 header. The header is plaintext,
@@ -138,7 +145,9 @@ On TDX the endpoint takes an SSH key, root's or a `Login`'s, only from an owner 
 encrypted copy confirmed during this boot, so unlock first and then attest again. An image
 without an `OperatorKey` volume takes no key there. A `Login` reaches only its menu or its
 shell, plus one exact sudoers line for each root command, and with `Login(owner=True)` the
-owner's key logs in as that login while root never takes it.
+owner's key logs in as that login while root never takes it. A menu gets no terminal in
+production, behind two locks: `PermitTTY no` and `restrict`-only keys. Only a development
+build of a login with `dev=True` commands lifts both (`PermitTTY yes`, `restrict,pty`).
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|
@@ -183,6 +192,10 @@ Some limits hold on every platform:
   paths.
 - **The tools.** The evidence service, the endpoint, and the key and disk tools build from
   `tools/` at the SDK's commit, which the lock pins like any other source.
+- **A fetched Go toolchain.** On a host without `go` 1.21 or newer, tundravm downloads the
+  release a `go.mod` names and runs it on your machine, once the Go checksum database has
+  vouched for it as `go` would check: a tree head signed by the key `go` has built in, the
+  release's record proven in that tree, and the zip's hash matching that record.
 
 ## Recovery
 
