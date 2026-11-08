@@ -226,31 +226,31 @@ this image uses.
 
 SDK first. S means under a day, M means a few days.
 
-1. `show` lists the container's forwarded rules (DNAT in, per-mode egress) under Firewall. M, `src/tundravm/_describe.py`.
-2. Host egress rules carry the declaring unit's `meta skuid`/`skgid`, as metadata rules do. M, `src/tundravm/components/_network.py`.
-3. `show` prints references as the file wrote them: `data.directory(...)`, `nethermind.engine_api`, `firewall.status`, `login=Login(...)`. M, `src/tundravm/_describe.py`.
-4. `ContainerSsh(owner=True)` takes the owner's key, so `Secret("searcher-keys")` and its second delivery go. S, `src/tundravm/components/_container.py`.
-5. `Mode(ingress=[searcher.ssh])` takes a container's sshd, so the port is typed once. S, `src/tundravm/components/_network.py`.
-6. `Bind` takes a `VolumeDirectory` and sets the mode the container needs. S, `src/tundravm/components/_container.py`.
-7. Host services beside a container: `PrivatePIDs=yes` on the container, and a `group=` directory whose files are group-readable (UMask 0027), so `logs` needs no sudo. M, `src/tundravm/components/_container.py`, `src/tundravm/_image/_service.py`.
-8. A development profile that exports in the guest stops requiring the production sink's credential. S, `src/tundravm/components/_observability.py`.
-9. The image-file vocabulary is re-exported from `tundravm`, one import line. S, `src/tundravm/__init__.py`.
-10. Argv words: an int as decimal, `TCP(p).address` as `0.0.0.0:p`; the error hint lists every accepted kind. S, `src/tundravm/_image/_service.py`.
-11. `GoBinary(channels, package="./cmd/x")` names itself `x`. S, `src/tundravm/_source.py`.
-12. Metric selectors (`container.metrics.active`, `.cpu_seconds`, `volume.metrics.available`), the rules group named after the image, and `show` naming the identity series that leave. M, `src/tundravm/components/_observability.py` (after `metrics-rules`).
-13. `check`: one line for `tundravm:tools` sources, hints grouped right, `lock-missing` with one severity, a `hardening-relaxed` text that names the preset and why. S, `src/tundravm/check.py`.
-14. The container's loop loader is dropped under a kernel with `loop=y`; `ip_forward` goes in `sysctl.d`; the namespace unit gets a sandbox. S, `src/tundravm/components/_container.py`.
-15. `convert` of a tundravm-written tree: one header line, a true subimage reason, per-setting reasons. S, `src/tundravm/convert.py`.
-16. `show`: the cmdline joined by spaces, build steps in prose, host names over set names, units over class names, the dev delta restored. S, `src/tundravm/_describe.py`.
-17. `show --diff`: a profile present on one side prints one line, and the program is cut after the first difference. S, `src/tundravm/diff.py`.
-18. `deploy --help` stops saying Azure volumes are refused. S, `src/tundravm/cli.py`.
-19. `doctor` names the image's Go sources and drops the replay version string. S, `src/tundravm/capabilities.py`.
-20. The wants links point at the unit files, and `mode-switch` gets `WantedBy=minimal.target`. S, `src/tundravm/compiler/emit_mkosi.py`.
-21. `Service(description=)`, defaulting to the docstring of the component. S, `src/tundravm/_image/_service.py`.
-22. `Network(egress=Egress())` turns into a default filter or a named flag. S, `src/tundravm/components/_network.py`.
-23. `Container("bob")`, with the relay unit named after the endpoint. S, `examples/flashbox/image.py`, `src/tundravm/components/_container.py`.
-24. `Nethermind(expose_p2p=True)`, and 30303 drops out of maintenance. S, `examples/attested-node/components/nethermind.py`, `examples/flashbox/image.py`.
-25. Rules: `flashbox:oom_kills_count`, `device!~"lo|ve-.*"`, a comment on `/`. S, `examples/flashbox/image.py`.
-26. Docstring: what leaves is stated correctly, the SDK paragraph goes, a kernel comment is added, and `socat` is dropped or explained. S, `examples/flashbox/image.py`.
-27. README: the refusal bullets corrected, the known_hosts and instance name shown, `uv run` working (a `[project]` table or a note). S, `examples/flashbox/README.md`, `examples/flashbox/pyproject.toml`.
+1. ~~`show` lists the container's forwarded rules (DNAT in, per-mode egress) under Firewall. M, `src/tundravm/_describe.py`.~~ (done: show-fidelity)
+2. ~~Host egress rules carry the declaring unit's `meta skuid`/`skgid`, as metadata rules do. M, `src/tundravm/components/_network.py`.~~ (done: container-hardening)
+3. ~~`show` prints references as the file wrote them: `data.directory(...)`, `nethermind.engine_api`, `firewall.status`, `login=Login(...)`. M, `src/tundravm/_describe.py`.~~ (done: show-fidelity)
+4. ~~`ContainerSsh(owner=True)` takes the owner's key, so `Secret("searcher-keys")` and its second delivery go. S, `src/tundravm/components/_container.py`.~~ (done: container-hardening)
+5. ~~`Mode(ingress=[searcher.ssh])` takes a container's sshd, so the port is typed once. S, `src/tundravm/components/_network.py`.~~ (done: container-hardening)
+6. ~~`Bind` takes a `VolumeDirectory` and sets the mode the container needs. S, `src/tundravm/components/_container.py`.~~ (done: container-hardening)
+7. ~~Host services beside a container: `PrivatePIDs=yes` on the container, and a `group=` directory whose files are group-readable (UMask 0027), so `logs` needs no sudo. M, `src/tundravm/components/_container.py`, `src/tundravm/_image/_service.py`.~~ (done: container-hardening)
+8. ~~A development profile that exports in the guest stops requiring the production sink's credential. S, `src/tundravm/components/_observability.py`.~~ (done: dev-secrets)
+9. The image-file vocabulary is re-exported from `tundravm`, one import line. S, `src/tundravm/__init__.py`. (not done: Franco asked for the submodule split, so the nine imports stay)
+10. ~~Argv words: an int as decimal, `TCP(p).address` as `0.0.0.0:p`; the error hint lists every accepted kind. S, `src/tundravm/_image/_service.py`.~~ (done: service-words)
+11. ~~`GoBinary(channels, package="./cmd/x")` names itself `x`. S, `src/tundravm/_source.py`.~~ (done: service-words)
+12. ~~Metric selectors (`container.metrics.active`, `.cpu_seconds`, `volume.metrics.available`), the rules group named after the image, and `show` naming the identity series that leave. M, `src/tundravm/components/_observability.py` (after `metrics-rules`).~~ (done: metric-selectors)
+13. ~~`check`: one line for `tundravm:tools` sources, hints grouped right, `lock-missing` with one severity, a `hardening-relaxed` text that names the preset and why. S, `src/tundravm/check.py`.~~ (done: check-polish)
+14. ~~The container's loop loader is dropped under a kernel with `loop=y`; `ip_forward` goes in `sysctl.d`; the namespace unit gets a sandbox. S, `src/tundravm/components/_container.py`.~~ (done: container-hardening)
+15. ~~`convert` of a tundravm-written tree: one header line, a true subimage reason, per-setting reasons. S, `src/tundravm/convert.py`.~~ (done: check-polish)
+16. ~~`show`: the cmdline joined by spaces, build steps in prose, host names over set names, units over class names, the dev delta restored. S, `src/tundravm/_describe.py`.~~ (done: show-fidelity)
+17. ~~`show --diff`: a profile present on one side prints one line, and the program is cut after the first difference. S, `src/tundravm/diff.py`.~~ (done: show-fidelity)
+18. ~~`deploy --help` stops saying Azure volumes are refused. S, `src/tundravm/cli.py`.~~ (done: check-polish)
+19. ~~`doctor` names the image's Go sources and drops the replay version string. S, `src/tundravm/capabilities.py`.~~ (done: check-polish)
+20. ~~The wants links point at the unit files, and `mode-switch` gets `WantedBy=minimal.target`. S, `src/tundravm/compiler/emit_mkosi.py`.~~ (done: wants-and-hints)
+21. ~~`Service(description=)`, defaulting to the docstring of the component. S, `src/tundravm/_image/_service.py`.~~ (done: service-words)
+22. `Network(egress=Egress())` turns into a default filter or a named flag. S, `src/tundravm/components/_network.py`. (open: filtering egress by default is Franco's decision, status item 56)
+23. ~~`Container("bob")`, with the relay unit named after the endpoint. S, `examples/flashbox/image.py`, `src/tundravm/components/_container.py`.~~ (done: container-hardening)
+24. ~~`Nethermind(expose_p2p=True)`, and 30303 drops out of maintenance. S, `examples/attested-node/components/nethermind.py`, `examples/flashbox/image.py`.~~ (done: flashbox-modules)
+25. ~~Rules: `flashbox:oom_kills_count`, `device!~"lo|ve-.*"`, a comment on `/`. S, `examples/flashbox/image.py`.~~ (done: flashbox-modules)
+26. ~~Docstring: what leaves is stated correctly, the SDK paragraph goes, a kernel comment is added, and `socat` is dropped or explained. S, `examples/flashbox/image.py`.~~ (done: flashbox-modules)
+27. ~~README: the refusal bullets corrected, the known_hosts and instance name shown, `uv run` working (a `[project]` table or a note). S, `examples/flashbox/README.md`, `examples/flashbox/pyproject.toml`.~~ (done: flashbox-modules)
 28. ~~The example commits its lock (`!examples/flashbox/build/tundravm.lock`), so `check` is quiet. S, `.gitignore`.~~ (not done: locks stay uncommitted, a lock embeds the payload and would churn; `check` is quiet without one instead, `unpinned-quiet`)
