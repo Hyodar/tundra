@@ -1043,7 +1043,12 @@ class _Lowering:
                     )
 
     def component(self, item: Component) -> dm.Fragment:
-        """A ``Component`` as the fragment it is, nested components included."""
+        """A ``Component`` as the fragment it is, nested components included; an
+        ``Observability`` as this image builds it."""
+        from tundravm.components.observability import Observability
+
+        if isinstance(item, Observability):
+            item = item.for_image(self.image.name)
         items: list[dm.Declaration | dm.Fragment] = []
         outer, self.composer = self.composer, item
         for child in composed(item):

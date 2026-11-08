@@ -1,5 +1,5 @@
 groups:
-  - name: tundravm
+  - name: fixture
     rules:
       - record: local:memory_available_ratio
         expr: "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes"

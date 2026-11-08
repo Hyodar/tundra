@@ -1,5 +1,5 @@
 groups:
-  - name: tundravm
+  - name: flashbox
     rules:
       - record: flashbox:container_alive
         expr: "max(tundravm_unit_active{unit=\"searcher-container.service\"})"

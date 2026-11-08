@@ -22,7 +22,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import KW_ONLY, dataclass, replace
+from dataclasses import KW_ONLY, dataclass, field, replace
 from urllib.parse import urlsplit
 
 from tundravm._image._component import Component
@@ -480,7 +480,8 @@ class PrometheusRemoteWrite(Keywords):
     of samples it could not send; in memory, at most four shards of 10000 samples wait,
     retried from one second to one minute apart, a 429 included.
 
-    *rules* are :class:`RecordingRule` values, evaluated every *interval* in their order.
+    *rules* are :class:`RecordingRule` values, evaluated every *interval* in their order, in
+    one group named after the image.
     Each rule says itself whether its series leaves. Agent mode evaluates no rules, so with
     *rules* Prometheus runs in server mode. A local store under ``/var/lib/metrics-export``
     then keeps *buffer* of samples, and its query API listens on the loopback only.
@@ -626,10 +627,11 @@ class PrometheusRemoteWrite(Keywords):
         config["remote_write"] = [remote]
         return config
 
-    def rules_file(self) -> dict[str, object]:
-        """:data:`METRICS_RULES`: *rules* as one group, in their order."""
+    def rules_file(self, group: str) -> dict[str, object]:
+        """:data:`METRICS_RULES`: *rules* as one group named *group*, the image's name, in
+        their order."""
         rules = [{"record": rule.record, "expr": rule.expr} for rule in self.rules]
-        return {"groups": [{"name": "tundravm", "rules": rules}]}
+        return {"groups": [{"name": group, "rules": rules}]}
 
     def service(self, proxy: Proxy | None = None) -> Service:
         """The ``metrics-export`` service: Prometheus in agent mode, in server mode with
@@ -733,6 +735,7 @@ class Observability(Component):
     logs: JournalExport | None = None
     metrics: PrometheusRemoteWrite | None = None
     proxy: str | Proxy | None = None
+    _image: str = field(default="tundravm", init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         proxy = _as_proxy(self, self.proxy)
@@ -758,6 +761,12 @@ class Observability(Component):
     def _urls(self) -> list[str]:
         """The sinks' URLs, the in-guest receivers' left out."""
         return [s.url for s in (self.logs, self.metrics) if s is not None and s.url is not None]
+
+    def for_image(self, name: str) -> Observability:
+        """This export as the image *name* builds it: the rules group carries its name."""
+        found = replace(self)
+        object.__setattr__(found, "_image", name)
+        return found
 
     def development(self) -> Observability:
         """What a development profile builds: each sink whose *url* is outside the guest
@@ -804,7 +813,8 @@ class Observability(Component):
             config = self.metrics.config(proxy)
             yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
             if self.metrics.rules:
-                yield ConfigFile.yaml(METRICS_RULES, self.metrics.rules_file(), sort_keys=False)
+                rules = self.metrics.rules_file(self._image)
+                yield ConfigFile.yaml(METRICS_RULES, rules, sort_keys=False)
                 check = f"mkosi-chroot promtool check rules {METRICS_RULES}"
                 yield dm.Hook("metrics-export-rules", "postinst", check)
             yield ConfigFile.env(
