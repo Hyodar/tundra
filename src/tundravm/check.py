@@ -1730,7 +1730,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "toolchain-drift",
         "warning",
         "The running toolchain (mkosi, the tools tree, tundravm, the measurement tools) "
-        "differs from the one the lock records, so a build may differ.",
+        "differs from the one the lock records, so a build may differ. tundravm run from a "
+        "checkout of its repository is `checkout`, whatever its commit.",
         "Run the locked tools, or `tundravm lock --update toolchain` to record this "
         "toolchain instead.",
     ),

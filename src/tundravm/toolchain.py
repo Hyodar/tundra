@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import functools
 import json
-import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import metadata
-from pathlib import Path
 from typing import Any
 
 from .diagnostics import Diagnostic
@@ -96,10 +94,10 @@ class ToolsTree:
 class Toolchain:
     """What builds the image: tundravm, mkosi, the tools tree and the measurement tools.
 
-    *tundravm* is ``<version>`` or ``<version>+<commit>``. *tools_tree* is the tools tree
-    the build installs its tools from (``None`` when unknown: a lock written before the tree
-    was resolved). *measure* maps the built-in measurement replay and its GCP firmware table
-    to their versions.
+    *tundravm* is ``<version>``, ``<version>+<commit>`` or :data:`CHECKOUT`. *tools_tree* is
+    the tools tree the build installs its tools from (``None`` when unknown: a lock written
+    before the tree was resolved). *measure* maps the built-in measurement replay and its GCP
+    firmware table to their versions.
     """
 
     tundravm: str
@@ -220,21 +218,6 @@ MEASURE_TOOLS = ("tundravm-measure", "gcp-firmware-table")
 table it embeds (both ship with tundravm, so a different version means other values)."""
 
 
-def _git_head(root: Path) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    head = result.stdout.strip() if result.returncode == 0 else ""
-    return head.splitlines()[0] if head else None
-
-
 def _vcs_commit(distribution: str) -> str | None:
     """The git commit a pip install of *distribution* from a VCS url records, if any."""
     try:
@@ -249,19 +232,34 @@ def _vcs_commit(distribution: str) -> str | None:
     return str(commit) if commit else None
 
 
+CHECKOUT = "checkout"
+"""What a lock records as tundravm's version when tundravm runs from a checkout of its
+repository: the image's tools are then that checkout's ``tools/``, pinned by content
+(``tundravm:tools``), so a commit that leaves ``tools/`` alone keeps the lock valid."""
+
+
+def locked_version() -> str:
+    """tundravm's version as the lock's ``compiler`` section records it: :data:`CHECKOUT`
+    from a checkout (:func:`~tundravm._modules.base.tools_checkout`), else ``__version__``."""
+    from . import __version__
+    from ._modules.base import tools_checkout
+
+    return CHECKOUT if tools_checkout() is not None else __version__
+
+
 @functools.cache
 def tundravm_identity() -> str:
-    """``<version>+<commit>`` for a release: the commit from a VCS install, the one the wheel
-    was built from or this source checkout's HEAD. A version between tags already names its
-    commit (``2.0.0.post1.dev3+gabc1234``) and is the identity as it is."""
+    """tundravm as the lock's ``toolchain`` records it: :data:`CHECKOUT` from a checkout, else
+    ``<version>+<commit>``, the commit from a VCS install or the one the wheel was built from.
+    A version between tags already names its commit (``2.0.0.post1.dev3+gabc1234``) and is
+    the identity as it is."""
     from . import __version__, _version
 
+    if locked_version() == CHECKOUT:
+        return CHECKOUT
     if "+" in __version__:
         return __version__
     commit = _vcs_commit("tundravm") or _version.commit
-    root = Path(__file__).resolve().parents[2]
-    if commit is None and (root / ".git").exists():
-        commit = _git_head(root)
     return f"{__version__}+{commit[:12]}" if commit else __version__
 
 

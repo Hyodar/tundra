@@ -140,7 +140,8 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `build` publishes `build/<image>/production/<id>/` once, read-only, with a canonical `manifest.json` whose digest is `<id>`, `measurements.json` (a `tundravm.policy/2` policy per record), an SPDX SBOM, `observations.json` and a report of artifacts, sources, toolchains, phases and predicted registers.
 - **Breaking:** the manifest is `tundravm.manifest/2`: `image_digest` replaces `recipe_digest`, in `show BUILD --json` and `lock --json` too; an older build directory is refused, so build again.
 - **Breaking:** a production build needs `build/tundravm.lock` (`lock-missing`); a development build writes a missing one and re-pins `Local` sources.
-- **Breaking:** lockfile version 8: profile sections are `profiles.<name>`, the payload and its digest `image` and `image_digest`, as the manifest says, and `toolchains` pins each Dotnet SDK; an older lock is refused, so run `tundravm lock` again.
+- **Breaking:** lockfile version 9: profile sections are `profiles.<name>`, the payload and its digest `image` and `image_digest`, as the manifest says, and `toolchains` pins each Dotnet SDK; an older lock is refused, so run `tundravm lock` again.
+- tundravm run from a checkout of its repository locks as `checkout` (`compiler` and `toolchain`), so its lock holds across commits that leave `tools/`, which the lock pins by content, and the image alone; a released tundravm records its version, and another one is drift.
 - **Breaking:** the default Debian snapshot moves from `20251113T083151Z` to `20261018T082309Z`; `Debian(snapshot=)` keeps the old one.
 - `lock` prints the snapshot, each source's ref and pin and the toolchain; `build --tree-only` without a lock says its tree will drift.
 - `lock --check` never writes or fetches and exits 1 on drift; `build --reproduce`, `--sign`, `--offline` and `verify` check the bytes anywhere.

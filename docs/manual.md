@@ -468,18 +468,17 @@ OpenSSL and libstdc++. The host needs no `dotnet`; no `global.json` is `E_SOURCE
 
 ## The lock
 
-`lock` writes `build/tundravm.lock`: a digest per section of the resolved image, a pin per
-source, and the toolchain (mkosi, the tools tree, tundravm, the measurement tools). Commit
-it. Packages and the tools tree share the snapshot this release pins; `Debian(snapshot=)`
-overrides it.
+`lock` writes `build/tundravm.lock`: a digest per image section, a pin per source, and
+the toolchain (mkosi, its tools tree, tundravm, measurement tools). Commit it. Packages
+and the tools tree share this release's snapshot; `Debian(snapshot=)` overrides it.
 
-- A profile's sections are `profiles.<name>.<key>`; `check` reports their drift as that
-  profile's `lock-changed`.
-- An older tundravm's lockfile is refused, never migrated: lock again.
+- Drift in `profiles.<name>.<key>` is that profile's `lock-changed`.
+- An older lockfile is refused: lock again.
+- A released tundravm records its version: another is drift. From a checkout it records
+  `checkout`: the `tools/` digest stands in for the version.
 - A production build refuses a missing (`lock-missing`) or stale lock and builds every
-  source at its pin. A development build writes a missing lock and re-pins `Local` sources.
-- `build --offline` builds only what the lock pins, and checks an `InRelease` against the
-  lock's digest instead of fetching it.
+  source at its pin. A development build writes a missing lock, re-pinning `Local` sources.
+- `build --offline` checks an `InRelease` against the lock instead of fetching it.
 
 ## The mkosi tree
 

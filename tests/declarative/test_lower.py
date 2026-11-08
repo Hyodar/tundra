@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-import tundravm
 from tests.helpers import own_files
 from tundravm._modules.init import runtime_init_order
 from tundravm._options import MkosiOptions
@@ -140,7 +139,7 @@ def declarative_recipe() -> Recipe:
 
 
 EQUIVALENCE_TREE = "1849a0cc6be8112300bb7d753efde4e0eea14c99f5b906e4e7c8b213974dcf5d"
-EQUIVALENCE_RECIPE = "20dfe130f492cb6963f0c557009362d29cf3823e147bc26e48e26eecd1642ec0"
+EQUIVALENCE_RECIPE = "a05e5d57ffec50c399ce33d51ee78bebfd662f9e84efb8278e9f13b3adb1e854"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
 overlay), and re-recorded when the ESP became a fixed 128M FAT32 and when the unpinned
@@ -150,14 +149,10 @@ ESP became sized from the UKI's ceiling, and when the endpoint's configuration g
 its ``attested_tls`` list, when the cloud glue gained its own groups, when the Azure
 glue gained ``azure-vm-utils``, and when every image gained the power button and kept
 its poweroff units, and when the wants links named the unit files. The recipe
-digest covers the compiler version, recorded as
-``0.1.0``."""
+digest covers the compiler version: ``checkout``, as this checkout runs."""
 
 
-def test_lowered_recipe_compiles_to_the_recorded_tree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(tundravm, "__version__", "0.1.0")
+def test_lowered_recipe_compiles_to_the_recorded_tree(tmp_path: Path) -> None:
     lowered = lower(declarative_recipe())
 
     assert lowered.select(PROFILES).digest() == EQUIVALENCE_RECIPE

@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+import tundravm
 from tests.helpers import write_image_file
+from tundravm import _version, templates
 from tundravm._image._values import LOCKED_SNAPSHOT
+from tundravm._modules import base
 from tundravm.backends import LimaMkosiBackend, LocalLinuxBackend
-from tundravm.cli import EXIT_OK, main
+from tundravm.cli import EXIT_FAILURE, EXIT_OK, main
+from tundravm.declarative import utils
 from tundravm.measure import MEASURE_VERSION
 from tundravm.toolchain import (
     MKOSI_PIN,
@@ -22,6 +27,7 @@ from tundravm.toolchain import (
     lock_toolchain,
     running_toolchain,
     toolchain_drift,
+    tundravm_identity,
 )
 
 PINNED = MkosiTool(MKOSI_PIN.version, MKOSI_PIN.commit)
@@ -135,7 +141,7 @@ def test_lock_records_the_toolchain_and_check_reports_drift(
     ) in text
     assert f"tundravm-measure {MEASURE_VERSION}" in text
     recorded = json.loads(lock.read_text(encoding="utf-8"))
-    assert recorded["version"] == 8
+    assert recorded["version"] == 9
     assert recorded["toolchain"]["mkosi"] == {"version": "27.1", "rev": MKOSI_PIN.commit}
     assert recorded["toolchain"]["tools_tree"] == {
         "distribution": "debian",
@@ -152,3 +158,83 @@ def test_lock_records_the_toolchain_and_check_reports_drift(
     assert drift[0]["message"].startswith(
         f"toolchain mkosi: locked 27.1 @{MKOSI_PIN.commit[:12]}, running 28 @{'b' * 12}"
     )
+
+
+TUNDRAVM = {
+    "a checkout": ("0.1.0.post1.dev3+gaaaaaaa", None),
+    "a later commit": ("0.1.0.post1.dev4+gbbbbbbb", None),
+    "a release": ("0.1.0", "a" * 40),
+    "another release": ("0.2.0", "b" * 40),
+}
+"""How tundravm runs: its version and, for a release wheel, the commit it was built from."""
+LOCK_CODES = {"local-changed", "lock-changed", "lock-added", "lock-removed", "toolchain-drift"}
+
+
+def _runs_as(monkeypatch: pytest.MonkeyPatch, how: str, tools: Path) -> None:
+    version, commit = TUNDRAVM[how]
+    monkeypatch.setattr(base, "tools_checkout", lambda: None if commit else tools)
+    monkeypatch.setattr(tundravm, "__version__", version)
+    monkeypatch.setattr(_version, "commit", commit)
+    monkeypatch.setattr(
+        templates, "tundravm_source", lambda: templates.release_source(version, commit)
+    )
+    _uncache()
+
+
+def _uncache() -> None:
+    for cached in (base.tools_source, utils.tools_source, tundravm_identity):
+        cached.cache_clear()
+
+
+@pytest.fixture
+def _uncached() -> Iterator[None]:
+    yield
+    _uncache()
+
+
+@pytest.mark.usefixtures("_uncached")
+@pytest.mark.parametrize(
+    ("locked_by", "checked_by", "edit_tools", "found"),
+    [
+        ("a checkout", "a later commit", False, set()),
+        ("a checkout", "a later commit", True, {"local-changed"}),
+        ("a release", "a release", False, set()),
+        ("a release", "another release", False, {"lock-changed", "toolchain-drift"}),
+        ("a checkout", "a release", False, {"lock-changed", "toolchain-drift"}),
+    ],
+    ids=["checkout-commit", "checkout-tools", "release-same", "release-upgrade", "to-release"],
+)
+def test_a_checkout_lock_holds_until_tools_change_and_a_release_compares_everything(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    locked_by: str,
+    checked_by: str,
+    edit_tools: bool,
+    found: set[str],
+) -> None:
+    recipe = write_image_file(
+        tmp_path,
+        """
+from tundravm import Image
+from tundravm.backends import LocalLinuxBackend
+from tundravm.components.tee import Tdxs
+
+backend = LocalLinuxBackend()
+image = Image("app", components=[Tdxs()])
+""",
+    )
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "go.mod").write_text("module example.com/tools\n\ngo 1.25.0\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TUNDRAVM_BACKEND")
+    _runs_as(monkeypatch, locked_by, tools)
+    assert cli("lock", str(recipe))[0] == EXIT_OK
+
+    _runs_as(monkeypatch, checked_by, tools)
+    if edit_tools:
+        (tools / "README.md").write_text("tools\n", encoding="utf-8")
+    code, text = cli("check", str(recipe), "--json")
+
+    assert {d["code"] for d in json.loads(text)["diagnostics"]} & LOCK_CODES == found, text
+    assert code == (EXIT_OK if found <= {"toolchain-drift"} else EXIT_FAILURE)

@@ -110,7 +110,7 @@ class Lock:
     """A lockfile as a value; ``sections`` maps payload sections to their digests.
 
     ``compiler_version`` is the tundravm version that wrote it (its ``compiler``
-    section; this version for a lockfile older than version 4).
+    section): ``checkout`` from a checkout of tundravm's repository.
     """
 
     image_digest: str

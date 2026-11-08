@@ -241,6 +241,6 @@ def test_lockfile_round_trips_its_toolchain() -> None:
     parsed = parse_lockfile(serialize_lockfile(current))
 
     assert parsed == current
-    assert LOCKFILE_VERSION == 8
+    assert LOCKFILE_VERSION == 9
     assert parsed.toolchain is not None and parsed.toolchain.tundravm
     assert "toolchains" not in serialize_lockfile(build_lockfile(image=current.image))

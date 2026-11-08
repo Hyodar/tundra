@@ -7,7 +7,7 @@ from typing import Any
 
 from tundravm.toolchain import Toolchain
 
-LOCKFILE_VERSION = 8
+LOCKFILE_VERSION = 9
 """Current lockfile schema version.
 
 Version 2 added per-section digests (``sections``) and version 3 named the
@@ -21,7 +21,9 @@ Version 6 names the per-profile sections ``profiles.<name>.<key>``, as the publi
 API says. Version 7 names the payload and its digest ``image`` and ``image_digest``,
 as the build manifest does, and records each digest-pinned apt archive's ``InRelease``
 (``repositories``). Version 8 pins each Dotnet build's SDK (``toolchains``): the
-release its ``global.json`` resolves to, with the tarball's url and sha512. Older
+release its ``global.json`` resolves to, with the tarball's url and sha512. Version 9
+records tundravm run from a checkout of its repository as ``checkout`` (``compiler`` and
+``toolchain``), so its locks hold across commits that leave ``tools/`` alone. Older
 lockfiles do not load: :func:`~tundravm.lockfile.parse_lockfile` asks to lock again.
 """
 

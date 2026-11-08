@@ -52,7 +52,7 @@ from tundravm.models import (
     RepositorySpec,
 )
 from tundravm.policy import Policy
-from tundravm.toolchain import ToolsTree
+from tundravm.toolchain import ToolsTree, locked_version
 
 if TYPE_CHECKING:
     from tundravm._modules.base import Module
@@ -239,8 +239,6 @@ class Lowered:
         (tundravm version, the mkosi options) and per variant its ``kernel`` (version,
         source, cmdline, tdx, sha256 of the config bytes) and its ``outputs``.
         """
-        from tundravm import __version__
-
         payload = recipe_payload(self.state, self.active)
         profiles = payload["profiles"]
         assert isinstance(profiles, dict)
@@ -259,7 +257,7 @@ class Lowered:
                 "epoch": self.epoch,
             },
             "compiler": {
-                "tundravm": __version__,
+                "tundravm": locked_version(),
                 "mkosi": mkosi_payload(self.mkosi),
             },
             **payload,

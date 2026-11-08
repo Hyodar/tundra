@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-import tundravm
 from tundravm._source import Source
 from tundravm.backends import Requirement
 from tundravm.declarative import (
@@ -46,6 +45,7 @@ from tundravm.declarative.utils import Tdxs
 from tundravm.errors import LockfileError, MeasurementError, ValidationError
 from tundravm.measure.policy import read_policy
 from tundravm.testing import assert_clean, assert_diagnostic, assert_tree
+from tundravm.toolchain import CHECKOUT
 
 APP_UNIT = "[Unit]\nDescription=app\n\n[Service]\nUser=app\nExecStart=/usr/bin/true\n"
 REPO = "https://example.com/app.git"
@@ -173,7 +173,7 @@ def test_lock_status_read_and_write(tmp_path: Path) -> None:
     assert isinstance(locked, Lock) and calls == ["main"]
     assert [(p.identity, p.digest) for p in locked.pins] == [("app", SHA)]
     assert locked.pins[0].source == Git(REPO, "main")
-    assert dict(locked.sections) and locked.compiler_version == tundravm.__version__
+    assert dict(locked.sections) and locked.compiler_version == CHECKOUT
     assert lock_status(_recipe(build=True), locked) == ()
 
     path = tmp_path / "tundravm.lock"
