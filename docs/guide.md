@@ -17,7 +17,7 @@ $ cd tundra/examples/attested-node
 $ tundravm check stages/01-boot.py
 ```
 
-`check` reads an image without building it, and it warns `source-unpinned` until you lock.
+`check` reads an image without building it, and until you lock it notes that no lockfile exists yet.
 The outputs below are excerpts of `tundravm show --diff OLD NEW`, which prints what one
 stage adds to another, also without building.
 
