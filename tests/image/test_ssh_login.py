@@ -237,6 +237,46 @@ def test_each_template_form_is_a_word_of_the_program(
     assert command.shown() == shown
 
 
+@dataclass(frozen=True)
+class Checked(ParamType):
+    check_text: str
+
+    def usage(self) -> str:
+        return "a value"
+
+    def check(self) -> str:
+        return self.check_text
+
+    def pattern(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("check", "written"),
+    [
+        ('Match(value, "^[0-9a-f]{64}$")', True),
+        ("Int(value, 1, 100)", True),
+        ('OneOf(value, "a", "say \\"hi\\"")', True),
+        ("nil", False),
+        (
+            'Match(value, "^a$") }}; func init() { panic("x") }; var _ = func() error { return nil',
+            False,
+        ),
+        ('Match(value, "a\nb")', False),
+        ("Match(value, `^a$`)", False),
+        ('os.RemoveAll("/")', False),
+    ],
+)
+def test_a_params_check_is_one_runtime_call_on_literals(check: str, written: bool) -> None:
+    command = Command(params=[CommandParam("v", type=Checked(check))], runs=["/x", "{{v}}"])
+    login = Login("tenant", keys=[KEY], commands={"run": command})
+    if written:
+        assert f"return {check} }}" in login.program()["main.go"]
+    else:
+        with pytest.raises(ValidationError, match="not one call"):
+            login.program()
+
+
 def test_the_program_is_the_four_files_the_build_compiles() -> None:
     login = Login(
         "tenant",

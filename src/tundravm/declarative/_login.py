@@ -36,6 +36,8 @@ _SUDO_ESCAPED = re.compile(r"([,:=#])")
 _PATTERN_LITERAL = re.compile(r"[A-Za-z0-9/_.+-]*")
 _PATTERN_REFUSED = frozenset(" \t\n\\,:=\"'")
 _PATTERN_BRACKET = re.compile(r"\[\]?[^]]*\]")
+_GO_LITERAL = r'[0-9]+|"(?:[^"\\\x00-\x1f\x7f]|\\[^\x00-\x1f\x7f])*"'
+_CHECK_CALL = re.compile(rf"(?:Int|OneOf|Match)\(value(?:, (?:{_GO_LITERAL}))*\)")
 SUDO_LINES = 64
 """The most sudoers lines one ``sudo=True`` command may take (``login-sudo-lines``)."""
 
@@ -46,9 +48,10 @@ class ParamType(ABC):
 
     ``type=int`` (with ``min=`` and ``max=``), ``type=str`` (with ``choices=``) and
     ``type=bool`` pick the built-in ones; pass an instance of a subclass for another
-    domain. :meth:`check` is compiled into the login's program, so it may call the
-    runtime's ``Int``, ``OneOf`` and ``Match`` only, and a :meth:`pattern` looser than
-    :meth:`check` lets sudo admit what the program refuses: keep the two the same set.
+    domain. :meth:`check` is compiled into the login's program, so it is one call of the
+    runtime's ``Int``, ``OneOf`` or ``Match`` with literal arguments (anything else is
+    refused), and a :meth:`pattern` looser than :meth:`check` lets sudo admit what the
+    program refuses: keep the two the same set.
     """
 
     __slots__ = ()
@@ -895,7 +898,21 @@ def _param(param: CommandParam) -> tuple[str, str | None]:
         fields.append(f"Default: {_go(param.default)}")
     if param.help is not None:
         fields.append(f"Help: {_go(param.help)}")
-    return ", ".join(fields), None if param.flag else f"return {param.type.check()}"
+    return ", ".join(fields), None if param.flag else f"return {_checked(param)}"
+
+
+def _checked(param: CommandParam) -> str:
+    """The param's check, refused unless it is one call of the runtime's ``Int``, ``OneOf``
+    or ``Match`` on ``value`` with literal arguments, so no other Go reaches the program."""
+    check = param.type.check()
+    if not isinstance(check, str) or not _CHECK_CALL.fullmatch(check):
+        raise ValidationError(
+            f"CommandParam {param.name}: type={param.kind}'s check() is {check!r}, not one call "
+            "of the runtime's Int, OneOf or Match on value with literal arguments.",
+            hint='Return Match(value, "^[0-9a-f]{64}$"), Int(value, 1, 100) or OneOf(value, '
+            '"a", "b"), each string a Go literal (json.dumps(text)).',
+        )
+    return check
 
 
 def _params(params: Sequence[CommandParam], indent: str) -> list[str]:
