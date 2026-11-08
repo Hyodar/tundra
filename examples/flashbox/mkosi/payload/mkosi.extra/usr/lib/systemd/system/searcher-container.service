@@ -1,5 +1,5 @@
 [Unit]
-Description=argv run in a Debian root of its own
+Description=Container searcher-container
 After=nethermind-ready.service runtime-init-volume-data.service tdx-evidence.service
 Requires=nethermind-ready.service runtime-init-volume-data.service tdx-evidence.service
 

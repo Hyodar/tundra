@@ -1,6 +1,6 @@
 # tundravm Container searcher-container: its network namespace, a veth the firewall forwards and IPv4 forwarding
 [Unit]
-Description=Network namespace of searcher-container.service
+Description=Network namespace of container searcher-container
 DefaultDependencies=no
 Requires=nftables.service
 After=nftables.service

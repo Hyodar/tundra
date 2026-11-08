@@ -12,7 +12,7 @@ Services (2):
     volume       /persistent/data/app on Volume("data", unlock=OperatorKey())
     credentials  Secret("api-token")
     probe        yes, TcpProbe(8080)
-  box  Container
+  box  Container  Container box
     program    /usr/bin/busybox nc -lu -p 9000
     hardening  static
     volume     /persistent/data/box on Volume("data", unlock=OperatorKey())
@@ -40,12 +40,13 @@ Built into production:
     disk-encryption    local tundravm:tools    pinned=-
     key-generation     local tundravm:tools    pinned=-
     tdxs               local tundravm:tools    pinned=-
-  Files (40):
+  Files (41):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  155B  sha256:031d2d3bb7e7
     /etc/nftables.conf                                                                       0755  4345B  sha256:4ca225943b40
     /etc/ssh/sshd_config.d/50-tundravm.conf                                                  0644  579B  sha256:3852ecfd462d
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
+    /etc/sysctl.d/60-container-box.conf                                                      0644  129B  sha256:f10391ba26d0
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
     /etc/systemd/network/10-tundravm-ve-box.network                                          0644  96B  sha256:0f9b254c4016
     /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea
@@ -60,8 +61,8 @@ Built into production:
     /etc/tundravm/runtime.json                                                               0644  1006B  sha256:acf8d81b0aeb
     /srv/www/index.html                                                                      0644  16B  sha256:75186e1a779a
     /usr/bin/azure-complete-provisioning                                                     0755  2517B  sha256:fd3d32e3d33f
-    /usr/lib/systemd/system/box-net.service                                                  0644  980B  sha256:a57e91d9f458
-    /usr/lib/systemd/system/box.service.d/20-container.conf                                  0644  267B  sha256:b7e879d13d9b
+    /usr/lib/systemd/system/box-net.service                                                  0644  1232B  sha256:7683506c9a16
+    /usr/lib/systemd/system/box.service.d/20-container.conf                                  0644  305B  sha256:8849ed6e01a5
     /usr/lib/systemd/system/chrony.service.d/50-tundravm-egress.conf                         0644  168B  sha256:96dcd0c6b5a4
     /usr/lib/systemd/system/egress-resolve.service                                           0644  853B  sha256:0720266027ce
     /usr/lib/systemd/system/egress-resolve.timer                                             0644  333B  sha256:cfc6f2f549dc

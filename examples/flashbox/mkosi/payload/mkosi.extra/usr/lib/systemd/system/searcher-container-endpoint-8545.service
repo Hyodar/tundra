@@ -1,5 +1,5 @@
 [Unit]
-Description=argv run in a Debian root of its own
+Description=Relay 127.0.0.1:8545 into container searcher-container
 After=searcher-container-endpoint-8545.socket nethermind-ready.service tdx-evidence.service
 Requires=searcher-container-endpoint-8545.socket nethermind-ready.service tdx-evidence.service
 

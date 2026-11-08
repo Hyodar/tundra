@@ -634,7 +634,7 @@ class Container(Component):
         yield dm.Task(
             container_ssh.unit(self.name).removesuffix(".service"),
             ("/bin/sh", path),
-            description=f"Generate this boot's SSH host key for {self.unit}",
+            description=f"Generate this boot's SSH host key for container {self.name}",
             user=Root(),
             timeout="60s",
             needs=(),
@@ -664,7 +664,7 @@ class Container(Component):
         yield dm.Task(
             self.loader.removesuffix(".service"),
             LOAD_LOOP,
-            description=f"Load loop for {self.unit}'s root image",
+            description=f"Load loop for container {self.name}'s root image",
             user=Root(),
             hardening=Hardening.none(),
             conditions=(LOOP_PRESENT,),
@@ -688,6 +688,7 @@ class Container(Component):
             if self.probe is None or network is None
             else replace(self.probe, host=network.address),
             unit=self._dropin(self.unit, units),
+            description=f"Container {self.name}",
         )
         if self.ssh is not None:
             yield from self._host_key()
@@ -698,6 +699,7 @@ class Container(Component):
                     user=self.run_user,
                     hardening=SSHD_SANDBOX,
                     unit=self._dropin(f"{self.name}-ssh.service", units),
+                    description=f"SSH into container {self.name}",
                 )
         for endpoint in self.requires:
             relay = self.relay(endpoint)
@@ -706,6 +708,7 @@ class Container(Component):
                 [PROXY, endpoint.address],
                 socket=dm.Listen(endpoint.address),
                 requires=[endpoint],
+                description=f"Relay {endpoint.address} into container {self.name}",
             )
             yield dm.File.text(
                 f"/usr/lib/systemd/system/{relay}.d/20-container.conf",
@@ -805,7 +808,7 @@ class Container(Component):
             f"# tundravm Container {name}: its network namespace"
             + (", a veth the firewall forwards and IPv4 forwarding" if network else "")
             + "\n[Unit]\n"
-            f"Description=Network namespace of {self.unit}\n"
+            f"Description=Network namespace of container {name}\n"
             "DefaultDependencies=no\n"
             f"{order}"
             "Conflicts=shutdown.target\nBefore=shutdown.target\n\n"

@@ -1,5 +1,5 @@
 [Unit]
-Description=Generate this boot's SSH host key for searcher-container.service
+Description=Generate this boot's SSH host key for container searcher-container
 
 [Service]
 Type=oneshot

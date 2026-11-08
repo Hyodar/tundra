@@ -1,5 +1,5 @@
 [Unit]
-Description=Load loop for box.service's root image
+Description=Load loop for container box's root image
 After=runtime-init.service
 Requires=runtime-init.service
 ConditionPathExists=!/dev/loop-control

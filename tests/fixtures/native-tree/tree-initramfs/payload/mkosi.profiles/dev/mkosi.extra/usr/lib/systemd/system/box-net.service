@@ -1,6 +1,6 @@
 # tundravm Container box: its network namespace, a veth the firewall forwards and IPv4 forwarding
 [Unit]
-Description=Network namespace of box.service
+Description=Network namespace of container box
 DefaultDependencies=no
 Requires=nftables.service
 After=nftables.service

@@ -1,5 +1,5 @@
 [Unit]
-Description=Generate this boot's SSH host key for box.service
+Description=Generate this boot's SSH host key for container box
 After=runtime-init-owners.service
 Requires=runtime-init-owners.service
 
