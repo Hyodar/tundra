@@ -164,6 +164,8 @@ class _Lowering:
     """*sends* as a development profile sees them: the observability's in-guest form's."""
     owned_rules: tuple[dm.EgressRule, ...] = ()
     """The rules a packaged daemon's user owns (chrony's NTP), beside what *sends* asks."""
+    senders: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Component -> the users whose sockets send its ``outbound()``, which its rules match."""
     implied: dict[str, dict[str, tuple[str, str, str]]] = field(default_factory=dict)
     """Unit -> the ready unit an :class:`Endpoint` in its argv or environment added to its
     ``requires=``, with where it named it, the URL and the upstream's unit (for
@@ -432,10 +434,15 @@ class _Lowering:
             firewall = Firewall(allow=firewall.allow, egress=egress, modes=firewall.modes)
         filtering = self.component(firewall)
         if egress is not None:
-            self.sends = tuple(self.outbound(egress, (tee, tdxs, network)))
-            self.local_sends = tuple(self.outbound(egress, (tee, tdxs, network), local=True))
+            sending = self.sending((tee, tdxs, network))
+            local = self.sending((tee, tdxs, network), local=True)
+            self.sends = (("image", egress), *_sends(sending))
+            self.local_sends = (("image", egress), *_sends(local))
+            self.senders = {**_sender_map(sending), **_sender_map(local)}
+            if not tee.dns:
+                self.senders.pop(network.name, None)
             self.owned_rules = (CHRONY_NTP,) if tee.time else ()
-            rules = (*egress_rules(self.sends), *self.owned_rules)
+            rules = (*egress_rules(self.sends, self.senders), *self.owned_rules)
             with _at(firewall):
                 filtering = _with_rules(filtering, rules)
         found: list[dm.Declaration | dm.Fragment] = [
@@ -451,19 +458,16 @@ class _Lowering:
         self.curl_shipped = self.curl
         return tuple(found)
 
-    def outbound(
-        self, egress: Egress, baseline: Sequence[Component], *, local: bool = False
-    ) -> Iterator[tuple[str, Egress]]:
-        """Who sends where: the image's *egress*, the ``outbound()`` of the *baseline*, of
-        every component and of what each composes, the observability as a development
-        profile builds it when *local*. The cloud glue reaches the metadata servers by its
-        own units' egress."""
+    def sending(
+        self, baseline: Sequence[Component], *, local: bool = False
+    ) -> tuple[Component, ...]:
+        """Whose ``outbound()`` the image's output chain accepts: the *baseline*, every
+        component, the observability as a development profile builds it when *local*. The
+        cloud glue reaches the metadata servers by its own units' egress."""
         image = self.image
-        yield "image", egress
         own = [item for item in image.components if not isinstance(item, self.baseline_types)]
         observability = [] if image.observability is None else [image.observability]
-        for component in (*baseline, *own, *_forms(observability, local=local)):
-            yield from _outbound(component)
+        return (*baseline, *own, *_forms(observability, local=local))
 
     def profile_egress(
         self,
@@ -484,8 +488,13 @@ class _Lowering:
         parent, own = local
         before = (*self.base_sends(parent), *_sends(_forms(inherited, local=parent)))
         after = (*self.base_sends(own), *_sends(_forms((*inherited, *added), local=own)))
-        rules = egress_rules(after)
-        if rules == egress_rules(before):
+        senders = {
+            **self.senders,
+            **_sender_map(_forms(inherited, local=parent)),
+            **_sender_map(_forms((*inherited, *added), local=own)),
+        }
+        rules = egress_rules(after, senders)
+        if rules == egress_rules(before, senders):
             return ()
         return (dm.Ref("Firewall").edit(egress_rules=(*rules, *self.owned_rules)),)
 
@@ -1550,6 +1559,28 @@ def _outbound(component: Component) -> Iterator[tuple[str, Egress]]:
     for item in composed(component):
         if isinstance(item, Component):
             yield from _outbound(item)
+
+
+def _sender_map(items: Sequence[object]) -> dict[str, tuple[str, ...]]:
+    """Component -> :meth:`~Component.senders` for each component among *items* (and each one
+    it composes) whose ``outbound()`` sends anything; one that names no sender is refused."""
+    found: dict[str, tuple[str, ...]] = {}
+    for item in items:
+        if not isinstance(item, Component):
+            continue
+        sends = item.outbound()
+        if isinstance(sends, Egress) and (sends.ports or sends.hosts or sends.metadata):
+            users = tuple(item.senders())
+            if not users:
+                raise ValidationError(
+                    f"{type(item).__name__}.outbound() names where it sends, and it composes "
+                    "no service whose user the firewall could accept it for.",
+                    hint="Compose the Service that sends it, or override senders() with the "
+                    "packaged daemon's user.",
+                )
+            found[item.name] = tuple(dict.fromkeys((*found.get(item.name, ()), *users)))
+        found.update(_sender_map(composed(item)))
+    return found
 
 
 def _kernel_needs(component: Component) -> Iterator[KernelFragment | KernelPatch]:

@@ -43,7 +43,7 @@ Built into production:
   Files (40):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
     /etc/hosts                                                                               0644  155B  sha256:031d2d3bb7e7
-    /etc/nftables.conf                                                                       0755  4145B  sha256:eaab0ba89aca
+    /etc/nftables.conf                                                                       0755  4345B  sha256:4ca225943b40
     /etc/ssh/sshd_config.d/50-tundravm.conf                                                  0644  579B  sha256:3852ecfd462d
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1

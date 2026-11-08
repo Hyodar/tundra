@@ -463,6 +463,10 @@ def nftables_conf(firewall: Firewall, items: Iterable[Declaration]) -> str:
     )
 
 
+NETWORKD_USER = "systemd-network"
+"""The user ``systemd-networkd`` runs as, whose sockets send the DHCP requests the output
+chain accepts (its first DISCOVER leaves on a packet socket, which no chain sees)."""
+
 METADATA_SHARED = (EgressRule(Port(123, "udp"), CLOUD_METADATA[0], ("metadata time",)),)
 """What every process may send the metadata server: its NTP, which ``chrony`` refines the
 NTS time from, and which carries no identity token. Its plain DNS is not: ``TeeBase``
@@ -494,8 +498,10 @@ def _output_rules(firewall: Firewall, items: Iterable[Declaration]) -> list[str]
             "ct state invalid drop",
             'oifname "lo" accept',
             f"icmpv6 type {{ {', '.join(ICMPV6_ESSENTIAL)} }} accept",
-            'udp sport 68 udp dport 67 accept comment "DHCPv4 requests"',
-            'udp sport 546 udp dport 547 accept comment "DHCPv6 requests"',
+            f'meta skuid "{NETWORKD_USER}" udp sport 68 udp dport 67 accept '
+            'comment "DHCPv4 requests"',
+            f'meta skuid "{NETWORKD_USER}" udp sport 546 udp dport 547 accept '
+            'comment "DHCPv6 requests"',
         ]
         if filtered
         else []

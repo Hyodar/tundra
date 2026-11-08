@@ -1014,7 +1014,7 @@ probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|
 check=observability:no-wait
 probe_nowait journal-export.service metrics-export.service -- tdxs.service web.service web-loopback.service greeter.service attested-tls-8443.service image-metrics.service box.service box-ssh.service box-endpoint-8090.service sink.service token.service go-probe.service rust-probe.service ledger.service
 check=observability:egress
-probe_rules 'ip daddr 127.0.0.1 tcp dport 19582'
+probe_rules 'meta skuid "journal-export" ip daddr 127.0.0.1 tcp dport 19582' 'meta skuid "metrics-export" ip daddr 127.0.0.1 tcp dport 19582'
 check=hardening:web.service
 probe_hardening web.service 2.5 static
 check=hardening:web-loopback.service

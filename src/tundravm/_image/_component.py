@@ -358,6 +358,12 @@ class Component(Located, metaclass=_ComponentMeta):
         """
         return Egress()
 
+    def senders(self) -> tuple[str, ...]:
+        """The users whose sockets send :meth:`outbound`, which the firewall accepts it for
+        alone (``meta skuid``): those of the services it composes, root left out. A component
+        whose traffic a packaged daemon sends overrides it with that daemon's user."""
+        return _senders(composed(self))
+
     def kernel(self) -> Sequence[KernelFragment | KernelPatch]:
         """What this component needs of a built kernel: ``()`` (nothing), unless a subclass
         overrides it.
@@ -421,6 +427,27 @@ def _declared_rules(name: str, rules: object) -> tuple[Rule, ...]:
             hint="Report the code from the component's check(resolved) method.",
         )
     return tuple(items)
+
+
+def _senders(items: Iterable[object]) -> tuple[str, ...]:
+    """The users the services among *items* run as, fragments opened, root left out."""
+    from ._service import Service as ServiceValue
+
+    found: list[str] = []
+    for item in items:
+        if isinstance(item, dm.Fragment):
+            found.extend(_senders(item.items))
+        elif isinstance(item, ServiceValue) and item.package is None:
+            found.append(item.user or item.stem)
+        elif isinstance(item, (dm.Service, dm.Task)):
+            user = item.user if item.user is not None else _default_user(item)
+            if isinstance(user, str):
+                found.append(user)
+    return tuple(dict.fromkeys(user for user in found if user != "root"))
+
+
+def _default_user(item: dm.Service | dm.Task) -> str:
+    return item.default_user if isinstance(item, dm.Service) else item.unit.removesuffix(".service")
 
 
 def composed(owner: Component) -> tuple[object, ...]:

@@ -441,28 +441,35 @@ def test_an_egress_filters_the_output_chain() -> None:
     image = Image("x", network=Network(egress=egress), targets=("qemu", "azure"))
     rules = plan(image, "production").file("/etc/nftables.conf").text
     assert "hook output priority filter; policy drop" in rules
-    assert 'tcp dport 443 accept comment "image"' in rules
-    assert 'ip daddr 10.0.0.5 accept comment "image"' in rules
-    # what the baseline sends: NTS time and DNS over TLS; the wireserver is the glue's
-    nts = 'ip daddr @host4_time.cloudflare.com tcp dport 4460 accept comment "tee-base"'
-    assert nts in rules and 'meta skuid "_chrony" udp dport 123 accept comment "tee-base"' in rules
+    # the image's own Egress is every process's; what the baseline sends is its daemons'
+    lines = [line.strip() for line in rules.splitlines()]
+    for rule in [
+        'tcp dport 443 accept comment "image"',
+        'ip daddr 10.0.0.5 accept comment "image"',
+        'meta skuid "_chrony" ip daddr @host4_time.cloudflare.com tcp dport 4460 accept '
+        'comment "tee-base"',
+        'meta skuid "_chrony" udp dport 123 accept comment "tee-base"',
+        'meta skuid "systemd-resolve" ip daddr 1.1.1.1 tcp dport 853 accept comment "network"',
+        'meta skuid "systemd-network" udp sport 68 udp dport 67 accept comment "DHCPv4 requests"',
+    ]:
+        assert rule in lines
     assert [line for line in rules.splitlines() if "udp dport 123 accept" in line] == [
         '\t\tip daddr 169.254.169.254 udp dport 123 accept comment "metadata time"',
         '\t\tmeta skuid "_chrony" udp dport 123 accept comment "tee-base"',
     ]
-    assert 'ip daddr 1.1.1.1 tcp dport 853 accept comment "network"' in rules
     assert "ip daddr 1.0.0.1 tcp dport 853 accept" in rules and "dport 53 " not in rules
     glue = 'meta skuid 0 meta skgid "azure-complete-provisioning" ip daddr 168.63.129.16 accept'
     assert glue in rules and 'ip daddr 168.63.129.16 accept comment "azure"' not in rules
 
 
 class Sink(Component):
-    """A component whose outbound() is a peer port and the host it ships to."""
+    """A component whose outbound() is a peer port and the host it ships to, sent by its
+    service's user."""
 
     host: str | Host = "logs.example:19532"
 
     def compose(self) -> Iterator[object]:
-        yield from ()
+        yield Service("shipper", ["/usr/bin/shipper"])
 
     def outbound(self) -> Egress:
         return Egress(ports=[UDP(30303)], hosts=[self.host])
@@ -500,7 +507,8 @@ def test_a_components_outbound_joins_the_image_egress(host: str | Host, rule: st
     egress = Network(egress=Egress(ports=[UDP(30303)]))
     filtered = Image("x", components=[Sink(host=host)], network=egress)
     rules = plan(filtered, "production").file("/etc/nftables.conf").text
-    assert rule in rules and 'udp dport 30303 accept comment "image, sink"' in rules
+    assert f'meta skuid "shipper" {rule}' in rules
+    assert '\t\tudp dport 30303 accept comment "image, sink"' in rules
     assert ("host4_logs.example" in rules) == (host == "logs.example:19532")
     unfiltered = plan(Image("x", components=[Sink(host=host)]), "production")
     assert "30303" not in unfiltered.file("/etc/nftables.conf").text

@@ -21,7 +21,7 @@ Built into production:
     tdxs  local tundravm:tools    pinned=-
   Files (20):
     /etc/chrony/chrony.conf                                                                  0644  605B  sha256:c75508d70f9b
-    /etc/nftables.conf                                                                       0755  2302B  sha256:d29d7d393ce9
+    /etc/nftables.conf                                                                       0755  2502B  sha256:38c1db0617c5
     /etc/sysctl.d/50-tundravm-tee.conf                                                       0644  2152B  sha256:ea9e425204c9
     /etc/systemd/journald.conf.d/50-tundravm-tee.conf                                        0644  72B  sha256:8a2a24c8d3a1
     /etc/systemd/network/50-tundravm.network                                                 0644  234B  sha256:180df2f77bea

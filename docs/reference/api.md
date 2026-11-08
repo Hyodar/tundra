@@ -744,6 +744,7 @@ A named group of declarations, written as a class, with typed exports.
 | `Component.outbound() -> Egress` | Where this component sends, derived from its fields: `Egress()` (nothing), unless a subclass overrides it. |
 | `Component.readiness() -> tuple[Readied, ...]` | What `ready` waits for: the readiness of each service it composes that declares one. A component whose readiness is not a service of its own (one that wraps a packaged or internal unit) overrides this. |
 | `Component.ready` | "Every service this component declares readiness for is ready". |
+| `Component.senders() -> tuple[str, ...]` | The users whose sockets send `outbound`, which the firewall accepts it for alone (`meta skuid`): those of the services it composes, root left out. A component whose traffic a packaged daemon sends overrides it with that daemon's user. |
 | `Component.service(name: str) -> ServiceRef` | The service called *name*, for `requires=` and for a profile's `changes=`. |
 | `Component.services() -> tuple[Service, ...]` | Every service this component composes, nested components included. |
 
@@ -938,6 +939,7 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 | `TeeBase.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
 | `TeeBase.kernel_cmdline` | `mitigations=auto,nosmt spec_store_bypass_disable=on`: every CPU vulnerability mitigated, SMT off where that needs it, Speculative Store Bypass off for every process (`TEE_KERNEL_CMDLINE` says why each). |
 | `TeeBase.outbound() -> Egress` | With *time*, NTS key exchange (TCP 4460) to each of *nts_servers*. NTP on UDP 123 goes where the key exchange says (RFC 8915 4.1.7), so the firewall accepts it to any address for chrony's user alone (`CHRONY_NTP`). The `Network` names where DNS goes. |
+| `TeeBase.senders() -> tuple[str, ...]` | chrony's user, whose daemon makes the key exchange. |
 
 ## tundravm.components.network
 
@@ -1044,6 +1046,7 @@ How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
 | `Network.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
 | `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
 | `Network.outbound() -> Egress` | DNS over TLS (TCP 853) to each of *dns*. |
+| `Network.senders() -> tuple[str, ...]` | `systemd-resolved`'s user, which asks the resolvers. |
 
 ### `StaticAddress`
 

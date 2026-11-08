@@ -152,11 +152,12 @@ def test_show_the_image_units_and_tree(project: Path, cli: Cli) -> None:
     filtered = filtered.replace('dev=DevAccess(password="tdx")', "network=Network(egress=Egress())")
     (project / "filtered.py").write_text(filtered, encoding="utf-8")
     assert (
-        "\n# egress\ntee-base  time.cloudflare.com:4460/tcp, nts.netnod.se:4460/tcp, "
-        "123/udp as _chrony\nnetwork   1.1.1.1:853/tcp" in cli("show", "filtered.py", "--units").out
+        "\n# egress\ntee-base  time.cloudflare.com:4460/tcp as _chrony, nts.netnod.se:4460/tcp "
+        "as _chrony, 123/udp as _chrony\nnetwork   1.1.1.1:853/tcp as systemd-resolve"
+        in cli("show", "filtered.py", "--units").out
     )
     egress = json.loads(cli("show", "filtered.py", "--units", "--json").out)["egress"]
-    assert egress["tee-base"][1:] == ["nts.netnod.se:4460/tcp", "123/udp as _chrony"]
+    assert egress["tee-base"][1:] == ["nts.netnod.se:4460/tcp as _chrony", "123/udp as _chrony"]
     tree = json.loads(cli("show", "demo.py", "--tree", "--json").out)["tree"]
     paths = {row["path"] for row in tree}
     assert "mkosi.conf" in paths and "payload/mkosi.extra/srv/www/index.html" in paths

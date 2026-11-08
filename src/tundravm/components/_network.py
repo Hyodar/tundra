@@ -40,6 +40,10 @@ __all__ = [
 ]
 
 
+RESOLVED_USER = "systemd-resolve"
+"""The user Debian's ``systemd-resolved`` runs as, whose sockets send DNS over TLS."""
+
+
 class Network(Component):
     """How the image reaches the network: ``Network()`` is DHCP on ``en*``/``eth*``.
 
@@ -123,6 +127,10 @@ class Network(Component):
             shown = f"[{address}]" if ":" in address else address
             hosts.append(f"{shown}:{du.DOT_PORT}")
         return Egress(hosts=hosts)
+
+    def senders(self) -> tuple[str, ...]:
+        """``systemd-resolved``'s user, which asks the resolvers."""
+        return (RESOLVED_USER,)
 
     def readiness(self) -> tuple[Readied, ...]:
         return (self.online,)
@@ -380,12 +388,21 @@ class Firewall(Component):
         return None
 
 
-def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.EgressRule, ...]:
+def egress_rules(
+    contributions: Iterable[tuple[str, Egress]],
+    senders: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[dm.EgressRule, ...]:
     """The output-chain rules *contributions* (``(who, egress)`` pairs) ask for: one per
     destination, with everyone who asked for it, in the order asked; a host name is its
     own destination, matched by the addresses it resolves to at boot; a :class:`Host` is
     one address rule per address, commented with its name; *metadata* is one rule per
-    cloud metadata server."""
+    cloud metadata server.
+
+    *senders* maps a contributor to the users whose sockets send what it asks for: its
+    rules match each of them (``meta skuid``), one rule per user. A contributor it does not
+    map (the image's own ``Egress``, a mode's) sends from any process, and a destination it
+    asks for is accepted for every process, whoever else asked for it too."""
+    owners = {} if senders is None else senders
     found: dict[tuple[dm.Port | None, str | None, str | None, str | None], list[str]] = {}
     for who, egress in contributions:
         if egress.metadata:
@@ -402,10 +419,17 @@ def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.Egress
                 label = None if pinned is None else pinned.name
                 key = (port, None, host, None) if named else (port, host, None, label)
                 found.setdefault(key, []).append(who)
-    return tuple(
-        dm.EgressRule(port, host, tuple(dict.fromkeys(origins)), name=name, pinned=pinned)
-        for (port, host, name, pinned), origins in found.items()
-    )
+    rules: list[dm.EgressRule] = []
+    for (to, address, name, label), asked in found.items():
+        origins = tuple(dict.fromkeys(asked))
+        if any(not owners.get(who) for who in origins):
+            rules.append(dm.EgressRule(to, address, origins, name=name, pinned=label))
+            continue
+        users = dict.fromkeys(user for who in origins for user in owners[who])
+        for user in users:
+            mine = tuple(who for who in origins if user in owners[who])
+            rules.append(dm.EgressRule(to, address, mine, name=name, user=user, pinned=label))
+    return tuple(rules)
 
 
 def pinned_hosts(contributions: Iterable[tuple[str, Egress]]) -> tuple[HostsEntry, ...]:

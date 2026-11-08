@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import tundravm
-from tundravm import Image, Profile
+from tundravm import Image, Profile, Service
 from tundravm._modules import probe
 from tundravm.components import Component
 from tundravm.components.network import Egress, Network
@@ -29,7 +29,7 @@ class Collector(Component):
     """A development collector: discard datagrams anywhere, logs to one receiver."""
 
     def compose(self) -> Iterator[object]:
-        yield from ()
+        yield Service("collector", ["/usr/bin/collector"])
 
     def outbound(self) -> Egress:
         return Egress(ports=[UDP(9)], hosts=["logs.example:19532"])

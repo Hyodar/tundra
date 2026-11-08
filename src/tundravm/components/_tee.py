@@ -35,7 +35,9 @@ __all__ = [
 EVIDENCE = ServiceReady("tdxs.service", Notify())
 """The implied evidence service is ready: what a service that asks for quotes requires."""
 
-CHRONY_NTP = dm.EgressRule(dm.Port(123, "udp"), origins=("tee-base",), user="_chrony")
+CHRONY_USER = "_chrony"
+"""The user Debian's ``chrony`` drops to, whose sockets send NTS and NTP."""
+CHRONY_NTP = dm.EgressRule(dm.Port(123, "udp"), origins=("tee-base",), user=CHRONY_USER)
 """NTP to any address, from chrony's sockets alone: ``TeeBase(time=True)``'s, beside its
 ``outbound()``."""
 
@@ -98,6 +100,10 @@ class TeeBase(Component):
             return Egress()
         servers = (f"[{s}]" if ":" in s else s for s in self.nts_servers)
         return Egress(hosts=[f"{server}:4460" for server in servers])
+
+    def senders(self) -> tuple[str, ...]:
+        """chrony's user, whose daemon makes the key exchange."""
+        return (CHRONY_USER,) if self.time else ()
 
     rules = (
         Rule(

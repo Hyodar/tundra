@@ -357,8 +357,8 @@ the build with both sizes. The manifest records the layout and the cap.
 
 `network=Network(egress=Egress(ports=[TCP(443)], hosts=["10.0.0.0/8"]))` filters outbound
 traffic. It accepts what the baseline (NTS time, resolvers) and each component's
-`outbound()` send. `Service(egress=Egress(...))` accepts more for that service's user
-alone. The cloud metadata server and its identity token take only tundravm's cloud glue
+`outbound()` send, each from its users. `Service(egress=Egress(...))` accepts more
+for its user. The cloud metadata server and its identity token take only tundravm's cloud glue
 and a service with `Egress(metadata=True)` (`service-metadata` warns).
 `"logs.example:443"` opens 443 to the addresses the name resolves to, which
 `egress-resolve` asks over DNS over TLS at boot and every 30s; until the first answer the
