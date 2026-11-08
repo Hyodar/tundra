@@ -125,6 +125,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `convert --from mkosi` maps `mkosi.profiles/` to `profiles=`, the units inside `mkosi.extra/` to `Service` values left out of the `Tree`, `KernelCommandLine=` and `KernelModules=` to `Kernel.default(cmdline=, modules=)`, `Snapshot=` to `Debian(snapshot=)`, `Repositories=` to an `AptRepository`, `VolatilePackages=` to packages, and `Locale=`, `Timezone=`, `Hostname=` and the like to `Mkosi(settings=)`; a tree naming no distribution is resolved for Debian and says so.
 - `convert --from mkosi` on a tundravm tree converts the payload and its cloud wrappers into `targets=`, drops the packages every image implies, and refuses what the Image file generated.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".
+- `check` prints tundravm's own tools as one `source-unpinned` line, lists the findings that share a hint together with the hint once after them, says a missing lock stops a production build with the error `lock-missing`, and names the preset and its reason in a preset's `hardening-relaxed`.
 
 ### Build and lock
 

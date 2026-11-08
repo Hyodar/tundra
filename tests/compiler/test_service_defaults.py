@@ -79,18 +79,26 @@ def test_opt_outs_are_linted() -> None:
             Service("root", "/usr/bin/a", user="root"),
             Service("bare", "/usr/bin/b", hardening=Hardening.none()),
             Service("jit", "/usr/bin/c", hardening=Hardening.strict(jit=True)),
+            Service("net", "/usr/bin/n", hardening=Hardening.preset("dotnet")),
             Service("dev", "/usr/bin/d", hardening=Hardening.strict(devices=("/dev/tdx_guest",))),
             Task("once", "/usr/bin/e", user="root"),
         ),
     )
     found = {
-        (d.code, d.subject, d.severity)
+        (d.code, d.subject, d.severity, d.message.rpartition(": ")[2])
         for d in lint(recipe)
         if d.code.startswith("hardening") or d.code == "service-runs-as-root"
     }
-    assert found == {
+    assert {row[:3] for row in found} == {
         ("service-runs-as-root", "root.service", "info"),
         ("service-runs-as-root", "once.service", "info"),
         ("hardening-disabled", "bare.service", "warning"),
         ("hardening-relaxed", "jit.service", "info"),
+        ("hardening-relaxed", "net.service", "info"),
     }
+    assert (
+        "hardening-relaxed",
+        "net.service",
+        "info",
+        "the JIT needs W^X off and .NET needs AF_NETLINK",
+    ) in found

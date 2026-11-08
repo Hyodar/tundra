@@ -965,8 +965,8 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     resolved = not any(d.severity == "error" for d in diagnostics)
     if locked is None:
         _err(
-            f"note: no lockfile at {found.lockfile}: a production build needs one (lock-missing); "
-            f"`{lock_command()}` writes it"
+            f"note: no lockfile at {found.lockfile}: `{lock_command()}` writes it; without "
+            "it a production build stops (error lock-missing)"
         )
     elif resolved:
         diagnostics.extend(lock_status(loaded.recipe, locked, variants=names))

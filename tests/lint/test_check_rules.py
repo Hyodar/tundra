@@ -8,6 +8,7 @@ is the CLI's lint report (resolution diagnostics, then the compiler rules);
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -402,15 +403,21 @@ def test_render_joins_profiles_and_states_a_shared_hint_once() -> None:
     def unpinned(name: str, profile: str) -> Diagnostic:
         return Diagnostic("source-unpinned", "warning", name, name, profile, hint="lock")
 
-    found = [unpinned("a", "dev"), unpinned("b", "dev"), unpinned("a", "prod")]
+    tools = [replace(unpinned(n, ""), context=(("source", "tundravm:tools"),)) for n in "tu"]
+    found = [unpinned("a", "dev"), unpinned("b", "dev"), unpinned("a", "prod"), *tools]
+    found[1:1] = [replace(unpinned("g", "dev"), hint="pin it")]
     found.append(Diagnostic("profile-empty", "info", "m", profile="prod", hint="drop it"))
     assert render(found).splitlines() == [
         "warning source-unpinned [dev, prod] a: a",
         "warning source-unpinned [dev] b: b",
         "    hint (all 2 above): lock",
+        "warning source-unpinned [dev] g: g",
+        "    hint: pin it",
+        "warning source-unpinned [image] tundravm's tools (2): not in the lockfile yet: "
+        "`tundravm lock` pins them",
         "info profile-empty [prod]: m",
         "    hint: drop it",
-        "0 errors, 3 warnings, 1 info (3 lines)",
+        "0 errors, 6 warnings, 1 info (5 lines)",
     ]
     assert len(render_github(found, "image.py").splitlines()) == len(found) + 1
 

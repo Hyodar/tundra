@@ -74,7 +74,7 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     codes = ("source-unpinned", "tree-drift")
     result = cli("check", *(f"--explain={code}" for code in codes), "demo.py")
     assert result.code == EXIT_OK, result.err
-    assert result.out.startswith("source-unpinned: warning (error when the policy refuses")
+    assert result.out.startswith("source-unpinned: warning (error when moving refs are refused")
     assert "\n    fix: Run `tundravm lock` to pin every source" in result.out
     assert "\n\ntree-drift: error\n" in result.out
     unknown = cli("check", "--explain", "source-unpined")
@@ -267,7 +267,7 @@ def test_a_hint_names_the_lock_command_that_runs_here(
 ) -> None:
     (project / "other.py").write_text(STARTER, encoding="utf-8")
     checked = cli("check", *given)
-    assert f"hint: Run `{command}` to pin its content digest " in checked.out
+    assert f"not in the lockfile yet: `{command}` pins them\n" in checked.out
     assert f"`{command}` writes it" in checked.err
     assert "IMAGE" not in checked.out + checked.err
 

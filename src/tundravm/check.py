@@ -23,7 +23,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ._modules.base import TPM_PROGRAMS
+from ._modules.base import TOOLS_LOCAL, TPM_PROGRAMS
 from ._modules.init import is_init_path
 from ._secret_scan import Finding, is_unit_path, scan_file, scan_unit
 from ._source import DebFile, KernelFile, KernelSource, LocalSource, NamedSource
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from ._units.lint import ShippedUnit
     from .declarative._lowered import Lowered
     from .declarative.model import Recipe, Service, Task
+    from .declarative.systemd import Hardening
 
 _SEVERITY: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
 
@@ -613,13 +614,20 @@ def _rule_source_unpinned(
         if spec.pin_from(pins) is not None:
             continue
         message, hint = _unpinned_advice(spec)
+        tools = isinstance(spec.source, LocalSource) and spec.source.path == TOOLS_LOCAL
         yield Diagnostic(
             severity=severity,
             code="source-unpinned",
             message=message,
             hint=hint,
             subject=f"sources.{spec.name}",
+            context=_TOOLS if tools else (),
         )
+
+
+_TOOLS = (("source", TOOLS_LOCAL),)
+"""The ``context`` of a ``source-unpinned`` finding about one of tundravm's own tools, which
+the text report folds into one line."""
 
 
 def _unpinned_advice(spec: NamedSource) -> tuple[str, str]:
@@ -1126,7 +1134,17 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
     strict = dict(Hardening.strict().entries())
     dropped = [k for k in strict if k not in keys or (k, strict[k]) not in entries]
     dropped = [k for k in dropped if not (k == "PrivateDevices" and "DevicePolicy" in keys)]
-    if dropped:
+    preset = _preset_of(sandbox)
+    if dropped and preset is not None:
+        yield Diagnostic(
+            code="hardening-relaxed",
+            severity="info",
+            message=f"unit {name!r} runs the {preset} preset, which relaxes "
+            f"{', '.join(dropped)}: {_PRESETS[preset]}",
+            subject=name,
+            profile=variant,
+        )
+    elif dropped:
         legacy = (
             " (the sandbox a parsed unit file renders; an Image file's Service sets hardening=)"
             if sandbox is None
@@ -1141,6 +1159,24 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
             hint="Each relaxed knob widens what a compromised process can do; keep only the "
             "ones the program needs (docs/reference/api.md: Hardening).",
         )
+
+
+_PRESETS = {
+    "dotnet": "the JIT needs W^X off and .NET needs AF_NETLINK",
+    "jit, node or python": "a JIT needs W^X off",
+}
+"""Each relaxing preset of ``Hardening.preset`` and why it relaxes what it does; the jit,
+node and python presets render one sandbox, so they are named together."""
+
+
+def _preset_of(sandbox: Hardening | None) -> str | None:
+    """The relaxing preset *sandbox* is, without deviations, as a key of :data:`_PRESETS`."""
+    from .declarative.systemd import Hardening
+
+    for name in _PRESETS:
+        if sandbox == Hardening.preset(name.partition(",")[0]):  # type: ignore[arg-type]
+            return name
+    return None
 
 
 _KEYWORDS: Mapping[str, str] = {
@@ -1416,8 +1452,8 @@ _REGISTRY: tuple[Rule, ...] = (
         "with every other source it cannot resolve, before anything is written.",
         (_rule_source_unpinned,),
         when=(
-            "when the policy refuses moving refs",
-            "when the policy allows them",
+            "when moving refs are refused",
+            "when they are allowed",
         ),
     ),
     Rule(
@@ -1618,9 +1654,12 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "hardening-relaxed",
         "info",
-        'A Service relaxes knobs of the strict sandbox (hardening="relaxed", or a preset\'s '
-        "deviations), and each one widens what a compromised process can do.",
-        "Keep only the knobs the program needs; the message lists the relaxed ones.",
+        "A Service relaxes knobs of the strict sandbox, and each one widens what a "
+        "compromised process can do: a preset (dotnet, jit, node, python) relaxes what its "
+        'runtime needs and the message says why; hardening="relaxed" or a preset\'s '
+        "deviations relax what the image file chose.",
+        'Nothing for a preset as it is; for hardening="relaxed" or a preset\'s deviations, '
+        "keep only the knobs the program needs (the message lists them).",
     ),
     Rule(
         "unit-extra",
@@ -1756,13 +1795,15 @@ def _where(d: Diagnostic) -> str:
 def render(diagnostics: Sequence[Diagnostic]) -> str:
     """Human-readable report, one line per finding plus a summary line.
 
-    A finding several profiles share is one line naming them (``[dev, production]``), and
-    a hint consecutive findings share follows the last of them, once. The summary counts
-    findings, one per profile, and says how many lines they took when that differs.
+    A finding several profiles share is one line naming them (``[dev, production]``), the
+    ``source-unpinned`` findings of tundravm's own tools are one line, and the findings of a
+    code that share a hint are listed together, the hint once after the last of them. The
+    summary counts findings, one per profile, and says how many lines they took when that
+    differs.
     """
     if not diagnostics:
         return "no findings"
-    merged = _merged(diagnostics)
+    merged = _by_hint(_tools_folded(_merged(diagnostics)))
     lines: list[str] = []
     for index, (d, where) in enumerate(merged):
         subject = f" {d.subject}" if d.subject else ""
@@ -1787,6 +1828,48 @@ def _merged(diagnostics: Sequence[Diagnostic]) -> list[tuple[Diagnostic, str]]:
     for d in diagnostics:
         groups.setdefault(replace(d, profile=""), []).append(_where(d))
     return [(d, ", ".join(dict.fromkeys(where))) for d, where in groups.items()]
+
+
+def _tools_folded(merged: list[tuple[Diagnostic, str]]) -> list[tuple[Diagnostic, str]]:
+    """*merged* with the ``source-unpinned`` findings of tundravm's own tools as one line,
+    after the image's own unpinned sources."""
+    tools = [
+        entry
+        for entry in merged
+        if entry[0].code == "source-unpinned" and entry[0].context == _TOOLS
+    ]
+    if not tools:
+        return merged
+    rest = [entry for entry in merged if entry not in tools]
+    first = tools[0][0]
+    folded = Diagnostic(
+        "source-unpinned",
+        first.severity,
+        f"not in the lockfile yet: `{lock_command()}` pins them",
+        subject=f"tundravm's tools ({len(tools)})",
+        context=_TOOLS,
+    )
+    after = max(
+        (i + 1 for i, (d, _) in enumerate(rest) if d.code == "source-unpinned"),
+        default=merged.index(tools[0]),
+    )
+    return [*rest[:after], (folded, tools[0][1]), *rest[after:]]
+
+
+def _by_hint(merged: list[tuple[Diagnostic, str]]) -> list[tuple[Diagnostic, str]]:
+    """*merged* with the consecutive findings of one code grouped by hint, each group where
+    its first finding was."""
+    out: list[tuple[Diagnostic, str]] = []
+    start = 0
+    while start < len(merged):
+        end = start
+        while end < len(merged) and merged[end][0].code == merged[start][0].code:
+            end += 1
+        run = merged[start:end]
+        order = {hint: i for i, hint in reversed(list(enumerate(d.hint for d, _ in run)))}
+        out.extend(sorted(run, key=lambda entry: order[entry[0].hint]))
+        start = end
+    return out
 
 
 @dataclass(frozen=True, slots=True)
