@@ -274,7 +274,7 @@ $ tundravm show --diff stages/02-nethermind.py stages/03-lighthouse.py
 ## 4. The signer, your own program
 
 A `Service` can also run a program you build from source. The directory `signer/` holds a
-Go proxy that signs Nethermind's block responses with the **instance key**:
+Go proxy that signs each block response, its request and a nonce with the **instance key**:
 
 <!-- diff: examples/attested-node/stages/03-lighthouse.py examples/attested-node/stages/04-signer.py -->
 ```diff
@@ -328,7 +328,7 @@ Services:
     + probe  yes, TcpProbe(8547)
 ```
 
-The signer listens on the loopback, so nothing outside the guest can reach it yet.
+The signer listens on the loopback, so nothing outside the guest reaches it yet.
 
 ## 5. The attested ingress
 
@@ -368,9 +368,8 @@ Ingress:
   + AttestedTLS(8546, upstream=Endpoint("http://127.0.0.1:8547/"))
 ```
 
-With `quotes=True` the signer starts only once the evidence service has issued a quote over
-its key. A client fetches that quote with `GET /quote?nonce=HEX` before it trusts the
-signatures.
+With `quotes=True` the signer starts only once the evidence service quotes its key, and a
+client fetches that quote with `GET /quote?nonce=HEX` before trusting its signatures.
 
 The quote also binds the certificate of the listener on 8546, and either command checks it:
 

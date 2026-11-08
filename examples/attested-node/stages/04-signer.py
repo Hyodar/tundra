@@ -2,7 +2,9 @@
 
 Adds the signer, the Go program in signer/, built from source and run as a sandboxed
 service. It forwards JSON-RPC to Nethermind and signs block responses with the key this
-boot generated, which it reads as a credential. It listens on the loopback only.
+boot generated, which it reads as a credential. A signature covers the request's method and
+params, the result and the nonce the caller sends in X-Tundra-Nonce, in the message
+signer/main.go defines. It listens on the loopback only.
 """
 
 from components.lighthouse import Lighthouse
