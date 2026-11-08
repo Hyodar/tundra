@@ -12,6 +12,7 @@ from __future__ import annotations
 import builtins
 import itertools
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
@@ -688,7 +689,7 @@ class Command:
                         hint="Anchor it (^...$), match no space (no . and no [^...]) and leave out "
                         "quotes, \\ , : and =: '^[0-9a-f]{64}$'.",
                     )
-        count = len(self.sudoers())
+        count = math.prod(len(v) for p in self.params if (v := _spelled(p)) is not None)
         if count > SUDO_LINES:
             raise ValidationError(
                 f"{where} produces {count} argvs, one sudoers line each (login-sudo-lines).",

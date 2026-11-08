@@ -562,6 +562,14 @@ def _choices(count: int) -> CommandParam:
             lambda: Command(params=[LINES], runs=["/x", "{{lines}}", "{{lines}}"], sudo=True),
             "names {{lines}} twice",
         ),
+        (
+            lambda: Command(
+                params=[CommandParam(f"--f{at}", type=bool) for at in range(64)],
+                runs=["/x", *(f"{{{{#f{at}}}}}-{at}{{{{/f{at}}}}}" for at in range(64))],
+                sudo=True,
+            ),
+            "produces 18446744073709551616 argvs",
+        ),
         (lambda: CommandParam("n", type=int), "takes min= and max="),
         (lambda: CommandParam("n", type=int, min=9, max=1), "min first"),
         (lambda: CommandParam("n"), "takes choices="),
