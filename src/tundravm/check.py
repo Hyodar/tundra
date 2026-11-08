@@ -333,25 +333,24 @@ def _rule_user_group_undefined(
 def _rule_file_path_duplicate(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
-    extra: dict[str, list[tuple[str, str | bytes, str]]] = {}
+    extra: dict[str, list[tuple[str | bytes, str]]] = {}
     for f in state.files:
-        extra.setdefault(_norm(f.path), []).append(("file", f.content, f.mode))
+        extra.setdefault(_norm(f.path), []).append((f.content, f.mode))
     for t in state.templates:
-        extra.setdefault(_norm(t.path), []).append(("template", t.rendered, t.mode))
-    skeleton: dict[str, list[tuple[str, str | bytes, str]]] = {}
+        extra.setdefault(_norm(t.path), []).append((t.rendered, t.mode))
+    skeleton: dict[str, list[tuple[str | bytes, str]]] = {}
     for f in state.skeleton_files:
-        skeleton.setdefault(_norm(f.path), []).append(("skeleton", f.content, f.mode))
-    for tree, groups in (("mkosi.extra", extra), ("mkosi.skeleton", skeleton)):
+        skeleton.setdefault(_norm(f.path), []).append((f.content, f.mode))
+    for groups in (extra, skeleton):
         for path, entries in groups.items():
-            if len({(content, mode) for _, content, mode in entries}) < 2:
+            if len(set(entries)) < 2:
                 continue
-            kinds = ", ".join(sorted({kind for kind, _, _ in entries}))
             yield Diagnostic(
                 severity="error",
                 code="file-path-duplicate",
                 message=(
-                    f"declared {len(entries)} times in {tree} with different content "
-                    f"({kinds}); only the last one ends up in the image"
+                    f"shipped {len(entries)} times with different content; only the last "
+                    "one ends up in the image"
                 ),
                 hint=(
                     "Keep a single declaration. If two components write this path, drop "
@@ -586,7 +585,10 @@ def _rule_debloat_removes_declared_file(
                 yield Diagnostic(
                     severity="warning",
                     code="debloat-removes-declared-file",
-                    message=f"debloat deletes {pattern} at finalize, after this file is placed",
+                    message=(
+                        f"the debloat empties {pattern} at the end of the build, after "
+                        "this file is placed"
+                    ),
                     hint=(
                         f"Ship the file outside {pattern}, which the image empties at the "
                         "end of the build; a service's logs= and state= directories are "
@@ -1082,7 +1084,7 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
 
     name = unit_name(item.name)
     if item.user == "root" or isinstance(item.user, Root):
-        spelled = "user='root'" if item.user == "root" else "user=Root()"
+        spelled = 'user="root"' if item.user == "root" else "a unit tundravm composes"
         yield Diagnostic(
             code="service-runs-as-root",
             severity="info",
@@ -1125,7 +1127,11 @@ def _typed_unit_findings(item: Service | Task, variant: str) -> Iterator[Diagnos
     dropped = [k for k in strict if k not in keys or (k, strict[k]) not in entries]
     dropped = [k for k in dropped if not (k == "PrivateDevices" and "DevicePolicy" in keys)]
     if dropped:
-        legacy = " (security= is deprecated: use hardening=)" if sandbox is None else ""
+        legacy = (
+            " (the sandbox a parsed unit file renders; an Image file's Service sets hardening=)"
+            if sandbox is None
+            else ""
+        )
         yield Diagnostic(
             code="hardening-relaxed",
             severity="info",

@@ -423,7 +423,8 @@ def _stable_topological[T](
         if key in visiting:
             raise ValidationError(
                 f"Ordering cycle through {key!r}.",
-                hint="Remove one of the after= dependencies that form the loop.",
+                hint="A shipped component ordered its boot steps or build scripts in a loop; "
+                "an Image file writes no such order, so report it.",
             )
         visiting.add(key)
         for dep in deps(node):
@@ -454,9 +455,10 @@ def order_hooks(hooks: Sequence[Hook]) -> list[Hook]:
         for dep in hook.after:
             if dep in phase_of and PHASES.index(phase_of[dep]) > PHASES.index(hook.phase):
                 raise ValidationError(
-                    f"hook {hook.name!r} ({hook.phase}) runs after {dep!r}, a later "
-                    f"{phase_of[dep]} hook.",
-                    hint=f"Drop {dep!r} from after=, or move {hook.name!r} to a later phase.",
+                    f"build script {hook.name!r} ({hook.phase}) runs after {dep!r}, a script "
+                    f"of the later {phase_of[dep]} stage.",
+                    hint="A shipped component wrote this order; an Image file's "
+                    "Mkosi(scripts=) run in the order given, so report it.",
                 )
     slots: dict[str, list[int]] = {}
     for index, hook in enumerate(hooks):

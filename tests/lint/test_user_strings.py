@@ -216,6 +216,9 @@ INTERNAL_MODEL = {
         r"\bFile(?:Tree)?\(\w+, /|\bPackage\([\w.+-]+, \w+\)"
     ),
     "Build(name), a source build by its identity": re.compile(r"(?<![\w.])Build\(\w+\)"),
+    "the lowering's tree or stage (the image, the end of the build)": re.compile(
+        r"\bin mkosi\.(?:extra|skeleton)\b|\bat finalize\b"
+    ),
     "an internal module path": re.compile(
         r"\btundravm\.(?:declarative|_(?!reference\b)\w+)\b|\b_(?:image|modules|units)\.[a-z_]+\b"
     ),
@@ -512,14 +515,16 @@ def _internal(text: str) -> list[str]:
 
 
 def _hint_strings(tree: ast.Module) -> Iterator[tuple[int, str]]:
-    """``(line, text)`` of the strings a finding's hint is built from: ``hint=`` of a
-    ``Diagnostic`` or a ``report``, the hint of ``_finding``, and module-level ``*_HINT``."""
+    """``(line, text)`` of the strings a finding's message and hint are built from:
+    ``message=`` and ``hint=`` of a ``Diagnostic`` or a ``report`` (or its message argument),
+    the hint of ``_finding``, and module-level ``*_HINT``."""
     for node in ast.walk(tree):
         parts: list[ast.AST] = []
         if isinstance(node, ast.Call):
             name = getattr(node.func, "id", getattr(node.func, "attr", ""))
             if name in ("Diagnostic", "report"):
-                parts = [k.value for k in node.keywords if k.arg == "hint"]
+                parts = [k.value for k in node.keywords if k.arg in ("message", "hint")]
+                parts += node.args[2:3] if name == "Diagnostic" else node.args[1:2]
             elif name == "_finding" and len(node.args) == 6:
                 parts = [node.args[5]]
         elif isinstance(node, ast.Assign) and any(
@@ -563,6 +568,8 @@ def test_lint_fixes_and_hints_name_the_public_api() -> None:
         "profile 'dev' edits File(extra, /etc/motd), which it does not inherit",
         "profile 'dev' removes Package(jq, runtime), which it does not inherit",
         "declared Build(server) via app > server",
+        "declared 2 times in mkosi.extra with different content (file, template)",
+        "debloat deletes /var/log at finalize, after this file is placed",
     ],
 )
 def test_internal_model_names_are_caught(text: str) -> None:

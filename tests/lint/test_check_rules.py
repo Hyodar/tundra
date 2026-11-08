@@ -111,7 +111,7 @@ def test_service_user_root_base_or_hook_created_is_fine() -> None:
 def test_file_path_duplicate_with_different_content() -> None:
     [diag] = report(recipe(Template("/etc/motd", "bye {x}\n", variables={"x": 1})))
     assert (diag.severity, diag.code, diag.subject) == ("error", "file-path-duplicate", "/etc/motd")
-    assert "file, template" in diag.message
+    assert diag.message.startswith("shipped 2 times with different content")
 
 
 def test_identical_redeclaration_and_skeleton_override_are_fine() -> None:
