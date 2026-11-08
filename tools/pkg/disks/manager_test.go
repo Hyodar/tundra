@@ -74,11 +74,11 @@ func TestManager_SetupDisk_EncryptedFormat(t *testing.T) {
 	// cryptsetup isLuks -> not LUKS
 	mr.on("", fmt.Errorf("not LUKS"), "cryptsetup", "isLuks", "/dev/sdb")
 	// cryptsetup luksFormat
-	mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+	mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", "/dev/sdb")
 	// cryptsetup token import (init token)
 	mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "1", "/dev/sdb")
 	// cryptsetup luksOpen
-	mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+	mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 	// mkfs.ext4
 	mr.on("", nil, "mkfs.ext4", "-F", "/dev/mapper/crypt_disk_persistent")
 	// mount
@@ -137,9 +137,9 @@ func TestFormatWritesTheInitTokenAfterMkfs(t *testing.T) {
 				return nil
 			}
 			mr.on("", fmt.Errorf("not LUKS"), "cryptsetup", "isLuks", "/dev/sdb")
-			mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+			mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", "/dev/sdb")
 			mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "1", "/dev/sdb")
-			mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+			mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 			mr.on("", failing("mkfs.ext4"), "mkfs.ext4", "-F", "/dev/mapper/crypt_disk_persistent")
 			mr.on("", failing("mount"), "mount", "/dev/mapper/crypt_disk_persistent", mountPoint)
 			mr.on("", nil, "cryptsetup", "luksClose", "crypt_disk_persistent")
@@ -199,7 +199,7 @@ func TestManager_SetupDisk_EncryptedMountExisting(t *testing.T) {
 	tokData, _ := json.Marshal(tok)
 	mr.on(string(tokData), nil, "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdb")
 	// luksOpen
-	mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+	mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 	// mount
 	mr.on("", nil, "mount", "/dev/mapper/crypt_disk_persistent", mountPoint)
 
@@ -272,9 +272,9 @@ func TestManager_SetupDisk_EncryptedAlwaysFormat(t *testing.T) {
 	tokData, _ := json.Marshal(tok)
 	mr.on(string(tokData), nil, "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdb")
 	// But format policy is "always", so we still format.
-	mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+	mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", "/dev/sdb")
 	mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "1", "/dev/sdb")
-	mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+	mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 	mr.on("", nil, "mkfs.ext4", "-F", "/dev/mapper/crypt_disk_persistent")
 	mr.on("", nil, "mount", "/dev/mapper/crypt_disk_persistent", mountPoint)
 
@@ -458,9 +458,9 @@ func TestManager_SetupDisk_UsesPerDiskKeyFile(t *testing.T) {
 	kp := &staticKeyProvider{err: fmt.Errorf("provider should not be used")}
 
 	mr.on("", fmt.Errorf("not LUKS"), "cryptsetup", "isLuks", "/dev/sdb")
-	mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+	mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", "/dev/sdb")
 	mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "1", "/dev/sdb")
-	mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+	mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 	mr.on("", nil, "mkfs.ext4", "-F", "/dev/mapper/crypt_disk_persistent")
 	mr.on("", nil, "mount", "/dev/mapper/crypt_disk_persistent", mountPoint)
 
@@ -562,7 +562,7 @@ func TestManager_SetupDisk_OnFailFormat(t *testing.T) {
 	// Not initialized (but is LUKS, so on_fail should not format)
 	mr.on("", fmt.Errorf("no token"), "cryptsetup", "token", "export", "--token-id", "1", "/dev/sdb")
 	// luksOpen
-	mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+	mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 	// mount
 	mr.on("", nil, "mount", "/dev/mapper/crypt_disk_persistent", mountPoint)
 

@@ -209,5 +209,6 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `POST /owner` answers only once `disk-setup` has written the new owner into every header it holds this boot (and an open volume's copy), as `<owner>.header` records, else 504 after a minute, so a kill after the answer cannot keep the old owner.
 - `POST /credentials` stages every target of a delivery in a temporary file beside it before renaming any, and removes the staged files when one fails, so a delivery lands in all its targets or in none.
 - `disk-setup` writes a new volume's init token only after `mkfs`, so a kill in between leaves a volume the next boot formats again, and closes the mapping when any later step of the format fails.
+- `disk-setup` passes `--key-file=-` to `luksFormat` and `luksOpen`, so the whole passphrase is the key, not its first line.
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 

@@ -221,7 +221,7 @@ func TestVolumeCopy(t *testing.T) {
 				mr.on("", fmt.Errorf("no token"), "cryptsetup", "token", "export", "--token-id", "2", "/dev/sdb")
 			}
 			mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "2", "--token-replace", "/dev/sdb")
-			mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_data")
+			mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_data")
 			if c.fails == "mount failed" {
 				mr.on("", fmt.Errorf("mount failed"), "mount", "/dev/mapper/crypt_disk_data", mount)
 			} else {

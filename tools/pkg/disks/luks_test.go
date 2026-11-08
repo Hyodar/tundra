@@ -4,9 +4,50 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	tundraexec "github.com/Hyodar/tundra/tools/pkg/exec"
 )
+
+// TestTheWholePassphraseIsTheKey: with the real cryptsetup and keyFromStdin (which
+// FormatLuks and OpenLuks pass, as their tests pin), a passphrase with a newline formats a
+// volume that only the whole passphrase unlocks, never its first line. A cheap PBKDF keeps
+// it fast.
+func TestTheWholePassphraseIsTheKey(t *testing.T) {
+	if _, err := exec.LookPath("cryptsetup"); err != nil {
+		t.Skip("no cryptsetup")
+	}
+	ctx := context.Background()
+	device := filepath.Join(t.TempDir(), "volume.img")
+	if err := os.WriteFile(device, make([]byte, 20<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &tundraexec.DefaultRunner{}
+	if _, err := runner.RunWithStdin(ctx, "first\nsecond", "cryptsetup", "luksFormat", "--type", "luks2",
+		"--batch-mode", "--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", keyFromStdin, device); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		key   string
+		opens bool
+	}{
+		{"the whole passphrase", "first\nsecond", true},
+		{"its first line", "first", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := runner.RunWithStdin(ctx, c.key, "cryptsetup", "open", "--test-passphrase", keyFromStdin, device)
+			if (err == nil) != c.opens {
+				t.Fatalf("unlocks: %v (%v), want %v", err == nil, err, c.opens)
+			}
+		})
+	}
+}
 
 // mockRunner records commands and returns pre-configured outputs.
 type mockRunner struct {
@@ -151,7 +192,7 @@ func TestLuksOps_FormatLuks(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		mr := newMockRunner()
-		mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+		mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", "/dev/sdb")
 		ops := NewLuksOps(mr)
 
 		err := ops.FormatLuks(ctx, "/dev/sdb", "my-secret-key")
@@ -169,7 +210,7 @@ func TestLuksOps_FormatLuks(t *testing.T) {
 
 	t.Run("failure", func(t *testing.T) {
 		mr := newMockRunner()
-		mr.on("", fmt.Errorf("device busy"), "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+		mr.on("", fmt.Errorf("device busy"), "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", "/dev/sdb")
 		ops := NewLuksOps(mr)
 
 		err := ops.FormatLuks(ctx, "/dev/sdb", "key")
@@ -183,7 +224,7 @@ func TestLuksOps_OpenLuks(t *testing.T) {
 	ctx := context.Background()
 
 	mr := newMockRunner()
-	mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+	mr.on("", nil, "cryptsetup", "luksOpen", "--key-file=-", "/dev/sdb", "crypt_disk_persistent")
 	ops := NewLuksOps(mr)
 
 	err := ops.OpenLuks(ctx, "/dev/sdb", "crypt_disk_persistent", "key")

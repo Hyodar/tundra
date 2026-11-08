@@ -57,7 +57,11 @@ func (l *LuksOps) InitToken(ctx context.Context, path string) (bool, string, err
 	return tok.Initialized == "true", tok.DiskName, nil
 }
 
-// FormatLuks formats the device as LUKS2 with the given passphrase.
+// keyFromStdin makes cryptsetup take all of stdin as the key: without it a passphrase
+// read from stdin stops at its first newline, so "a\nb" and "a" would open the same volume.
+const keyFromStdin = "--key-file=-"
+
+// FormatLuks formats the device as LUKS2 with the given passphrase, all of it the key.
 func (l *LuksOps) FormatLuks(ctx context.Context, device, passphrase string) error {
 	slog.InfoContext(ctx, "formatting LUKS2 device", "device", device)
 
@@ -65,6 +69,7 @@ func (l *LuksOps) FormatLuks(ctx context.Context, device, passphrase string) err
 		"cryptsetup", "luksFormat",
 		"--type", "luks2",
 		"--batch-mode",
+		keyFromStdin,
 		device,
 	)
 	if err != nil {
@@ -74,12 +79,13 @@ func (l *LuksOps) FormatLuks(ctx context.Context, device, passphrase string) err
 	return nil
 }
 
-// OpenLuks opens a LUKS device with the given mapper name.
+// OpenLuks opens a LUKS device with the given mapper name and passphrase, all of it the key.
 func (l *LuksOps) OpenLuks(ctx context.Context, device, mapperName, passphrase string) error {
 	slog.InfoContext(ctx, "opening LUKS device", "device", device, "mapper", mapperName)
 
 	_, err := l.Runner.RunWithStdin(ctx, passphrase,
 		"cryptsetup", "luksOpen",
+		keyFromStdin,
 		device,
 		mapperName,
 	)
