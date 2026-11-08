@@ -1,12 +1,16 @@
 // The signing proxy examples/attested-node/image.py builds from this directory
 // (Local("signer")). It answers JSON-RPC on -listen by forwarding each request to the
 // Nethermind endpoint -upstream. For eth_blockNumber, eth_getBlockByNumber and
-// eth_getBlockByHash it signs keccak256 of the response's canonical result (compact JSON,
-// object keys sorted) with this boot's instance key: a recoverable 65-byte signature
-// r || s || v (v is 27 or 28, as ecrecover takes it), sent hex-encoded in
-// X-Tundra-Signature with the signer's compressed public key in X-Tundra-Signer. Every
-// other request passes through unsigned. GET /signer answers the public key. With -quotes
-// it starts only once the evidence service quotes its key, and GET /quote?nonce=HEX
+// eth_getBlockByHash the caller sends a fresh nonce of 16 to 64 random bytes in hex in
+// X-Tundra-Nonce (a request without one is refused), and the signer signs the whole
+// exchange: keccak256 of the compact JSON {"method","nonce","params","result"} (no
+// whitespace, object keys sorted, numbers as written, <>& unescaped), where nonce is the
+// lowercase hex the response echoes in X-Tundra-Nonce and params is null when the request
+// carried none. The signature is this boot's instance key's recoverable r || s || v (v is
+// 27 or 28, as ecrecover takes it), sent hex-encoded in X-Tundra-Signature with the
+// signer's compressed public key in X-Tundra-Signer; an error response carries none, and
+// every other method passes through unsigned. GET /signer answers the public key. With
+// -quotes it starts only once the evidence service quotes its key, and GET /quote?nonce=HEX
 // answers a quote whose report data binds the key and the nonce (quote.go).
 package main
 
@@ -34,6 +38,7 @@ import (
 const (
 	signatureHeader = "X-Tundra-Signature"
 	signerHeader    = "X-Tundra-Signer"
+	nonceHeader     = "X-Tundra-Nonce"
 	maxRequest      = 1 << 20
 	maxResponse     = 64 << 20
 )
@@ -143,8 +148,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // quote answers the evidence service's document over the key and the caller's nonce.
 func (p *proxy) quote(w http.ResponseWriter, r *http.Request) {
-	nonce, err := hex.DecodeString(r.URL.Query().Get("nonce"))
-	if err != nil || len(nonce) < 16 || len(nonce) > 64 {
+	nonce, ok := parseNonce(r.URL.Query().Get("nonce"))
+	if !ok {
 		http.Error(w, "pass nonce= 16 to 64 random bytes in hex", http.StatusBadRequest)
 		return
 	}
@@ -157,6 +162,12 @@ func (p *proxy) quote(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"signer": p.signer, "document": document})
 }
 
+// parseNonce decodes a caller's nonce: 16 to 64 bytes in hex.
+func parseNonce(text string) ([]byte, bool) {
+	nonce, err := hex.DecodeString(text)
+	return nonce, err == nil && len(nonce) >= 16 && len(nonce) <= 64
+}
+
 func (p *proxy) forward(w http.ResponseWriter, r *http.Request) {
 	request, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequest))
 	if err != nil {
@@ -164,9 +175,20 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var call struct {
-		Method string `json:"method"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
 	}
 	sign := json.Unmarshal(request, &call) == nil && signed[call.Method]
+	var nonce []byte
+	if sign {
+		var ok bool
+		if nonce, ok = parseNonce(r.Header.Get(nonceHeader)); !ok {
+			http.Error(w, "pass "+nonceHeader+": 16 to 64 fresh random bytes in hex; "+
+				"the signature binds it, so a stale or replayed answer fails to verify",
+				http.StatusBadRequest)
+			return
+		}
+	}
 	upstream, err := p.client.Post(p.upstream, "application/json", bytes.NewReader(request))
 	if err != nil {
 		http.Error(w, "nethermind: "+err.Error(), http.StatusBadGateway)
@@ -179,9 +201,10 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sign && upstream.StatusCode == http.StatusOK {
-		if signature, ok := p.signResult(response); ok {
+		if signature, ok := p.signExchange(call.Method, call.Params, response, nonce); ok {
 			w.Header().Set(signatureHeader, "0x"+hex.EncodeToString(signature))
 			w.Header().Set(signerHeader, p.signer)
+			w.Header().Set(nonceHeader, hex.EncodeToString(nonce))
 		}
 	}
 	w.Header().Set("Content-Type", upstream.Header.Get("Content-Type"))
@@ -189,36 +212,56 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request) {
 	w.Write(response)
 }
 
-// signResult signs the result of a JSON-RPC response; an error response carries none.
-func (p *proxy) signResult(response []byte) ([]byte, bool) {
+// signExchange signs the request's method and params, the response's result and the
+// caller's nonce; an error response carries no signature.
+func (p *proxy) signExchange(method string, params, response, nonce []byte) ([]byte, bool) {
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 	}
 	if json.Unmarshal(response, &envelope) != nil || len(envelope.Result) == 0 {
 		return nil, false
 	}
-	canonical, err := canonicalJSON(envelope.Result)
+	message, err := exchange(method, params, envelope.Result, nonce)
 	if err != nil {
 		return nil, false
 	}
-	return sign(p.key, keccak256(canonical)), true
+	return sign(p.key, keccak256(message)), true
 }
 
-// canonicalJSON re-encodes raw compact, with object keys sorted and numbers as written.
-func canonicalJSON(raw []byte) ([]byte, error) {
+// exchange is the message a signature covers: the compact JSON, keys sorted, of the
+// method, the lowercase hex nonce, the params (null when absent) and the result.
+func exchange(method string, params, result, nonce []byte) ([]byte, error) {
+	message := map[string]any{"method": method, "nonce": hex.EncodeToString(nonce), "params": nil}
+	if len(params) > 0 {
+		value, err := decodeJSON(params)
+		if err != nil {
+			return nil, err
+		}
+		message["params"] = value
+	}
+	value, err := decodeJSON(result)
+	if err != nil {
+		return nil, err
+	}
+	message["result"] = value
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(message); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
+}
+
+// decodeJSON decodes raw keeping numbers as written, so the message re-encodes them so.
+func decodeJSON(raw []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
-	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
+	return value, nil
 }
 
 func keccak256(data []byte) []byte {
