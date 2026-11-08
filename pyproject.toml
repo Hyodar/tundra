@@ -75,6 +75,9 @@ strict = true
 # Modules are named from the root down (examples.flashbox.image), so the two examples'
 # image.py differ; attested-node, not a package name, roots its own (image, components).
 explicit_package_bases = true
+# flashbox's image.py imports its own components/, which this run names
+# examples.flashbox.components: CI checks it in a run rooted at examples/flashbox.
+exclude = ["^examples/flashbox/image\\.py$"]
 
 [tool.hatch.version]
 # The release tag (v2.0.0) is the version; between tags, <last tag>.post1.dev<n>+g<sha>.

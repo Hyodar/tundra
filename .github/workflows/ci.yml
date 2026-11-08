@@ -49,7 +49,9 @@ jobs:
           uv run ruff format --check src tests examples
 
       - name: Typecheck
-        run: uv run mypy .
+        run: |
+          uv run mypy .
+          MYPYPATH=examples/flashbox uv run mypy examples/flashbox/image.py examples/flashbox/components
 
       - name: Unit tests
         run: uv run pytest -m "not integration"
