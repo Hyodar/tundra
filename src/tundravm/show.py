@@ -65,14 +65,16 @@ def image_report(
     recipe: Recipe,
     declared: Image,
     file: Path | None = None,
+    bindings: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """The dry run of *profiles*, in the order given: the image and the *file* it is
     declared in, the digest the lockfile records, its base, what the image file wrote
     (*declared*, the ``Image`` *recipe* lowers: its components, services, ingress, content
-    and profiles) and what each profile builds."""
+    and profiles, a value the file binds by its name in *bindings*) and what each profile
+    builds."""
     variants = {variant.name for variant in recipe.variants}
     probes = probe_units(declared)
-    written = declared_view(declared, profiles)
+    written = declared_view(declared, profiles, bindings)
     return {
         "image": img.image_id,
         "file": None if file is None else _shown(file),

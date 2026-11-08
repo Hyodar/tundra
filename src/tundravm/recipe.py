@@ -13,9 +13,9 @@ import importlib.util
 import os
 import sys
 import traceback
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, cast
@@ -201,7 +201,8 @@ class RecipeFile:
     image lowers to, its ``backend`` and the lowered image once built.
 
     *backend* is the file's own ``backend`` when it binds one, else :func:`default_backend`;
-    *backend_origin* says which.
+    *backend_origin* says which. *bindings* are what the file binds at its top level, by
+    name: what ``show`` calls each of them.
     """
 
     path: Path
@@ -210,6 +211,7 @@ class RecipeFile:
     image: Lowered | None
     backend: BuildBackend | None
     backend_origin: BackendOrigin = "recipe"
+    bindings: Mapping[str, object] = field(default_factory=dict)
 
     @property
     def variants(self) -> tuple[str, ...]:
@@ -246,11 +248,14 @@ def load_file(
     module = import_recipe_module(image_path, extra_paths=extra_paths)
     declared = image_of(module, image_path, attribute=attribute)
     found = recipe_of(declared)
+    bindings = {name: value for name, value in vars(module).items() if not name.startswith("_")}
     raw = getattr(module, BACKEND_NAME, None)
+    origin: BackendOrigin = "recipe"
     if raw is not None:
-        return RecipeFile(image_path, declared, found, None, _backend(raw, image_path))
-    backend, origin = default_backend()
-    return RecipeFile(image_path, declared, found, None, backend, origin)
+        backend = _backend(raw, image_path)
+    else:
+        backend, origin = default_backend()
+    return RecipeFile(image_path, declared, found, None, backend, origin, bindings)
 
 
 __all__ = [

@@ -14,10 +14,13 @@ the one it extends) prints the rows two descriptions do not share (:func:`diff_s
 from __future__ import annotations
 
 import dataclasses
+import functools
 import hashlib
+import inspect
 import json
 import re
 from collections.abc import Collection, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -48,15 +51,27 @@ _RUNTIME = "/etc/tundravm/runtime.json"
 # ── the image as written ─────────────────────────────────────────────────
 
 
-def declared(image: Image, profiles: Sequence[str]) -> dict[str, object]:
+def declared(
+    image: Image, profiles: Sequence[str], bindings: Mapping[str, object] | None = None
+) -> dict[str, object]:
     """*image*'s components, services and *profiles*, as the image file wrote them.
 
     Components are the ones the file named (``components=``, ``network=``,
     ``observability=``), never the implied baseline; services are the image's and those its
     components compose, each with the component that holds it; content is what the image
     names itself (``packages=``, ``files=``, ``users=``, ``groups=``); logins are each
-    ``SshAccess`` login's menu, every command with the profiles it exists in.
+    ``SshAccess`` login's menu, every command with the profiles it exists in. Within a call,
+    a component, service or volume the file binds at its top level (*bindings*, by name)
+    is that name, and what one exports is ``name.attribute`` (:func:`call`).
     """
+    token = _REFERENCES.set(_References(bindings or {}))
+    try:
+        return _declared(image, profiles)
+    finally:
+        _REFERENCES.reset(token)
+
+
+def _declared(image: Image, profiles: Sequence[str]) -> dict[str, object]:
     return {
         "components": [_component(c) for c in _written_components(image)],
         "services": [_service(s, owner) for s, owner in _written_services(image)],
@@ -305,8 +320,17 @@ def _change(change: object) -> str:
 
 def call(value: object) -> str:
     """*value* as the call that makes it, keywords at their defaults left out:
-    ``App(version="0.1.0", port=8080)``. A ``password`` keyword prints as ``"***"``."""
-    from ._image._component import Endpoint
+    ``App(version="0.1.0", port=8080)``. A ``password`` keyword prints as ``"***"``.
+
+    Within :func:`declared`, what *value* holds is spelled as the image file wrote it
+    when it can be: a component, service or volume the file names is its name, a value
+    one of them exports is ``nethermind.engine_api`` or ``app.endpoint(8080)``, a
+    directory ``data.directory("app")``, and a list of one a keyword also takes alone is
+    that one."""
+    return _call(value, nested=False)
+
+
+def _call(value: object, *, nested: bool = True) -> str:
     from ._image._storage import VolumeDirectory
 
     if isinstance(value, str):
@@ -315,33 +339,168 @@ def call(value: object) -> str:
         return repr(value)
     if isinstance(value, Path):
         return json.dumps(str(value))
+    references = _REFERENCES.get() if nested else None
+    named = None if references is None else references.spelling(value)
+    if named is not None:
+        return named
     if isinstance(value, VolumeDirectory):
-        return f"{call(value.volume)}.directory({json.dumps(value.name)})"
-    if isinstance(value, Endpoint):
-        return f"Endpoint({json.dumps(value.url)})"
+        words: list[str] = [json.dumps(value.name)]
+        words += [] if value.mode == 0o750 else [f"mode={value.mode:#o}"]
+        words += [] if value.group is None else [f"group={json.dumps(value.group)}"]
+        return f"{_call(value.volume)}.directory({', '.join(words)})"
     if isinstance(value, Mapping):
-        return "{" + ", ".join(f"{call(k)}: {call(v)}" for k, v in value.items()) + "}"
+        return "{" + ", ".join(f"{_call(k)}: {_call(v)}" for k, v in value.items()) + "}"
     if isinstance(value, (tuple, list, set, frozenset)):
         items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
-        return "[" + ", ".join(call(item) for item in items) + "]"
+        return "[" + ", ".join(_call(item) for item in items) + "]"
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not cast(Any, value).__dataclass_params__.repr:
             text = repr(value)
             return text if '"' in text else text.replace("'", '"')
-        words: list[str] = []
+        positional = _positional(type(value))
+        words = []
         for item in dataclasses.fields(value):
-            if not item.init or item.name.startswith("_"):
+            if not item.init or not item.compare or item.name.startswith("_"):
                 continue
             held = getattr(value, item.name)
             if _at_default(item, held) or _derived(value, item, held):
                 continue
-            text = MASKED if item.name in _MASKED_FIELDS else call(held)
-            required = (
-                item.default is dataclasses.MISSING and item.default_factory is dataclasses.MISSING
-            )
-            words.append(text if required and not item.kw_only else f"{item.name}={text}")
+            if isinstance(held, tuple) and len(held) == 1 and _alone(value, item, held[0]):
+                held = held[0]
+            text = MASKED if item.name in _MASKED_FIELDS else _call(held)
+            words.append(text if item.name in positional else f"{item.name}={text}")
         return f"{type(value).__name__}({', '.join(words)})"
     return repr(value)
+
+
+@functools.cache
+def _positional(kind: type) -> frozenset[str]:
+    """The parameters *kind* requires and takes by position."""
+    try:
+        parameters = inspect.signature(kind).parameters.values()
+    except (TypeError, ValueError):
+        return frozenset()
+    return frozenset(
+        p.name
+        for p in parameters
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
+    )
+
+
+def _alone(owner: object, item: dataclasses.Field[Any], value: object) -> bool:
+    """Whether *owner*'s keyword takes *value* alone for the list of it it holds
+    (``login=Login(...)``)."""
+    try:
+        return bool(dataclasses.replace(cast(Any, owner), **{item.name: value}) == owner)
+    except (TdxError, TypeError, ValueError):
+        return False
+
+
+@dataclass(frozen=True)
+class _References:
+    """The components, services and volumes an image file binds to its top-level *names*,
+    which :func:`call` spells by name, with what each exports."""
+
+    names: Mapping[str, object]
+
+    @functools.cached_property
+    def bound(self) -> dict[int, str]:
+        from ._image import Component, Service
+        from ._image._storage import Volume
+
+        found: dict[int, str] = {}
+        for name, value in self.names.items():
+            if isinstance(value, (Component, Service, Volume)):
+                found.setdefault(id(value), name)
+        return found
+
+    @functools.cached_property
+    def exports(self) -> list[tuple[str, object]]:
+        """``(name.attribute, value)`` of each property a bound component or service
+        exports that is a value of its own: an endpoint, a login entry, a readiness."""
+        from ._image import Component, Service
+
+        found: list[tuple[str, object]] = []
+        for owner, name in self._owners():
+            seen: set[str] = set()
+            for kind in type(owner).__mro__:
+                for attribute, member in vars(kind).items():
+                    if attribute in seen or attribute.startswith("_"):
+                        continue
+                    seen.add(attribute)
+                    if not isinstance(member, property):
+                        continue
+                    try:
+                        value = getattr(owner, attribute)
+                    except (TdxError, AttributeError, TypeError, ValueError):
+                        continue
+                    if _exported(value) and not isinstance(value, (Component, Service)):
+                        found.append((f"{name}.{attribute}", value))
+        return found
+
+    def _owners(self) -> list[tuple[object, str]]:
+        from ._image import Component, Service
+
+        return [
+            (value, name)
+            for name, value in self.names.items()
+            if isinstance(value, (Component, Service)) and self.bound.get(id(value)) == name
+        ]
+
+    def spelling(self, value: object) -> str | None:
+        """*value* by the name the file binds it to or the export it is, else ``None``."""
+        from ._image._component import Endpoint
+
+        if id(value) in self.bound:
+            return self.bound[id(value)]
+        if not _exported(value):
+            return None
+        for spelled, exported in self.exports:
+            if _same(exported, value):
+                return spelled
+        if isinstance(value, Endpoint):
+            return self._endpoint(value)
+        return None
+
+    def _endpoint(self, value: Any) -> str | None:
+        """``app.endpoint(8080)``: the endpoint a bound owner's ``endpoint()`` makes."""
+        for owner, name in self._owners():
+            make = getattr(owner, "endpoint", None)
+            if not callable(make):
+                continue
+            try:
+                made = make(value.port, path=value.path, scheme=value.scheme)
+            except (TdxError, TypeError, ValueError):
+                continue
+            if _same(made, value):
+                words = [str(value.port)]
+                words += [] if value.path == "/" else [f"path={json.dumps(value.path)}"]
+                words += [] if value.scheme == "http" else [f"scheme={json.dumps(value.scheme)}"]
+                return f"{name}.endpoint({', '.join(words)})"
+        return None
+
+
+_REFERENCES: ContextVar[_References | None] = ContextVar("references", default=None)
+
+
+def _exported(value: object) -> bool:
+    """Whether *value* is a value of its own an owner may export: a dataclass instance
+    that is not empty (an export equal to ``Kind()`` names nothing)."""
+    if not dataclasses.is_dataclass(value) or isinstance(value, type):
+        return False
+    try:
+        return bool(type(value)() != value)
+    except (TdxError, TypeError, ValueError):
+        return True
+
+
+def _same(left: object, right: object) -> bool:
+    """Whether *left* and *right* are one value, the fields equality skips compared too
+    (an endpoint's readiness and provider)."""
+    return type(left) is type(right) and all(
+        getattr(left, item.name) == getattr(right, item.name)
+        for item in dataclasses.fields(cast(Any, left))
+    )
 
 
 def _derived(owner: object, item: dataclasses.Field[Any], value: object) -> bool:

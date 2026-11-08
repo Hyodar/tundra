@@ -2,7 +2,7 @@ prover  prover.py
 Debian trixie, snapshot 20261018T082309Z, x86_64, reproducible
 
 Components (2):
-  Container(name="box", argv=["/usr/bin/busybox", "nc", "-lu", "-p", "9000"], packages=["busybox"], expose=[UDP(9000)], egress=Egress(hosts=["192.0.2.7:443"]))
+  Container("box", argv=["/usr/bin/busybox", "nc", "-lu", "-p", "9000"], packages=["busybox"], state=data.directory("box"), expose=[UDP(9000)], egress=Egress(hosts=["192.0.2.7:443"]))
   Network(egress=Egress())
 
 Services (2):
@@ -15,10 +15,11 @@ Services (2):
   box  Container
     program    /usr/bin/busybox nc -lu -p 9000
     hardening  static
+    volume     /persistent/data/box on Volume("data", unlock=OperatorKey())
     probe      no
 
 Ingress (1):
-  AttestedTLS(443, upstream=Endpoint("http://127.0.0.1:8080/"))
+  AttestedTLS(443, upstream=app.endpoint(8080))
 
 Content (2):
   Package("busybox")
@@ -56,11 +57,11 @@ Built into production:
     /etc/tdx/secrets.yaml                                                                    0644  492B  sha256:f06dea230aa6
     /etc/tdxs/config.yaml                                                                    0644  74B  sha256:2ead90d8d442
     /etc/tundravm/egress-hosts                                                               0644  34B  sha256:072f11e6c183
-    /etc/tundravm/runtime.json                                                               0644  974B  sha256:ec9d09a9b50d
+    /etc/tundravm/runtime.json                                                               0644  1006B  sha256:acf8d81b0aeb
     /srv/www/index.html                                                                      0644  16B  sha256:75186e1a779a
     /usr/bin/azure-complete-provisioning                                                     0755  2517B  sha256:fd3d32e3d33f
     /usr/lib/systemd/system/box-net.service                                                  0644  980B  sha256:a57e91d9f458
-    /usr/lib/systemd/system/box.service.d/20-container.conf                                  0644  215B  sha256:169f9f14e1e0
+    /usr/lib/systemd/system/box.service.d/20-container.conf                                  0644  267B  sha256:b7e879d13d9b
     /usr/lib/systemd/system/chrony.service.d/50-tundravm-egress.conf                         0644  168B  sha256:96dcd0c6b5a4
     /usr/lib/systemd/system/egress-resolve.service                                           0644  853B  sha256:0720266027ce
     /usr/lib/systemd/system/egress-resolve.timer                                             0644  333B  sha256:cfc6f2f549dc
@@ -120,7 +121,7 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  26030B  sha256:59c267a0f82c
+    + /usr/lib/tundravm/probe  0755  26218B  sha256:4fe163885c65
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
   Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
   Build steps

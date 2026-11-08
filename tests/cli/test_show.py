@@ -33,6 +33,7 @@ box = Container(
     "box",
     ["/usr/bin/busybox", "nc", "-lu", "-p", "9000"],
     packages=["busybox"],
+    state=data.directory("box"),
     expose=[UDP(9000)],
     egress=Egress(hosts=["192.0.2.7:443"]),
 )

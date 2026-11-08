@@ -1371,7 +1371,12 @@ def _image_report(
     given = [builds.choose_profile(img, None, dev=True)] if args.dev else args.profile
     names = show.ordered_profiles(loaded.variants, _profiles(img, given or ()))
     report = show.image_report(
-        img, names, file=found.image, declared=loaded.declared, recipe=loaded.recipe
+        img,
+        names,
+        file=found.image,
+        declared=loaded.declared,
+        recipe=loaded.recipe,
+        bindings=loaded.bindings,
     )
     return report, loaded, img, names
 
