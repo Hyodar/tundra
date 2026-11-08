@@ -18,7 +18,7 @@ TDX VM, whose memory the host cannot read and whose contents anyone can verify.
 ## First run
 
 ```console
-$ sudo apt install debian-archive-keyring golang qemu-system-x86 ovmf
+$ sudo apt install debian-archive-keyring qemu-system-x86 ovmf
 $ uv tool install git+https://github.com/Hyodar/tundra@v2.0.0
 $ tundravm doctor
 $ tundravm new my-image && cd my-image
