@@ -1,10 +1,10 @@
 # The flashbox example built as a whole and booted: its dev profile (the built 6.18.57 kernel,
 # Nethermind, Lighthouse, the searcher's container, the delayed-log and input channels) under
 # QEMU in simulated mode, then driven the way a searcher and its operator would: attest with an
-# owner identity, deliver the keys, unlock the volume, the login menu in production, a
-# maintenance window that opens the container's SSH, the delayed log and the input channel, and
-# the window closed again. Too slow for every push (the kernel and Nethermind build), so weekly
-# and by hand:
+# owner identity, deliver the metrics credential, unlock the volume, the login menu in
+# production, a maintenance window that opens the container's SSH, the delayed log and the
+# input channel, and the window closed again. Too slow for every push (the kernel and
+# Nethermind build), so weekly and by hand:
 #   gh workflow run flashbox.yml --ref BRANCH
 # What the dev profile leaves unproven on a runner: the metrics export (a profile cannot point
 # Observability at the in-guest sink, so it keeps the TLS passthrough to a proxy that is not
@@ -64,7 +64,7 @@ jobs:
           grep -F 'tdx-evidence: no TDX quote path; development profile, running simulated' \
             ".tundravm/instances/$INSTANCE/console.log"
 
-      - name: Attest as the owner, deliver the keys and unlock the volume
+      - name: Attest as the owner, deliver the metrics credential and unlock the volume
         if: ${{ !cancelled() }}
         run: |
           ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/operator"
