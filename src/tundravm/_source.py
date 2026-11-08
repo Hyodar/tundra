@@ -1913,14 +1913,17 @@ def go_toolchain(go_mod: str) -> str:
         key = _go_version_key(line.removeprefix("go")) if line.startswith("go") else None
         if key is None:
             raise _not_a_release(f"toolchain {line}")
+        if key[2] == 0 and key >= _GO_FIRST_TOOLCHAIN:
+            raise _not_a_release(f"toolchain {line}", f"its first release is {line}.0")
         if key > best:
             best, name = key, line
     return name if best >= _GO_FIRST_TOOLCHAIN else GO_TOOLCHAIN_LOCAL
 
 
-def _not_a_release(line: str) -> SourceError:
+def _not_a_release(line: str, first: str = "") -> SourceError:
+    language = f", a language version: {first}" if first else ""
     return SourceError(
-        f"go.mod's `{line}` is not a Go release, so no toolchain can be fetched for it.",
+        f"go.mod's `{line}` is not a Go release{language}, so no toolchain can be fetched for it.",
         source="go.mod",
         reason=f"`{line}` is not a Go release",
         hint="Build a revision whose go.mod names a Go release (go1.N.P, go1.NrcM).",
@@ -1969,9 +1972,10 @@ def _go_prefetcher(build: SourceBuild, name: str) -> tuple[str, dict[str, str]]:
 
     The host's ``go`` when it can switch to *name* (1.21 or newer), or any host ``go`` for
     a go.mod older than toolchain modules; else *name* itself, fetched and checked against
-    the checksum database (``tundravm._go_toolchain.fetch_go``), first on ``PATH`` under
-    ``GOTOOLCHAIN=local``. A go.mod older than Go 1.21 without a host ``go`` raises
-    ``SourceError``: no toolchain module serves it.
+    the checksum database (``tundravm._go_toolchain.fetch_go``), under ``GOTOOLCHAIN=local``
+    so it never fetches another, with ``GOROOT`` its own, its ``bin`` first on ``PATH`` and
+    no relative or other fetched toolchain's entry after it. A go.mod older than Go 1.21
+    without a host ``go`` raises ``SourceError``: no toolchain module serves it.
     """
     found = host_go_version()
     key = _go_version_key(found.removeprefix("go")) if found else None
@@ -1990,8 +1994,10 @@ def _go_prefetcher(build: SourceBuild, name: str) -> tuple[str, dict[str, str]]:
             ),
         )
     root = fetch_go(name)
-    path = os.pathsep.join((str(root / "bin"), os.environ.get("PATH", "")))
-    return f"fetched {name}", {"GOTOOLCHAIN": GO_TOOLCHAIN_LOCAL, "PATH": path}
+    entries = os.environ.get("PATH", "").split(os.pathsep)
+    kept = [p for p in entries if os.path.isabs(p) and not Path(p).is_relative_to(root.parent)]
+    path = os.pathsep.join((str(root / "bin"), *kept))
+    return f"fetched {name}", {"GOTOOLCHAIN": GO_TOOLCHAIN_LOCAL, "GOROOT": str(root), "PATH": path}
 
 
 def _go_toolchain_module(name: str) -> str:

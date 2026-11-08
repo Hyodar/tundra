@@ -84,7 +84,9 @@ _ZIP_ERRORS = (
 )
 """What reading a hostile zip raises: a bad CRC or header, a broken deflate stream, a
 truncated entry, a method or encryption ``zipfile`` lacks, a name that is not UTF-8."""
-_GOARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+_AMD64 = frozenset({"x86_64", "amd64"})
+_RELEASE = re.compile(r"go1\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)|(rc|beta)[1-9][0-9]*)")
+"""A Go release's name: ``go1.25.0``, ``go1.25rc1``; never a path."""
 
 
 class _Refused(Exception):
@@ -97,16 +99,28 @@ def toolchains_dir() -> Path:
 
 
 def host_module(name: str) -> str:
-    """``golang.org/toolchain@v0.0.1-<name>.linux-<arch>``: release *name* for this host."""
-    arch = _GOARCH.get(platform.machine().lower())
-    if arch is None:
+    """``golang.org/toolchain@v0.0.1-<name>.linux-amd64``: release *name* for this host.
+
+    A *name* that is not a release, or a host other than linux/amd64 (the platform
+    tundravm builds on), raises ``SourceError``.
+    """
+    if _RELEASE.fullmatch(name) is None:
         raise SourceError(
-            f"No Go toolchain is published for this host's {platform.machine()} processor.",
+            f"{name!r} is not a Go release, so tundravm fetches no toolchain for it.",
             source=GO_TOOLCHAIN_MODULE,
-            reason=f"no Go release for {platform.machine()}",
+            reason=f"{name!r} is not a Go release",
+            hint="Build a revision whose go.mod names a Go release (go1.N.P, go1.NrcM).",
+        )
+    host = f"{platform.system().lower()}/{platform.machine()}"
+    if platform.system() != "Linux" or platform.machine().lower() not in _AMD64:
+        raise SourceError(
+            f"tundravm fetches Go only for linux/amd64, the platform it builds on, and this "
+            f"host is {host}.",
+            source=GO_TOOLCHAIN_MODULE,
+            reason=f"no fetched Go for {host}",
             hint="Install golang (sudo apt install golang) to prefetch with the host's go.",
         )
-    return f"{GO_TOOLCHAIN_MODULE}@v0.0.1-{name}.linux-{arch}"
+    return f"{GO_TOOLCHAIN_MODULE}@v0.0.1-{name}.linux-amd64"
 
 
 def fetch_go(name: str, *, fetcher: Fetcher | None = None) -> Path:

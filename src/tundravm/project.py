@@ -251,9 +251,13 @@ def given_image(image: str | os.PathLike[str] | None) -> Iterator[None]:
 
 def host_cache() -> Path:
     """``$XDG_CACHE_HOME/tundravm`` (``~/.cache/tundravm`` without it): what every build on
-    this host shares, the packages mkosi downloads and the Go toolchains tundravm fetches."""
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "tundravm"
+    this host shares, the packages mkosi downloads and the Go toolchains tundravm fetches.
+
+    A relative ``XDG_CACHE_HOME`` is ignored, as the XDG base directory spec says, so the
+    cache never lands in whatever directory a command runs from.
+    """
+    base = os.environ.get("XDG_CACHE_HOME", "")
+    return Path(base if os.path.isabs(base) else Path.home() / ".cache") / "tundravm"
 
 
 def lock_command(*flags: str) -> str:

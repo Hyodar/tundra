@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -287,6 +288,7 @@ def _locked(recipe: Recipe, pin: str, deb: str | None = None) -> Lock:
         ("go 1.21rc1\n", "go1.21rc1"),
         ("go 1.25.0\ntoolchain go1.25.3\n", "go1.25.3"),
         ("go 1.25.0\ntoolchain go1.24.2\n", "go1.25.0"),
+        ("go 1.24.0\ntoolchain go1.25rc1\n", "go1.25rc1"),
         ("go 1.25.0\ntoolchain default\n", "go1.25.0"),
         ("go 1.20\n", "local"),
         ("module m\n", "local"),
@@ -297,6 +299,7 @@ def _locked(recipe: Recipe, pin: str, deb: str | None = None) -> Lock:
         "prerelease",
         "toolchain",
         "older-toolchain",
+        "prerelease-toolchain",
         "default",
         "pre-1.21",
         "none",
@@ -325,11 +328,16 @@ def test_without_a_host_go_that_switches_the_release_go_mod_names_prefetches_its
     prefetcher: str,
 ) -> None:
     """A host go 1.21+ prefetches, switching to the go.mod's release; without one, that
-    release is fetched and runs first on PATH, never switching again; the marker says which."""
+    release is fetched and runs first on PATH, with its own GOROOT, never switching again,
+    and no relative or other fetched toolchain's PATH entry after it; the marker says which."""
     url, first = go_repo
     tools = _GoModules(monkeypatch, ["go"])
     monkeypatch.setattr(_source, "host_go_version", lambda: host)
     fetched = tmp_path / "toolchains" / TOOLCHAIN
+    host_path = os.environ["PATH"]
+    planted = (str(tmp_path / "toolchains" / "go1.24.0" / "bin"), "", ".", "bin")
+    monkeypatch.setenv("PATH", os.pathsep.join((host_path, *planted)))
+    monkeypatch.setenv("GOROOT", "/usr/lib/go-1.19")
     monkeypatch.setattr(_source, "fetch_go", lambda name: fetched if name == TOOLCHAIN else None)
     recipe = _recipe(_build(url, "go"))
     (done,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path / "out")
@@ -341,13 +349,33 @@ def test_without_a_host_go_that_switches_the_release_go_mod_names_prefetches_its
         if host == HOST_GO:
             assert env["GOTOOLCHAIN"] == TOOLCHAIN and env["PATH"] == os.environ["PATH"]
         else:
-            assert env["GOTOOLCHAIN"] == "local"
-            assert env["PATH"].split(os.pathsep)[0] == str(fetched / "bin")
+            assert env["GOTOOLCHAIN"] == "local" and env["GOROOT"] == str(fetched)
+            kept = [p for p in host_path.split(os.pathsep) if os.path.isabs(p)]
+            assert env["PATH"].split(os.pathsep) == [str(fetched / "bin"), *kept]
 
 
-def test_a_toolchain_that_is_not_a_release_is_refused() -> None:
-    with pytest.raises(SourceError, match="`toolchain go1.25.0-corp` is not a Go release"):
-        _source.go_toolchain("go 1.25.0\ntoolchain go1.25.0-corp\n")
+@pytest.mark.parametrize(
+    ("go_mod", "refused"),
+    [
+        ("go 1.25.0\ntoolchain go1.25.0-corp\n", "`toolchain go1.25.0-corp` is not a Go release"),
+        ("go 1.25.0\ntoolchain go1.26.0+auto\n", "`toolchain go1.26.0+auto` is not a Go release"),
+        ("go 1.25.0\ntoolchain banana\n", "`toolchain banana` is not a Go release"),
+        ("go 1.25.0\ntoolchain 1.26.0\n", "`toolchain 1.26.0` is not a Go release"),
+        ("go banana\n", "`go banana` is not a Go release"),
+        ("go v1.25.0\n", "`go v1.25.0` is not a Go release"),
+        (
+            "go 1.21.0\ntoolchain go1.22\n",
+            "`toolchain go1.22` is not a Go release, a language version: its first release is "
+            "go1.22.0",
+        ),
+    ],
+    ids=["suffix", "plus-suffix", "word", "no-go-prefix", "go-word", "go-v-prefix", "language"],
+)
+def test_a_toolchain_that_is_not_a_release_is_refused(go_mod: str, refused: str) -> None:
+    """A custom (``-corp``), mode-suffixed or non-version toolchain, or a language version
+    where a release belongs, is refused before anything is fetched, naming the line."""
+    with pytest.raises(SourceError, match=re.escape(refused)):
+        _source.go_toolchain(go_mod)
 
 
 RUST = "1.91.0-x86_64-unknown-linux-gnu"

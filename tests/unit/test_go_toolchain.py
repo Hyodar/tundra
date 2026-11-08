@@ -8,6 +8,7 @@ import hashlib
 import http.client
 import io
 import os
+import re
 import socket
 import stat
 import struct
@@ -24,6 +25,7 @@ import pytest
 
 from tundravm import _go_toolchain as go
 from tundravm.errors import SourceError
+from tundravm.project import host_cache
 
 NAME = "go1.25.0"
 MODULE = f"golang.org/toolchain@v0.0.1-{NAME}.linux-amd64"
@@ -598,3 +600,52 @@ def test_a_redirect_is_followed_only_to_the_proxys_storage(
         handler.redirect_request(
             request, io.BytesIO(), 302, "Found", http.client.HTTPMessage(), target
         )
+
+
+@pytest.mark.parametrize(
+    ("name", "system", "machine", "refused"),
+    [
+        (NAME, "Linux", "x86_64", None),
+        ("go1.25rc1", "Linux", "AMD64", None),
+        (
+            NAME,
+            "Linux",
+            "aarch64",
+            "only for linux/amd64, the platform it builds on, and this host is linux/aarch64",
+        ),
+        (NAME, "Darwin", "x86_64", "this host is darwin/x86_64"),
+        ("../../bin", "Linux", "x86_64", "'../../bin' is not a Go release"),
+        ("go1.25.0/../../x", "Linux", "x86_64", "is not a Go release"),
+        ("go1.22", "Linux", "x86_64", "'go1.22' is not a Go release"),
+        ("go1.021.0", "Linux", "x86_64", "'go1.021.0' is not a Go release"),
+    ],
+    ids=["amd64", "rc", "arm64", "darwin", "traversal", "suffix-traversal", "language", "zeros"],
+)
+def test_only_a_release_for_linux_amd64_is_fetched(
+    monkeypatch: pytest.MonkeyPatch, name: str, system: str, machine: str, refused: str | None
+) -> None:
+    """The release name becomes a cache path and a proxy url, so only a release's shape
+    passes; the build platform is linux/amd64, so no other host fetches its Go."""
+    monkeypatch.setattr("platform.system", lambda: system)
+    monkeypatch.setattr("platform.machine", lambda: machine)
+    if refused is None:
+        assert go.host_module(name) == f"{PATH}@v0.0.1-{name}.linux-amd64"
+        return
+    with pytest.raises(SourceError, match=re.escape(refused)) as failed:
+        go.fetch_go(name, fetcher=_fetcher({}))
+    assert "sudo apt install golang" in str(failed.value.hint) or "go.mod" in str(failed.value.hint)
+    assert not go.toolchains_dir().exists()
+
+
+@pytest.mark.parametrize(
+    ("xdg", "cache"),
+    [("/var/cache/me", "/var/cache/me/tundravm"), ("", None), ("relative/cache", None)],
+    ids=["absolute", "empty", "relative"],
+)
+def test_the_host_cache_is_xdg_cache_home_when_absolute(
+    monkeypatch: pytest.MonkeyPatch, xdg: str, cache: str | None
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", xdg)
+    expected = Path(cache) if cache else Path.home() / ".cache" / "tundravm"
+    assert host_cache() == expected
+    assert go.toolchains_dir() == expected / "toolchains"
