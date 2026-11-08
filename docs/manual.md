@@ -236,7 +236,8 @@ in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to a `Comman
 as the login, or a `Sudo(...)`, run as root (`firewall.status`, `firewall.switch`). A word is
 a string, `Int("lines", 1, 1000)` or `Choice("mode", "a", "b")`. `modes=` limits a command
 to those firewall modes, `dev=True` to development builds. `login-menu`, the account's shell
-and forced command, lists the menu, refuses anything else and runs no shell or terminal.
+and forced command, lists the menu and refuses anything else; only a `dev=True`
+command gets a terminal (`ssh -t`).
 Root commands get exact `/etc/sudoers.d/<name>` lines.
 `owner=True` gives the login the key `attest` hands over. A `Login` in `SshAccess` takes
 root's delivered key away unless `from_delivery=True`. Root without a key never logs in

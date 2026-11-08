@@ -738,7 +738,7 @@ class _Lowering:
         if hosts is not None:
             items.append(hosts)
         runtime, waits = self.runtime.changes(
-            self.reads(profile.extends or BASE_PROFILE), self.reads(name)
+            self.reads(profile.extends or BASE_PROFILE), self.reads(name), local
         )
         items.extend(waits)
         items = self.owners(items, name)
@@ -967,7 +967,9 @@ class _Lowering:
                 items.append(tool)
         else:
             items.append(self.component(dev))
-        runtime, waits = self.runtime.changes(self.runtime.read, self.reads(DEV_PROFILE))
+        runtime, waits = self.runtime.changes(
+            self.runtime.read, self.reads(DEV_PROFILE), (False, True)
+        )
         items.extend(waits)
         items = self.owners(items, DEV_PROFILE)
         with _at(dev):

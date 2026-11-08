@@ -56,7 +56,11 @@ The menu file (`/etc/tundravm/logins/<name>.json`, `0444`) keeps each word typed
 `"modes"` (empty: every mode). A `dev=True` command is in the development profiles' copy
 of that file only, which their overlay writes over the production one; its sudoers lines
 and, when it is the login's only root command, the sudoers file and `sudo` itself, are in
-those overlays too. sshd's `Match User` block is the same in every build.
+those overlays too. A terminal takes two locks, both lifted in those overlays only: sshd's
+`Match User` block says `PermitTTY yes`, and the login's keys carry `pty` (baked with it, or
+the endpoint writes `restrict,pty` as that profile's `secrets.yaml` says with `pty: true`).
+`ssh -t` then gives a dev `shell` a terminal, which `login-menu` hands on with the client's
+`TERM`. Production keeps `PermitTTY no` and `restrict` keys.
 
 `login-menu` reads the mode in force from `/run/tundravm/firewall-events` (`0644` in the
 `0711` `/run/tundravm`, so the login reads it without root; no log is production), as
@@ -116,5 +120,4 @@ strings and in the examples.
 
 ## Not here
 
-A terminal for a command (`PermitTTY` stays off: `shell` reads stdin
-without a prompt), an argument inside a word (`--lines=N`), and free strings.
+An argument inside a word (`--lines=N`), and free strings.

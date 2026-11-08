@@ -1,11 +1,12 @@
 // login-menu is a Login's shell and sshd's ForceCommand for it: it reads the login's menu,
 // /etc/tundravm/logins/<user>.json, and the request the client sent ($SSH_ORIGINAL_COMMAND).
 // An empty request prints the menu; any other names one entry and its typed arguments, and
-// login-menu execs that entry's exact argv, through sudo -n for a root entry. An entry with
-// modes runs only while one of them is in force, as the boot's log of switches
+// login-menu execs that entry's exact argv, through sudo -n for a root entry, on the
+// session's own stdio: a terminal when sshd allocated one. An entry with modes runs only
+// while one of them is in force, as the boot's log of switches
 // (/run/tundravm/firewall-events) says. Anything else is refused with a problem line and a
-// fix line. Its own arguments (sshd passes -c and the
-// forced command) are ignored: the request is never handed to a shell.
+// fix line. Its own arguments (sshd passes -c and the forced command) are ignored: the
+// request is never handed to a shell.
 package main
 
 import (
@@ -52,13 +53,7 @@ func main() {
 		fmt.Print(m.Listing())
 		return
 	}
-	env := []string{
-		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME=" + me.HomeDir,
-		"USER=" + me.Username,
-		"LOGNAME=" + me.Username,
-		"LANG=C.UTF-8",
-	}
+	env := menu.Environment(me.HomeDir, me.Username, os.Getenv("TERM"))
 	if err := syscall.Exec(argv[0], argv, env); err != nil {
 		fail("%s: %v", argv[0], err)
 	}

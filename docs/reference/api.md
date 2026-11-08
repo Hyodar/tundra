@@ -1148,16 +1148,16 @@ An account other than root that logs in over SSH into a menu of commands: `Login
 | Member | Does |
 |---|---|
 | `Login.account_shell` | The login shell: `login-menu` for a menu, else *shell*. |
-| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, its menu if any. |
+| `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, its menu if any, with a terminal only in a development build (`terminal`). |
 | `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys, its menu and its sudo lines. |
 | `Login.delivered` | Whether the keys arrive after attestation (a `Secret`, or the owner's). |
 | `Login.developed` | Whether a development build holds more of it: a command says `dev=True`. |
-| `Login.development() -> Login` | The login as a development build holds it: its `dev=True` commands too. |
+| `Login.development() -> Login` | The login as a development build holds it: its `dev=True` commands too, and a terminal for whichever command the client asks one for (`ssh -t`). |
 | `Login.entries` | The menu this build holds, sorted by command name: every command but a `dev=True` one (`development` holds those too). |
 | `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
 | `Login.menu() -> str` | The menu file `login-menu` reads: each entry with its words typed. |
 | `Login.menu_file` | `/etc/tundravm/logins/<name>.json`, or `None` for a shell login. |
-| `Login.options` | The `authorized_keys` options every baked key carries. |
+| `Login.options` | The `authorized_keys` options every baked key carries: a menu's allow a terminal (`pty`) only with `terminal`. |
 | `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: each root command's exact argv, or its digits-only pattern. |
 | `Login.sudoers() -> str` | The `sudoers.d` file: exactly `sudo_rules`. |
 | `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without a root command. |

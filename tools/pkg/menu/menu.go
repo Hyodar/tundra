@@ -26,7 +26,25 @@ var (
 	argPattern   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	modePattern  = regexp.MustCompile(`^[a-z][a-z0-9]{0,23}$`)
 	decimal      = regexp.MustCompile(`^(0|[1-9][0-9]{0,9})$`)
+	termPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 )
+
+// Environment is the fixed environment an entry runs with: the login's home and names, and
+// term as TERM when it names a terminfo entry. sshd sets TERM only with a terminal, which a
+// development build alone allows (PermitTTY yes).
+func Environment(home, login, term string) []string {
+	env := []string{
+		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=" + home,
+		"USER=" + login,
+		"LOGNAME=" + login,
+		"LANG=C.UTF-8",
+	}
+	if termPattern.MatchString(term) {
+		env = append(env, "TERM="+term)
+	}
+	return env
+}
 
 // Word is one word of an entry's argv: a literal Word, or an argument Arg the client fills,
 // an Int within its two bounds or one of its Choice values.

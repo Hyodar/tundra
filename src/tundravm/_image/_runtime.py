@@ -347,6 +347,15 @@ class Runtime:
             return None
         return next((login.name for login in self.ssh.logins if login.owner), None)
 
+    def terminal(self, development: bool) -> bool:
+        """Whether the owner login's delivered key may have a terminal: in a *development*
+        build, when the login has ``dev=True`` commands."""
+        from tundravm.components.access import SshAccess
+
+        if not development or not isinstance(self.ssh, SshAccess):
+            return False
+        return any(login.owner and login.developed for login in self.ssh.logins)
+
     @property
     def root_delivery(self) -> bool:
         """Whether root takes the delivered key: unless the image's ``SshAccess`` declares a
@@ -559,17 +568,24 @@ class Runtime:
                 )
 
     def changes(
-        self, parent: Reads, own: Reads
+        self, parent: Reads, own: Reads, local: tuple[bool, bool] = (False, False)
     ) -> tuple[tuple[dm.Edit | dm.Remove, ...], tuple[dm.Task, ...]]:
         """What turns a profile's runtime from the one that reads *parent* into the one that
-        reads *own*: the edits of the endpoint's entries and of the manifest, the removal
-        of each wait it no longer needs, and the waits it adds."""
-        if not self.control_plane or parent == own:
+        reads *own* (*local*: whether each is a development one): the edits of the
+        endpoint's entries, of its terminal for the owner login's key and of the manifest,
+        the removal of each wait it no longer needs, and the waits it adds."""
+        terminal = self.terminal(local[1])
+        if not self.control_plane or (parent == own and terminal == self.terminal(local[0])):
             return (), ()
         found: list[dm.Edit | dm.Remove] = []
+        fields: dict[str, object] = {}
         entries = self.entries(own.secrets)
         if entries != self.entries(parent.secrets):
-            found.append(dm.Secrets.ref(CONTROL_PLANE).edit(entries=entries))
+            fields["entries"] = entries
+        if terminal != self.terminal(local[0]):
+            fields["ssh_terminal"] = terminal
+        if fields:
+            found.append(dm.Secrets.ref(CONTROL_PLANE).edit(**fields))
         manifest = self.manifest(own)
         if manifest != self.manifest(parent):
             found.append(dm.File.ref(RUNTIME_MANIFEST).edit(content=manifest))

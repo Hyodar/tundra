@@ -111,6 +111,20 @@ func TestAnEntryWithModesRunsOnlyInThem(t *testing.T) {
 	}
 }
 
+func TestEnvironmentPassesTERMOnlyWhenItNamesATerminal(t *testing.T) {
+	cases := map[string]string{"": "", "xterm-256color": "TERM=xterm-256color", "../x": "", "a b": "", "-x": ""}
+	for term, want := range cases {
+		env := Environment("/home/t", "t", term)
+		got := ""
+		if last := env[len(env)-1]; strings.HasPrefix(last, "TERM=") {
+			got = last
+		}
+		if got != want || env[1] != "HOME=/home/t" {
+			t.Errorf("Environment(TERM %q) = %v; want %q", term, env, want)
+		}
+	}
+}
+
 func TestCheckRefusesAMenuTheImageCouldNotWrite(t *testing.T) {
 	cases := map[string]Menu{
 		"no entries":     {Login: "t"},

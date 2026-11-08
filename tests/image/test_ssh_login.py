@@ -187,15 +187,20 @@ def test_a_command_names_only_modes_the_firewall_declares(
 
 
 @pytest.mark.parametrize(
-    ("profile", "menu", "sudoers"),
+    ("profile", "menu", "sudoers", "terminal"),
     [
-        ("production", ["status"], None),
-        ("staging", ["status"], None),
-        ("dev", ["debug", "shell", "status"], 'tenant ALL=(root) NOPASSWD: /usr/bin/debug ""\n'),
+        ("production", ["status"], None, False),
+        ("staging", ["status"], None, False),
+        (
+            "dev",
+            ["debug", "shell", "status"],
+            'tenant ALL=(root) NOPASSWD: /usr/bin/debug ""\n',
+            True,
+        ),
     ],
 )
 def test_a_dev_command_exists_in_development_builds_only(
-    profile: str, menu: list[str], sudoers: str | None
+    profile: str, menu: list[str], sudoers: str | None, terminal: bool
 ) -> None:
     login = Login(
         "tenant",
@@ -206,9 +211,14 @@ def test_a_dev_command_exists_in_development_builds_only(
             "debug": Sudo("/usr/bin/debug", dev=True),
         },
     )
-    planned = plan(_image(login), profile)
+    baked = Login("guest", keys=[KEY], commands={**STATUS, "sh": Command("/bin/sh", dev=True)})
+    planned = plan(_image(login, baked), profile)
     names = [entry["name"] for entry in json.loads(planned.file(MENU).text)["entries"]]
     assert names == menu
+    pty = ",pty" if terminal else ""
+    assert f"    PermitTTY {'yes' if terminal else 'no'}\n" in planned.file(CONFIG).text
+    assert planned.file("/etc/ssh/authorized_keys.d/guest").text.startswith(f"restrict{pty},")
+    assert ("  pty: true\n" in planned.file("/etc/tdx/secrets.yaml").text) == terminal
     if sudoers is None:
         assert SUDOERS not in planned.files
     else:

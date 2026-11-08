@@ -527,6 +527,7 @@ class StateBuilder:
                 ssh_dir=entry.ssh_directory,
                 key_path=entry.ssh_key_path,
                 ssh_login=entry.ssh_login,
+                ssh_terminal=entry.ssh_terminal,
                 store_at=_store_name(entry),
                 config_path=config_path,
                 manifest_path=manifest_path,

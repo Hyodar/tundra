@@ -104,8 +104,8 @@ class SecretDelivery(Module):
     certificate (:func:`tundravm._modules.attested_tls.certificate`) the quote binds.
     *owners* name the volumes whose header pins the operator's key: with one, every write
     must be signed by it (the first signed one pins its signer). The operator's SSH key goes
-    to root's *ssh_dir*, or to the ``authorized_keys.d`` file of *ssh_login*; with neither
-    the endpoint takes none. *containers* are
+    to root's *ssh_dir*, or to the ``authorized_keys.d`` file of *ssh_login*, with a
+    terminal (``pty``) when *ssh_terminal*; with neither the endpoint takes none. *containers* are
     ``(name, port)`` pairs: the containers whose sshd host keys
     (:func:`tundravm._modules.container_ssh.host_keys`) the quote binds, labelled by name,
     and whose keys directory takes a login's key.
@@ -118,6 +118,7 @@ class SecretDelivery(Module):
     ssh_dir: str | None = "/root/.ssh"
     key_path: str | None = "/etc/root_key"
     ssh_login: str | None = None
+    ssh_terminal: bool = False
     store_at: str | DiskSpec | None = "disk_persistent"
     config_path: str = SECRET_DELIVERY_DEFAULT_CONFIG_PATH
     manifest_path: str = SECRET_DELIVERY_DEFAULT_MANIFEST_PATH
@@ -298,6 +299,8 @@ class SecretDelivery(Module):
         ]
         if self.ssh_login is not None:
             lines.extend(("ssh:", f'  login: "{self.ssh_login}"'))
+            if self.ssh_terminal:
+                lines.append("  pty: true")
         elif self.ssh_dir is not None:
             lines.extend(("ssh:", f'  dir: "{self.ssh_dir}"'))
             if self.key_path:

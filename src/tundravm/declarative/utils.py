@@ -1408,7 +1408,10 @@ class Login(Keywords):
     the menu, anything the menu does not offer is refused, and nothing reaches a shell.
     *shell* is the escape hatch: a login shell the image ships, with a terminal and no
     sudo. One of them is required. Every key is ``restrict``-ed and sshd's ``Match User``
-    block disables forwarding and reads only those keys. *home* makes ``/home/<name>``,
+    block disables forwarding, reads only those keys and gives a menu no terminal
+    (``PermitTTY no``); a development build of a login with ``dev=True`` commands lifts
+    both locks (``pty``, ``PermitTTY yes``), so ``ssh -t`` hands the command a terminal.
+    *home* makes ``/home/<name>``,
     which the ``owners`` runtime-init step hands to the login at boot.
     """
 
@@ -1418,6 +1421,9 @@ class Login(Keywords):
     shell: str | None = None
     owner: bool = False
     home: bool = False
+    terminal: bool = field(default=False, init=False, repr=False)
+    """Whether sshd lets a menu have a terminal: a development build's login with
+    ``dev=True`` commands (:meth:`development`)."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _LOGIN_NAME.fullmatch(self.name):
@@ -1525,12 +1531,15 @@ class Login(Keywords):
         return any(command.dev for command in (self.commands or {}).values())
 
     def development(self) -> Login:
-        """The login as a development build holds it: its ``dev=True`` commands too."""
+        """The login as a development build holds it: its ``dev=True`` commands too, and a
+        terminal for whichever command the client asks one for (``ssh -t``)."""
         if not self.developed:
             return self
         assert self.commands is not None
         commands = {name: command.developed() for name, command in self.commands.items()}
-        return replace(self, commands=commands)
+        login = replace(self, commands=commands)
+        object.__setattr__(login, "terminal", True)
+        return login
 
     @property
     def delivered(self) -> bool:
@@ -1549,10 +1558,11 @@ class Login(Keywords):
 
     @property
     def options(self) -> str:
-        """The ``authorized_keys`` options every baked key carries."""
-        if self.commands is not None:
-            return f'restrict,command="{LOGIN_MENU}"'
-        return "restrict,pty"
+        """The ``authorized_keys`` options every baked key carries: a menu's allow a
+        terminal (``pty``) only with :attr:`terminal`."""
+        if self.commands is None:
+            return "restrict,pty"
+        return f'restrict{",pty" if self.terminal else ""},command="{LOGIN_MENU}"'
 
     @property
     def account_shell(self) -> str:
@@ -1567,7 +1577,8 @@ class Login(Keywords):
         return None
 
     def config(self) -> str:
-        """The ``sshd_config.d`` file: its own keys only, no forwarding, its menu if any."""
+        """The ``sshd_config.d`` file: its own keys only, no forwarding, its menu if any,
+        with a terminal only in a development build (:attr:`terminal`)."""
         lines = [
             f"# tundravm Login {self.name}: its own keys, no forwarding"
             + (", its menu only" if self.commands is not None else ""),
@@ -1576,7 +1587,8 @@ class Login(Keywords):
             "    DisableForwarding yes",
         ]
         if self.commands is not None:
-            lines += ["    PermitTTY no", f"    ForceCommand {LOGIN_MENU}"]
+            tty = "yes" if self.terminal else "no"
+            lines += [f"    PermitTTY {tty}", f"    ForceCommand {LOGIN_MENU}"]
         return "\n".join(lines) + "\n"
 
     def menu(self) -> str:

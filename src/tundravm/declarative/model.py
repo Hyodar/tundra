@@ -2221,7 +2221,8 @@ class Secrets(Declared):
     whose certificate key, made at boot under ``/run/tundravm/attested-tls/<port>``, every
     quote binds after the instance key, in port order. The operator's SSH key goes to
     root's *ssh_directory*, or to the ``authorized_keys.d`` file of *ssh_login* instead;
-    with neither the endpoint takes none. *containers* are the
+    with neither the endpoint takes none. *ssh_terminal* lets that login's key have a
+    terminal (``pty``), as a development build's dev commands do. *containers* are the
     ``(name, port)`` of each container's sshd, whose host keys, made at boot under
     ``/run/tundravm/containers/<name>``, every quote binds before the attested TLS keys.
     """
@@ -2235,6 +2236,7 @@ class Secrets(Declared):
     ssh_directory: str | None = "/root/.ssh"
     ssh_key_path: str | None = "/etc/root_key"
     ssh_login: str | None = None
+    ssh_terminal: bool = False
     delivery: ExternalDelivery | None = None
     attested_tls: tuple[int, ...] = ()
     containers: tuple[tuple[str, int], ...] = ()
@@ -2303,6 +2305,12 @@ class Secrets(Declared):
                 f"the operator's SSH key goes to root's {self.ssh_directory} and to login "
                 f"{self.ssh_login}.",
                 hint="Pass ssh_directory=None with ssh_login=.",
+            )
+        if self.ssh_terminal and self.ssh_login is None:
+            raise _fail(
+                self,
+                "ssh_terminal=True gives a login's key a terminal, and ssh_login= names none.",
+                hint="Pass ssh_login= with ssh_terminal=True, or drop it.",
             )
         if self.ssh_directory is not None:
             _require_absolute(self, self.ssh_directory, "ssh_directory")

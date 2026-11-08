@@ -91,6 +91,9 @@ type SSHConfig struct {
 	KeyPath string `yaml:"key_path"`
 	// Login is the account the key logs in as instead of root.
 	Login string `yaml:"login"`
+	// Pty lets the login's key have a terminal: a development build's, whose login has
+	// dev-only commands and whose Match User block says PermitTTY yes.
+	Pty bool `yaml:"pty"`
 }
 
 var (

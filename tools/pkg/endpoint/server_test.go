@@ -373,6 +373,11 @@ func TestAnSSHKeyForALoginLandsInItsFileAndNotRoots(t *testing.T) {
 	if string(keys) != "restrict ssh-ed25519 AAAAop\n" || info.Mode().Perm() != 0o644 {
 		t.Fatalf("%s is %q mode %v", path, keys, info.Mode())
 	}
+	f.server.cfg.SSH.Pty = true
+	must(t, f.server.writeSSHKey("ssh-ed25519 AAAAop"))
+	if keys, _ := os.ReadFile(path); string(keys) != "restrict,pty ssh-ed25519 AAAAop\n" {
+		t.Fatalf("with pty: %s is %q", path, keys)
+	}
 	if _, err := os.Stat(filepath.Join(f.dir, "ssh")); !os.IsNotExist(err) {
 		t.Fatalf("root's ssh directory was made: %v", err)
 	}

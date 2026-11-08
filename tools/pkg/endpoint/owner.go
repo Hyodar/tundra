@@ -235,11 +235,16 @@ func (s *Server) awaitHeaders(key string) []string {
 }
 
 // writeSSHKey makes key the one authorized_keys line: root's (and KeyPath's blob), or the
-// login's, restricted, which sshd reads as that login (0644).
+// login's, restricted (with a terminal when SSH.Pty says so), which sshd reads as that
+// login (0644).
 func (s *Server) writeSSHKey(key string) error {
 	if s.cfg.SSH.Login != "" {
+		options := "restrict"
+		if s.cfg.SSH.Pty {
+			options += ",pty"
+		}
 		path := filepath.Join(s.cfg.LoginKeys, s.cfg.SSH.Login)
-		return writeAtomic(path, []byte("restrict "+key+"\n"), 0o644, "")
+		return writeAtomic(path, []byte(options+" "+key+"\n"), 0o644, "")
 	}
 	if err := os.MkdirAll(s.cfg.SSH.Dir, 0o700); err != nil {
 		return err
