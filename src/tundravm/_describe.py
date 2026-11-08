@@ -879,21 +879,16 @@ def _merged(rules: list[dict[str, str]]) -> list[dict[str, str]]:
 
 
 def _describe_metrics(profile_state: ProfileState) -> dict[str, object] | None:
-    """Where the metrics export writes and the series it keeps, the image's identity
-    among them, from its configuration; ``None`` without one."""
+    """Where the metrics export writes and the series its ``keep`` relabel lets through,
+    the image's identity among them, from its configuration; ``None`` without one."""
     from .components._observability import METRICS_CONFIG
 
     found = next((f for f in profile_state.files if f.path == METRICS_CONFIG), None)
     if found is None:
         return None
-    url, series = None, []
-    for line in found.data.decode("utf-8", errors="replace").splitlines():
-        key, _, value = line.strip().removeprefix("- ").partition(": ")
-        if key == "url" and url is None:
-            url = value
-        elif key == "regex":
-            series = str(json.loads(value)).split("|")
-    return {"url": url, "series": series}
+    remote = json.loads(found.data)["remote_write"][0]
+    kept = next(r for r in remote["write_relabel_configs"] if r["action"] == "keep")
+    return {"url": remote["url"], "series": kept["regex"].split("|")}
 
 
 def _describe_control_plane(profile_state: ProfileState) -> dict[str, object] | None:

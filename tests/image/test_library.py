@@ -3,6 +3,7 @@ components whose exports wire into each other."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -280,8 +281,8 @@ def test_the_exporters_reach_their_sinks_through_the_proxy(
     planned = plan(Image("x", observability=observability), "production")
     environment = planned.service("journal-export").values("Service", "Environment")
     assert f"https_proxy={url}" in environment
-    config = planned.file("/etc/tundravm/metrics-export.yml").text.replace('"', "")
-    assert f"proxy_url: {url}" in config
+    remote = json.loads(planned.file("/etc/tundravm/metrics-export.json").text)["remote_write"]
+    assert remote[0]["proxy_url"] == url
     assert observability.outbound().hosts == (allowed,)
     found = planned.files.get("/etc/hosts")
     assert (found.text.removeprefix(HEADER) if found else None) == hosts
@@ -334,7 +335,7 @@ def test_a_sink_without_a_url_ships_to_the_in_guest_receiver(
     planned = plan(image, profile)
     rendered = planned.service(exporter).exec_start or ""
     if exporter == "metrics-export":
-        rendered = planned.file("/etc/tundravm/metrics-export.yml").text.replace('"', "")
+        rendered = planned.file("/etc/tundravm/metrics-export.json").text.replace('"', "")
     assert url in rendered
     assert f"{receiver}-ready.service" in _after(planned, f"{exporter}.service")
     assert listen in (planned.service(receiver).exec_start or "")
@@ -377,8 +378,8 @@ def test_a_development_profile_ships_to_the_in_guest_receivers(
     )
     planned = plan(image, profile)
     upload = planned.service("journal-export").exec_start or ""
-    config = planned.file("/etc/tundravm/metrics-export.yml").text.replace('"', "")
-    assert f"--url={receivers[0]} " in upload and f"url: {receivers[1]}\n" in config
+    remote = json.loads(planned.file("/etc/tundravm/metrics-export.json").text)["remote_write"]
+    assert f"--url={receivers[0]} " in upload and remote[0]["url"] == receivers[1]
     for exporter, receiver in zip(("journal-export", "metrics-export"), receivers, strict=True):
         bound = planned.service(exporter).values("Service", "LoadCredential")
         assert bool(bound) == (receiver not in (GUEST_LOGS, GUEST_METRICS)), exporter
@@ -401,8 +402,8 @@ def test_a_passthrough_maps_each_sink_name_to_its_address_and_sigv4_signs_the_wr
     )
     planned = plan(Image("x", observability=observability), "production")
     assert planned.service("journal-export").values("Service", "Environment") == ()
-    config = planned.file("/etc/tundravm/metrics-export.yml").text
-    assert "proxy_url" not in config and "region: us-east-2" in config
+    (remote,) = json.loads(planned.file("/etc/tundravm/metrics-export.json").text)["remote_write"]
+    assert "proxy_url" not in remote and remote["sigv4"] == {"region": "us-east-2"}
     environment = planned.service("metrics-export").values("Service", "Environment")
     assert (
         "AWS_SHARED_CREDENTIALS_FILE=/run/credentials/metrics-export.service/metrics-aws"
@@ -603,7 +604,7 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     assert "credential-logs-key.service" in _after(planned, "journal-export.service")
     agent = planned.service("metrics-export")
     assert "--enable-feature=agent" in (agent.exec_start or "")
-    config_text = planned.file("/etc/tundravm/metrics-export.yml").text
+    config_text = planned.file("/etc/tundravm/metrics-export.json").text
     assert "/run/credentials/metrics-export.service/metrics-token" in config_text
     assert "127.0.0.1:9100" in planned.file("/etc/default/prometheus-node-exporter").text
     assert {"systemd-journal-remote", "prometheus", "prometheus-node-exporter"} <= set(
@@ -614,7 +615,7 @@ def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:
     for unit in ("journal-export.service", "metrics-export.service"):
         others = [path for path in units if not path.endswith(f"/{unit}")]
         assert [path for path in others if unit in planned.file(path).text] == [], unit
-    assert "max_shards: 4" in config_text
+    assert json.loads(config_text)["remote_write"][0]["queue_config"]["max_shards"] == 4
     plaintext = Image("x", observability=Observability(logs=JournalExport("http://logs:19532")))
     assert "observability-plaintext" in {d.code for d in plan(plaintext).lint()}
     with pytest.raises(ValidationError, match="exports nothing"):

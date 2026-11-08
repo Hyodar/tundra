@@ -61,8 +61,9 @@ LOGS_SERVICE = "journal-export"
 METRICS_SERVICE = "metrics-export"
 """The Prometheus agent's service."""
 
-METRICS_CONFIG = "/etc/tundravm/metrics-export.yml"
-"""The Prometheus agent's configuration."""
+METRICS_CONFIG = "/etc/tundravm/metrics-export.json"
+"""The Prometheus agent's configuration, as JSON: YAML to Prometheus, read back by
+``show`` and the probe."""
 
 METRICS_RULES = "/etc/tundravm/metrics-rules.yml"
 """The recording rules Prometheus evaluates when ``rules=`` declares some."""
@@ -843,7 +844,7 @@ class Observability(Component):
             # Debian's prometheus.service would serve a query API on every interface.
             yield dm.Unit("prometheus.service", masked=True)
             config = self.metrics.config(proxy)
-            yield ConfigFile.yaml(METRICS_CONFIG, config, sort_keys=False)
+            yield ConfigFile.json(METRICS_CONFIG, config, sort_keys=False)
             web = {"basic_auth_users": {METRICS_SERVICE: _NO_CLIENT}}
             yield ConfigFile.yaml(METRICS_WEB_CONFIG, web, sort_keys=False)
             if self.metrics.rules:

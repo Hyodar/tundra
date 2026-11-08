@@ -620,7 +620,7 @@ probe_endpoint 8745 tundravm-endpoint.service
 check=observability:journal-export.service
 probe_upload journal-export.service 'http://127.0.0.1:19532' /var/lib/journal-export/state 19532
 check=observability:metrics-export.service
-probe_agent metrics-export.service /etc/tundravm/metrics-export.yml --agent
+probe_agent metrics-export.service /etc/tundravm/metrics-export.json --agent
 check=observability:series
 probe_series 'http://127.0.0.1:9091' 'up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest'
 check=observability:no-wait

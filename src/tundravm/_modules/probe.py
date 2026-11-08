@@ -1126,12 +1126,11 @@ def _observability(
 
 def _remote_write(config: str) -> tuple[str, str] | None:
     """The agent's remote-write sink (``scheme://host:port``) and keep-list regex in
-    *config*, when the sink is on the loopback, where the probe can ask it."""
-    url = re.search(r"^  - url: (.+)$", config, re.MULTILINE)
-    keep = re.search(r"^        regex: (.+)$", config, re.MULTILINE)
-    if url is None or keep is None:
-        return None
-    sink, regex = (json.loads(v) if v.startswith('"') else v for v in (url[1], keep[1]))
+    *config* (``metrics-export.json``), when the sink is on the loopback, where the probe can
+    ask it."""
+    remote = json.loads(config)["remote_write"][0]
+    sink = remote["url"]
+    regex = next(r["regex"] for r in remote["write_relabel_configs"] if r["action"] == "keep")
     parts = urlsplit(sink)
     try:
         local = (

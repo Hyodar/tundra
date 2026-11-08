@@ -1015,7 +1015,7 @@ probe_firewall_mode
 check=observability:journal-export.service
 probe_upload journal-export.service 'http://127.0.0.2:19580' /var/lib/journal-export/state 19582
 check=observability:metrics-export.service
-probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
+probe_agent metrics-export.service /etc/tundravm/metrics-export.json
 check=observability:series
 probe_series 'http://127.0.0.2:19581' 'fixture:memory_available_over_10_percent|fixture:node_up|fixture:box_alive|fixture:box_cpu_under_80_percent|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'fixture:memory_available_over_10_percent' 'fixture:node_up' 'fixture:box_alive' 'fixture:box_cpu_under_80_percent'
 check=observability:no-wait

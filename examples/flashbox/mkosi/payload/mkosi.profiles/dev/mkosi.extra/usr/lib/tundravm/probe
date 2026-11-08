@@ -901,7 +901,7 @@ probe_endpoint 8745 tundravm-endpoint.service
 check=mode:firewall
 probe_firewall_mode
 check=observability:metrics-export.service
-probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
+probe_agent metrics-export.service /etc/tundravm/metrics-export.json
 check=observability:series
 probe_series 'http://127.0.0.1:9091' 'flashbox:container_alive|flashbox:container_average_cpu_is_under_80_percent|flashbox:container_oom_kills_count|flashbox:disk_free_space_is_over_10_percent|flashbox:disk_free_space_is_over_128_gb|flashbox:network_is_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'flashbox:container_alive' 'flashbox:container_average_cpu_is_under_80_percent' 'flashbox:container_oom_kills_count' 'flashbox:disk_free_space_is_over_10_percent' 'flashbox:disk_free_space_is_over_128_gb' 'flashbox:network_is_up'
 check=observability:no-wait
