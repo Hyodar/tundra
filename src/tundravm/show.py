@@ -33,6 +33,7 @@ from ._describe import (
     render_sections,
     resolved_sections,
     section_payload,
+    senders,
 )
 from ._describe import declared as declared_view
 from ._location import display_location
@@ -74,6 +75,7 @@ def image_report(
     builds."""
     variants = {variant.name for variant in recipe.variants}
     probes = probe_units(declared)
+    sending = senders(declared)
     written = declared_view(declared, profiles, bindings)
     return {
         "image": img.image_id,
@@ -93,6 +95,7 @@ def image_report(
                 profile=name,
                 resolved=resolve(recipe, variant=name) if name in variants else None,
                 probes=probes,
+                senders=sending,
             )
             for name in profiles
         },
@@ -190,8 +193,10 @@ def render_image(report: Mapping[str, Any]) -> str:
 def image_sections(report: Mapping[str, Any], *, beyond: bool = True) -> list[Section]:
     """What the image file wrote (components, services, ingress, content, profiles), then
     what each profile builds; with *beyond*, a profile beyond the one it extends when both
-    are shown."""
+    are shown: the rows the two lowered profiles do not share, whether the profile is
+    emitted over its parent or whole."""
     extends = {name: row.get("extends") for name, row in report["resolved"].items()}
+    extends |= {row["name"]: row["extends"] for row in report["profiles"] if row["extends"]}
     built = resolved_sections(report["resolved"], extends, beyond=beyond)
     return [*declared_sections(report), *built]
 

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from ._image import Component, Image, Service
     from .declarative._lowered import Lowered
     from .declarative.model import Recipe, Resolved
+    from .declarative.systemd import Hardening
 
 SHORT_DIGEST_LEN = 12
 PROGRAM_WIDTH = 100
@@ -126,16 +127,56 @@ def _written_components(image: Image) -> list[Component]:
     return found
 
 
-def _written_services(image: Image) -> list[tuple[Service, str | None]]:
+def senders(image: Image) -> dict[str, str]:
+    """Each component of *image* by the units that send what its ``outbound()`` names,
+    which a firewall rule it asked for names: the units of the services it composes, or
+    the daemon one of tundravm's own runs (``tee-base``: ``chrony.service``)."""
     from ._image import Component, Service
     from ._image._component import composed
 
-    found: list[tuple[Service, str | None]] = [(s, None) for s in image.services]
+    found = dict(_DAEMONS)
+
+    def units(component: Component) -> list[str]:
+        held: list[str] = []
+        for item in composed(component):
+            if isinstance(item, Service):
+                held.append(item.unit_name)
+            elif isinstance(item, Component):
+                held += units(item)
+        return held
+
+    def walk(component: Component) -> None:
+        held = units(component)
+        if held:
+            found[component.name] = ", ".join(dict.fromkeys(held))
+        for item in composed(component):
+            if isinstance(item, Component):
+                walk(item)
+
+    for component in _written_components(image):
+        walk(component)
+    return found
+
+
+_DAEMONS = {
+    "tee-base": "chrony.service",
+    "network": "systemd-resolved.service",
+    "tdxs": "tdxs.service",
+}
+"""What sends for the components wrapping a packaged daemon: NTS time, DNS over TLS,
+Intel's collateral."""
+
+
+def _written_services(image: Image) -> list[tuple[Service, Component | None]]:
+    from ._image import Component, Service
+    from ._image._component import composed
+
+    found: list[tuple[Service, Component | None]] = [(s, None) for s in image.services]
 
     def walk(component: Component) -> None:
         for item in composed(component):
             if isinstance(item, Service):
-                found.append((item, type(component).__name__))
+                found.append((item, component))
             elif isinstance(item, Component):
                 walk(item)
 
@@ -166,32 +207,69 @@ def _field_values(value: object) -> list[object]:
     return found
 
 
-def _service(service: Service, owner: str | None) -> dict[str, object]:
+def _service(service: Service, owner: Component | None) -> dict[str, object]:
     from ._image._storage import VolumeDirectory
-    from .declarative.systemd import Hardening, ceiling
+    from .declarative.systemd import Hardening
 
     state = service.state
     sandbox = service.hardening
     assert isinstance(sandbox, Hardening)
-    preset = ceiling(sandbox)
-    hardening = preset[0] if preset else "none" if sandbox == Hardening.none() else "custom"
     return {
         "name": service.name,
         "description": service.description,
-        "component": owner,
+        "component": None if owner is None else type(owner).__name__,
         "program": list(service.command()),
         "package": service.package,
         "sources": [call(binary) for binary in service.binaries()],
         "ports": [call(port) for port in service.expose],
-        "hardening": hardening,
+        "hardening": _hardening(sandbox),
         "state": service.state_directory,
         "volume": call(state.volume) if isinstance(state, VolumeDirectory) else None,
         "credentials": [call(binding) for binding in service.bindings],
         "probe": service.probe_unit is not None,
         "readiness": None if service.readiness is None else call(service.readiness),
+        "checked": _checked(service, owner),
         "timer": None if service.timer is None else call(service.timer),
         "quotes": service.quotes,
     }
+
+
+def _hardening(sandbox: Hardening) -> str:
+    """A sandbox by its preset (``static``, ``relaxed``, ``none``), else by the preset it
+    is nearest and what it changes: ``static, but deny_syscalls=["@privileged"]``."""
+    from .declarative.systemd import PRESETS, Hardening, ceiling
+
+    exact = ceiling(sandbox)
+    if exact is not None:
+        return exact[0]
+    if sandbox == Hardening.none():
+        return "none"
+    knobs = [f.name for f in dataclasses.fields(Hardening) if f.init and f.compare]
+    bases = {name: Hardening.preset(cast(Any, name)) for name in PRESETS}
+    bases["relaxed"] = Hardening.relaxed()
+    changes = {
+        name: [k for k in knobs if getattr(base, k) != getattr(sandbox, k)]
+        for name, base in bases.items()
+    }
+    name = min(changes, key=lambda n: len(changes[n]))
+    shown = ", ".join(f"{k}={call(getattr(sandbox, k))}" for k in changes[name])
+    return f"{name}, but {shown}"
+
+
+def _checked(service: Service, owner: Component | None) -> str | None:
+    """The row of a development boot's probe that checks *service* when no readiness of
+    its own does: a container's (``container:web``), a host endpoint relayed into it
+    (``container:web:endpoint:8545``)."""
+    from .components._container import Container
+
+    if not isinstance(owner, Container):
+        return None
+    if service.unit_name == owner.unit:
+        return f"container:{owner.name}"
+    for endpoint in owner.requires:
+        if owner.relay(endpoint).removesuffix(".socket") == service.stem:
+            return f"container:{owner.name}:endpoint:{endpoint.port}"
+    return None
 
 
 def _profiles(image: Image) -> list[dict[str, object]]:
@@ -531,6 +609,7 @@ def describe(
     profile: str | None = None,
     resolved: Resolved | None = None,
     probes: Collection[str] = (),
+    senders: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """What *image* builds for *profile* (default: the active one), merged over the profile
     it extends.
@@ -540,6 +619,8 @@ def describe(
     reads. *probes* are the probe units of the image's services (:func:`probe_units`),
     which are their service's ``probe``, not units or users of their own. *resolved* (the
     profile resolved) names each build step, which is then said by what it does.
+    *senders* (:func:`senders`) name the units behind each component a firewall rule
+    names.
     """
     selected = image.profile(profile)
     pins = image.build_pins()
@@ -610,7 +691,8 @@ def describe(
             for g in sorted(profile_state.groups, key=lambda item: item.name)
         ],
         "units": _describe_units(profile_state, frozenset(probes)),
-        "firewall": _describe_firewall(profile_state),
+        "firewall": _describe_firewall(profile_state, senders or {}),
+        "metrics": _describe_metrics(profile_state),
         "control_plane": _describe_control_plane(profile_state),
         "build_steps": _describe_build_steps(profile_state, resolved),
         "boot_steps": [
@@ -680,11 +762,14 @@ def _describe_units(profile_state: ProfileState, probes: frozenset[str]) -> dict
     }
 
 
-def _describe_firewall(profile_state: ProfileState) -> dict[str, object] | None:
+def _describe_firewall(
+    profile_state: ProfileState, senders: Mapping[str, str]
+) -> dict[str, object] | None:
     """What ``/etc/nftables.conf`` accepts: inbound, each port DNATed to a container among
     it; outbound when its output chain drops what no rule accepts (``None`` there:
     unfiltered); and what each container may send (``containers``). Each rule names who
-    asked, a container by its unit."""
+    asked: a unit (a component by the units *senders* name for it), a mode, or the
+    ``Firewall``'s own ``allow=``. A host name stands for the sets of its addresses."""
     conf = next((f for f in profile_state.files if f.path == _FIREWALL), None)
     if conf is None:
         return None
@@ -717,8 +802,14 @@ def _describe_firewall(profile_state: ProfileState) -> dict[str, object] | None:
             rule["for"] = f"{mode}: {_unit(name, units)}" if mode else _unit(name, units)
             sent.append(rule)
         elif hook == "output":
+            rule["for"] = ", ".join(
+                dict.fromkeys(senders.get(name) or _unit(name, units) for name in who.split(", "))
+            )
             outbound.append(rule)
         elif hook == "input":
+            mode, _, names = who.rpartition(": ")
+            if names == "allow":
+                rule["for"] = f"{mode} mode" if mode else "Firewall(allow=)"
             inbound.append(rule)
     for row in inbound:
         mode, _, names = row["for"].rpartition(": ")
@@ -769,6 +860,24 @@ def _merged(rules: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
+def _describe_metrics(profile_state: ProfileState) -> dict[str, object] | None:
+    """Where the metrics export writes and the series it keeps, the image's identity
+    among them, from its configuration; ``None`` without one."""
+    from .components._observability import METRICS_CONFIG
+
+    found = next((f for f in profile_state.files if f.path == METRICS_CONFIG), None)
+    if found is None:
+        return None
+    url, series = None, []
+    for line in found.data.decode("utf-8", errors="replace").splitlines():
+        key, _, value = line.strip().removeprefix("- ").partition(": ")
+        if key == "url" and url is None:
+            url = value
+        elif key == "regex":
+            series = str(json.loads(value)).split("|")
+    return {"url": url, "series": series}
+
+
 def _describe_control_plane(profile_state: ProfileState) -> dict[str, object] | None:
     """The attested endpoint and who hands it each value, from the profile's runtime
     manifest: a volume's key and a secret come from the operator or a broker (its URL and
@@ -799,8 +908,9 @@ def _describe_control_plane(profile_state: ProfileState) -> dict[str, object] | 
 
 def _rule(words: list[str], pinned: str | None = None) -> str:
     """``tcp dport 8080`` as ``8080/tcp``, ``ip daddr 1.1.1.1 tcp dport 443`` as
-    ``1.1.1.1:443/tcp``, an address *pinned* to a name as ``api.example:443/tcp
-    (203.0.113.7)``; anything else as written."""
+    ``1.1.1.1:443/tcp``, a host name's set (``ip daddr @host4_api.example``) as the name,
+    an address *pinned* to a name as ``api.example:443/tcp (203.0.113.7)``; anything else
+    as written."""
     found: dict[str, str] = {}
     for key in ("daddr", "dport"):
         if key in words and words.index(key) + 1 < len(words):
@@ -812,7 +922,9 @@ def _rule(words: list[str], pinned: str | None = None) -> str:
     if "daddr" not in found:
         return port
     address = found["daddr"]
-    if pinned is not None:
+    if address.startswith(("@host4_", "@host6_")):
+        address = address[len("@host4_") :]
+    elif pinned is not None:
         return f"{pinned}:{port} ({address})" if port else f"{pinned} ({address})"
     return f"{address}:{port}" if port else address
 
@@ -821,7 +933,26 @@ _STEPS = {
     "devtools-root-login": "sets the dev root password",
     "devtools-serial-console": "enables the serial console",
     "efi-stub": "installs the pinned EFI stub",
+    "tee-base-resolv-conf": "points /etc/resolv.conf at systemd-resolved's stub",
+    "metrics-export-rules": "checks the recording rules with promtool",
 }
+
+_LOGIN_STEPS = {
+    "keys": "makes the directory {login}'s delivered keys go in",
+    "sudoers": "checks {login}'s sudoers file with visudo",
+}
+"""The build steps of a ``Login`` (``ssh-login-NAME-keys``), by what each does."""
+
+_WHEN = {
+    "sync": "before the build",
+    "prepare": "before the packages are installed",
+    "build": "in the build",
+    "postinst": "once the packages are installed",
+    "finalize": "once the tree is complete",
+    "postoutput": "once the image is written",
+    "clean": "when the build is cleaned",
+}
+"""When a build step of each phase runs."""
 
 
 def _describe_build_steps(profile_state: ProfileState, resolved: Resolved | None) -> list[str]:
@@ -869,16 +1000,20 @@ def _step(name: str | None, script: str, phase: str, strip: str, gcp: Any) -> st
         return "removes IMAGE_VERSION from os-release, so a rebuild matches"
     if script == gcp.NVME_HOST_IDS:
         return "drops the NVMe host ids, which GCP sets per instance"
+    when = _WHEN.get(phase, f"in the {phase} phase")
     if name is None:
-        return f"runs a {phase} script"
+        return f"runs a script {when}"
     if name in _STEPS:
         step = _STEPS[name]
         return f"{step}, which logs in over SSH too" if NETWORK_LOGIN_SCRIPT in script else step
+    login = re.fullmatch(r"ssh-login-(.+)-(keys|sudoers)", name)
+    if login is not None:
+        return _LOGIN_STEPS[login.group(2)].format(login=login.group(1))
     if name.startswith("apt-"):
         return f"checks the InRelease of {name.removeprefix('apt-')}"
     if name.startswith("mkosi-"):
         return f"runs Mkosi(scripts=) {phase} script {name.rsplit('-', 1)[-1]}"
-    return f"runs {name} ({phase})"
+    return f"runs {name} {when}"
 
 
 _BOOT_STEPS = {
@@ -1011,6 +1146,8 @@ def _service_row(row: Mapping[str, Any]) -> Row:
     probe = "yes, " + str(row["readiness"]) if row["probe"] else "no"
     if row["readiness"] and not row["probe"]:
         probe = f"no, {row['readiness']} says when it is ready"
+    elif row.get("checked") and not row["probe"]:
+        probe = f"no, a development boot checks {row['checked']}"
     items.append(("probe", probe))
     if row.get("quotes"):
         items.append(("quotes", "yes"))
@@ -1065,7 +1202,11 @@ def resolved_rows(description: Mapping[str, Any]) -> list[Row]:
     kernel = get("kernel")
     if isinstance(kernel, Mapping):
         rows.append(Row(_render_kernel(kernel)))
-    options = get("build_options") or {}
+    options = dict(get("build_options") or {})
+    cmdline = options.pop("kernel_cmdline", None)
+    if cmdline:
+        shown = " ".join(cmdline) if isinstance(cmdline, list) else str(cmdline)
+        rows.append(Row(f"Kernel command line: {shown}"))
     if options:
         rows.append(Row("Build options: " + " ".join(f"{k}={_fmt(v)}" for k, v in options.items())))
     listing("Packages", get("packages", ()), inline=True)
@@ -1093,6 +1234,10 @@ def resolved_rows(description: Mapping[str, Any]) -> list[Row]:
     firewall = get("firewall")
     if isinstance(firewall, Mapping):
         listing("Firewall", _firewall_items(firewall))
+    metrics = get("metrics")
+    if isinstance(metrics, Mapping):
+        rows.append(Row(f"Metrics export to {metrics['url']}"))
+        listing("Exported series", metrics["series"], inline=True)
     control = get("control_plane")
     if isinstance(control, Mapping):
         listing("Control plane", _control_plane_items(control))

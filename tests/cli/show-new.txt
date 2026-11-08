@@ -14,7 +14,7 @@ Profiles (2):
 
 Built into production:
   Targets (1): qemu
-  Build options: kernel_cmdline=mitigations=auto,nosmt,spec_store_bypass_disable=on
+  Kernel command line: mitigations=auto,nosmt spec_store_bypass_disable=on
   Packages (12): acpid ca-certificates chrony kmod linux-image-amd64 nftables openssl systemd systemd-boot-efi systemd-resolved systemd-sysv udev
   Build packages (1): golang
   Sources (1):
@@ -45,16 +45,15 @@ Built into production:
   Enabled units (13): chrony.service systemd-time-wait-sync.service systemd-resolved.service tdxs.socket systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service nftables.service egress-resolve.timer tundravm-root-mode.service tdx-evidence.service tundravm-instance-key.service tundravm-power-button.service
   Units started on demand (1): tdxs.service
   Masked units (7): apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service acpid.path acpid.service acpid.socket
-  Firewall (5):
+  Firewall (4):
     in   nothing beyond replies and DHCP
-    out  169.254.169.254:123/udp                                                            metadata time
-    out  123/udp, @host4_time.cloudflare.com:4460/tcp, @host6_time.cloudflare.com:4460/tcp  tee-base
-    out  @host4_nts.netnod.se:4460/tcp, @host6_nts.netnod.se:4460/tcp                       tee-base
-    out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp                                                   network
+    out  169.254.169.254:123/udp                                        metadata time
+    out  123/udp, time.cloudflare.com:4460/tcp, nts.netnod.se:4460/tcp  chrony.service
+    out  1.1.1.1:853/tcp, 1.0.0.1:853/tcp                               systemd-resolved.service
   Instance key: secp256k1, fresh each boot; taken by no service
   Build steps (3):
     builds tdxs from source
-    runs tee-base-resolv-conf (postinst)
+    points /etc/resolv.conf at systemd-resolved's stub
     removes IMAGE_VERSION from os-release, so a rebuild matches
   Debloat: enabled, 30 paths removed, systemd minimize=yes
 

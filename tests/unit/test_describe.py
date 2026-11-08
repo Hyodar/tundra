@@ -97,8 +97,8 @@ def test_describe_says_what_a_profile_builds_in_public_terms() -> None:
     assert isinstance(files, list)
     assert {"bytes": 12, "mode": "0644", "path": "/etc/motd", "sha256": "a948904f2f0f"} in files
     assert info["build_steps"] == [
-        "runs first (postinst)",
-        "runs long (postinst)",
+        "runs first once the packages are installed",
+        "runs long once the packages are installed",
         "drops the NVMe host ids, which GCP sets per instance",
         "removes IMAGE_VERSION from os-release, so a rebuild matches",
     ]
