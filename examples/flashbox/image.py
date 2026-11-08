@@ -22,6 +22,7 @@ from tundravm.storage import OperatorKey, Volume
 
 data = Volume("data", unlock=OperatorKey())
 jwt = Generated("jwt")
+lighthouse_logs = data.directory("lighthouse-logs")
 nethermind = Nethermind(
     jwt=jwt, config="mainnet", state=data.directory("nethermind"), expose_p2p=True
 )
@@ -31,6 +32,7 @@ lighthouse = Lighthouse(
     network="mainnet",
     checkpoint_sync_url="https://mainnet.checkpoint.sigp.io",
     state=data.directory("lighthouse"),
+    logs=lighthouse_logs,
     expose_p2p=True,
     disable_quic=True,
     disable_optimistic_finalized_sync=True,
@@ -43,6 +45,7 @@ searcher = Searcher(
     # The searcher's login reads the delayed log through its own group, without root.
     delayed=data.directory("delayed", group="searcher"),
     delay=300,
+    logs_from=[lighthouse_logs],
 )
 
 firewall = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[searcher.ssh])})

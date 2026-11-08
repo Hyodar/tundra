@@ -41,6 +41,10 @@ class Lighthouse(Component):
     dials peers on 9000 and 9001 and accepts none unless *expose_p2p*. *disable_quic*
     drops the QUIC transport (and UDP 9001 with it), *disable_optimistic_finalized_sync*
     and *state_cache_size* pass Lighthouse's flags of those names.
+
+    *logs* is a volume directory Lighthouse writes its log files to (``--logfile-dir``),
+    readable by the directory's group alone: a container's ``Bind(lighthouse.logs)`` gives
+    it the container's. Without it they go to ``beacon/logs`` in the database's directory.
     """
 
     execution: Endpoint
@@ -48,6 +52,7 @@ class Lighthouse(Component):
     checkpoint_sync_url: str | None = None
     network: str = "hoodi"
     state: VolumeDirectory | None = None
+    logs: VolumeDirectory | None = None
     http_port: int = 5052
     expose_p2p: bool = False
     disable_quic: bool = False
@@ -112,12 +117,15 @@ class Lighthouse(Component):
             argv.append(f"--state-cache-size={self.state_cache_size}")
         if self.checkpoint_sync_url is not None:
             argv.append(f"--checkpoint-sync-url={self.checkpoint_sync_url}")
+        if self.logs is not None:
+            argv += [f"--logfile-dir={self.logs.path}", "--logfile-no-restricted-perms"]
         yield Service(
             "lighthouse",
             argv,
             requires=[self.execution],
             readiness=HttpProbe(f"http://127.0.0.1:{self.http_port}{HEALTH}", timeout="10min"),
             state="lighthouse" if self.state is None else self.state,
+            logs=self.logs,
             credentials=[self.jwt],
             expose=self._p2p() if self.expose_p2p else [],
             hardening="static",

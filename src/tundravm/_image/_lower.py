@@ -569,9 +569,10 @@ class _Lowering:
     def shared_groups(self) -> tuple[str, ...]:
         """The groups shared volume directories name, declared once each."""
         groups = {
-            service.state.group
+            state.group
             for service in self.runtime.services
-            if isinstance(service.state, VolumeDirectory) and service.state.group is not None
+            for state in service.volume_directories
+            if state.group is not None
         }
         declared = {group.name for group in self.image.groups} | account_groups(self.image)
         return tuple(sorted(groups - declared))
@@ -1137,7 +1138,7 @@ class _Lowering:
             state=None if isinstance(state, VolumeDirectory) else state,
             write_paths=write,
             needs=_outputs(item),
-            logs=item.logs,
+            logs=None if isinstance(item.logs, VolumeDirectory) else item.logs,
             runtime=item.runtime,
             ports=tuple(dm.Port(port.port, port.protocol) for port in item.expose),
             requires=requires,
@@ -1195,13 +1196,15 @@ class _Lowering:
         environment = item.variables()
         groups = _groups(item)
         working = item.working_directory
-        write: tuple[str, ...] = ()
         if isinstance(state, VolumeDirectory):
             environment.setdefault("STATE_DIRECTORY", state.path)
             working = working or state.path
-            write = (f"-{state.path}",)
-            if state.group is not None and state.group not in groups:
-                groups.append(state.group)
+        if isinstance(item.logs, VolumeDirectory):
+            environment.setdefault("LOGS_DIRECTORY", item.logs.path)
+        write = tuple(f"-{directory.path}" for directory in item.volume_directories)
+        for directory in item.volume_directories:
+            if directory.group is not None and directory.group not in groups:
+                groups.append(directory.group)
         return directives, requires, environment, groups, working, write
 
     def resolution(self, item: Service) -> tuple[str, ...]:
@@ -1243,7 +1246,7 @@ class _Lowering:
             env=environment,
             write_paths=write,
             credentials=_credentials(item.bindings),
-            logs=item.logs,
+            logs=None if isinstance(item.logs, VolumeDirectory) else item.logs,
             runtime=item.runtime,
             after=requires,
             requires=requires,
@@ -1550,11 +1553,13 @@ GROUP_UMASK = "0027"
 
 
 def _sandbox_of(item: Service) -> Hardening:
-    """*item*'s sandbox, with :data:`GROUP_UMASK` when its state is a ``group=`` directory, so
-    the group reads what it writes there."""
+    """*item*'s sandbox, with :data:`GROUP_UMASK` when its state is a ``group=`` directory or
+    its logs are on a volume, so the directory's group reads what it writes there."""
     hardening = cast("Hardening", item.hardening)
     state = item.state
     if isinstance(state, VolumeDirectory) and state.group is not None:
+        return replace(hardening, umask=GROUP_UMASK)
+    if isinstance(item.logs, VolumeDirectory):
         return replace(hardening, umask=GROUP_UMASK)
     return hardening
 

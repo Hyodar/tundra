@@ -5,12 +5,13 @@ Requires=nethermind-ready.service tundravm-generated-jwt.service runtime-init-vo
 
 [Service]
 Type=exec
-ExecStart=/usr/lib/lighthouse/lighthouse bn --network=mainnet --datadir=/persistent/data/lighthouse --execution-endpoint=http://127.0.0.1:8551/ --execution-jwt=${CREDENTIALS_DIRECTORY}/jwt --http --http-address=127.0.0.1 --http-port=5052 --port=9000 --disable-upnp --disable-quic --disable-optimistic-finalized-sync --state-cache-size=32 --checkpoint-sync-url=https://mainnet.checkpoint.sigp.io
+ExecStart=/usr/lib/lighthouse/lighthouse bn --network=mainnet --datadir=/persistent/data/lighthouse --execution-endpoint=http://127.0.0.1:8551/ --execution-jwt=${CREDENTIALS_DIRECTORY}/jwt --http --http-address=127.0.0.1 --http-port=5052 --port=9000 --disable-upnp --disable-quic --disable-optimistic-finalized-sync --state-cache-size=32 --checkpoint-sync-url=https://mainnet.checkpoint.sigp.io --logfile-dir=/persistent/data/lighthouse-logs --logfile-no-restricted-perms
 User=lighthouse
 WorkingDirectory=/persistent/data/lighthouse
+Environment=LOGS_DIRECTORY=/persistent/data/lighthouse-logs
 Environment=STATE_DIRECTORY=/persistent/data/lighthouse
 LoadCredential=jwt:/run/tundravm/secrets/jwt
-ReadWritePaths=-/persistent/data/lighthouse
+ReadWritePaths=-/persistent/data/lighthouse -/persistent/data/lighthouse-logs
 Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict
@@ -36,7 +37,7 @@ SystemCallFilter=~@privileged @resources
 SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-UMask=0077
+UMask=0027
 
 [Install]
 WantedBy=tundravm-held.target

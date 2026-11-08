@@ -6,7 +6,7 @@ has attested, with the searcher's key signing the unlock. The firewall boots int
 production, where the container reaches the bundle endpoint, the transaction stream and
 BuilderNet. A maintenance window opens the container's SSH and lets it reach DNS and any
 host on the web ports except the transaction stream, and the bundle endpoint stays
-reachable in both modes.
+reachable in both modes. The container reads Lighthouse's log files, never writes them.
 
 `image.py` ports it from flashbots-images at `09c7576` and composes the parts in
 `components/`. `searcher.py` is the container with flashbox's two channels, `orderflow.py`
@@ -22,7 +22,7 @@ attested node's `nethermind.py` and `lighthouse.py` are linked there file by fil
 | `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `Mode(ingress=[searcher.ssh])`, `firewall.switch` as the menu's `toggle` |
 | `searchersh.c`, `99-searcher`, dropbear | `Login("searcher", owner=True, commands={...})`: `Command(...)` as the login, `Sudo(...)` as root, `dev=True` in development builds only |
 | tdx-init, `persistent-mount.service` | `Volume("data", unlock=OperatorKey())` |
-| `lighthouse.service` | `Lighthouse(disable_quic=, ...)`, `Generated("jwt")` |
+| `lighthouse.service`, `lighthouse_logs` | `Lighthouse(disable_quic=, logs=, ...)`, `Generated("jwt")`, `Searcher(logs_from=)` |
 | the container's execution client | `Nethermind(expose_p2p=True)` on the host, `Searcher(rpc=nethermind.rpc)` |
 | `recording_rules.yml`, SigV4, the 443 proxy | `health_rules(searcher, data)` over `.metrics` selectors, `SigV4`, `Proxy(passthrough=True)` |
 | static hosts in `after-init`, the tx stream's DROP | `Host(...)` pins in `orderflow.py`, `Egress(deny=)` |
@@ -79,6 +79,4 @@ this way (`.github/workflows/flashbox.yml`).
 - A writable container layer, so the searcher cannot install tools. It needs a uid-range
   user namespace, which is Franco's decision.
 - The jwt in a container, so the searcher cannot run its own execution client.
-- Lighthouse's logs in the container, which flashbox mounts read-only: the example
-  Lighthouse has no log-directory keyword.
 - TLS in `input-proxy`: flashbox's pins the searcher's key, and this one relays plain bytes.

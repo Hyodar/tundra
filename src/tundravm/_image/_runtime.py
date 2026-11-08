@@ -265,8 +265,8 @@ def bound(image: object) -> tuple[tuple[Volume, ...], tuple[Secret, ...]]:
     volumes: dict[str, Volume] = {}
     secrets: dict[str, Secret] = {}
     for service in _image_services(image):
-        if isinstance(service.state, VolumeDirectory):
-            _first("volume", volumes, service.state.volume)
+        for directory in service.volume_directories:
+            _first("volume", volumes, directory.volume)
         for secret in service.secrets:
             _first("secret", secrets, secret)
     for login in _logins(_image_items(image)):
@@ -324,8 +324,7 @@ def check_bindings(image: object) -> None:
     services = _image_services(image)
     owners: dict[str, list[str]] = {}
     for service in services:
-        state = service.state
-        if isinstance(state, VolumeDirectory):
+        for state in service.volume_directories:
             owners.setdefault(state.path, []).append(service.name)
             if len(set(owners[state.path])) > 1 and state.group is None:
                 raise ValidationError(
@@ -468,9 +467,8 @@ class Runtime:
         its volume."""
         units = [secret.ready.unit for secret in service.secrets if secret.required]
         units += [item.unit for item in service.bindings if isinstance(item, Generated)]
-        if isinstance(service.state, VolumeDirectory):
-            units.append(service.state.ready.unit)
-        return tuple(units)
+        units += [item.ready.unit for item in service.volume_directories]
+        return tuple(dict.fromkeys(units))
 
     def optional(self, service: Service) -> tuple[str, ...]:
         """``SetCredential=`` lines: an optional secret reads as one newline until it
@@ -573,9 +571,10 @@ class Runtime:
         """``path -> (owner, group, mode)`` of each directory a service binds on *volume*."""
         found: dict[str, tuple[str, str, int]] = {}
         users: dict[str, set[str]] = {}
-        for service in self.services:
-            state = service.state
-            if not isinstance(state, VolumeDirectory) or state.volume != volume:
+        for service, state in (
+            (each, state) for each in self.services for state in each.volume_directories
+        ):
+            if state.volume != volume:
                 continue
             user = service.user or service.stem
             users.setdefault(state.path, set()).add(user)
@@ -597,7 +596,7 @@ class Runtime:
                     hint="Give each container a directory of its own.",
                 )
             owner = found.get(directory.path, (group,))[0]
-            found[directory.path] = (owner, group, 0o770 if writable else 0o750)
+            found[directory.path] = (owner, group, 0o770 if writable else 0o2750)
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:

@@ -506,7 +506,8 @@ def test_a_mode_opens_a_containers_sshd_by_naming_it(ingress: list[Any], rule: s
             Bind(data.directory("input"), writable=True),
             "-o feeder -g web -m 0770 /persistent/data/input",
         ),
-        (Bind(data.directory("input")), "-o feeder -g web -m 0750 /persistent/data/input"),
+        (Bind(data.directory("input")), "-o feeder -g web -m 2750 /persistent/data/input"),
+        (Bind(data.directory("logs")), "-o feeder -g web -m 2750 /persistent/data/logs"),
         (
             Bind(data.directory("drop"), writable=True),
             "-o web -g web -m 0770 /persistent/data/drop",
@@ -518,7 +519,9 @@ def test_a_bound_volume_directory_is_one_the_containers_group_traverses(
 ) -> None:
     """The directory keeps its service as owner and takes the container's group, with the
     mode the bind needs: no raw mode= on the directory."""
-    feeder = Service("feeder", ["/usr/bin/feeder"], state=data.directory("input"))
+    feeder = Service(
+        "feeder", ["/usr/bin/feeder"], state=data.directory("input"), logs=data.directory("logs")
+    )
     image = Image("box", components=[web(binds=[bind])], services=[feeder])
     planned = plan(image, "production")
     (step,) = [step for step in planned.init_steps if step.name == "volume-data"]

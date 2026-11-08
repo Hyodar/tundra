@@ -184,8 +184,6 @@ def _listing(kind: str) -> str:
 def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
     """What a service edit cannot carry: a different built binary, a credential bound or
     unbound by argv or environment, another user for a directory on a volume."""
-    from ._storage import VolumeDirectory
-
     if edited.binaries() != value.binaries():
         raise ValidationError(
             f"The edit of {ref} changes the built binary it runs, whose build the image "
@@ -203,12 +201,8 @@ def _check_service_edit(ref: Ref, value: Any, edited: Any) -> None:
             "environment=: what a profile binds, it says in credentials=.",
             hint="Set credentials=[...] in the edit, with secret.path in the word that reads it.",
         )
-    state = value.state
-    if (
-        isinstance(state, VolumeDirectory)
-        and state.group is None
-        and (edited.user or edited.stem) != (value.user or value.stem)
-    ):
+    state = next((item for item in value.volume_directories if item.group is None), None)
+    if state is not None and (edited.user or edited.stem) != (value.user or value.stem):
         raise ValidationError(
             f"The edit of {ref} runs it as another user, but the image prepares its "
             f"directory on volume {state.volume.name!r} at boot for {value.user or value.stem!r}.",

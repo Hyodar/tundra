@@ -22,6 +22,7 @@
         "/persistent/data/delayed",
         "/persistent/data/input",
         "/persistent/data/lighthouse",
+        "/persistent/data/lighthouse-logs",
         "/persistent/data/nethermind",
         "/persistent/data/searcher"
       ],

@@ -234,11 +234,16 @@ class Service(Located):
 
     ``state=`` is a ``StateDirectory=`` name under ``/var/lib`` (volatile, like the rest
     of the root) or a directory on a persistent volume (``data.directory("app")``), which
-    the service then waits for. A :class:`Secret` in argv (``[app, "--jwt", jwt]``) or in
-    ``environment=`` (``{"JWT_FILE": jwt}``) is the path the service reads it at, and
-    binds it: the service waits for a required one. ``credentials=[jwt]`` binds one the
-    program finds otherwise (a word that embeds ``jwt.path``, a config file); an argv
-    word naming a credential the service does not bind is refused. ``InstanceKey()`` is
+    the service then waits for. ``logs=`` is a ``LogsDirectory=`` name under
+    ``/var/log`` or, the same way, a directory on a volume (``$LOGS_DIRECTORY``), where the
+    service writes group-readable files (``UMask=0027``) for whomever the directory's
+    group admits: a ``Container``'s ``Bind`` of it gives the container's.
+
+    A :class:`Secret` in argv (``[app, "--jwt", jwt]``) or in ``environment=``
+    (``{"JWT_FILE": jwt}``) is the path the service reads it at, and binds it: the service
+    waits for a required one. ``credentials=[jwt]`` binds one the program finds otherwise
+    (a word that embeds ``jwt.path``, a config file); an argv word naming a credential the
+    service does not bind is refused. ``InstanceKey()`` is
     this boot's secp256k1 key, bound the same ways; the service then requires the unit
     that generates it.
 
@@ -276,7 +281,7 @@ class Service(Located):
     """Each value one line of text, a :class:`Secret` (or :class:`Credential`), which
     binds it and renders as the path the service reads it at, or an :class:`Endpoint`,
     which renders as its URL and waits for its service as in argv."""
-    logs: str | None = None
+    logs: str | VolumeDirectory | None = None
     runtime: str | None = None
     package: str | None = None
     """The Debian package whose own unit this is (:meth:`packaged`): its ``ExecStart=``,
@@ -552,6 +557,18 @@ class Service(Located):
                 f"state= holds {self.state!r}.",
                 hint="Pass a directory name under /var/lib, or volume.directory('name').",
             )
+        if isinstance(self.runtime, VolumeDirectory):
+            raise _fail(
+                self,
+                f"runtime= {self.runtime.path} is a volume directory, and /run is this boot's.",
+                hint=f'runtime="{self.stem}", or state=/logs= for a directory on the volume.',
+            )
+        if isinstance(self.logs, VolumeDirectory) and self.logs == self.state:
+            raise _fail(
+                self,
+                f"logs= and state= are both {self.logs.path}.",
+                hint="Give the logs a directory of their own: logs=volume.directory('app-logs').",
+            )
         for name in ("state", "logs", "runtime"):
             value = getattr(self, name)
             if isinstance(value, VolumeDirectory):
@@ -760,6 +777,11 @@ class Service(Located):
         for binding in self._references():
             found.setdefault(binding.name, binding)
         return tuple(found.values())
+
+    @property
+    def volume_directories(self) -> tuple[VolumeDirectory, ...]:
+        """*state* and *logs*, those on a volume: what the image makes for it at boot."""
+        return tuple(item for item in (self.state, self.logs) if isinstance(item, VolumeDirectory))
 
     @property
     def state_directory(self) -> str | None:

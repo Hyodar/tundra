@@ -187,7 +187,7 @@ The keywords change the rest:
 | `shutdown=` | `Shutdown(timeout=, signal=, kill_mode=)` |
 | `user=`, `groups=` | another account, more groups (`["tdx"]`) |
 | `quotes=` | `True`: it asks the evidence service for quotes ([Components](#components)) |
-| `working_directory=`, `logs=`, `runtime=` | `WorkingDirectory=`, and directories under `/var/log` and `/run` |
+| `working_directory=`, `logs=`, `runtime=` | `WorkingDirectory=`, and directories under `/var/log` (or a volume's) and `/run` |
 | `description=` | `Description=`; a component's service defaults to the first sentence of its docstring |
 | `unit=` | `DropIn(...)`, for anything systemd knows and no keyword covers |
 
@@ -347,7 +347,7 @@ host key made each boot that every quote binds; `attest` pins that key, and
 The container runs in a PID namespace of its own, so it sees no host process. It writes
 group-readable files, and a host service joins `container.group` to read them.
 `Bind(data.directory("in"), writable=True)` gives a volume directory the container's group,
-`0750` or `0770` when writable, and the container waits for the volume. The control plane
+`2750` (setgid) or `0770` when writable, and the container waits for the volume. The control plane
 under `/run/tundravm`, the kernel's interfaces and whole system trees are refused as binds.
 
 ## Profiles

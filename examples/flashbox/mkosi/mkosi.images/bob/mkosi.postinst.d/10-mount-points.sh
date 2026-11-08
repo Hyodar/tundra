@@ -11,5 +11,6 @@ chmod 1777 "$BUILDROOT"/tmp
 chmod 1777 "$BUILDROOT"/var/tmp
 mkdir -p "$BUILDROOT"/persistent/data/searcher
 mkdir -p "$BUILDROOT"/persistent/data/input
+mkdir -p "$BUILDROOT"/persistent/data/lighthouse-logs
 mkdir -p "$BUILDROOT"/etc/ssh/tundravm/host
 mkdir -p "$BUILDROOT"/etc/ssh/tundravm/keys

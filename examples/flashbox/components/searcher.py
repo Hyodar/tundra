@@ -8,7 +8,7 @@ describes is still live. ``input-proxy`` carries bytes from TCP 27018 into the c
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from tundravm import Service
 from tundravm.components import Component, Endpoint
@@ -31,7 +31,8 @@ class Searcher(Component):
     address. *state* is the bot's directory, *input* holds the socket ``input-proxy`` writes
     and *delayed* the log ``delay-pipe`` writes, *delay* seconds behind ``bob.log``. Both
     services join the container's group, so they read and write what it shares without
-    running as its account.
+    running as its account. Each of *logs_from* is a host service's log directory, which
+    the container reads at the same path: ``lighthouse.logs``.
     """
 
     rpc: Endpoint
@@ -39,6 +40,7 @@ class Searcher(Component):
     input: VolumeDirectory
     delayed: VolumeDirectory
     delay: int
+    logs_from: Sequence[VolumeDirectory] = ()
     ssh_port: int = 10022
 
     @property
@@ -54,7 +56,10 @@ class Searcher(Component):
             egress=EGRESS,
             modes=MODES,
             requires=[self.rpc],
-            binds=[Bind(self.input, writable=True)],
+            binds=[
+                Bind(self.input, writable=True),
+                *(Bind(directory) for directory in self.logs_from),
+            ],
         )
 
     @property
