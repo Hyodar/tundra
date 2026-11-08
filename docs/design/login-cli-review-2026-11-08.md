@@ -15,24 +15,24 @@ Line numbers are those of the branch head.
   line into a comment, so `["/usr/bin/x", "#c"]` became `/usr/bin/x`, which admits any
   arguments as root, and `visudo -c` passes it. The path of a pattern line went unescaped
   (`=` split it, `:` broke the file), and a literal line whose arguments start with `^` and
-  end with `$` is read as a regex. `_sudo_word` (`_login.py:800`) now escapes `, : = #`
+  end with `$` is read as a regex. `_sudo_word` (`_login.py:841`) now escapes `, : = #`
   everywhere and a leading `^` is escaped.
 - `08f687e5` (security): sudo matches a pattern line against the arguments joined by
   spaces, so a pattern able to match a space (`.`, `[^/]`) admitted argvs of more words
-  than the program passes. `_sudo_pattern` (`_login.py:815`) refuses those and anything
+  than the program passes. `_sudo_pattern` (`_login.py:941`) refuses those and anything
   outside printable ASCII.
 - `4ebf822d` (security): `ParamType.check()` was pasted into `main.go` after `return`, so a
   type could close the `Check` closure and add a `func init()`. `_checked`
-  (`_login.py:931`) writes it only when `_CHECK_CALL` (`_login.py:42`) matches: one call of
+  (`_login.py:1057`) writes it only when `_CHECK_CALL` (`_login.py:44`) matches: one call of
   `Int`, `OneOf` or `Match` on `value` with decimal or Go string literal arguments.
 - `a2b9e5a1` (security): the declaring file's name went raw into the first `//` comment, so
-  a name with a newline put Go into the program; it is now JSON-escaped (`_login.py:867`).
+  a name with a newline put Go into the program; it is now JSON-escaped (`_login.py:993`).
 - `faf5fe05` (security): sudoers lines were spelled word by word, so a choice or flag named
   in two words took independent values (`/x a --to=b` was admitted, never passed). The
-  lines are now every assignment of the command's flags and choices (`_login.py:700`), and
-  a patterned param named twice is refused (`_login.py:672`).
+  lines are now every assignment of the command's flags and choices (`_login.py:741`), and
+  a patterned param named twice is refused (`_login.py:705`).
 - `3253fc97` (fix): the 64-line cap was `len(self.sudoers())`, spelling 2^n lines before
-  refusing; it is now the product of the domains (`_login.py:692`).
+  refusing; it is now the product of the domains (`_login.py:725`).
 - `6837c00a` (security): `Match` ran its pattern unanchored, so `"[0-9a-f]{64}"` admitted
   `--output=/etc/x<hex>`, and a command not run through sudo had no other check. It now
   compiles `^(?:pattern)$` (`cli.go:126`); the three trees carry the new runtime.
@@ -40,19 +40,36 @@ Line numbers are those of the branch head.
   `ssh I --login=bob -- -x` re-parsed `-x` as INSTANCE (`cli.py:2105`).
 - `93f8dc19` (fix): `known_hosts` was written in place, so a torn write left a truncated
   file that the boot probe never re-pinned; it now replaces the file by rename
-  (`bootstrap.py:679`).
+  (`bootstrap.py:690`).
+
+Franco's decisions on the open questions became five more commits:
+
+- `7a48b196` (security): a `pattern()` or `Match` check that may admit a value starting
+  with `-` is refused at declaration (`login-param-option-like`): each alternative must
+  begin with a literal character or a class that leaves `-` out, with no quantifier letting
+  it be absent, and a group, `.`, a negated or POSIX class counts as admitting it.
+- `e2f3b6f3` (fix): `help` is refused as a choice, as `--help` and `-h` already were.
+- `320b7831` (security): evidence is refused unless each host and container key is
+  `ssh-ed25519`, `ecdsa-sha2-*` or `ssh-rsa` and its base64, one key per entry, so no
+  newline or `@cert-authority` reaches `known_hosts`.
+- `82fe1a3e` (fix): a sudoers line over 1024 characters is refused at generation
+  (`login-sudo-line-length`), since `visudo -c` passes it and sudo refuses it at run time.
+- `tundravm ssh I -- --help` stays as it is: argparse's pattern for INSTANCE takes the `--`
+  after it and strips it before the remote words' action runs (`argparse.py:1976`, `-*A-*`),
+  so the action cannot tell `I -- --help` from `I --help`; fixing it means making INSTANCE
+  part of the remote words, which changes the command's grammar and its reference.
 
 ## The six checks
 
 1. Generated-code injection: no, after `4ebf822d` and `a2b9e5a1`. Every other string
    (command and param names, help, usage, literals, paths, choices, modes, defaults) goes
-   through `_go` (`_login.py:117`), JSON escaping, which Go reads as the same string; a
+   through `_go` (`_login.py:124`), JSON escaping, which Go reads as the same string; a
    U+FEFF in a help string fails the build rather than changing it. The `go.mod` module line
    is the login name, held to `[a-z_][a-z0-9_-]{0,31}` (`utils.py:1067`).
 2. Sudoers exactness: yes, after the four sudoers fixes. `*?[]\"'` stay refused
-   (`_login.py:36`); a pattern line is one anchored regex with each literal from
-   `[A-Za-z0-9/_.+-]` and `.`/`+` bracketed (`_login.py:38`); choices come from
-   `_login.py:29` and need no escaping; a command without arguments gets `""`. The `--`
+   (`_login.py:38`); a pattern line is one anchored regex with each literal from
+   `[A-Za-z0-9/_.+-]` and `.`/`+` bracketed (`_login.py:40`); choices come from
+   `_login.py:30` and need no escaping; a command without arguments gets `""`. The `--`
    after `sudo -n` (`cli.go:138`) ends sudo's options (sudo(8): "the -- is used to delimit
    the end of the sudo options"), so sudoers matches the argv after it. `Int`'s `[0-9]+`
    admits what the program refuses (leading zeros, out of range), never the reverse. The
@@ -78,22 +95,15 @@ Line numbers are those of the branch head.
    no option after it; `--login` must equal an account the tree names or `root` on a
    development build (`_ssh.py:70`); `-i` and its path are separate words (`_ssh.py:149`);
    `-p` is the receipt's port as an int (`_ssh.py:151`); `os.execvp` runs no shell.
-6. `pin_host_keys`: safe after `93f8dc19`. It writes only when the verdict passes against
-   the build's `measurements.json` (`bootstrap.py:691`), makes one attempt, and the probe
-   pins only when no `known_hosts` exists (`cli.py:1544`). A failed judgement writes
-   nothing and the probe says which verdict it got.
+6. `pin_host_keys`: safe after `93f8dc19` and `320b7831`. It writes only when the verdict
+   passes against the build's `measurements.json` (`bootstrap.py:702`), makes one attempt,
+   and the probe pins only when no `known_hosts` exists (`cli.py:1544`). A failed judgement
+   writes nothing and the probe says which verdict it got; each key it writes is one
+   `type base64`.
 
 ## Left as they are
 
-- The mode gate is the program's alone: sudoers cannot say "maintenance only", so a gated
-  root command's line admits it in every mode. ForceCommand is the only way the login
-  reaches sudo, so this holds while nothing else runs as the login.
-- A custom pattern that admits a leading `-` lets a value read as an option to the target
-  program; the generator cannot decide that in general.
-- A `choices=` value spelled `help` can never be typed, since any help word prints help.
-- argparse drops a leading `--` before INSTANCE's words, so `tundravm ssh I -- --help`
-  still prints tundravm's help; the login's own spelling is `help`.
-- The evidence's host keys are written as given; the binding joins them with newlines, so
-  a relay could regroup lines but not add a key the quote does not bind.
-- A pattern line over 1024 characters passes `visudo -c` and is refused by sudo at run
-  time, failing closed.
+- The mode gate is the program's alone, accepted by design: sudoers cannot say
+  "maintenance only", so a gated root command's line admits it in every mode, and
+  ForceCommand is the only route from the login to sudo.
+- argparse drops a `--` right after INSTANCE, as above; the login's own spelling is `help`.
