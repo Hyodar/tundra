@@ -253,4 +253,4 @@ SDK first. S means under a day, M means a few days.
 25. Rules: `flashbox:oom_kills_count`, `device!~"lo|ve-.*"`, a comment on `/`. S, `examples/flashbox/image.py`.
 26. Docstring: what leaves is stated correctly, the SDK paragraph goes, a kernel comment is added, and `socat` is dropped or explained. S, `examples/flashbox/image.py`.
 27. README: the refusal bullets corrected, the known_hosts and instance name shown, `uv run` working (a `[project]` table or a note). S, `examples/flashbox/README.md`, `examples/flashbox/pyproject.toml`.
-28. The example commits its lock (`!examples/flashbox/build/tundravm.lock`), so `check` is quiet. S, `.gitignore`.
+28. ~~The example commits its lock (`!examples/flashbox/build/tundravm.lock`), so `check` is quiet. S, `.gitignore`.~~ (not done: locks stay uncommitted, a lock embeds the payload and would churn; `check` is quiet without one instead, `unpinned-quiet`)
