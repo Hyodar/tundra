@@ -150,6 +150,11 @@ def test_a_service_on_a_locked_volume_never_holds_the_probe(
     held = f"probe_locked /persistent/vault vault {how} || probe_service ledger.service\n"
     assert held in script
     assert f"probe_volume /persistent/vault yes {how}" in script
+    again = tree.unit(probe.AGAIN_UNIT, "dev")
+    waits = "runtime-init-volume-vault.service ledger.service ledger-ready.service"
+    assert f"After={probe.UNIT} {waits}\n" in again
+    assert f"ExecStart=/bin/sh {probe.SCRIPT_PATH} {probe.AGAIN}\n" in again
+    assert "WantedBy=tundravm-held.target\n" in again
 
 
 @pytest.mark.parametrize(
@@ -181,3 +186,37 @@ def test_a_locked_volume_skips_its_service_checks(
         check=True,
     )
     assert done.stdout.startswith(f"{probe.PREFIX.strip()} service:x {line}")
+
+
+LOCKED = [
+    "tundravm-probe: volume:/persistent/vault skip locked until `tundravm secrets unlock`",
+    "tundravm-probe: service:ledger.service skip locked: it starts once the volume opens",
+    "tundravm-probe: done 0 ok 0 fail",
+]
+OPENED = [
+    "tundravm-probe: again: a held volume opened",
+    "tundravm-probe: volume:/persistent/vault ok ext4 on /dev/mapper/vault, dm-crypt",
+    "tundravm-probe: service:ledger.service ok active",
+    "tundravm-probe: done 2 ok 0 fail",
+]
+
+
+@pytest.mark.parametrize(
+    ("lines", "done", "verdicts", "locked"),
+    [
+        (LOCKED, (0, 0), ["skip", "skip"], True),
+        (LOCKED + OPENED[:2], None, ["ok"], False),
+        (LOCKED + OPENED, (2, 0), ["ok", "ok"], False),
+    ],
+    ids=["locked", "running-again", "opened"],
+)
+def test_the_report_is_the_last_run(
+    lines: list[str], done: tuple[int, int] | None, verdicts: list[str], locked: bool
+) -> None:
+    """The second run, once a held volume opened, replaces the first's lines and counts."""
+    report = probe.read(lines)
+    assert (report.done, [r.verdict for r in report.results], report.locked) == (
+        done,
+        verdicts,
+        locked,
+    )

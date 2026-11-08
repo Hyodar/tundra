@@ -2372,6 +2372,7 @@ ProbeReport(
     results: tuple[Result, ...] = (),
     done: tuple[int, int] | None = None,
     expected: tuple[str, ...] = (),
+    again: bool = False,
 )
 ```
 
@@ -2380,6 +2381,7 @@ What the probe printed: each check's last line, and its `done` counts (`None` un
 | Member | Does |
 |---|---|
 | `ProbeReport.failed` | The checks whose last line was `fail`. |
+| `ProbeReport.locked` | A check skipped because its volume waits for its key. |
 | `ProbeReport.missing` | Expected checks that printed no line. |
 | `ProbeReport.ok` | It finished, nothing failed and every expected check printed. |
 | `ProbeReport.table() -> str` | The results as a table: check, verdict, detail; then the counts. |

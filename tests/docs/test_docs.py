@@ -277,7 +277,7 @@ def test_slugs_follow_github() -> None:
         ("docs/terms.md", 800),
         ("docs/guide.md", 1750),
         ("docs/howto.md", 1200),
-        ("docs/manual.md", 7700),
+        ("docs/manual.md", 7720),
         ("docs/trust.md", 2950),
         ("docs/release.md", 600),
     ],

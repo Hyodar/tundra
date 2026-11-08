@@ -121,8 +121,8 @@ Built into dev, beyond production:
   Files
     + /etc/tdxs/simulator.yaml  0644  80B  sha256:22a565d9e4cc
     + /usr/lib/systemd/system/tdx-evidence.service.d/50-tundravm-execution.conf  0644  53B  sha256:08546e89161d
-    + /usr/lib/tundravm/probe  0755  26218B  sha256:4fe163885c65
+    + /usr/lib/tundravm/probe  0755  26276B  sha256:46270000b2b1
     + /usr/lib/tundravm/tdxs-issuer  0755  451B  sha256:048d6a4fa0e7
-  Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service
+  Enabled units: +serial-getty@ttyS0.service +tundravm-probe.service +tundravm-probe-again.service
   Build steps
     + sets the dev root password

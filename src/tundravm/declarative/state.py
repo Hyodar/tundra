@@ -417,16 +417,22 @@ class StateBuilder:
         profile = self.state.ensure_profile(name)
         _add_file(profile, probe_module.SCRIPT_PATH, probe.script(), "0755")
         profile.services.append(probe.service())
+        again = probe.again()
+        if again is not None:
+            profile.services.append(again)
         profile.keep_bins.update(probe.tools)
 
-    def no_probe(self, name: str) -> None:
-        """Keep a production profile *name* from running the probe its development default
-        ships: a drop-in whose condition never holds."""
+    def no_probe(self, name: str, probe: Probe | None) -> None:
+        """Keep a production profile *name* from running the *probe* its development
+        default ships, and its second run: a drop-in whose condition never holds."""
         text = (
             "# tundravm: a production profile runs no boot probe\n"
             f"[Unit]\nConditionPathExists=!{probe_module.SCRIPT_PATH}\n"
         )
-        _add_file(self.state.ensure_profile(name), probe_module.DROPIN, text)
+        profile = self.state.ensure_profile(name)
+        _add_file(profile, probe_module.DROPIN, text)
+        if probe is not None and probe.again() is not None:
+            _add_file(profile, probe_module.DROPIN_AGAIN, text)
 
     def issuer(self, name: str, *, release: bool) -> None:
         """Make profile *name*'s tdxs issuer follow its build (``tundravm._modules.tdxs``).

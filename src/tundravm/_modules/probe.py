@@ -33,7 +33,10 @@ The checks, each only when its declaration exists (:func:`derive`):
   the volume keeps inside; a ``BrokerKey`` one is a ``skip`` while it waits for its broker.
   The probe is ordered after nothing of a service whose state is on such a volume, and its
   ``service:`` and ``port:`` rows are a ``skip locked`` while the volume is not mounted, so
-  a boot waiting for its operator still finishes its probe;
+  a boot waiting for its operator still finishes its probe. Once the volume's step and the
+  units waiting on it ran, :data:`AGAIN_UNIT` runs the whole probe again, its first line
+  ``tundravm-probe: again: ...``, so the last run's lines and ``done`` are the verdicts
+  after the unlock;
 - ``dns``: with ``TeeBase``'s resolver, the first resolver's TLS name resolves through the
   stub, ``systemd-resolved`` holds a connection to port 853 (DNS over TLS) and, where
   ``resolvectl`` reaches it over D-Bus, reports ``+DNSOverTLS``;
@@ -131,6 +134,7 @@ from tundravm.models import ServiceSpec, unit_name
 
 from . import execution, instance_key, root_mode
 from .disk_encryption import OWNER_DIRECTORY
+from .init import HELD_TARGET
 
 if TYPE_CHECKING:
     from tundravm.declarative.model import (
@@ -145,6 +149,11 @@ UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
 PREFIX = "tundravm-probe: "
 DONE = "done"
+AGAIN = "again"
+"""The first line of the run :data:`AGAIN_UNIT` starts: a reader drops what came before."""
+AGAIN_UNIT = "tundravm-probe-again.service"
+"""The probe's second run, once a held volume opens (:meth:`Probe.again`)."""
+DROPIN_AGAIN = f"/usr/lib/systemd/system/{AGAIN_UNIT}.d/50-tundravm-production.conf"
 WAIT_SECONDS = 30
 """How long a service may stay ``activating`` and a declared port stay unbound."""
 DROPIN = f"/usr/lib/systemd/system/{UNIT}.d/50-tundravm-production.conf"
@@ -234,9 +243,11 @@ class Check:
 
 @dataclass(frozen=True, slots=True)
 class Probe:
-    """A profile's checks, and the systemd binaries they need kept."""
+    """A profile's checks, and the units a held volume holds, which :meth:`again` waits
+    for."""
 
     checks: tuple[Check, ...]
+    held: tuple[str, ...] = ()
 
     @property
     def tools(self) -> tuple[str, ...]:
@@ -252,6 +263,8 @@ class Probe:
             used.add("locked")
         parts = [_HEADER]
         parts += [_HELPERS[name] for name in _HELPERS if name in used]
+        if self.held:
+            parts.append(f'[ "${{1:-}}" = {AGAIN} ] && say "{AGAIN}: a held volume opened"\n')
         parts += [_MODE, _RTMR]
         parts += [f"check={check.name}\n{check.call}\n" for check in self.checks[2:]]
         parts.append('say "done $passed ok $failed fail"\n')
@@ -274,6 +287,28 @@ class Probe:
             timeout_start="10min",
             hardening=(),
             needs=(),
+            extra_unit={"Service": {"StandardOutput": "journal+console"}},
+        )
+
+    def again(self) -> ServiceSpec | None:
+        """:data:`AGAIN_UNIT`, with a held volume: the whole probe again once the volume's
+        step and the units waiting on it ran, so the last run's lines (and its ``done``) are
+        the verdicts after ``tundravm secrets unlock``. ``None`` without one."""
+        if not self.held:
+            return None
+        return ServiceSpec(
+            name=AGAIN_UNIT,
+            command=("/bin/sh", SCRIPT_PATH, AGAIN),
+            description="Check again once a held volume opens",
+            after=(UNIT, *self.held),
+            type="oneshot",
+            remain_after_exit=True,
+            restart="no",
+            restart_sec="",
+            timeout_start="10min",
+            hardening=(),
+            needs=(),
+            wanted_by=HELD_TARGET,
             extra_unit={"Service": {"StandardOutput": "journal+console"}},
         )
 
@@ -563,7 +598,8 @@ def derive(
                 (f"runtime-init-{step}.service",),
             )
         )
-    return Probe(tuple(_unheld(checks, items)))
+    unheld, held_units = _unheld(checks, items)
+    return Probe(tuple(unheld), held_units)
 
 
 def _container(item: ContainerRoot, items: Sequence[Declaration], containers: str) -> list[Check]:
@@ -897,11 +933,14 @@ def _held(items: Sequence[Declaration]) -> dict[str, tuple[str, str]]:
     return found
 
 
-def _unheld(checks: list[Check], items: Sequence[Declaration]) -> list[Check]:
+def _unheld(
+    checks: list[Check], items: Sequence[Declaration]
+) -> tuple[list[Check], tuple[str, ...]]:
     """*checks* with each one that reads a service waiting on a held volume (:func:`_held`)
     ordered after none of its units and run only once that volume is mounted (``hardening:``
     reads the unit file, so it runs regardless): ordering the probe after the service would
-    hold the whole probe until someone unlocks the volume."""
+    hold the whole probe until someone unlocks the volume. Then the units :data:`AGAIN_UNIT`
+    waits for: each held volume's step and the units the checks no longer wait for."""
     from tundravm.declarative.model import Service
 
     held = _held(items)
@@ -914,11 +953,13 @@ def _unheld(checks: list[Check], items: Sequence[Declaration]) -> list[Check]:
                 stem = unit_name(item.name).removesuffix(".service")
                 waiting[f"{stem}.service"] = waiting[f"{stem}-ready.service"] = volume
     found: list[Check] = []
+    units = [f"runtime-init-volume-{volume}.service" for volume in held]
     for check in checks:
         on = next((waiting[unit] for unit in check.after if unit in waiting), None)
         if on is None:
             found.append(check)
             continue
+        units += [unit for unit in check.after if unit in waiting and unit not in units]
         after = tuple(unit for unit in check.after if unit not in waiting)
         if check.helper == "hardening":
             found.append(replace(check, after=after))
@@ -931,7 +972,7 @@ def _unheld(checks: list[Check], items: Sequence[Declaration]) -> list[Check]:
                 after=after,
             )
         )
-    return found
+    return found, tuple(units)
 
 
 def _service(item: object) -> list[Check]:
@@ -2206,6 +2247,13 @@ class Report:
     done: tuple[int, int] | None = None
     expected: tuple[str, ...] = field(default=(), compare=False)
     """The checks the build's manifest says the probe carries (empty: unknown)."""
+    again: bool = False
+    """These lines are the second run's, once a held volume opened."""
+
+    @property
+    def locked(self) -> bool:
+        """A check skipped because its volume waits for its key."""
+        return any(r.verdict == "skip" and r.detail.startswith("locked") for r in self.results)
 
     @property
     def failed(self) -> tuple[Result, ...]:
@@ -2254,14 +2302,18 @@ _DONE = re.compile(rf"{DONE} (\d+) ok (\d+) fail")
 def read(lines: Iterable[str], expected: Sequence[str] = ()) -> Report:
     """The :class:`Report` in console *lines* (``console_lines``): the last line of each
     check (the journal may forward it a second time), in the order they first printed, and
-    the last ``done``."""
+    the last ``done``, of the last run (an :data:`AGAIN` line starts one)."""
     found: dict[str, Result] = {}
     done: tuple[int, int] | None = None
+    again = False
     for line in lines:
         _, sep, said = line.partition(PREFIX)
         if not sep:
             continue
         said = said.strip()
+        if said.startswith(f"{AGAIN}:"):
+            found, done, again = {}, None, True
+            continue
         counted = _DONE.fullmatch(said)
         if counted:
             done = (int(counted[1]), int(counted[2]))
@@ -2270,7 +2322,7 @@ def read(lines: Iterable[str], expected: Sequence[str] = ()) -> Report:
         if match:
             name = match[1]
             found[name] = Result(name, match[2], match[3] or "")  # type: ignore[arg-type]
-    return Report(tuple(found.values()), done, tuple(expected))
+    return Report(tuple(found.values()), done, tuple(expected), again)
 
 
 def checks_of(manifest: Mapping[str, object]) -> tuple[str, ...]:
@@ -2281,8 +2333,11 @@ def checks_of(manifest: Mapping[str, object]) -> tuple[str, ...]:
 
 
 __all__ = [
+    "AGAIN",
+    "AGAIN_UNIT",
     "DONE",
     "DROPIN",
+    "DROPIN_AGAIN",
     "PREFIX",
     "SCRIPT_PATH",
     "SYMBOLS",

@@ -34,6 +34,7 @@ mkosi-chroot systemctl enable metrics-sink.service
 mkosi-chroot systemctl enable metrics-sink-ready.service
 mkosi-chroot systemctl enable serial-getty@ttyS0.service
 mkosi-chroot systemctl enable tundravm-probe.service
+mkosi-chroot systemctl enable tundravm-probe-again.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/usr/lib/systemd/system/metrics-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/metrics-sink.service"
 ln -sf "/usr/lib/systemd/system/metrics-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/metrics-sink-ready.service"

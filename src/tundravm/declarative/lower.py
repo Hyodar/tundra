@@ -324,7 +324,7 @@ def _probes(
         name = variant.name
         if variant.release:
             if not default.release and name in overlays:
-                builder.no_probe(name)
+                builder.no_probe(name, found.get(default.name))
             continue
         if name != default.name and name not in overlays:
             if default.name in found:

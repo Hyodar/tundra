@@ -803,6 +803,7 @@ probe_firewall_mode() {
         fail "${said#mode-switch: }; journalctl -u mode-switch -u tdxs"
     fi
 }
+[ "${1:-}" = again ] && say "again: a held volume opened"
 check=mode
 mode=$(cat /run/tundravm/mode 2>/dev/null || true)
 case $mode in

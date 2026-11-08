@@ -1,0 +1,13 @@
+[Unit]
+Description=Check again once a held volume opens
+After=tundravm-probe.service runtime-init-volume-data.service nethermind.service nethermind-ready.service lighthouse.service lighthouse-ready.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/tundravm/probe again
+TimeoutStartSec=10min
+StandardOutput=journal+console
+
+[Install]
+WantedBy=tundravm-held.target

@@ -670,7 +670,9 @@ def probe_checks(build: Mapping[str, Any], subject: str) -> tuple[str, ...]:
 def probe(instance: Instance, *, timeout: float | None = None) -> probe_module.Report:
     """``run --probe`` / ``run probe``: wait up to *timeout* seconds (:data:`PROBE_TIMEOUT`
     when ``None``, read at the call) for ``tundravm-probe: done`` on *instance*'s console,
-    then write :data:`PROBE` into its directory and return what the probe printed."""
+    then write :data:`PROBE` into its directory and return what the probe printed. Once
+    ``secrets unlock`` opened a volume, a run that skipped it as locked is not the last:
+    it waits for the second run's ``done``."""
     timeout = PROBE_TIMEOUT if timeout is None else timeout
     from .testing._boot import console_lines
 
@@ -681,7 +683,10 @@ def probe(instance: Instance, *, timeout: float | None = None) -> probe_module.R
     while True:
         text = console.read_text(encoding="utf-8", errors="replace") if console.is_file() else ""
         report = probe_module.read(console_lines(text), expected)
-        if report.done is not None or not alive(instance) or time.monotonic() >= deadline:
+        unlocked = any(event.get("event") == "unlocked" for event in instance.events())
+        stale = unlocked and report.locked and not report.again
+        finished = report.done is not None and not stale
+        if finished or not alive(instance) or time.monotonic() >= deadline:
             break
         time.sleep(POLL)
     record = {"instance": instance.id, "build": build.id, "at": now(), **report.to_dict()}

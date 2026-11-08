@@ -556,6 +556,7 @@ probe_root() {
         fail "/ is $said: it must be root:root 0755, or anyone writes beside /etc and sshd refuses every key under /etc/ssh; journalctl -u tundravm-root-mode.service"
     fi
 }
+[ "${1:-}" = again ] && say "again: a held volume opened"
 check=mode
 mode=$(cat /run/tundravm/mode 2>/dev/null || true)
 case $mode in

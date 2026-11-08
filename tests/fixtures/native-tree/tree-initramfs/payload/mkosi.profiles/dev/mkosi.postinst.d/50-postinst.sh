@@ -29,6 +29,7 @@ mkosi-chroot systemctl enable go-probe.service
 mkosi-chroot systemctl enable rust-probe.service
 mkosi-chroot systemctl enable ledger.service
 mkosi-chroot systemctl enable tundravm-probe.service
+mkosi-chroot systemctl enable tundravm-probe-again.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/usr/lib/systemd/system/tick.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/tick.timer"
 ln -sf "/usr/lib/systemd/system/journal-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/journal-export.service"

@@ -790,7 +790,9 @@ A development profile carries `tundravm-probe.service`, which prints
 | `attested-tls:` | each `AttestedTLS` port's certificate carries the key that evidence binds |
 
 `--probe` waits for it (up to `--timeout`), prints the table, writes `probe.json`, and exits
-1 on a failure. `run probe INSTANCE` reads a running instance's.
+1 on a failure. `run probe INSTANCE` reads a running instance's. A row behind a locked volume skips; once
+the volume opens, `tundravm-probe-again.service` runs the probe again and `run probe` reads
+that run.
 
 ## Deploy and attest
 

@@ -899,6 +899,7 @@ probe_owner() {
         fail "$1 is $said, declared $2${3:+ $3}: its owner was not applied, so $2 cannot use it"
     fi
 }
+[ "${1:-}" = again ] && say "again: a held volume opened"
 check=mode
 mode=$(cat /run/tundravm/mode 2>/dev/null || true)
 case $mode in
