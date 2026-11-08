@@ -11,6 +11,7 @@ from tundravm import Image, Kernel, Package, Profile, Service
 from tundravm._image import lower, recipe_of
 from tundravm.components import Component, Endpoint
 from tundravm.components.access import DevAccess, SshAccess
+from tundravm.components.container import Container
 from tundravm.components.network import Egress, Firewall, Network
 from tundravm.components.observability import (
     JournalExport,
@@ -504,6 +505,51 @@ def test_the_exported_rules_and_the_keep_list_leave(
 def test_a_rule_records_a_colon_name_once(build: Callable[[], object], refusal: str) -> None:
     with pytest.raises(ValidationError, match=refusal):
         build()
+
+
+APP = Service("app", ["/usr/bin/app"])
+BOX = Container("box", ["/usr/bin/box"], packages=["busybox"])
+
+
+@pytest.mark.parametrize(
+    ("selector", "promql"),
+    [
+        (lambda: APP.metrics.active, 'tundravm_unit_active{unit="app.service"}'),
+        (lambda: BOX.metrics.cpu_seconds, 'tundravm_unit_cpu_seconds_total{unit="box.service"}'),
+        (lambda: BOX.metrics.memory_bytes, 'tundravm_unit_memory_bytes{unit="box.service"}'),
+        (lambda: BOX.metrics.oom_kills, 'tundravm_unit_oom_kills_total{unit="box.service"}'),
+        (lambda: data.metrics.available, 'node_filesystem_avail_bytes{mountpoint="/persistent"}'),
+        (lambda: data.metrics.size, 'node_filesystem_size_bytes{mountpoint="/persistent"}'),
+        (
+            lambda: data.metrics.used_ratio,
+            '(1 - node_filesystem_avail_bytes{mountpoint="/persistent"}'
+            ' / node_filesystem_size_bytes{mountpoint="/persistent"})',
+        ),
+        (lambda: f"max({BOX.metrics.active})", 'max(tundravm_unit_active{unit="box.service"})'),
+        (
+            lambda: data.metrics.available.over("128Gi"),
+            'node_filesystem_avail_bytes{mountpoint="/persistent"} > bool 137438953472',
+        ),
+        (
+            lambda: BOX.metrics.memory_bytes.over("2048MiB"),
+            'tundravm_unit_memory_bytes{unit="box.service"} > bool 2147483648',
+        ),
+        (lambda: type(RecordingRule("box:up", BOX.metrics.active).expr).__name__, "str"),
+        (lambda: BOX.metrics.active.over("1Gi"), "refused: is not in bytes"),
+        (lambda: data.metrics.size.over("128GB"), "refused: not a size in binary units"),
+    ],
+)
+def test_metrics_selectors_render_promql_with_the_labels_filled_in(
+    selector: Callable[[], str], promql: str
+) -> None:
+    """A service's, a container's and a volume's ``.metrics`` are PromQL text an f-string
+    holds as it is, and a rule keeps it as plain text; ``.over`` compares a selector of
+    bytes with a binary size."""
+    if promql.startswith("refused: "):
+        with pytest.raises(ValidationError, match=promql.removeprefix("refused: ")):
+            selector()
+    else:
+        assert selector() == promql
 
 
 def test_observability_exports_logs_and_metrics_and_blocks_nothing() -> None:

@@ -26,6 +26,7 @@ from dataclasses import KW_ONLY, dataclass, replace
 from urllib.parse import urlsplit
 
 from tundravm._image._component import Component
+from tundravm._image._metrics import Selector, UnitMetrics, VolumeMetrics
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Service
 from tundravm._image._values import Egress, File, Package, TcpProbe, egress_host
@@ -46,7 +47,10 @@ __all__ = [
     "PrometheusRemoteWrite",
     "Proxy",
     "RecordingRule",
+    "Selector",
     "SigV4",
+    "UnitMetrics",
+    "VolumeMetrics",
 ]
 
 LOGS_SERVICE = "journal-export"
@@ -109,8 +113,10 @@ the TD reports, and the execution gate's mode."""
 
 IMAGE_METRICS = "image-metrics"
 """The service writing the image's identity and the system's state for the node exporter, each
-loaded service's state and CPU time among it (``tundravm_unit_active``,
-``tundravm_unit_cpu_seconds_total``): what rules derive a container's liveness and load from."""
+loaded service's state, CPU time, memory and OOM kills among it (``tundravm_unit_active``,
+``tundravm_unit_cpu_seconds_total``, ``tundravm_unit_memory_bytes``,
+``tundravm_unit_oom_kills_total``): what rules derive a container's liveness and load from,
+through its :class:`UnitMetrics`."""
 
 IMAGE_METRICS_DIRECTORY = f"/run/{IMAGE_METRICS}"
 """Its runtime directory: the node exporter's textfile collector reads it."""
@@ -425,7 +431,10 @@ class RecordingRule(Keywords):
     *record* is the new series' name, with a colon (``level:metric``) as Prometheus names
     recorded series and no exporter does, so it never shadows a raw one. *expr* is PromQL,
     checked by ``promtool check rules`` in the image at build time. A rule reads the series
-    the scrape collects and the rules declared before it.
+    the scrape collects and the rules declared before it. A service's, a container's and a
+    volume's ``.metrics`` are those series as selectors with the labels filled in
+    (:class:`UnitMetrics`, :class:`VolumeMetrics`): ``f"max({searcher.metrics.active})"``,
+    ``data.metrics.available.over("128Gi")``.
 
     *export* says whether the series leaves the guest. ``export=False`` keeps an
     intermediate series, which later rules read, inside the TEE.
@@ -452,6 +461,7 @@ class RecordingRule(Keywords):
                 f"RecordingRule {self.record}: expr {self.expr!r} is not a PromQL expression.",
                 hint="Pass the expression as text: 'min(up{job=\"node\"})'.",
             )
+        object.__setattr__(self, "expr", str(self.expr))
         if not isinstance(self.export, bool):
             raise ValidationError(
                 f"RecordingRule {self.record}: export {self.export!r} is not True or False.",

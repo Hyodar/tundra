@@ -15,6 +15,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### SDK
 
+- A `Service`'s and a `Container`'s `.metrics` (`active`, `cpu_seconds`, `memory_bytes`, `oom_kills`) and a `Volume`'s (`available`, `size`, `used_ratio`) are PromQL selectors with the unit or mount filled in, so a rule reads `f"max({searcher.metrics.active})"` with no doubled braces, and `data.metrics.available.over("128Gi")` compares bytes with a binary size. `image-metrics` writes each service's `tundravm_unit_memory_bytes` and `tundravm_unit_oom_kills_total` (its cgroup's `memory.events`).
 - **Breaking:** `Host(name, addresses, port=, aliases=)` in `Egress(hosts=)` pins a peer: the firewall accepts exactly those addresses on that port, and the name resolves to them in `/etc/hosts`, the image's or a container root's, which `Container(files=)` may no longer write; one image pins a name once and never also as `"NAME:PORT"`. `Proxy(tls_name=)` and a passthrough pin their names through the same file instead of a fragment merged at each exporter's start.
 - An argv word may be an `int` (`300`, in decimal) or `TCP(p).address` / `UDP(p).address` (`0.0.0.0:p`), so a port is typed once beside `expose=[port]`; a refused word's hint lists every kind argv takes.
 - **Breaking:** `GoBinary(source, package=)` and `CargoBinary(source, bin=, package=)` name themselves after the package path's last element (or `bin`), else the directory the source builds (`Local("signer")` is `signer`); `name=` is a keyword for a clash or an `Http` source.

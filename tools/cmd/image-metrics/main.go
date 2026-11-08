@@ -9,9 +9,11 @@
 //	tundravm_units_failed 0                                    the units in the failed state
 //	tundravm_unit_active{unit="box.service"} 1                 each loaded service, 1 while active
 //	tundravm_unit_cpu_seconds_total{unit="box.service"} 1.5    the CPU time systemd accounts to its cgroup
+//	tundravm_unit_memory_bytes{unit="box.service"} 4096        the memory its cgroup holds
+//	tundravm_unit_oom_kills_total{unit="box.service"} 0        the OOM kills in its cgroup and below (memory.events)
 //
-// The per-unit series are what recording rules derive liveness and CPU booleans from: a
-// container's processes are all in its unit's cgroup. The identity is read once, the state
+// The per-unit series are what recording rules derive liveness, CPU, memory and OOM
+// booleans from: a container's processes are all in its unit's cgroup. The identity is read once, the state
 // every interval. At start it also prints the
 // identity to the journal, one line for the image and one per RTMR:
 //
@@ -49,6 +51,7 @@ const (
 	modeFile  = "/run/tundravm/mode"
 	ccelPath  = "/sys/firmware/acpi/tables/data/CCEL"
 	tdxGuest  = "/dev/tdx_guest"
+	cgroups   = "/sys/fs/cgroup"
 
 	// _IOWR('T', 1, struct tdx_report_req): 64 bytes of report data, 1024 of TDREPORT.
 	tdxGetReport0 = 0xc4405401
@@ -86,7 +89,7 @@ func main() {
 	}
 	for {
 		state, failed := systemState()
-		if err := write(output, render(id, state, failed, serviceUnits())); err != nil {
+		if err := write(output, render(id, state, failed, serviceUnits(cgroups))); err != nil {
 			log.Fatal(err)
 		}
 		time.Sleep(*interval)
@@ -277,17 +280,21 @@ func systemState() (string, int) {
 	return state, failed
 }
 
-// unit is one loaded service as systemctl shows it; cpu is negative when unaccounted.
+// unit is one loaded service as systemctl shows it; cpu, memory and ooms are negative when
+// unaccounted.
 type unit struct {
 	name   string
 	active bool
 	cpu    float64
+	memory float64
+	ooms   int64
 }
 
-// serviceUnits is every loaded service with its state and CPU time.
-func serviceUnits() []unit {
+// serviceUnits is every loaded service with its state, CPU time, memory and OOM kills, the
+// last read from the memory.events of its cgroup under root.
+func serviceUnits(root string) []unit {
 	listed, _ := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-legend", "--plain").Output()
-	args := []string{"show", "-p", "Id,LoadState,ActiveState,CPUUsageNSec", "--"}
+	args := []string{"show", "-p", "Id,LoadState,ActiveState,CPUUsageNSec,MemoryCurrent,ControlGroup", "--"}
 	for _, line := range strings.Split(string(listed), "\n") {
 		if fields := strings.Fields(line); len(fields) > 0 && strings.HasSuffix(fields[0], ".service") {
 			args = append(args, fields[0])
@@ -297,12 +304,13 @@ func serviceUnits() []unit {
 		return nil
 	}
 	shown, _ := exec.Command("systemctl", args...).Output()
-	return parseUnits(string(shown))
+	return parseUnits(string(shown), root)
 }
 
-// parseUnits reads systemctl show's blocks of Id, LoadState, ActiveState and CPUUsageNSec,
-// keeping the loaded units.
-func parseUnits(shown string) []unit {
+// parseUnits reads systemctl show's blocks of Id, LoadState, ActiveState, CPUUsageNSec,
+// MemoryCurrent and ControlGroup, keeping the loaded units; each one's OOM kills are the
+// oom_kill of root/ControlGroup/memory.events.
+func parseUnits(shown, root string) []unit {
 	var found []unit
 	for _, block := range strings.Split(shown, "\n\n") {
 		props := map[string]string{}
@@ -314,13 +322,35 @@ func parseUnits(shown string) []unit {
 		if props["Id"] == "" || props["LoadState"] != "loaded" {
 			continue
 		}
-		u := unit{name: props["Id"], active: props["ActiveState"] == "active", cpu: -1}
+		u := unit{name: props["Id"], active: props["ActiveState"] == "active", cpu: -1, memory: -1, ooms: -1}
 		if nsec, err := strconv.ParseUint(props["CPUUsageNSec"], 10, 64); err == nil && nsec != math.MaxUint64 {
 			u.cpu = float64(nsec) / 1e9
+		}
+		if held, err := strconv.ParseUint(props["MemoryCurrent"], 10, 64); err == nil && held != math.MaxUint64 {
+			u.memory = float64(held)
+		}
+		if group := props["ControlGroup"]; strings.HasPrefix(group, "/") {
+			u.ooms = oomKills(filepath.Join(root, group, "memory.events"))
 		}
 		found = append(found, u)
 	}
 	return found
+}
+
+// oomKills is the oom_kill count of a cgroup's memory.events, -1 when it cannot be read.
+func oomKills(path string) int64 {
+	events, err := os.ReadFile(path)
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(events), "\n") {
+		if value, found := strings.CutPrefix(line, "oom_kill "); found {
+			if count, err := strconv.ParseInt(value, 10, 64); err == nil {
+				return count
+			}
+		}
+	}
+	return -1
 }
 
 // labelEscaper escapes a label value as the Prometheus text exposition format reads it:
@@ -363,6 +393,18 @@ func render(id identity, state string, failed int, units []unit) []byte {
 		for _, u := range units {
 			if u.cpu >= 0 {
 				fmt.Fprintf(&out, "tundravm_unit_cpu_seconds_total{unit=%s} %g\n", label(u.name), u.cpu)
+			}
+		}
+		gauge("tundravm_unit_memory_bytes", "The memory each service's cgroup holds.")
+		for _, u := range units {
+			if u.memory >= 0 {
+				fmt.Fprintf(&out, "tundravm_unit_memory_bytes{unit=%s} %g\n", label(u.name), u.memory)
+			}
+		}
+		fmt.Fprintf(&out, "# HELP tundravm_unit_oom_kills_total The OOM kills in each service's cgroup and below it.\n# TYPE tundravm_unit_oom_kills_total counter\n")
+		for _, u := range units {
+			if u.ooms >= 0 {
+				fmt.Fprintf(&out, "tundravm_unit_oom_kills_total{unit=%s} %d\n", label(u.name), u.ooms)
 			}
 		}
 	}

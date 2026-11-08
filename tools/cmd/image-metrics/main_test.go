@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -141,20 +143,38 @@ func TestIdentityLines(t *testing.T) {
 }
 
 func TestUnits(t *testing.T) {
-	shown := "Id=box.service\nLoadState=loaded\nActiveState=active\nCPUUsageNSec=1500000000\n\n" +
+	root := t.TempDir()
+	box := filepath.Join(root, "system.slice", "box.service")
+	if err := os.MkdirAll(box, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	events := "low 0\nhigh 0\nmax 2\noom 3\noom_kill 2\noom_group_kill 0\n"
+	if err := os.WriteFile(filepath.Join(box, "memory.events"), []byte(events), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shown := "Id=box.service\nLoadState=loaded\nActiveState=active\nCPUUsageNSec=1500000000\n" +
+		"MemoryCurrent=4096\nControlGroup=/system.slice/box.service\n\n" +
 		"Id=gone.service\nLoadState=not-found\nActiveState=inactive\nCPUUsageNSec=[not set]\n\n" +
-		"Id=web.service\nLoadState=loaded\nActiveState=failed\nCPUUsageNSec=[not set]\n"
-	text := string(render(identity{image: "fixture", digest: "unmeasured", mode: "simulated"}, "running", 0, parseUnits(shown)))
+		"Id=web.service\nLoadState=loaded\nActiveState=failed\nCPUUsageNSec=[not set]\n" +
+		"MemoryCurrent=[not set]\nControlGroup=\n"
+	text := string(render(identity{image: "fixture", digest: "unmeasured", mode: "simulated"}, "running", 0, parseUnits(shown, root)))
 	for _, line := range []string{
 		`tundravm_unit_active{unit="box.service"} 1`,
 		`tundravm_unit_active{unit="web.service"} 0`,
 		`tundravm_unit_cpu_seconds_total{unit="box.service"} 1.5`,
+		`tundravm_unit_memory_bytes{unit="box.service"} 4096`,
+		`tundravm_unit_oom_kills_total{unit="box.service"} 2`,
 	} {
 		if !strings.Contains(text, line+"\n") {
 			t.Errorf("no %q in\n%s", line, text)
 		}
 	}
-	for _, absent := range []string{"gone.service", `tundravm_unit_cpu_seconds_total{unit="web.service"}`} {
+	for _, absent := range []string{
+		"gone.service",
+		`tundravm_unit_cpu_seconds_total{unit="web.service"}`,
+		`tundravm_unit_memory_bytes{unit="web.service"}`,
+		`tundravm_unit_oom_kills_total{unit="web.service"}`,
+	} {
 		if strings.Contains(text, absent) {
 			t.Errorf("%q in\n%s", absent, text)
 		}

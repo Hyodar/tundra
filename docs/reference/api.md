@@ -387,6 +387,7 @@ A program the image runs, as its own user, in a tested sandbox.
 | `Service.bindings` | Every credential this service binds: `credentials=`, then each one its argv or `environment=` names. |
 | `Service.command() -> tuple[str, ...]` | The argv as words: a built first element becomes its installed path, an `Endpoint` its URL, a credential `${CREDENTIALS_DIRECTORY}/<name>`. |
 | `Service.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where this service answers on the loopback, with its readiness: what an ingress fronts (`upstream=app.endpoint(8080)`) or a dependent requires. It opens no port and changes no listen address. |
+| `Service.metrics` | Its unit's series as PromQL selectors, for a `RecordingRule`: `f"max({app.metrics.active})"`. |
 | `Service.packaged(name: str, *, package: str \| None = None, hardening: Sandbox = 'static', requires: Sequence[Requirement] = (), readiness: TcpProbe \| HttpProbe \| None = None, expose: Sequence[PortValue] = (), unit: DropIn \| None = None) -> Service` | The unit *name* the Debian *package* ships (default: the unit's stem), enabled and run under `hardening=`, which replaces the package's own sandbox. |
 | `Service.probe_unit` | The bounded probe unit a dependent waits for, when readiness needs one. |
 | `Service.ready` | "This service is ready": what another service's `requires=` takes. |
@@ -1253,6 +1254,7 @@ Container(
 | `Container.image` | Where the payload ships its root image. |
 | `Container.kernel() -> tuple[KernelFragment, ...]` | With a veth, what a built kernel needs for it: veth and the firewall's nat. |
 | `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there. |
+| `Container.metrics` | Its unit's series as PromQL selectors, for a `RecordingRule`: `f"max({searcher.metrics.active})"`. |
 | `Container.namespace` | The `<name>-net.service` that makes its namespace, `None` when it holds `lo` only (`PrivateNetwork=yes`). |
 | `Container.network() -> ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
 | `Container.relay(endpoint: Endpoint) -> str` | The socket in its namespace that relays *endpoint*. |
@@ -1277,7 +1279,7 @@ The container's own sshd on *port*, letting its user in with *keys* and with not
 
 ## tundravm.components.observability
 
-The export path (`image.observability`): `Observability` with `JournalExport`, `PrometheusRemoteWrite` (its `RecordingRule` values, a `SigV4` credential) and `Proxy`.
+The export path (`image.observability`): `Observability` with `JournalExport`, `PrometheusRemoteWrite` (its `RecordingRule` values, a `SigV4` credential) and `Proxy`; the `Selector` values a rule reads through a service's or a container's `UnitMetrics` and a volume's `VolumeMetrics`.
 
 ### `JournalExport`
 
@@ -1374,6 +1376,20 @@ RecordingRule(record: str, expr: str, *, export: bool = True)
 
 A series the guest computes from others: `RecordingRule("node:up", "min(up)")`.
 
+### `Selector`
+
+*class*
+
+```python
+Selector(text: str, *, in_bytes: bool = False)
+```
+
+A PromQL selector, as the text a rule's expression holds: `tundravm_unit_active{unit="searcher.service"}`.
+
+| Member | Does |
+|---|---|
+| `Selector.over(size: str) -> str` | `SELECTOR > bool BYTES`, *size* written `"128Gi"` or `"2048MiB"`. |
+
 ### `SigV4`
 
 *dataclass*
@@ -1383,6 +1399,39 @@ SigV4(region: str, secret: Secret)
 ```
 
 AWS Signature V4 for a remote-write sink such as Amazon Managed Prometheus: `credential=SigV4("us-east-2", Secret("metrics-aws"))`.
+
+### `UnitMetrics`
+
+*dataclass*
+
+```python
+UnitMetrics(unit: str)
+```
+
+What `image-metrics` writes for one unit, as selectors: a `Service`'s or a `Container`'s `.metrics`. A container's processes are all in its unit's cgroup.
+
+| Member | Does |
+|---|---|
+| `UnitMetrics.active` | `tundravm_unit_active`: 1 while the unit is active, else 0. |
+| `UnitMetrics.cpu_seconds` | `tundravm_unit_cpu_seconds_total`: the CPU time systemd accounts to the unit's cgroup, a counter (`rate(...[5m])` is its CPUs in use). |
+| `UnitMetrics.memory_bytes` | `tundravm_unit_memory_bytes`: the memory the unit's cgroup holds now. |
+| `UnitMetrics.oom_kills` | `tundravm_unit_oom_kills_total`: the processes the OOM killer took in the unit's cgroup and below it (`memory.events`), a counter. |
+
+### `VolumeMetrics`
+
+*dataclass*
+
+```python
+VolumeMetrics(mount: str)
+```
+
+What the node exporter reports for one mount, as selectors: a `Volume`'s `.metrics`.
+
+| Member | Does |
+|---|---|
+| `VolumeMetrics.available` | `node_filesystem_avail_bytes`: what the volume's filesystem has free. |
+| `VolumeMetrics.size` | `node_filesystem_size_bytes`: the volume's filesystem's size. |
+| `VolumeMetrics.used_ratio` | The share of the filesystem in use, from 0 to 1, in parentheses. |
 
 ## tundravm.storage
 
@@ -1457,6 +1506,7 @@ A persistent, encrypted volume: `Volume("data", unlock=...)`.
 | `Volume.device` | The `/dev/disk/by-id/` glob that finds the attachment on every target. |
 | `Volume.directory(name: str, *, mode: int = 0o750, group: str \| None = None) -> VolumeDirectory` | The directory *name* on this volume, for a service's (or component's) state. |
 | `Volume.manifest() -> dict[str, object]` | The volume as the runtime manifest records it. |
+| `Volume.metrics` | Its filesystem's series as PromQL selectors, for a `RecordingRule`: `data.metrics.available.over("128Gi")`. |
 | `Volume.pipe` | The FIFO an operator (or a broker client) writes the passphrase into. |
 | `Volume.ready` | "It is open, mounted, and its directories exist". |
 | `Volume.serial` | The attachment name: QEMU's `serial=`, GCP's device name, Azure's LUN link. |

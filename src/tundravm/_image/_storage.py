@@ -20,6 +20,7 @@ from tundravm.errors import ValidationError
 
 from .._keywords import Keywords
 from ._component import BootReady
+from ._metrics import VolumeMetrics
 from ._secrets import RUNTIME_DIRECTORY, BrokerKey
 
 __all__ = [
@@ -242,6 +243,12 @@ class Volume(Located):
     def ready(self) -> BootReady:
         """ "It is open, mounted, and its directories exist"."""
         return BootReady(f"runtime-init-{self.step}.service")
+
+    @property
+    def metrics(self) -> VolumeMetrics:
+        """Its filesystem's series as PromQL selectors, for a ``RecordingRule``:
+        ``data.metrics.available.over("128Gi")``."""
+        return VolumeMetrics(self.mount)
 
     def directory(
         self, name: str, *, mode: int = 0o750, group: str | None = None

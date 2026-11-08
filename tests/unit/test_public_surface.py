@@ -72,7 +72,10 @@ OBSERVABILITY = [
     "PrometheusRemoteWrite",
     "Proxy",
     "RecordingRule",
+    "Selector",
     "SigV4",
+    "UnitMetrics",
+    "VolumeMetrics",
 ]
 STORAGE = ["BrokerKey", "OperatorKey", "TpmSeal", "Volume", "VolumeDirectory"]
 SECRETS = ["Credential", "Generated", "InstanceKey", "Secret"]

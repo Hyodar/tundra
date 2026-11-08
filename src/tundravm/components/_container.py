@@ -20,6 +20,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field, replace
 
 from tundravm._image._component import Component, Endpoint, ServiceReady
+from tundravm._image._metrics import UnitMetrics
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Sandbox, Service, _sandbox
 from tundravm._image._storage import VolumeDirectory
@@ -850,3 +851,9 @@ class Container(Component):
                 f"profile {resolved.profile!r}: a container runs its program, not a shell",
             ),
         )
+
+    @property
+    def metrics(self) -> UnitMetrics:
+        """Its unit's series as PromQL selectors, for a ``RecordingRule``:
+        ``f"max({searcher.metrics.active})"``."""
+        return UnitMetrics(self.unit)

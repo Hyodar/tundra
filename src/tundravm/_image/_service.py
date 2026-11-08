@@ -33,6 +33,7 @@ from ._component import (
     ServiceRef,
     readiness_of,
 )
+from ._metrics import UnitMetrics
 from ._secrets import CREDENTIAL_REFERENCE, Secret
 from ._storage import VolumeDirectory
 from ._values import (
@@ -682,6 +683,12 @@ class Service(Located):
     def unit_name(self) -> str:
         """The ``.service`` unit this lowers to."""
         return self.name if self.name.endswith(".service") else f"{self.name}.service"
+
+    @property
+    def metrics(self) -> UnitMetrics:
+        """Its unit's series as PromQL selectors, for a ``RecordingRule``:
+        ``f"max({app.metrics.active})"``."""
+        return UnitMetrics(self.unit_name)
 
     # The export a caller references.
     @property
