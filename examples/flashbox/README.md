@@ -62,10 +62,10 @@ $ ssh -o UserKnownHostsFile=.tundravm/instances/flashbox-1/known_hosts searcher@
 $ ssh -o UserKnownHostsFile=.tundravm/instances/flashbox-1/known_hosts -p 10022 bob@HOST
 ```
 
-From a checkout of this repository, run each command as `uv run --project ../.. tundravm`.
-A bare `uv run` takes this directory's `pyproject.toml`, which only names the image file,
-for a project of its own, and finds no `tundravm` in it. `deploy` names the instance after
-the image, `flashbox-1` for the first, and `POLICY` is the build's `measurements.json`.
+This directory is a uv project that depends on the checkout around it, so `uv run tundravm`
+runs that tundravm, and the block leaves out `uv run` as [How do I](../../docs/howto.md)
+does. `deploy` names the instance after the image, `flashbox-1` for the first, and `POLICY`
+is the build's `measurements.json`.
 
 The searcher attests first, so its key owns the volume and logs in both as `searcher`,
 whose menu offers `status`, `logs N` (the delayed copy), `toggle` and `reboot`, and as
