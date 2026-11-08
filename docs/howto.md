@@ -153,12 +153,10 @@ ssh = SshAccess(login=Login(
 ))
 ```
 
-Pass both in `components=`. `ssh tenant@HOST` lists the menu and `ssh tenant@HOST logs 50`
-runs one command. A `Command` runs as the login and a `Sudo` as root, while `firewall.switch`
-is the command the firewall hands out for its modes. `modes=["maintenance"]` offers a command
-in that mode only, and `dev=True` keeps `shell` out of production builds. The account has no
-password, no shell and no forwarding. With `owner=True` it takes the key `attest` hands over,
-in place of root, and `keys=` takes baked keys or a `Secret` instead.
+Pass both in `components=`. `ssh tenant@HOST` lists the menu, and `ssh tenant@HOST logs 50`
+runs one command. A `Command` runs as the login, a `Sudo` as root. `modes=["maintenance"]`
+limits a command to that mode, and `dev=True` keeps `shell` out of production builds.
+`owner=True` gives the account the key `attest` hands over.
 
 ## Run a container
 
