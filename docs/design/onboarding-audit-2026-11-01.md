@@ -327,5 +327,5 @@ or a Go from go.dev/dl, and neither `doctor` nor the README names the package.
 
 19. The documented `@v2.0.0` does not exist: cutting the release (`docs/release.md`) fixes
     the install line and `--version` (S; a release step).
-20. The build needs a host `go` 1.21+ to prefetch Go sources; fetching the Go toolchain
-    without one would make `golang` optional (M; `_source.py`).
+20. ~~The build needs a host `go` 1.21+ to prefetch Go sources; fetching the Go toolchain
+    without one would make `golang` optional (M; `_source.py`).~~ (done: go-toolchain-optional)

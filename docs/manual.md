@@ -448,9 +448,9 @@ without network. A modified checkout is `E_SOURCE`; `build --clean-cache` starts
 the workspace afresh. The manifest records each source's toolchain; `show BUILD` prints it.
 
 A Go source builds with the toolchain its `go.mod` names (the `toolchain` line, else the
-`go` line: `go 1.22` is `go1.22.0`), fetched with the modules by the host's `go` 1.21+;
-Debian's `golang` only bootstraps it. A release the host cannot fetch is `E_SOURCE`; a
-`go.mod` older than 1.21 builds with Debian's `go`.
+`go` line: `go 1.22` is `go1.22.0`), fetched with the modules by the host's `go` 1.21+
+or, without one, by tundravm, checked against sum.golang.org. An unfetchable release is
+`E_SOURCE`; a `go.mod` older than 1.21 builds with Debian's `go`.
 
 A Cargo source builds with the channel its `rust-toolchain.toml` (or `rust-toolchain`)
 pins, installed into the workspace by the host's `rustup`; its `cargo` fetches the crates,
