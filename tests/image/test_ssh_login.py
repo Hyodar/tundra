@@ -209,6 +209,23 @@ def test_the_owners_key_goes_to_the_owner_login_and_root_takes_none_without_aski
             ),
             ["/usr/bin/x ^[a-z][a-z.-]*$"],
         ),
+        (
+            Command(
+                params=[FOLLOW, MODE],
+                runs=["/usr/bin/x", "{{mode}}", "{{#follow}}-f{{/follow}}", "--to={{mode}}"],
+                sudo=True,
+            ),
+            ["/usr/bin/x a -f --to\\=a", "/usr/bin/x a --to\\=a"]
+            + ["/usr/bin/x b -f --to\\=b", "/usr/bin/x b --to\\=b"],
+        ),
+        (
+            Command(
+                params=[FOLLOW],
+                runs=["/usr/bin/x", "{{#follow}}-f{{/follow}}", "{{#follow}}-v{{/follow}}"],
+                sudo=True,
+            ),
+            ["/usr/bin/x -f -v", '/usr/bin/x ""'],
+        ),
         (Command(runs=["/usr/bin/x"], modes=["maintenance"], sudo=True), ['/usr/bin/x ""']),
         (Command(runs=["/usr/bin/x"]), []),
     ],
@@ -540,6 +557,10 @@ def _choices(count: int) -> CommandParam:
                 sudo=True,
             ),
             "login-sudo-lines",
+        ),
+        (
+            lambda: Command(params=[LINES], runs=["/x", "{{lines}}", "{{lines}}"], sudo=True),
+            "names {{lines}} twice",
         ),
         (lambda: CommandParam("n", type=int), "takes min= and max="),
         (lambda: CommandParam("n", type=int, min=9, max=1), "min first"),

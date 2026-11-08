@@ -1091,7 +1091,7 @@ A command of a `Login`, as an argparse subparser: `Command(params=[CommandParam(
 | `Command.notes(root: bool) -> list[str]` | What the listing says beside its help: `as root`, `maintenance only`. |
 | `Command.payload(name: str, profiles: Sequence[str]) -> dict[str, object]` | What `show --json` says of it, *profiles* the ones it exists in. |
 | `Command.shown() -> str` | The argv as the help's `runs:` line prints it: `<lines>` for a value, `[-f]` for a flag's word, `(as root)` after a root command's. |
-| `Command.sudoers() -> list[str]` | The sudoers commands admitting every argv it can produce: each flag given and not, one line per choice value, a type's pattern where it has one (then the line is one anchored regular expression over the arguments). |
+| `Command.sudoers() -> list[str]` | The sudoers commands admitting every argv it can produce: each flag given and not, one line per choice value, a param one value in every word that names it, a type's pattern where it has one (then the line is one anchored regular expression over the arguments). |
 | `Command.usage(name: str) -> str` | The command as the client types it: `logs [--lines N] [--follow]`. |
 
 ### `CommandParam`

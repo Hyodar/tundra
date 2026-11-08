@@ -10,6 +10,7 @@ of a ``sudo=True`` command are every argv it can produce (:meth:`Command.sudoers
 from __future__ import annotations
 
 import builtins
+import itertools
 import json
 import re
 from abc import ABC, abstractmethod
@@ -465,10 +466,10 @@ class Command:
     ``{{name}}`` names a param (``login-param-unused``, ``login-param-unknown``).
     *sudo* runs it as root through ``sudo -n``, which ``/etc/sudoers.d/<login>`` admits for
     exactly the argvs it can produce: each flag given and not, one line per choice, a
-    type's pattern for any other value, at most 64 lines (``login-sudo-lines``). *modes*
-    offers it in those ``Firewall(modes=)`` modes only; *dev* makes it exist in
-    development builds only, the profiles whose ``production=`` is ``False``. *help* is
-    its line in the listing.
+    type's pattern for any other value (named once), at most 64 lines
+    (``login-sudo-lines``). *modes* offers it in those ``Firewall(modes=)`` modes only;
+    *dev* makes it exist in development builds only, the profiles whose ``production=`` is
+    ``False``. *help* is its line in the listing.
     """
 
     params: tuple[CommandParam, ...]
@@ -648,8 +649,9 @@ class Command:
         patterned = any(
             params[name].type.pattern() is not None for word in self.words for name in word.names
         )
+        named = [n for w in self.words for n in w.names]
         for at, word in enumerate(self.words):
-            literal = "".join(text for named, text in word.parts if not named)
+            literal = "".join(text for is_name, text in word.parts if not is_name)
             refused = "".join(sorted(_SUDO_REFUSED & set(literal)))
             if refused:
                 raise ValidationError(
@@ -666,6 +668,12 @@ class Command:
             for name in word.names:
                 kind = params[name].type
                 pattern = kind.pattern()
+                if pattern is not None and named.count(name) > 1:
+                    raise ValidationError(
+                        f"{where}: runs= names {{{{{name}}}}} twice, and a sudoers pattern cannot "
+                        "say both are the same value, so the line would admit two different ones.",
+                        hint=f"Name {{{{{name}}}}} once in a root command's runs=.",
+                    )
                 if pattern is None and not isinstance(kind, _Choices):
                     raise ValidationError(
                         f"{where}: {params[name].name}'s type {params[name].kind} has no "
@@ -690,42 +698,50 @@ class Command:
 
     def sudoers(self) -> list[str]:
         """The sudoers commands admitting every argv it can produce: each flag given and not,
-        one line per choice value, a type's pattern where it has one (then the line is one
-        anchored regular expression over the arguments)."""
+        one line per choice value, a param one value in every word that names it, a type's
+        pattern where it has one (then the line is one anchored regular expression over the
+        arguments)."""
         params = {p.dest: p for p in self.params}
-        lines: list[list[tuple[bool, str]]] = [[]]
-        for word in self.words:
-            if word.flag is not None:
-                text = word.parts[0][1]
-                lines = [option for line in lines for option in ([*line, (False, text)], line)]
-                continue
-            spelled: list[list[tuple[bool, str]]] = [[]]
-            for named, text in word.parts:
-                if not named:
-                    spelled = [[*s, (False, text)] for s in spelled]
+        spelled = {n: v for n in self._named() if (v := _spelled(params[n])) is not None}
+        lines: list[list[tuple[bool, str]]] = []
+        for values in itertools.product(*spelled.values()):
+            given = dict(zip(spelled, values, strict=True))
+            line: list[tuple[bool, str]] = []
+            for word in self.words:
+                if word.flag is not None:
+                    if given[word.flag]:
+                        line.append((False, word.parts[0][1]))
                     continue
-                kind = params[text].type
-                if isinstance(kind, _Choices):
-                    spelled = [[*s, (False, v)] for s in spelled for v in kind.values]
-                else:
-                    core = (kind.pattern() or "^$")[1:-1]
-                    core = f"({core})" if "|" in core else core
-                    spelled = [[*s, (True, core)] for s in spelled]
-            lines = [[*line, _joined(s)] for line in lines for s in spelled]
+                parts: list[tuple[bool, str]] = []
+                for named, text in word.parts:
+                    if not named:
+                        parts.append((False, text))
+                    elif text in given:
+                        parts.append((False, str(given[text])))
+                    else:
+                        core = (params[text].type.pattern() or "^$")[1:-1]
+                        parts.append((True, f"({core})" if "|" in core else core))
+                line.append(_joined(parts))
+            lines.append(line)
         found = []
         for line in lines:
             path, rest = line[0][1], line[1:]
             if any(pattern for pattern, _ in rest):
-                parts = [
+                spelt = [
                     text if pattern else re.sub(r"([.+])", r"[\1]", text) for pattern, text in rest
                 ]
-                found.append(f"{_sudo_word(path)} ^{' '.join(parts)}$")
+                found.append(f"{_sudo_word(path)} ^{' '.join(spelt)}$")
                 continue
             words = [_sudo_word(text) for _, text in line]
             if rest and words[1].startswith("^"):
                 words[1] = f"\\{words[1]}"
             found.append(" ".join(words if rest else [*words, '""']))
         return found
+
+    def _named(self) -> list[str]:
+        """The params *runs* names, in the order it first names each."""
+        found = [n for w in self.words for n in (*w.names, *([w.flag] if w.flag else []))]
+        return list(dict.fromkeys(found))
 
     def usage(self, name: str) -> str:
         """The command as the client types it: ``logs [--lines N] [--follow]``."""
@@ -770,6 +786,14 @@ class Command:
             "modes": list(self.modes),
             "profiles": list(profiles),
         }
+
+
+def _spelled(param: CommandParam) -> tuple[bool, ...] | tuple[str, ...] | None:
+    """What the sudoers lines spell *param* as, one line each: a flag given and not, each
+    choice; ``None`` for a value its type's pattern admits."""
+    if param.flag:
+        return (True, False)
+    return param.type.values if isinstance(param.type, _Choices) else None
 
 
 def _sudo_word(text: str) -> str:
