@@ -143,11 +143,14 @@ receipt, and a lost key means a new volume.
 
 On TDX the endpoint takes an SSH key, root's or a `Login`'s, only from an owner that the
 encrypted copy confirmed during this boot, so unlock first and then attest again. An image
-without an `OperatorKey` volume takes no key there. A `Login` reaches only its menu or its
-shell, plus one exact sudoers line for each root command, and with `Login(owner=True)` the
-owner's key logs in as that login while root never takes it. A menu gets no terminal in
-production, behind two locks: `PermitTTY no` and `restrict`-only keys. Only a development
-build of a login with `dev=True` commands lifts both (`PermitTTY yes`, `restrict,pty`).
+without an `OperatorKey` volume takes no key there, and with `Login(owner=True)` the
+owner's key logs in as that login while root never takes it.
+
+A `Login` reaches only its shell or the program compiled from its commands, which parses the
+client's words and execs one declared argv, never through an interpreter or shell, and its
+sudoers lines admit exactly the argvs a root command can produce. In production the program
+gets no terminal, behind `PermitTTY no` and `restrict` keys, locks only a development
+build with `dev=True` commands lifts (`PermitTTY yes`, `restrict,pty`).
 
 | Issuer | First contact proves | It does not prove |
 |---|---|---|

@@ -140,26 +140,21 @@ key's signature, so a lost key means a new volume.
 
 <!-- fragment -->
 ```python
-firewall = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])})
-ssh = SshAccess(login=Login(
-    "tenant",
-    owner=True,
-    commands={
-        "status": Command(runs=["/usr/bin/app-status"]),
-        "logs": Command(
-            params=[CommandParam("lines", type=int, min=1, max=1000)],
-            runs=["/usr/bin/journalctl", "-u", "app", "-n", "{{lines}}"],
-            sudo=True,
-        ),
-        "toggle": firewall.commands.switch,
-        "shell": Command(runs=["/usr/bin/bash"], dev=True),
-    },
-))
+ssh = SshAccess(login=Login("tenant", owner=True, commands={
+    "logs": Command(
+        params=[
+            CommandParam("--lines", type=int, min=1, max=10000, default=200, help="lines from the end"),
+            CommandParam("--follow", type=bool, help="keep printing as the file grows"),
+        ],
+        runs=["/usr/bin/tail", "--lines", "{{lines}}", "{{#follow}}-f{{/follow}}", "/var/log/app.log"],
+        help="the app's output",
+    ),
+}))
 ```
 
-Pass both in `components=`. `ssh tenant@HOST` lists the commands, `logs 50` runs one as
-root and `logs --help` says what it takes. `dev=True` keeps `shell` out of production
-builds, and `owner=True` gives the account the key `attest` hands over.
+`ssh tenant@HOST` lists the commands, `logs --lines 500 --follow` runs one and `logs --help`
+prints its params. `sudo=True` runs a command as root, `dev=True` keeps one out of
+production, and `owner=True` gives the login the key `attest` hands over.
 
 ## Run a container
 

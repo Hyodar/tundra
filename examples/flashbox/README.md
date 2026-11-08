@@ -19,7 +19,7 @@ attested node's `nethermind.py` and `lighthouse.py` are linked there file by fil
 | flashbots-images | tundravm |
 |---|---|
 | podman, `init-container.sh` | `Searcher(...)`, which composes `Container("bob", ssh=, expose=, egress=, modes=, binds=)` |
-| `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `Mode(ingress=[searcher.ssh])`, `firewall.commands.switch` as the menu's `toggle` |
+| `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `Mode(ingress=[searcher.ssh])`, `firewall.commands.switch` as the login's `toggle` |
 | `searchersh.c`, `99-searcher`, dropbear | `Login("searcher", owner=True, commands={...})`: `Command(...)` as the login, `Command(..., sudo=True)` as root, `dev=True` in development builds only |
 | tdx-init, `persistent-mount.service` | `Volume("data", unlock=OperatorKey())` |
 | `lighthouse.service`, `lighthouse_logs` | `Lighthouse(disable_quic=, logs=, ...)`, `Generated("jwt")`, `Searcher(logs_from=)` |
@@ -41,7 +41,7 @@ the searcher reads its RPC at `127.0.0.1:8545`.
 - `stopped`, and a cooldown on the host's clock: the image boots into production, and a
   window closes after 30 minutes of boot time.
 - `initialize`: the passphrase goes by `secrets unlock` over the attested endpoint.
-- Root logins, and port 22 in a mode: the menu answers on 22 in every mode, and only the
+- Root logins, and port 22 in a mode: the login answers on 22 in every mode, and only the
   container's 10022 opens and closes.
 - `CONFIG_IPV6=n`: the firewall is one `inet` table, which needs IPv6.
 - A sandbox of the searcher's choosing: the container's sshd runs under tundravm's, so
@@ -69,8 +69,8 @@ does. `deploy` names the instance after the image, `flashbox-1` for the first, a
 is the build's `measurements.json`.
 
 The searcher attests first, so its key owns the volume and logs in both as `searcher`,
-whose menu offers `status`, `logs N` (the delayed copy), `toggle` and `reboot`, and as
-`bob` inside the container. `attest` pins both host keys in the instance's `known_hosts`,
+whose program runs `status`, `logs --lines 500` (the delayed copy), `toggle` and
+`reboot`, and as `bob` inside the container. `attest` pins both host keys in the instance's `known_hosts`,
 so neither login asks to trust a key on first use. CI boots the dev profile and drives it
 this way (`.github/workflows/flashbox.yml`).
 
