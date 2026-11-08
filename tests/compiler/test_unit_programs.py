@@ -90,10 +90,18 @@ def _builds(directory: Path) -> dict[str, str | None]:
 
 
 def _profiles(payload: Path) -> dict[str, list[Path]]:
-    """Each profile of *payload*, as the directories it is made of, the payload's first."""
-    views = {"default": [payload]}
+    """Each profile of *payload*, as the directories it is made of, the payload's first: the
+    default one with the overlay a ``mkosi.conf.d`` file includes for it."""
+    own = [
+        payload / line.removeprefix("Include=")
+        for conf in sorted(payload.glob("mkosi.conf.d/*.conf"))
+        for line in conf.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Include=mkosi.profiles/")
+    ]
+    views = {"default": [payload, *own]}
     for profile in sorted((payload / "mkosi.profiles").glob("*")):
-        views[profile.name] = [payload, profile]
+        if profile not in own:
+            views[profile.name] = [payload, profile]
     return views
 
 

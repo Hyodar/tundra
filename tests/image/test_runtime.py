@@ -13,11 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from tundravm import File, Image, Kernel, RootFS, Service
+from tundravm import File, Image, Kernel, Profile, RootFS, Service
 from tundravm._image import lower, recipe_of
 from tundravm._image._values import MANAGEMENT_PORT
 from tundravm.components import Endpoint
+from tundravm.components.access import DevAccess
+from tundravm.components.container import Container, ContainerSsh
 from tundravm.components.network import Egress, Network
+from tundravm.components.observability import Observability, PrometheusRemoteWrite, SigV4
 from tundravm.declarative import Disk, Key, Secrets
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, TLS, AttestedTLS
@@ -32,6 +35,7 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 data = Volume("data", mount="/persistent", unlock=OperatorKey())
 token = Secret("api-token")
 flags = Secret("flags", required=False)
+URL = "https://metrics.example/api/v1/write"
 
 
 def app(**changes: object) -> Service:
@@ -308,6 +312,58 @@ def test_the_image_collects_the_volumes_and_secrets_its_services_bind() -> None:
 
 
 # ── Secrets ─────────────────────────────────────────────────────────────
+
+
+def _flashbox(url: str | None) -> Image:
+    """flashbox's shape: a container's sshd keys, a remote-write credential, a service's
+    secret, ``dev=``, a development profile, one adding a reader and one removing one."""
+    feed = Secret("feed")
+    reader = Service("reader", ["/usr/bin/reader", feed])
+    keys = ContainerSsh(port=10022, keys=Secret("keys"))
+    searcher = Container("searcher", packages=["socat"], ssh=keys)
+    metrics = PrometheusRemoteWrite(
+        url=url, credential=SigV4("us-east-2", Secret("metrics-aws")), export="health"
+    )
+    return Image(
+        "flashbox",
+        components=[searcher],
+        services=[reader],
+        observability=Observability(metrics=metrics),
+        dev=DevAccess(password="tdx"),
+        profiles={
+            "bench": Profile(production=False),
+            "staging": Profile(add=[Service("api", ["/usr/bin/api", token])]),
+            "lean": Profile(changes=[reader.ref.remove()]),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "url", "reads"),
+    [
+        ("production", URL, ["feed", "metrics-aws", "keys"]),
+        ("dev", URL, ["feed", "keys"]),
+        ("bench", URL, ["feed", "keys"]),
+        ("staging", URL, ["feed", "metrics-aws", "api-token", "keys"]),
+        ("lean", URL, ["metrics-aws", "keys"]),
+        ("production", None, ["feed", "keys"]),
+    ],
+    ids=["production", "dev", "development", "adds", "removes", "unread"],
+)
+def test_a_profile_waits_only_for_the_secrets_its_units_read(
+    profile: str, url: str | None, reads: list[str]
+) -> None:
+    planned = plan(_flashbox(url), profile)
+    manifest = json.loads(planned.file("/etc/tundravm/runtime.json").text)
+    delivery = json.loads(planned.file("/etc/tdx/secrets.json").text)
+    waits = sorted(
+        path.removeprefix("/usr/lib/systemd/system/credential-").removesuffix(".service")
+        for path in planned.files
+        if path.startswith("/usr/lib/systemd/system/credential-")
+    )
+    assert [s["name"] for s in manifest["secrets"]] == reads
+    assert [s["name"] for s in delivery["secrets"]] == sorted(reads)
+    assert waits == sorted(reads)
 
 
 def test_a_secret_is_a_credential_the_service_waits_for(planned: PlannedImage) -> None:

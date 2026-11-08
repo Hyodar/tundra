@@ -26,6 +26,9 @@ values become the declarations the tools and systemd already understand:
   reads as credentials and the endpoint's quotes bind;
 - a ``Login(keys=Secret(...))`` adds that secret, which the endpoint also writes to the
   login's ``authorized_keys.d`` file, on TDX from a confirmed owner only;
+- each profile's endpoint takes, and its boot waits for, only the secrets its own units read
+  (:func:`reads`), so a development profile whose observability stays in the guest never
+  waits for the export's credential;
 - ``/etc/tundravm/runtime.json`` records all of it for the tools that deliver.
 
 Nothing here writes a secret or a key into the image.
@@ -68,6 +71,7 @@ __all__ = [
     "CONTROL_PLANE",
     "RUNTIME_FRAGMENT",
     "RUNTIME_MANIFEST",
+    "Reads",
     "Runtime",
     "RuntimeFragment",
     "bound",
@@ -75,6 +79,7 @@ __all__ = [
     "check_owner_login",
     "container_ports",
     "key_files",
+    "reads",
     "services_of",
 ]
 
@@ -233,6 +238,38 @@ def bound(image: object) -> tuple[tuple[Volume, ...], tuple[Secret, ...]]:
     return tuple(volumes.values()), tuple(secrets.values())
 
 
+@dataclass(frozen=True, slots=True)
+class Reads:
+    """What one profile's units read of the image's secrets: the secrets, in the image's
+    order, and the services that bind them."""
+
+    secrets: tuple[Secret, ...] = ()
+    services: tuple[Service, ...] = ()
+
+
+def reads(image: object, items: Iterable[object], services: Iterable[Service]) -> Reads:
+    """The secrets of ``image.secrets`` one profile reads: what its *services* bind, the keys
+    a ``Login`` or a container's sshd among its *items* takes, and each ``TLS``
+    certificate. A secret nothing there reads stays out: the profile's endpoint does not
+    take it and its boot does not wait for it."""
+    from ._image import Image
+
+    assert isinstance(image, Image)
+    items, services = tuple(items), tuple(services)
+    names = {secret.name for service in services for secret in service.secrets}
+    names.update(login.keys.name for login in _logins(items) if isinstance(login.keys, Secret))
+    names.update(
+        container.ssh.keys.name
+        for container in _containers(items)
+        if container.ssh is not None and isinstance(container.ssh.keys, Secret)
+    )
+    names.update(way.certificate.name for way in image.ingress if isinstance(way, TLS))
+    return Reads(
+        tuple(secret for secret in image.secrets if secret.name in names),
+        tuple(service for service in services if service.secrets),
+    )
+
+
 def check_bindings(image: object) -> None:
     """Every shared directory says who shares it, and no service exposes what an ingress
     fronts."""
@@ -278,6 +315,7 @@ class Runtime:
 
     volumes: tuple[Volume, ...]
     secrets: tuple[Secret, ...]
+    """Every secret some profile reads: with one, every profile runs the endpoint."""
     ingress: tuple[AttestedTLS | TLS, ...]
     services: tuple[Service, ...]
     tools: dm.Git | dm.Local
@@ -295,6 +333,9 @@ class Runtime:
     """The firewall has modes, which an operator switches over the attested endpoint."""
     azure: bool = False
     """The image targets Azure: each volume is the data disk at its LUN, its position."""
+    read: Reads = Reads()
+    """What the image's own profile reads, which its endpoint takes, its boot waits for and
+    its manifest records; every other profile edits them to its own (:meth:`changes`)."""
 
     @property
     def owner_login(self) -> str | None:
@@ -422,7 +463,7 @@ class Runtime:
         for way in self.ingress:
             found.extend(self.relay(way))
         if self.volumes or self.secrets or self.ingress:
-            found.append(dm.File(RUNTIME_MANIFEST, self.manifest()))
+            found.append(dm.File(RUNTIME_MANIFEST, self.manifest(self.read)))
         return tuple(found)
 
     def volume(self, volume: Volume) -> Iterator[dm.Declaration]:
@@ -476,20 +517,9 @@ class Runtime:
         has none, so the boot completes without it."""
         from tundravm.components.access import SshAccess
 
-        entries = tuple(
-            dm.Secret(
-                secret.name,
-                (
-                    dm.SecretFile(secret.location, mode=0o600),
-                    *(dm.SecretFile(p, mode=0o644) for s, p in self.key_files if s == secret.name),
-                ),
-                required=secret.required,
-            )
-            for secret in self.secrets
-        )
         yield dm.Secrets(
             CONTROL_PLANE,
-            entries=entries,
+            entries=self.entries(self.read.secrets),
             port=MANAGEMENT_PORT,
             ssh_directory="/root/.ssh" if self.root_delivery else None,
             ssh_key_path=None,
@@ -501,14 +531,52 @@ class Runtime:
             yield dataclasses.replace(self.ssh, from_delivery=self.root_delivery)
         else:
             yield SshAccess(from_delivery=True)
-        for secret in self.secrets:
-            if not secret.required:
-                continue
-            yield _wait(
-                secret.ready.unit,
-                f"Wait for secret {secret.name}",
-                f"until [ -e {shlex.quote(secret.location)} ]; do sleep 1; done",
+        yield from self.waits_for(self.read.secrets)
+
+    def entries(self, secrets: Iterable[Secret]) -> tuple[dm.Secret, ...]:
+        """The endpoint's entry of each of *secrets*: its credential file, and the
+        ``authorized_keys`` files of the logins and containers it is the keys of."""
+        return tuple(
+            dm.Secret(
+                secret.name,
+                (
+                    dm.SecretFile(secret.location, mode=0o600),
+                    *(dm.SecretFile(p, mode=0o644) for s, p in self.key_files if s == secret.name),
+                ),
+                required=secret.required,
             )
+            for secret in secrets
+        )
+
+    def waits_for(self, secrets: Iterable[Secret]) -> Iterator[dm.Task]:
+        """The boot unit of each required one of *secrets*, which finishes once it arrived."""
+        for secret in secrets:
+            if secret.required:
+                yield _wait(
+                    secret.ready.unit,
+                    f"Wait for secret {secret.name}",
+                    f"until [ -e {shlex.quote(secret.location)} ]; do sleep 1; done",
+                )
+
+    def changes(
+        self, parent: Reads, own: Reads
+    ) -> tuple[tuple[dm.Edit | dm.Remove, ...], tuple[dm.Task, ...]]:
+        """What turns a profile's runtime from the one that reads *parent* into the one that
+        reads *own*: the edits of the endpoint's entries and of the manifest, the removal
+        of each wait it no longer needs, and the waits it adds."""
+        if not self.control_plane or parent == own:
+            return (), ()
+        found: list[dm.Edit | dm.Remove] = []
+        entries = self.entries(own.secrets)
+        if entries != self.entries(parent.secrets):
+            found.append(dm.Secrets.ref(CONTROL_PLANE).edit(entries=entries))
+        manifest = self.manifest(own)
+        if manifest != self.manifest(parent):
+            found.append(dm.File.ref(RUNTIME_MANIFEST).edit(content=manifest))
+        before = {task.name: task for task in self.waits_for(parent.secrets)}
+        after = {task.name: task for task in self.waits_for(own.secrets)}
+        found.extend(task.ref.remove() for name, task in before.items() if name not in after)
+        return tuple(found), tuple(task for name, task in after.items() if name not in before)
 
     def relay(self, way: AttestedTLS | TLS) -> Iterator[dm.Declaration]:
         """The TLS listener relaying *way*'s port to its upstream, started once the
@@ -568,10 +636,10 @@ class Runtime:
             hardening=hardening,
         )
 
-    def manifest(self) -> str:
-        """``/etc/tundravm/runtime.json``."""
+    def manifest(self, read: Reads) -> str:
+        """``/etc/tundravm/runtime.json`` of the profile that reads *read*."""
         bound: dict[str, list[str]] = {}
-        for service in self.services:
+        for service in read.services:
             for secret in service.secrets:
                 bound.setdefault(secret.name, []).append(service.unit_name)
         for way in self.ingress:
@@ -585,7 +653,7 @@ class Runtime:
                 "source": None if secret.source is None else secret.source.manifest(),
                 "units": sorted(set(bound.get(secret.name, []))),
             }
-            for secret in self.secrets
+            for secret in read.secrets
         ]
         volumes = []
         for lun, volume in enumerate(self.volumes):

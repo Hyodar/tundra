@@ -170,9 +170,13 @@ class Build:
         return self.path / ARTIFACT_NAMES[cast(OutputTarget, target)]
 
     def runtime(self) -> dict[str, Any]:
-        """``/etc/tundravm/runtime.json`` of the build's tree: its volumes, secrets and
-        management port (empty when the image declares none)."""
-        found = list((self.path / mf.TREE).glob("**/mkosi.extra/etc/tundravm/runtime.json"))
+        """``/etc/tundravm/runtime.json`` of the build's profile: its volumes, the secrets it
+        reads and the management port (empty when the image declares none). The profile's
+        overlay holds its own when it reads other secrets than the shared payload's."""
+        tree, path = self.path / mf.TREE, "mkosi.extra/etc/tundravm/runtime.json"
+        found = list(tree.glob(f"**/mkosi.profiles/{self.profile}/{path}")) or [
+            item for item in tree.glob(f"**/{path}") if "mkosi.profiles" not in item.parts
+        ]
         if not found:
             return {}
         payload = json.loads(sorted(found)[0].read_text(encoding="utf-8"))

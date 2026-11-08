@@ -231,7 +231,8 @@ class Image(Located):
     volumes: tuple[Volume, ...] = field(init=False, default=())
     """Every volume a service's ``state=`` sits on, in order of first use."""
     secrets: tuple[Secret, ...] = field(init=False, default=())
-    """Every secret a service binds or a ``TLS`` ingress takes, in order of first use."""
+    """Every secret a service binds or a ``TLS`` ingress takes, in order of first use, in
+    any profile; each profile's boot waits only for the ones its units read."""
 
     def __post_init__(self) -> None:
         for name in (

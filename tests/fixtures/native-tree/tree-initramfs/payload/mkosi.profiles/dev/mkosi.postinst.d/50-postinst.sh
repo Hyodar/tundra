@@ -47,4 +47,6 @@ ln -sf "/etc/systemd/system/go-probe.service" "$BUILDROOT/etc/systemd/system/min
 ln -sf "/etc/systemd/system/rust-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 mkosi-chroot promtool check rules /etc/tundravm/metrics-rules.yml
+rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
+
 mkosi-chroot systemctl mask systemd-journal-upload.service prometheus.service

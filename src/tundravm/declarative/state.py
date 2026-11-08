@@ -196,10 +196,11 @@ class StateBuilder:
             ]
             profile.hooks = [h for h in profile.hooks if not _is_strip_hook(h)]
 
-    def root_size(self, size: str) -> None:
-        """Cap the default profile's initramfs root tmpfs at *size*: ``systemd-remount-fs``
-        remounts ``/`` with the options ``/etc/fstab`` gives it."""
-        profile = self.state.ensure_profile(self.state.default_profile)
+    def root_size(self, name: str, size: str) -> None:
+        """Cap profile *name*'s initramfs root tmpfs at *size*: ``systemd-remount-fs``
+        remounts ``/`` with the options ``/etc/fstab`` gives it; the profiles extending it
+        inherit it."""
+        profile = self.state.ensure_profile(name)
         _add_file(profile, "/etc/fstab", ROOT_FSTAB.format(size=size))
 
     def extending(self, name: str) -> None:

@@ -37,6 +37,42 @@ UMask=0077
 
 [Install]
 WantedBy=minimal.target
+== production/mkosi.extra/usr/lib/systemd/system/credential-key.service
+[Unit]
+Description=Wait for secret key
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c "until [ -e /run/tundravm/credentials/key ]; do sleep 1; done"
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@setuid
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=minimal.target
 == production/mkosi.extra/usr/lib/systemd/system/tick.service
 [Unit]
 Description=tick.service
@@ -176,11 +212,13 @@ mkosi-chroot systemctl enable api.service
 mkosi-chroot systemctl enable tick.timer
 mkosi-chroot systemctl enable web.service
 mkosi-chroot systemctl enable web-ready.service
+mkosi-chroot systemctl enable credential-key.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/api.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/tick.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/web-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/etc/systemd/system/credential-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 == staging/mkosi.conf
 [Output]
 ImageId=%i-staging
@@ -213,3 +251,36 @@ table inet filter {
 		ip6 daddr fd20:ce::254 drop comment "cloud metadata"
 	}
 }
+== staging/mkosi.extra/etc/tdx/secrets.json
+{
+  "host": "0.0.0.0",
+  "method": "http_post",
+  "port": 8745,
+  "secrets": []
+}
+== staging/mkosi.extra/etc/tdx/secrets.yaml
+listen: "0.0.0.0:8745"
+quote_socket: "/var/tdxs.sock"
+ssh_host_keys: "/etc/ssh/ssh_host_*_key.pub"
+instance_key: "/run/tundravm/instance-key.pub"
+mode_file: "/run/tundravm/mode"
+ssh:
+  dir: "/root/.ssh"
+credentials: []
+volumes: []
+attested_tls: []
+== staging/mkosi.extra/etc/tundravm/runtime.json
+{
+  "control_plane": "attested endpoint: TLS bound to the quote",
+  "ingress": [],
+  "management_port": 8745,
+  "rootfs": "initramfs",
+  "schema": 1,
+  "secrets": [],
+  "volumes": []
+}
+== staging/mkosi.extra/usr/lib/runtime-init/secrets
+#!/bin/bash
+set -euo pipefail
+
+# secrets: nothing required arrives through the attested endpoint

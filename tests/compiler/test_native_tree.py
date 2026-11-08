@@ -202,12 +202,15 @@ def test_tree_has_the_native_shape() -> None:
         "payload/mkosi.conf.d/50-tundravm-runtime.conf",
         "payload/mkosi.conf.d/60-firewall.conf",
         "payload/mkosi.conf.d/70-cloud-glue.conf",
+        "payload/mkosi.conf.d/99-production.conf",
         "payload/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.postinst.d/50-postinst.sh",
         "payload/mkosi.profiles/dev/mkosi.build.d/50-build.sh",
         "payload/mkosi.profiles/dev/mkosi.conf",
         "payload/mkosi.profiles/dev/mkosi.finalize.d/50-finalize.sh",
         "payload/mkosi.profiles/dev/mkosi.postinst.d/50-postinst.sh",
+        "payload/mkosi.profiles/production/mkosi.build.d/50-build.sh",
+        "payload/mkosi.profiles/production/mkosi.postinst.d/50-postinst.sh",
     ]
     for script in (
         "mkosi.images/azure/mkosi.postoutput.d/vhd",
@@ -287,8 +290,10 @@ def test_cloud_glue_is_in_the_payload_and_gated_at_boot() -> None:
     assert "ConditionVirtualization=google" in (units / "gcp-hostname.service").read_text(
         encoding="utf-8"
     )
+    # only the default profile's own overlay is matched: by no --profile at all
     for conf in (FIXTURE / "tree-initramfs").rglob("*.conf"):
-        assert "[Match]" not in conf.read_text(encoding="utf-8"), conf
+        text = conf.read_text(encoding="utf-8")
+        assert "[Match]" not in text or text.startswith("[Match]\nProfiles=\n\n"), conf
 
 
 DEV_UKI = 138881024
@@ -512,7 +517,7 @@ def test_every_emitted_key_is_an_mkosi_setting_in_its_section() -> None:
             for line in conf.read_text(encoding="utf-8").splitlines():
                 if line.startswith("["):
                     section = line.strip("[]")
-                elif "=" in line and not line.startswith(" "):
+                elif "=" in line and not line.startswith(" ") and section != "Match":
                     key = line.partition("=")[0]
                     setting = SETTINGS_LOOKUP_BY_NAME[key]
                     assert setting.section == section, f"{conf}: {key} in [{section}]"
@@ -606,5 +611,5 @@ def test_selected_variants_do_not_change_the_payload() -> None:
     alone = compile(recipe_with(), variants=["production"])
     payload = {e.path: e for e in whole.entries if e.path.startswith("payload/")}
     own = {e.path: e for e in alone.entries if e.path.startswith("payload/")}
-    shared = {p: e for p, e in payload.items() if not p.startswith("payload/mkosi.profiles/")}
+    shared = {p: e for p, e in payload.items() if not p.startswith("payload/mkosi.profiles/dev/")}
     assert own == shared

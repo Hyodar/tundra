@@ -1,0 +1,37 @@
+{
+  "control_plane": "attested endpoint: TLS bound to the quote",
+  "ingress": [],
+  "management_port": 8745,
+  "rootfs": "verity",
+  "schema": 1,
+  "secrets": [
+    {
+      "location": "/run/tundravm/credentials/searcher-keys",
+      "name": "searcher-keys",
+      "required": true,
+      "source": null,
+      "units": []
+    }
+  ],
+  "volumes": [
+    {
+      "device": "/dev/disk/by-id/*-tundravm-data",
+      "directories": [
+        "/persistent/data/delayed",
+        "/persistent/data/input",
+        "/persistent/data/lighthouse",
+        "/persistent/data/nethermind",
+        "/persistent/data/searcher"
+      ],
+      "filesystem": "ext4",
+      "lun": 0,
+      "mount": "/persistent/data",
+      "name": "data",
+      "pipe": "/run/tundravm/unlock/data",
+      "serial": "tundravm-data",
+      "unlock": {
+        "kind": "operator-key"
+      }
+    }
+  ]
+}

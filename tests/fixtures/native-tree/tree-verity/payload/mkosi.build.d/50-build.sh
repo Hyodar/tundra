@@ -24,6 +24,3 @@ echo 'tundravm: source build attested-endpoint is not pinned: run tundravm lock,
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"login-menu","package":"./cmd/login-menu","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/login-menu","kind":"file","mode":"0755","path":"build/login-menu"}],"name":"login-menu","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
 echo 'tundravm: source build login-menu is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
-# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"mode-switch","package":"./cmd/mode-switch","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/mode-switch","kind":"file","mode":"0755","path":"build/mode-switch"}],"name":"mode-switch","source":{"kind":"local","path":"tundravm:tools"}}
-# unpinned: tundravm:tools
-echo 'tundravm: source build mode-switch is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

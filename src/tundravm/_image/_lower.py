@@ -47,11 +47,13 @@ from ._component import (
 from ._image import BASE_PROFILE, DEV_PROFILE, Image, Profile
 from ._runtime import (
     RUNTIME_FRAGMENT,
+    Reads,
     Runtime,
     RuntimeFragment,
     check_owner_login,
     container_ports,
     key_files,
+    reads,
     services_of,
 )
 from ._secrets import InstanceKey, Secret
@@ -206,6 +208,7 @@ class _Lowering:
             switchable=bool(getattr(self.explicit(Firewall), "modes", None)),
             azure="azure" in image.targets,
         )
+        self.runtime.read = self.reads(BASE_PROFILE)
         check_owner_login(image, self.runtime.ssh)
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
         local = services_of(_forms((*self.workload(), *self.profile_content()), local=True))
@@ -298,6 +301,38 @@ class _Lowering:
             return True
         profile = self.image.profiles.get(name)
         return profile is not None and not profile.production
+
+    def reads(self, name: str) -> Reads:
+        """What profile *name* (the image's own, ``dev=`` or a ``Profile``) reads: the
+        secrets its services, as it builds and edits them, bind, and the keys its logins and
+        containers take."""
+        items: list[object] = [*self.workload()]
+        world: dict[str, Service] = {}
+        gone: set[str] = set()
+        profile = self.image.profiles.get(name)
+        if name == DEV_PROFILE and self.image.dev is not None:
+            items.append(self.image.dev)
+        elif profile is not None:
+            for each in (*self.ancestors(profile), profile):
+                items.extend(each.add)
+                for change in each.changes:
+                    unit = (
+                        _removed_unit(change, set(self.declared))
+                        if isinstance(change, Remove)
+                        else None
+                    )
+                    if unit is not None:
+                        gone.add(unit)
+                    elif isinstance(change, Edit) and isinstance(change.ref.value, Service):
+                        unit = change.ref.value.unit_name
+                        world[unit] = replace(world.get(unit, change.ref.value), **change.fields)  # type: ignore[arg-type]
+        forms = _forms(items, local=self.local(name))
+        services = (
+            world.get(service.unit_name, service)
+            for service in services_of(forms)
+            if service.unit_name not in gone
+        )
+        return reads(self.image, forms, services)
 
     def build_network(self) -> bool:
         """Whether a component's builds fetch dependencies while the image is built."""
@@ -681,6 +716,10 @@ class _Lowering:
         hosts = self.pins(f"egress-{name}", self.egresses(profile.add))
         if hosts is not None:
             items.append(hosts)
+        runtime, waits = self.runtime.changes(
+            self.reads(profile.extends or BASE_PROFILE), self.reads(name)
+        )
+        items.extend(waits)
         items = self.owners(items, name)
         with _at(profile):
             egress = self.profile_egress(profile.add, inherited, local=local)
@@ -688,7 +727,7 @@ class _Lowering:
             name,
             inherits=profile.extends or BASE_PROFILE,
             add=dm.Fragment(name, items=tuple(items)),
-            changes=(*switched, *changes, *egress),
+            changes=(*switched, *changes, *runtime, *egress),
             release=profile.production,
         )
 
@@ -907,6 +946,8 @@ class _Lowering:
                 items.append(tool)
         else:
             items.append(self.component(dev))
+        runtime, waits = self.runtime.changes(self.runtime.read, self.reads(DEV_PROFILE))
+        items.extend(waits)
         items = self.owners(items, DEV_PROFILE)
         with _at(dev):
             egress = self.profile_egress([dev], local=(False, True))
@@ -914,7 +955,7 @@ class _Lowering:
             DEV_PROFILE,
             inherits=BASE_PROFILE,
             add=dm.Fragment(DEV_PROFILE, items=tuple(items)),
-            changes=(*switched, *egress),
+            changes=(*switched, *runtime, *egress),
             release=False,
         )
 

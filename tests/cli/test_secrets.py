@@ -282,7 +282,7 @@ def test_deliver_refuses_what_the_image_does_not_declare(
     token = _file(tmp_path, "token.txt", TOKEN)
     unknown = cli("secrets", "deliver", instance.id, "--policy", simulated, f"jwt=@{token}")
     assert unknown.code == EXIT_ERROR
-    assert "declares no secret jwt" in unknown.err and "api-token" in unknown.err
+    assert "reads no secret jwt" in unknown.err and "api-token" in unknown.err
     inline = cli("secrets", "deliver", instance.id, "--policy", simulated, "api-token=abc")
     assert inline.code == EXIT_ERROR and "is not NAME=@FILE" in inline.err
     assert endpoint.sessions == []

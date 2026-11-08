@@ -44,7 +44,6 @@ mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
 mkosi-chroot systemctl enable systemd-user-sessions.service
-mkosi-chroot systemctl enable credential-metrics-aws.service
 mkosi-chroot systemctl enable credential-searcher-keys.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable mode-switch.service
@@ -77,7 +76,6 @@ ln -sf "/etc/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/syst
 ln -sf "/etc/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/systemd-user-sessions.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/credential-metrics-aws.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/credential-searcher-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
 ln -sf "/etc/systemd/system/mode-switch.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"

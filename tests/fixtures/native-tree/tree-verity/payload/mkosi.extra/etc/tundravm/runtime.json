@@ -12,24 +12,7 @@
   "management_port": 8745,
   "rootfs": "verity",
   "schema": 1,
-  "secrets": [
-    {
-      "location": "/run/tundravm/credentials/greeting-token",
-      "name": "greeting-token",
-      "required": false,
-      "source": null,
-      "units": [
-        "token.service"
-      ]
-    },
-    {
-      "location": "/run/tundravm/credentials/box-keys",
-      "name": "box-keys",
-      "required": false,
-      "source": null,
-      "units": []
-    }
-  ],
+  "secrets": [],
   "volumes": [
     {
       "device": "/dev/disk/by-id/*-tundravm-vault",

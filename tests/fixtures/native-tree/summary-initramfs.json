@@ -13,7 +13,8 @@
           "golang"
         ],
         "BuildScripts": [
-          "<tree>/payload/mkosi.build.d/50-build.sh"
+          "<tree>/payload/mkosi.build.d/50-build.sh",
+          "<tree>/payload/mkosi.profiles/production/mkosi.build.d/50-build.sh"
         ],
         "BuildSources": [
           {
@@ -109,7 +110,8 @@
           "udev"
         ],
         "PostInstallationScripts": [
-          "<tree>/payload/mkosi.postinst.d/50-postinst.sh"
+          "<tree>/payload/mkosi.postinst.d/50-postinst.sh",
+          "<tree>/payload/mkosi.profiles/production/mkosi.postinst.d/50-postinst.sh"
         ],
         "PostOutputScripts": [],
         "PrepareScripts": [],

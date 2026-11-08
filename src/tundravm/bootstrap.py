@@ -897,10 +897,11 @@ def deliver(
     on the bound session (``POST /credentials``)."""
     values = _values(pairs)
     _refuse_fail_closed(instance, "delivery-refused")
+    profile = instance.build.profile
     declared = {str(s["name"]) for s in instance.build.runtime().get("secrets", ())}
-    _known(values, declared)
+    _known(values, declared, profile)
     result, evidence, channel = _released(instance, policy, "delivery-refused", validator, connect)
-    _known(values, set(evidence.credentials), every=True)
+    _known(values, set(evidence.credentials), profile, every=True)
     encoded = {name: base64.b64encode(value).decode() for name, value in values}
     signature = signed(instance, evidence, recorded_operator(instance))
     post(channel, evidence, "/credentials", {"credentials": encoded, **signature})
@@ -915,14 +916,17 @@ def deliver(
     return result, names
 
 
-def _known(values: Sequence[tuple[str, bytes]], declared: set[str], every: bool = False) -> None:
-    """Refuse a name that is not *declared*; nothing declared is no check unless *every*
-    (the verified endpoint's list, which is the image's)."""
+def _known(
+    values: Sequence[tuple[str, bytes]], declared: set[str], profile: str, every: bool = False
+) -> None:
+    """Refuse a name *profile* does not read (*declared*); nothing declared is no check
+    unless *every* (the verified endpoint's list, which is the profile's)."""
     unknown = [name for name, _ in values if name not in declared]
     if unknown and (declared or every):
         raise ValidationError(
-            f"The image declares no secret {', '.join(unknown)}.",
-            hint=f"Declared: {', '.join(sorted(declared)) or 'none'}.",
+            f"Profile {profile} reads no secret {', '.join(unknown)}, so its endpoint does "
+            "not take it.",
+            hint=f"It reads: {', '.join(sorted(declared)) or 'none'}.",
         )
 
 

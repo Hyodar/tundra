@@ -206,7 +206,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
 
     builder.declare(default.name, base.items, full=base.items)
     if recipe.mkosi.root_size is not None:
-        builder.root_size(recipe.mkosi.root_size)
+        builder.root_size(default.name, recipe.mkosi.root_size)
     if recipe.mkosi.root == "initramfs":
         builder.root_mode(default.name)
     builder.execution_gate(
@@ -249,6 +249,8 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
             )
             builder.instance_key(variant.name)
             builder.power_button(variant.name)
+            if recipe.mkosi.root_size is not None:
+                builder.root_size(variant.name, recipe.mkosi.root_size)
             if recipe.mkosi.root == "initramfs":
                 builder.root_mode(variant.name)
             builder.issuer(variant.name, release=variant.release)
