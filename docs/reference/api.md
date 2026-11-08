@@ -931,7 +931,7 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 
 ## tundravm.components.network
 
-The network baseline every image implies: `Network` (also `image.network`, configured with `StaticAddress` and `Egress`) and `Firewall` (switchable with `Mode`). Passing one in `components=` replaces the default.
+The network baseline every image implies: `Network` (also `image.network`, configured with `StaticAddress` and `Egress`, whose peers a `Host` pins) and `Firewall` (switchable with `Mode`). Passing one in `components=` replaces the default.
 
 ### `Egress`
 
@@ -940,12 +940,16 @@ The network baseline every image implies: `Network` (also `image.network`, confi
 ```python
 Egress(
     ports: Sequence[PortValue] = (),
-    hosts: Sequence[str] = (),
+    hosts: Sequence[str | Host] = (),
     metadata: bool = False,
 )
 ```
 
 Outbound traffic the image, or one service, may send; everything else is dropped.
+
+| Member | Does |
+|---|---|
+| `Egress.pinned` | The `Host` entries of *hosts*, in order. |
 
 ### `Firewall`
 
@@ -968,6 +972,27 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 | `Firewall.lowered_modes() -> tuple[FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
 | `Firewall.status` | A `Login` entry printing the mode in force, the switches since boot and whether RTMR3 replays them: `mode-switch status`. |
 | `Firewall.switch` | A `Login` entry switching to the mode the client names, one of *modes*: `mode-switch to MODE`, extended into RTMR3. |
+
+### `Host`
+
+*dataclass*
+
+```python
+Host(
+    name: str,
+    addresses: Sequence[str],
+    *,
+    port: int | None = None,
+    aliases: Sequence[str] = (),
+)
+```
+
+A peer pinned to its addresses, in `Egress(hosts=)`: `Host("api.example", ["203.0.113.7", "203.0.113.8"], port=443)`.
+
+| Member | Does |
+|---|---|
+| `Host.entries` | One `"ADDRESS"` or `"ADDRESS:PORT"` (`"[IPv6]:PORT"`) per address: what the firewall accepts, as the string entries of `Egress(hosts=)` spell it. |
+| `Host.names` | *name*, then *aliases*: what resolves to *addresses*. |
 
 ### `Mode`
 
@@ -1270,7 +1295,7 @@ The fixed-address proxy both exporters reach their sinks through: `Proxy("10.0.0
 |---|---|
 | `Proxy.check_sink(url: str) -> None` | Refuse a sink *url* a passthrough cannot carry: not `https://`, an address for a host, or another port than *port*. |
 | `Proxy.endpoint` | `IP:PORT` (`[IPv6]:PORT`), what the firewall allows. |
-| `Proxy.hosts(urls: Sequence[str]) -> str \| None` | `PROXY_HOSTS`: *address* for the TLS name, or for each of the sinks' *urls*' names through a passthrough; `None` when no name maps to it. |
+| `Proxy.hosts(urls: Sequence[str]) -> tuple[HostsEntry, ...]` | The `/etc/hosts` entries mapping *address* to the TLS name, or to each of the sinks' *urls*' names through a passthrough; none without either. |
 | `Proxy.url` | The URL the exporters reach the proxy at: `https://<tls_name>:<port>` or `http://<endpoint>`; `None` for a passthrough, which the exporters do not know of. |
 
 ### `RecordingRule`
@@ -2435,6 +2460,7 @@ Declaration = (
     | Mount
     | tundravm.declarative.model.Firewall
     | ContainerRoot
+    | Hosts
 )
 ```
 
@@ -2449,6 +2475,16 @@ Extra = Mapping[str, Mapping[str, str | tuple[str, ...]]]
 ```
 
 `extra={"Service": {"OOMScoreAdjust": "-500"}}`: section -> directive -> value(s).
+
+### `HostsEntry`
+
+*alias*
+
+```python
+HostsEntry = tuple[str, tuple[str, ...]]
+```
+
+One `/etc/hosts` line: an address and the names that resolve to it.
 
 ### `Ingress`
 

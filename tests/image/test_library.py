@@ -10,7 +10,6 @@ import pytest
 from tundravm import Image, Kernel, Package, Profile, Service
 from tundravm._image import lower, recipe_of
 from tundravm.components import Component, Endpoint
-from tundravm.components._observability import PROXY_HOSTS, PROXY_HOSTS_SCRIPT
 from tundravm.components.access import DevAccess, SshAccess
 from tundravm.components.network import Egress, Firewall, Network
 from tundravm.components.observability import (
@@ -22,6 +21,7 @@ from tundravm.components.observability import (
     SigV4,
 )
 from tundravm.components.tee import EVIDENCE, Tdxs, TeeBase
+from tundravm.declarative._network import HOSTS_HEADER
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
 from tundravm.secrets import Secret
@@ -245,6 +245,8 @@ def test_dev_access_joins_the_control_plane_sshd_instead_of_a_second_one() -> No
 
 # ── Observability ───────────────────────────────────────────────────────
 
+HEADER = "".join(f"{line}\n" for line in HOSTS_HEADER)
+
 
 @pytest.mark.parametrize(
     ("proxy", "url", "allowed", "hosts"),
@@ -279,12 +281,8 @@ def test_the_exporters_reach_their_sinks_through_the_proxy(
     config = planned.file("/etc/tundravm/metrics-export.yml").text.replace('"', "")
     assert f"proxy_url: {url}" in config
     assert observability.outbound().hosts == (allowed,)
-    step = f"+/bin/sh {PROXY_HOSTS_SCRIPT}"
-    for unit in ("journal-export", "metrics-export"):
-        dropin = planned.files.get(f"/usr/lib/systemd/system/{unit}.service.d/20-tundravm.conf")
-        assert (step in (dropin.text if dropin else "")) == (hosts is not None), unit
-    found = planned.files.get(PROXY_HOSTS)
-    assert (found.text if found else None) == hosts
+    found = planned.files.get("/etc/hosts")
+    assert (found.text.removeprefix(HEADER) if found else None) == hosts
 
 
 @pytest.mark.parametrize(
@@ -408,8 +406,8 @@ def test_a_passthrough_maps_each_sink_name_to_its_address_and_sigv4_signs_the_wr
         "AWS_SHARED_CREDENTIALS_FILE=/run/credentials/metrics-export.service/metrics-aws"
         in environment
     )
-    assert planned.file(PROXY_HOSTS).text == (
-        "10.88.0.100 logs.example\n10.88.0.100 aps-workspaces.us-east-2.amazonaws.com\n"
+    assert planned.file("/etc/hosts").text == (
+        f"{HEADER}10.88.0.100 logs.example\n10.88.0.100 aps-workspaces.us-east-2.amazonaws.com\n"
     )
     assert observability.outbound().hosts == ("10.88.0.100:443",)
 

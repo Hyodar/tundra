@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import copy
 import shlex
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from tundravm._location import anchored, declared_at, display_location
 from tundravm._modules import tdxs as _tdxs
@@ -68,8 +68,12 @@ from ._values import (
     Package,
     Tree,
     egress_host,
+    host_entries,
     mkosi_section,
 )
+
+if TYPE_CHECKING:
+    from tundravm.components.container import Container
 
 __all__ = [
     "CONTAINER_KERNEL",
@@ -206,6 +210,62 @@ class _Lowering:
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
         local = services_of(_forms((*self.workload(), *self.profile_content()), local=True))
         self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev, *local))
+        self.check_pins()
+
+    def check_pins(self) -> None:
+        """Refuse a name pinned to two address sets, or pinned in one place and left to
+        DNS in another, anywhere in the image."""
+        from tundravm.components._network import check_pinned
+
+        image = self.image
+        found = [*self.image_egress(), *self.egresses(self.workload())]
+        for profile in image.profiles.values():
+            found.extend(self.egresses(profile.add))
+        if image.dev is not None:
+            found.extend(self.egresses((image.dev,)))
+        check_pinned(found)
+
+    def image_egress(self) -> list[tuple[str, Egress]]:
+        """The image's own filter and its firewall modes' egress, as ``(where, egress)``."""
+        from tundravm.components.network import Firewall, Network
+
+        network = self.image.network or self.explicit(Network)
+        firewall = self.explicit(Firewall)
+        found: list[tuple[str, Egress]] = []
+        if network is not None and network.egress is not None:
+            found.append(("Network(egress=)", network.egress))
+        if firewall is not None and firewall.egress is not None:
+            found.append(("Firewall(egress=)", firewall.egress))
+        if firewall is not None:
+            for mode, value in firewall.modes.items():
+                if value.egress is not None:
+                    found.append((f"Firewall mode {mode!r}", value.egress))
+        return found
+
+    def egresses(self, items: Sequence[object]) -> Iterator[tuple[str, Egress]]:
+        """Who among *items* names peers: each service's own egress, each component's
+        ``outbound()`` and each container's egress and modes, as ``(where, egress)``."""
+
+        for service in services_of(items):
+            if service.egress is not None:
+                yield f"Service({service.name!r})", service.egress
+        for item in items:
+            if not isinstance(item, Component):
+                continue
+            for who, egress in _outbound(item):
+                yield f"component {who!r}", egress
+            for container in _containers(item):
+                yield f"Container({container.name!r}) egress=", container.egress
+                for mode, egress in container.modes.items():
+                    yield f"Container({container.name!r}) modes[{mode!r}]", egress
+
+    def pins(self, name: str, found: Iterable[tuple[str, Egress]]) -> dm.Hosts | None:
+        """The image's ``/etc/hosts`` lines the ``Host`` pins among *found* ask for, declared
+        as *name*; a container's pins go to its own root. ``None`` when nothing is pinned."""
+        from tundravm.components._network import pinned_hosts
+
+        entries = pinned_hosts((w, e) for w, e in found if not w.startswith("Container("))
+        return None if not entries else dm.Hosts(name, entries)
 
     def workload(self) -> tuple[object, ...]:
         """What the image runs beyond its baseline: services, components, observability."""
@@ -295,6 +355,9 @@ class _Lowering:
                     RUNTIME_FRAGMENT, items=tuple(runtime), checks=(self.runtime.check,)
                 )
             )
+        hosts = self.pins("egress", [*self.image_egress(), *self.egresses(self.workload())])
+        if hosts is not None:
+            body.append(hosts)
         body.append(dm.Fragment(IMPLIED_FRAGMENT, checks=(self.implied_check,)))
         if image.kernel.built:
             body.append(self.kernel())
@@ -615,6 +678,9 @@ class _Lowering:
         if self.curl and not self.curl_shipped:
             items.append(dm.Package("curl"))
         self.curl = curl
+        hosts = self.pins(f"egress-{name}", self.egresses(profile.add))
+        if hosts is not None:
+            items.append(hosts)
         items = self.owners(items, name)
         with _at(profile):
             egress = self.profile_egress(profile.add, inherited, local=local)
@@ -1048,7 +1114,11 @@ class _Lowering:
         from tundravm.components.network import Firewall, Network
 
         egress = item.egress
-        if egress is None or not any(egress_host(egress, host)[2] for host in egress.hosts):
+        if egress is None or not any(
+            pinned is None and egress_host(egress, text)[2]
+            for host in egress.hosts
+            for text, pinned in host_entries(egress, host)
+        ):
             return ()
         network = self.image.network or self.explicit(Network)
         firewall = self.explicit(Firewall)
@@ -1382,6 +1452,17 @@ def _own_egress(item: Service) -> tuple[dm.EgressRule, ...]:
     from tundravm.components._network import egress_rules
 
     return () if item.egress is None else egress_rules(((item.unit_name, item.egress),))
+
+
+def _containers(component: Component) -> Iterator[Container]:
+    """*component* when it is a ``Container``, then each one it composes."""
+    from tundravm.components.container import Container
+
+    if isinstance(component, Container):
+        yield component
+    for item in composed(component):
+        if isinstance(item, Component):
+            yield from _containers(item)
 
 
 def _outbound(component: Component) -> Iterator[tuple[str, Egress]]:

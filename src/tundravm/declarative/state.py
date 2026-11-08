@@ -91,6 +91,7 @@ from tundravm.models import (
     unit_name,
 )
 
+from ._network import HOSTS_FILE, hosts_file
 from .model import (
     BootStep,
     Build,
@@ -106,6 +107,7 @@ from .model import (
     Git,
     Group,
     Hook,
+    Hosts,
     Kernel,
     KernelConfig,
     Key,
@@ -243,6 +245,15 @@ class StateBuilder:
         del profile.services[declared:]
         profile.services[:0] = glue
 
+    def hosts_files(self) -> None:
+        """Write each profile's ``/etc/hosts`` from what it and the profiles it extends
+        pin (:func:`hosts_file`), once every declaration and target is in: a profile that
+        pins nothing of its own inherits the file."""
+        for name, own in self.state.profiles.items():
+            if own.hosts:
+                effective = self.state.effective_profile(name)
+                _add_file(own, HOSTS_FILE, hosts_file(effective.hosts))
+
     # ── declarations ────────────────────────────────────────────────────
 
     def declare(
@@ -333,6 +344,8 @@ class StateBuilder:
                     profile.build_packages.update(item.build_packages)
                 case ContainerRoot():
                     profile.containers.append(_container(item))
+                case Hosts():
+                    profile.hosts.extend(item.entries)
                 case BootStep() | Setting() | KernelConfig() | RuntimeTools():
                     pass  # boot steps register below; the rest is per-tree configuration
         for unit in reemit:
@@ -559,7 +572,7 @@ class StateBuilder:
         routes, Google's disk naming rules and their NVMe helper, each unit gated to Compute
         Engine. DNS is ``TeeBase``'s over TLS: the metadata resolver speaks none."""
         profile.packages.update(("udev", *gcp.GCP_PACKAGES))
-        _add_file(profile, "/etc/hosts", gcp.GCP_HOSTS)
+        profile.hosts.append(gcp.GCP_METADATA_HOST)
         _add_file(profile, gcp.HOSTNAME_SCRIPT_PATH, gcp.HOSTNAME_SCRIPT, "0755")
         hostname, routes = gcp.metadata_units()
         _glue_group(profile, hostname)
@@ -842,6 +855,8 @@ def _container(item: ContainerRoot) -> ContainerSpec:
     shipped = ProfileState(name=item.name)
     for entry in item.files:
         _file(shipped, entry)
+    if item.hosts:
+        _add_file(shipped, HOSTS_FILE, hosts_file(item.hosts))
     user = item.account
     passwd: tuple[str, ...] = ()
     group: tuple[str, ...] = ()

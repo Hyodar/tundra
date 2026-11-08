@@ -40,6 +40,7 @@ __all__ = [
     "DebianConfig",
     "Egress",
     "File",
+    "Host",
     "HttpProbe",
     "Kernel",
     "KernelFragment",
@@ -56,6 +57,7 @@ __all__ = [
     "Tree",
     "UDP",
     "egress_host",
+    "host_entries",
 ]
 
 LOCKED_SNAPSHOT = "20261018T082309Z"
@@ -932,12 +934,14 @@ class Egress(Keywords):
     names, *ports* and *hosts*, and drops the rest. ``Service(egress=Egress(...))`` accepts
     what that one service sends beyond it, matched by the service's user.
 
-    *ports* go to any address. Each of *hosts* is an address or CIDR block (any port) or
-    ``HOST:PORT`` (TCP to that port; ``[ADDRESS]:PORT`` for IPv6). nftables matches
-    addresses, not names, so a host name needs its port and ``"logs.example:443"`` accepts
-    TCP 443 to the addresses it resolves to: ``egress-resolve`` asks ``systemd-resolved``
-    (DNS over TLS) at boot and every 30s and fills the name's nftables sets, which the rule
-    matches. Until the first answer the name is unreachable.
+    *ports* go to any address. Each of *hosts* is an address or CIDR block (any port),
+    ``HOST:PORT`` (TCP to that port; ``[ADDRESS]:PORT`` for IPv6) or a :class:`Host`.
+    nftables matches addresses, not names, so a host name needs its port and
+    ``"logs.example:443"`` accepts TCP 443 to the addresses it resolves to:
+    ``egress-resolve`` asks ``systemd-resolved`` (DNS over TLS) at boot and every 30s and
+    fills the name's nftables sets, which the rule matches. Until the first answer the name
+    is unreachable. A ``Host`` pins a name to its addresses instead: the firewall accepts
+    exactly those, and the name resolves to them in ``/etc/hosts``, so no resolver is asked.
 
     *metadata* lets a service reach the cloud metadata servers
     (:data:`~tundravm.declarative.model.CLOUD_METADATA`), where the instance's identity
@@ -946,7 +950,7 @@ class Egress(Keywords):
     """
 
     ports: Sequence[PortValue] = ()
-    hosts: Sequence[str] = ()
+    hosts: Sequence[str | Host] = ()
     metadata: bool = False
 
     def __post_init__(self) -> None:
@@ -963,19 +967,120 @@ class Egress(Keywords):
                     f"ports= holds {shown(port)}, not TCP(...) or UDP(...).",
                     hint="Egress(ports=[TCP(443)])",
                 )
-        for host in self.hosts:
-            name = egress_host(self, host)[0]
-            if name in dm.CLOUD_METADATA:
-                raise _fail(
-                    self,
-                    f"hosts= names {name}, a cloud metadata server.",
-                    hint="Egress(metadata=True), on the one service that reads it: "
-                    "Service(..., egress=Egress(metadata=True)).",
-                )
+        for entry in self.hosts:
+            for text, _pinned in host_entries(self, entry):
+                name = egress_host(self, text)[0]
+                if name in dm.CLOUD_METADATA:
+                    raise _fail(
+                        self,
+                        f"hosts= names {name}, a cloud metadata server.",
+                        hint="Egress(metadata=True), on the one service that reads it: "
+                        "Service(..., egress=Egress(metadata=True)).",
+                    )
         if not isinstance(self.metadata, bool):
             raise _fail(
                 self, f"metadata= holds {self.metadata!r}.", hint="Pass metadata=True or drop it."
             )
+
+    @property
+    def pinned(self) -> tuple[Host, ...]:
+        """The :class:`Host` entries of *hosts*, in order."""
+        return tuple(host for host in self.hosts if isinstance(host, Host))
+
+
+@dataclass(frozen=True, slots=True)
+class Host(Keywords):
+    """A peer pinned to its addresses, in ``Egress(hosts=)``:
+    ``Host("api.example", ["203.0.113.7", "203.0.113.8"], port=443)``.
+
+    The firewall accepts TCP *port* (any port without one) to exactly *addresses*, as the
+    ``"ADDRESS:PORT"`` entries do, and *name* and each of *aliases* resolve to exactly
+    those addresses in ``/etc/hosts``, the image's or the container root's the ``Egress``
+    belongs to; ``systemd-resolved`` reads that file first. No resolver chooses the peer:
+    a TEE talks to the addresses its image names. One image pins a name to one set of
+    addresses, and never also names it as ``"NAME:PORT"``, which DNS would resolve at boot.
+    """
+
+    name: str
+    addresses: Sequence[str]
+    _: KW_ONLY
+    port: int | None = None
+    aliases: Sequence[str] = ()
+
+    def __post_init__(self) -> None:
+        example = 'Host("api.example", ["203.0.113.7"], port=443)'
+        if not _is_name(self.name):
+            raise _fail(self, f"{self.name!r} is not a host name.", hint=example)
+        if isinstance(self.addresses, str) or not isinstance(self.addresses, Sequence):
+            raise _fail(self, "addresses= takes a list of addresses.", hint=example)
+        object.__setattr__(self, "addresses", tuple(self.addresses))
+        if not self.addresses:
+            raise _fail(
+                self,
+                "addresses= is empty, so the name would resolve to nothing.",
+                hint="Pass each address the peer answers at: addresses=['203.0.113.7'].",
+            )
+        for address in self.addresses:
+            try:
+                ipaddress.ip_address(address)
+            except (TypeError, ValueError):
+                raise _fail(
+                    self,
+                    f"addresses= holds {address!r}, not an IP address.",
+                    hint="Pass address literals: addresses=['203.0.113.7', '2001:db8::7']; a "
+                    "CIDR block or a name goes in hosts= as a string.",
+                ) from None
+        if len(set(self.addresses)) != len(self.addresses):
+            raise _fail(self, "addresses= names an address twice.", hint="Name each one once.")
+        if self.port is not None and (
+            isinstance(self.port, bool)
+            or not isinstance(self.port, int)
+            or not 0 < self.port < 65536
+        ):
+            raise _fail(
+                self,
+                f"port= {self.port!r} is not a port in 1..65535.",
+                hint="Pass port=443, or drop it to accept every port.",
+            )
+        if isinstance(self.aliases, str) or not isinstance(self.aliases, Sequence):
+            raise _fail(self, "aliases= takes a list of names.", hint="aliases=['rpc.example']")
+        object.__setattr__(self, "aliases", tuple(self.aliases))
+        for alias in self.aliases:
+            if not _is_name(alias) or alias == self.name:
+                raise _fail(
+                    self,
+                    f"aliases= holds {alias!r}, not another host name.",
+                    hint="aliases=['rpc.example']",
+                )
+        if len(set(self.aliases)) != len(self.aliases):
+            raise _fail(self, "aliases= names an alias twice.", hint="Name each one once.")
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """*name*, then *aliases*: what resolves to *addresses*."""
+        return (self.name, *self.aliases)
+
+    @property
+    def entries(self) -> tuple[str, ...]:
+        """One ``"ADDRESS"`` or ``"ADDRESS:PORT"`` (``"[IPv6]:PORT"``) per address: what the
+        firewall accepts, as the string entries of ``Egress(hosts=)`` spell it."""
+        if self.port is None:
+            return tuple(self.addresses)
+        return tuple(
+            f"[{address}]:{self.port}" if ":" in address else f"{address}:{self.port}"
+            for address in self.addresses
+        )
+
+
+def _is_name(value: object) -> bool:
+    """Whether *value* is a DNS name and not an address literal."""
+    if not isinstance(value, str) or not _HOST_NAME.fullmatch(value):
+        return False
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1028,6 +1133,22 @@ class Mode(Keywords):
 
 
 _HOST_NAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?)+")
+
+
+def host_entries(owner: object, entry: object) -> tuple[tuple[str, Host | None], ...]:
+    """An ``Egress(hosts=)`` entry as the ``(text, host)`` pairs the firewall lowers: a string
+    as itself, a :class:`Host` as one ``ADDRESS:PORT`` string per address with the Host
+    that pins it."""
+    if isinstance(entry, Host):
+        return tuple((text, entry) for text in entry.entries)
+    if isinstance(entry, str):
+        return ((entry, None),)
+    raise _fail(
+        owner,
+        f"hosts= holds {shown(entry)}, not a host.",
+        hint="Pass '10.0.0.5', '10.0.0.0/8', 'logs.example:443' or "
+        "Host('api.example', ['203.0.113.7'], port=443).",
+    )
 
 
 def egress_host(owner: object, host: object) -> tuple[str, int | None, bool]:

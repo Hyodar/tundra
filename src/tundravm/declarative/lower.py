@@ -264,6 +264,7 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
                 variant.name, release=variant.release, default=default.release, ships=False
             )
             builder.issuer(variant.name, release=variant.release)
+    builder.hosts_files()
     if rejected:
         plural = "s" if len(rejected) > 1 else ""
         listed = ", ".join(f"{name!r} (it {why})" for name, why in rejected)

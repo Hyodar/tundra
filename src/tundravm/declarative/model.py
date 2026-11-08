@@ -28,7 +28,7 @@ from tundravm._source import GoBuild as Go
 from tundravm._units.directives import UNIT_SUFFIXES, check_value
 from tundravm.diagnostics import Diagnostic
 from tundravm.errors import ValidationError
-from tundravm.models import unit_name
+from tundravm.models import HostsEntry, unit_name
 from tundravm.policy import Policy
 
 from .._keywords import Keywords, subject
@@ -3334,7 +3334,9 @@ class ContainerRoot(Declared):
     holds ``lo`` only); *endpoints* the host's loopback ``host:port`` its namespace relays;
     *account* the user it runs as, with the uid and gid the host pins for it, written into
     the root's ``passwd`` and ``group``; *ssh_port* the port its sshd listens on, if any;
-    *mount_files* the empty files a file bind lands on."""
+    *mount_files* the empty files a file bind lands on; *hosts* the ``(address, names)``
+    lines of the root's ``/etc/hosts``, which its egress pins (the root resolves nothing
+    else)."""
 
     name: str
     packages: tuple[str, ...]
@@ -3346,6 +3348,7 @@ class ContainerRoot(Declared):
     mount_files: tuple[str, ...] = ()
     account: User | None = None
     ssh_port: int | None = None
+    hosts: tuple[HostsEntry, ...] = ()
 
     @property
     def ports(self) -> tuple[Port, ...]:
@@ -3353,7 +3356,8 @@ class ContainerRoot(Declared):
         return () if self.network is None else self.network.expose
 
     def __post_init__(self) -> None:
-        _freeze(self, "packages", "files", "directories", "endpoints", "mount_files")
+        _freeze(self, "packages", "files", "directories", "endpoints", "mount_files", "hosts")
+        _check_hosts_entries(self, self.hosts)
         if self.network is not None and not isinstance(self.network, ContainerNetwork):
             raise _fail(
                 self,
@@ -3400,6 +3404,45 @@ class ContainerRoot(Declared):
                 f"account= holds {account!r}, not a User with a pinned uid and gid.",
                 hint='account=User("web", uid=60600, primary_group=60600)',
             )
+
+
+@dataclass(frozen=True, slots=True)
+class Hosts(Declared):
+    """Names pinned to addresses in the variant's ``/etc/hosts``: *entries* are
+    ``(address, names)`` pairs, one line each. Resolution writes the file once from every
+    ``Hosts`` of the variant (*name* says who pins: ``egress`` for the image's filter, a
+    component's name for its own) and the cloud glue's entry, after the loopback lines
+    Debian's installer writes. ``systemd-resolved`` reads it before any resolver."""
+
+    name: str
+    entries: tuple[HostsEntry, ...]
+
+    def __post_init__(self) -> None:
+        _require_name(self, self.name, "name")
+        _freeze(self, "entries")
+        if not self.entries:
+            raise _fail(self, "entries is empty.", hint="Declare a Hosts only with entries.")
+        _check_hosts_entries(self, self.entries)
+
+
+def _check_hosts_entries(owner: object, entries: tuple[HostsEntry, ...]) -> None:
+    hint = "Pass (address, names) pairs: (('203.0.113.7', ('api.example',)),)."
+    for entry in entries:
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise _fail(owner, f"hosts entry {entry!r} is not (address, names).", hint=hint)
+        address, names = entry
+        try:
+            ipaddress.ip_address(address)
+        except (TypeError, ValueError):
+            raise _fail(
+                owner, f"hosts address {address!r} is not an IP address.", hint=hint
+            ) from None
+        if (
+            not isinstance(names, tuple)
+            or not names
+            or not all(isinstance(n, str) and _EGRESS_NAME.fullmatch(n) for n in names)
+        ):
+            raise _fail(owner, f"hosts names {names!r} are not host names.", hint=hint)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3450,7 +3493,8 @@ class EgressRule:
     named rule takes a port and no *host*.
 
     *origins* say who asked for it: the component (``image`` for the image's own
-    ``Egress``, the unit for a service's own). They become the rule's comment.
+    ``Egress``, the unit for a service's own). They become the rule's comment, with
+    *pinned*, the name *host* is pinned to in ``/etc/hosts``, when there is one.
 
     *user* accepts it for one system user's sockets alone (``meta skuid``): a packaged
     daemon's, such as chrony's NTP, where a ``Service`` names its own in ``egress``.
@@ -3461,6 +3505,7 @@ class EgressRule:
     origins: tuple[str, ...] = ()
     name: str | None = None
     user: str | None = None
+    pinned: str | None = None
 
     def __post_init__(self) -> None:
         if self.port is not None and not isinstance(self.port, Port):
@@ -3494,6 +3539,17 @@ class EgressRule:
             not isinstance(self.user, str) or not _GROUP_NAME.fullmatch(self.user)
         ):
             raise _fail(self, f"user {self.user!r} is not a user name.", hint="user='_chrony'")
+        if self.pinned is not None and (
+            not isinstance(self.pinned, str)
+            or not _EGRESS_NAME.fullmatch(self.pinned)
+            or self.host is None
+            or "/" in self.host
+        ):
+            raise _fail(
+                self,
+                f"pinned name {self.pinned!r} needs a host name and one address.",
+                hint="EgressRule(Port(443), '203.0.113.7', pinned='api.example')",
+            )
         object.__setattr__(self, "origins", tuple(self.origins))
         for who in self.origins:
             if not isinstance(who, str) or not who:
@@ -3501,8 +3557,9 @@ class EgressRule:
 
     @property
     def comment(self) -> str:
-        """*origins*, comma separated."""
-        return ", ".join(dict.fromkeys(self.origins))
+        """*origins*, comma separated, then *pinned* in parentheses."""
+        text = ", ".join(dict.fromkeys(self.origins))
+        return text if self.pinned is None else f"{text} ({self.pinned})"
 
     def __str__(self) -> str:
         return self._destination() + ("" if self.user is None else f" as {self.user}")
@@ -3842,6 +3899,7 @@ type Declaration = (
     | Mount
     | Firewall
     | ContainerRoot
+    | Hosts
 )
 """One item of a resolved profile: what the image's values and components lowered to, in
 the compiler's words; ``Resolved.bind(value.ref)`` finds the one a value made."""
@@ -3872,6 +3930,7 @@ DECLARATION_TYPES: tuple[type, ...] = (
     Mount,
     Firewall,
     ContainerRoot,
+    Hosts,
 )
 
 

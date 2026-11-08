@@ -63,7 +63,7 @@ COMPONENTS = [
     "ServiceRef",
 ]
 ACCESS = ["DevAccess", "Login", "SshAccess", "Sudo"]
-NETWORK = ["Egress", "Firewall", "Mode", "Network", "StaticAddress"]
+NETWORK = ["Egress", "Firewall", "Host", "Mode", "Network", "StaticAddress"]
 TEE = ["EVIDENCE", "Tdxs", "TeeBase"]
 CONTAINER = ["Bind", "Container", "ContainerSsh"]
 OBSERVABILITY = [

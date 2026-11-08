@@ -13,11 +13,13 @@ from tundravm._image._values import (
     TCP,
     UDP,
     Egress,
+    Host,
     Mode,
     Notify,
     PortValue,
     StaticAddress,
     egress_host,
+    host_entries,
 )
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
@@ -25,13 +27,16 @@ from tundravm.declarative import utils as du
 from tundravm.declarative._network import MODE_SWITCH
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
+from tundravm.models import HostsEntry
 
 from ._base import _diagnostic
 
 __all__ = [
     "Firewall",
     "Network",
+    "check_pinned",
     "egress_rules",
+    "pinned_hosts",
 ]
 
 
@@ -362,7 +367,9 @@ class Firewall(Component):
                 "the production profile accepts every outbound packet, so a compromised "
                 f"service sends what it holds anywhere: {fix}"
             )
-        everywhere = [host for host in self.egress.hosts if host.endswith("/0")]
+        everywhere = [
+            host for host in self.egress.hosts if isinstance(host, str) and host.endswith("/0")
+        ]
         if everywhere:
             return (
                 f"Egress(hosts=[{', '.join(map(repr, everywhere))}]) accepts every "
@@ -374,24 +381,73 @@ class Firewall(Component):
 def egress_rules(contributions: Iterable[tuple[str, Egress]]) -> tuple[dm.EgressRule, ...]:
     """The output-chain rules *contributions* (``(who, egress)`` pairs) ask for: one per
     destination, with everyone who asked for it, in the order asked; a host name is its
-    own destination, matched by the addresses it resolves to at boot; *metadata* is one
-    rule per cloud metadata server."""
-    found: dict[tuple[dm.Port | None, str | None, str | None], list[str]] = {}
+    own destination, matched by the addresses it resolves to at boot; a :class:`Host` is
+    one address rule per address, commented with its name; *metadata* is one rule per
+    cloud metadata server."""
+    found: dict[tuple[dm.Port | None, str | None, str | None, str | None], list[str]] = {}
     for who, egress in contributions:
         if egress.metadata:
             for host in dm.CLOUD_METADATA:
-                found.setdefault((None, host, None), []).append(who)
+                found.setdefault((None, host, None, None), []).append(who)
         for value in egress.ports:
-            found.setdefault((dm.Port(value.port, value.protocol), None, None), []).append(who)
+            found.setdefault((dm.Port(value.port, value.protocol), None, None, None), []).append(
+                who
+            )
         for entry in egress.hosts:
-            host, number, named = egress_host(egress, entry)
-            port = None if number is None else dm.Port(number)
-            key = (port, None, host) if named else (port, host, None)
-            found.setdefault(key, []).append(who)
+            for text, pinned in host_entries(egress, entry):
+                host, number, named = egress_host(egress, text)
+                port = None if number is None else dm.Port(number)
+                label = None if pinned is None else pinned.name
+                key = (port, None, host, None) if named else (port, host, None, label)
+                found.setdefault(key, []).append(who)
     return tuple(
-        dm.EgressRule(port, host, tuple(dict.fromkeys(origins)), name=name)
-        for (port, host, name), origins in found.items()
+        dm.EgressRule(port, host, tuple(dict.fromkeys(origins)), name=name, pinned=pinned)
+        for (port, host, name, pinned), origins in found.items()
     )
+
+
+def pinned_hosts(contributions: Iterable[tuple[str, Egress]]) -> tuple[HostsEntry, ...]:
+    """The ``/etc/hosts`` entries the :class:`Host` pins of *contributions* ask for: one
+    ``(address, names)`` per address, in the order asked, each once."""
+    found: dict[HostsEntry, None] = {}
+    for _who, egress in contributions:
+        for host in egress.pinned:
+            for address in host.addresses:
+                found.setdefault((address, host.names), None)
+    return tuple(found)
+
+
+def check_pinned(contributions: Iterable[tuple[str, Egress]]) -> None:
+    """Refuse *contributions* (``(where, egress)`` pairs, the whole image's) that pin one
+    name to two sets of addresses, or pin a name in one place and leave it to DNS
+    (``"NAME:PORT"``) in another."""
+    pins: dict[str, tuple[tuple[str, ...], str]] = {}
+    resolved: list[tuple[str, str, str]] = []
+    for where, egress in contributions:
+        for entry in egress.hosts:
+            if isinstance(entry, Host):
+                for alias in entry.names:
+                    pins.setdefault(alias, (tuple(entry.addresses), where))
+                addresses, first = pins[entry.name]
+                if set(addresses) != set(entry.addresses):
+                    raise ValidationError(
+                        f"Image: {where} pins {entry.name} to {', '.join(entry.addresses)}, "
+                        f"and {first} pins it to {', '.join(addresses)}.",
+                        hint="Pin a name to one set of addresses: declare the Host once and "
+                        "pass that value everywhere the peer is reached.",
+                    )
+                continue
+            name, _port, named = egress_host(egress, entry)
+            if named:
+                resolved.append((name, entry, where))
+    for name, text, where in resolved:
+        if name in pins:
+            addresses, first = pins[name]
+            raise ValidationError(
+                f"Image: {first} pins {name} to {', '.join(addresses)}, and {where} names it "
+                f"as {text!r}, which DNS would resolve at boot.",
+                hint=f"Use the Host everywhere: hosts=[Host({name!r}, [...], port=...)].",
+            )
 
 
 def _whole_image(owner: str, egress: Egress | None) -> None:

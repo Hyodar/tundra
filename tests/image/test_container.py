@@ -16,7 +16,8 @@ from tundravm.builds import _container_roots
 from tundravm.components import Endpoint
 from tundravm.components.access import DevAccess, Login, SshAccess
 from tundravm.components.container import Bind, Container, ContainerSsh
-from tundravm.components.network import Egress, Firewall, Mode, Network
+from tundravm.components.network import Egress, Firewall, Host, Mode, Network
+from tundravm.declarative._network import HOSTS_HEADER
 from tundravm.errors import ValidationError
 from tundravm.models import ContainerSpec
 from tundravm.ports import TCP, UDP
@@ -151,6 +152,30 @@ def networked() -> Image:
         components=[container, WINDOW],
         network=Network(egress=Egress()),
     )
+
+
+def test_a_containers_pinned_hosts_resolve_in_its_own_root(tmp_path: Path) -> None:
+    """Every Host of egress= and modes= is a line of the root's /etc/hosts, after Debian's
+    loopback lines, whatever the mode in force; the image's own /etc/hosts stays untouched."""
+    peer = Host("api.example", ["203.0.113.7", "203.0.113.8"], port=443, aliases=["rpc.example"])
+    windowed = Host("deb.example", ["203.0.113.20"], port=443)
+    container = web(
+        egress=Egress(hosts=[peer, "10.0.0.5:8545"]),
+        modes={"maintenance": Egress(hosts=[windowed, peer])},
+    )
+    image = Image("box", components=[container, WINDOW], network=Network(egress=Egress()))
+    out = tree(image, tmp_path / "tree")
+    assert read(out, "mkosi.images/web/mkosi.extra/etc/hosts") == "".join(
+        f"{line}\n" for line in HOSTS_HEADER
+    ) + (
+        "203.0.113.7 api.example rpc.example\n"
+        "203.0.113.8 api.example rpc.example\n"
+        "203.0.113.20 deb.example\n"
+    )
+    assert not (out / "payload/mkosi.extra/etc/hosts").exists()
+    conf = read(out, "payload/mkosi.extra/etc/nftables.conf")
+    assert 'ip daddr 203.0.113.7 tcp dport 443 accept comment "web (api.example)"' in conf
+    assert "host4_api.example" not in conf
 
 
 def test_a_networked_container_lowers_to_a_veth_the_firewall_forwards() -> None:

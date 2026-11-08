@@ -43,7 +43,7 @@ from tundravm.errors import ValidationError
 from tundravm.kernel_modules import CONTAINER_NETWORK_PATH
 from tundravm.models import CONTAINERS_PATH
 
-from ._network import egress_rules
+from ._network import egress_rules, pinned_hosts
 
 __all__ = ["Bind", "Container", "ContainerSsh"]
 
@@ -218,7 +218,9 @@ class Container(Component):
     it opens and closes it. *egress* is what it alone may send: the forward chain accepts
     exactly its destinations (the metadata servers only with ``metadata=True``) and refuses
     the rest. *modes* map a ``Firewall`` mode's name to what it may send in that mode only,
-    beyond *egress*: a flow it opened drops once another mode is in force. Each of
+    beyond *egress*: a flow it opened drops once another mode is in force. Every ``Host``
+    of *egress* and *modes* is a line of the root's ``/etc/hosts``, in every mode: the root
+    resolves nothing else, so a pinned peer is the only kind it reaches by name. Each of
     *requires* is a host endpoint on the loopback, with readiness (``nethermind.rpc``): the
     container reaches it at the same address, through a socket in its namespace, and starts
     once it is ready. Each port of *serves* is one the host reaches it on, at its veth
@@ -706,8 +708,8 @@ class Container(Component):
             )
 
     def _root(self, network: dm.ContainerNetwork | None) -> dm.ContainerRoot:
-        """The root image: its packages and files, sshd's with *ssh*, its network, and the
-        user with the ids the host pins."""
+        """The root image: its packages and files, sshd's with *ssh*, its network, the
+        peers its egress pins and the user with the ids the host pins."""
         binds = self._binds(sshd=True)
         mounts = tuple(item.target for item in binds if not item.file)
         points = tuple(item.target for item in binds if item.file)
@@ -736,6 +738,7 @@ class Container(Component):
             endpoints=tuple(endpoint.address for endpoint in self.requires),
             account=account,
             ssh_port=None if ssh is None else ssh.port,
+            hosts=pinned_hosts(((self.name, self.egress), *self.modes.items())),
         )
 
     def _dropin(self, unit: str, units: Sequence[str]) -> dm.DropIn:

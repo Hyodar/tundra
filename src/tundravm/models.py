@@ -21,6 +21,8 @@ OutputTarget = Literal["qemu", "azure", "gcp"]
 FileKind = Literal["file", "symlink", "directory"]
 SecurityProfile = Literal["strict", "default", "none"]
 RestartPolicy = Literal["always", "on-failure", "on-abnormal", "no"]
+HostsEntry = tuple[str, tuple[str, ...]]
+"""One ``/etc/hosts`` line: an address and the names that resolve to it."""
 ALL_STEPS = "*"
 """The ``ServiceSpec.needs`` entry for the whole runtime-init chain (``runtime-init.service``)."""
 ServiceType = Literal["simple", "exec", "oneshot", "notify", "forking"]
@@ -570,6 +572,8 @@ class ProfileState:
     """Binaries of the ``systemd`` package this profile keeps beyond its debloat's list
     (``systemd-analyze`` for a probe that scores hardening)."""
     containers: list[ContainerSpec] = field(default_factory=list)
+    hosts: list[HostsEntry] = field(default_factory=list)
+    """The ``/etc/hosts`` entries this profile pins: ``(address, names)``, in order."""
 
 
 @dataclass(slots=True)
@@ -684,6 +688,7 @@ def merge_profiles(base: ProfileState, own: ProfileState) -> ProfileState:
         debloat_explicit=own.debloat_explicit,
         keep_bins=base.keep_bins | own.keep_bins,
         containers=_override(base.containers, own.containers, lambda c: c.name),
+        hosts=list(dict.fromkeys((*base.hosts, *own.hosts))),
     )
 
 

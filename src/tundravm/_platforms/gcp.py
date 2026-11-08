@@ -13,16 +13,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tundravm.models import HostsEntry
+
 if TYPE_CHECKING:
     from tundravm.declarative.model import Service, Task
 
 # ---------------------------------------------------------------------------
-# /etc/hosts — GCP metadata server DNS entries
+# /etc/hosts — the GCP metadata server's names
 # ---------------------------------------------------------------------------
 
-GCP_HOSTS = """\
-127.0.0.1 localhost
-169.254.169.254 metadata.google.internal metadata"""
+GCP_METADATA_HOST: HostsEntry = ("169.254.169.254", ("metadata.google.internal", "metadata"))
+"""The metadata server's line in ``/etc/hosts``: Compute Engine's DNS speaks no TLS, and
+``TeeBase`` resolves over TLS alone."""
 
 # ---------------------------------------------------------------------------
 # The built kernel's ACPI patch, vendored unchanged

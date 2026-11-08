@@ -35,6 +35,7 @@ from tundravm.declarative.config import ConfigFile
 from tundravm.declarative.systemd import Hardening, Root
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
+from tundravm.models import HostsEntry
 
 from .._keywords import Keywords
 
@@ -179,22 +180,9 @@ def _destination(url: str) -> str:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
-PROXY_HOSTS = "/etc/tundravm/hosts.d/observability-proxy"
-"""The proxy's ``ADDRESS NAME`` lines (its TLS name, or each sink's name for a passthrough):
-this component's own fragment of ``/etc/hosts``, apart from the file the GCP glue's
-``gcp-hostname`` appends the host's name to."""
-
-PROXY_HOSTS_SCRIPT = "/usr/lib/tundravm/observability-hosts"
-"""What each exporter runs as root before it starts when its proxy speaks TLS or passes it
-through: appends :data:`PROXY_HOSTS`'s lines ``/etc/hosts`` does not have yet."""
-
-_PROXY_HOSTS_STEP = f"""\
-#!/bin/sh
-# tundravm Observability: names no resolver answers, mapped to the proxy, in /etc/hosts.
-while read -r line; do
-    grep -qxF "$line" /etc/hosts 2>/dev/null || echo "$line" >> /etc/hosts
-done < {PROXY_HOSTS}
-"""
+PROXY_HOSTS = "observability-proxy"
+"""The ``Hosts`` declaration mapping the proxy's names (its TLS name, or each sink's name
+for a passthrough) to its address in the image's ``/etc/hosts``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,9 +194,9 @@ class Proxy(Keywords):
     own TLS, inside the tunnel, is encrypted. With *tls_name* the proxy speaks TLS itself:
     the exporters reach ``https://<tls_name>:<port>``, send *tls_name* as the SNI and check
     the proxy's certificate for it against the image's CA store, and the image maps the
-    name to *address* in ``/etc/hosts`` (a line in :data:`PROXY_HOSTS`, merged at each
-    exporter's start), so the name never reaches a resolver and the firewall still allows
-    the address alone. Not verified without a boot: that ``systemd-journal-upload``'s
+    name to *address* in ``/etc/hosts`` (:data:`PROXY_HOSTS`), so the name never reaches a
+    resolver and the firewall still allows the address alone. Not verified without a boot:
+    that ``systemd-journal-upload``'s
     libcurl and Prometheus negotiate TLS with a given proxy, and that its certificate
     chains to a CA the image trusts (a private CA needs its certificate in the image).
 
@@ -295,14 +283,13 @@ class Proxy(Keywords):
             return f"http://{self.endpoint}"
         return f"https://{self.tls_name}:{self.port}"
 
-    def hosts(self, urls: Sequence[str]) -> str | None:
-        """:data:`PROXY_HOSTS`: *address* for the TLS name, or for each of the sinks' *urls*'
-        names through a passthrough; ``None`` when no name maps to it."""
+    def hosts(self, urls: Sequence[str]) -> tuple[HostsEntry, ...]:
+        """The ``/etc/hosts`` entries mapping *address* to the TLS name, or to each of the
+        sinks' *urls*' names through a passthrough; none without either."""
         names = [self.tls_name] if self.tls_name is not None else []
         if self.passthrough:
             names = [urlsplit(url).hostname or "" for url in urls]
-        lines = dict.fromkeys(f"{self.address} {name}\n" for name in names)
-        return "".join(lines) or None
+        return tuple(dict.fromkeys((self.address, (name,)) for name in names))
 
 
 def _as_proxy(owner: object, proxy: object) -> Proxy | None:
@@ -321,14 +308,6 @@ def _as_proxy(owner: object, proxy: object) -> Proxy | None:
             hint=hint,
         )
     return Proxy(address, port)
-
-
-def _start_steps(proxy: Proxy | None) -> tuple[str, ...]:
-    """The root steps an exporter runs before it starts: the names mapped to the proxy, for
-    one that speaks TLS or passes it through."""
-    if proxy is None or (proxy.tls_name is None and not proxy.passthrough):
-        return ()
-    return (f"+/bin/sh {PROXY_HOSTS_SCRIPT}",)
 
 
 def _check_credential(owner: object, credential: object) -> None:
@@ -386,7 +365,7 @@ class JournalExport(Keywords):
             groups=["systemd-journal"],
             environment={} if url is None else {"https_proxy": url, "http_proxy": url},
             unit=dm.DropIn(
-                exec_start_pre=(*_start_steps(proxy), f"+/bin/sh {JOURNAL_ACCESS}"),
+                exec_start_pre=(f"+/bin/sh {JOURNAL_ACCESS}",),
                 after=() if local else ("time-sync.target",),
                 wants=() if local else ("time-sync.target",),
             ),
@@ -647,7 +626,6 @@ class PrometheusRemoteWrite(Keywords):
         *rules*, through *proxy*; without *url*, to the in-guest :meth:`sink`, never through a
         proxy."""
         local = self.url is None
-        steps = () if local else _start_steps(proxy)
         credential = None if local else self.credential
         environment = {}
         if isinstance(credential, SigV4):
@@ -674,9 +652,7 @@ class PrometheusRemoteWrite(Keywords):
             environment=environment,
             unit=None
             if local
-            else dm.DropIn(
-                exec_start_pre=steps, after=("time-sync.target",), wants=("time-sync.target",)
-            ),
+            else dm.DropIn(after=("time-sync.target",), wants=("time-sync.target",)),
         )
 
     def identity(self) -> tuple[dm.Build, dm.Service]:
@@ -733,10 +709,9 @@ class Observability(Component):
     can only allow by address, and the guest resolves no sink. ``systemd-journal-upload``
     reads it from ``https_proxy``, Prometheus from ``proxy_url``. A proxy that speaks TLS
     itself is ``Proxy(address, port, tls_name=...)``: neither exporter takes the proxy's
-    TLS name apart from its URL, so the component writes the name's address to its own
-    ``/etc/hosts`` fragment. ``Proxy(address, port, passthrough=True)`` is a TCP relay
-    instead: the fragment maps each sink's name to *address*, and the exporters know of no
-    proxy.
+    TLS name apart from its URL, so the component pins the name to the address in
+    ``/etc/hosts``. ``Proxy(address, port, passthrough=True)`` is a TCP relay instead:
+    each sink's name is pinned to *address*, and the exporters know of no proxy.
 
     A development profile builds :meth:`development` in its place, so nothing leaves a
     dev VM.
@@ -797,10 +772,9 @@ class Observability(Component):
 
     def compose(self) -> Iterator[object]:
         proxy = _as_proxy(self, self.proxy)
-        hosts = None if proxy is None else proxy.hosts(self._urls())
-        if hosts is not None:
-            yield File(PROXY_HOSTS, hosts)
-            yield File(PROXY_HOSTS_SCRIPT, _PROXY_HOSTS_STEP, mode=0o755)
+        hosts = () if proxy is None else proxy.hosts(self._urls())
+        if hosts:
+            yield dm.Hosts(PROXY_HOSTS, hosts)
         if self.logs is not None:
             yield Package("systemd-journal-remote")
             yield File(JOURNAL_ACCESS, _JOURNAL_ACCESS_SCRIPT, mode=0o755)

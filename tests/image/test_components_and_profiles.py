@@ -12,7 +12,8 @@ from tundravm._image import recipe_of
 from tundravm._image._values import RESERVED_SETTINGS
 from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
 from tundravm.components.access import DevAccess
-from tundravm.components.network import Egress, Network
+from tundravm.components.network import Egress, Firewall, Host, Mode, Network
+from tundravm.declarative._network import HOSTS_HEADER
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP, UDP
 from tundravm.secrets import Secret
@@ -438,7 +439,7 @@ def test_an_egress_filters_the_output_chain() -> None:
 class Sink(Component):
     """A component whose outbound() is a peer port and the host it ships to."""
 
-    host: str = "logs.example:19532"
+    host: str | Host = "logs.example:19532"
 
     def compose(self) -> Iterator[object]:
         yield from ()
@@ -461,13 +462,26 @@ class Sink(Component):
         ("10.0.0.5:8545", 'ip daddr 10.0.0.5 tcp dport 8545 accept comment "sink"'),
         ("[fd00::5]:8545", 'ip6 daddr fd00::5 tcp dport 8545 accept comment "sink"'),
         ("10.0.0.0/8", 'ip daddr 10.0.0.0/8 accept comment "sink"'),
+        (
+            Host("logs.example", ["10.0.0.5", "fd00::5"], port=19532),
+            'ip daddr 10.0.0.5 tcp dport 19532 accept comment "sink (logs.example)"',
+        ),
+        (
+            Host("logs.example", ["10.0.0.5", "fd00::5"], port=19532),
+            'ip6 daddr fd00::5 tcp dport 19532 accept comment "sink (logs.example)"',
+        ),
+        (
+            Host("logs.example", ["10.0.0.5"]),
+            'ip daddr 10.0.0.5 accept comment "sink (logs.example)"',
+        ),
     ],
 )
-def test_a_components_outbound_joins_the_image_egress(host: str, rule: str) -> None:
+def test_a_components_outbound_joins_the_image_egress(host: str | Host, rule: str) -> None:
     egress = Network(egress=Egress(ports=[UDP(30303)]))
     filtered = Image("x", components=[Sink(host=host)], network=egress)
     rules = plan(filtered, "production").file("/etc/nftables.conf").text
     assert rule in rules and 'udp dport 30303 accept comment "image, sink"' in rules
+    assert ("host4_logs.example" in rules) == (host == "logs.example:19532")
     unfiltered = plan(Image("x", components=[Sink(host=host)]), "production")
     assert "30303" not in unfiltered.file("/etc/nftables.conf").text
 
@@ -490,9 +504,16 @@ def test_a_host_name_is_reached_only_at_the_addresses_it_resolves_to() -> None:
     assert "host4_" not in unfiltered.file("/etc/nftables.conf").text
 
 
-@pytest.mark.parametrize(("host", "waits"), [("api.example:443", True), ("10.0.0.5:443", False)])
+@pytest.mark.parametrize(
+    ("host", "waits"),
+    [
+        ("api.example:443", True),
+        ("10.0.0.5:443", False),
+        (Host("api.example", ["10.0.0.5"], port=443), False),
+    ],
+)
 def test_a_service_whose_egress_names_a_host_starts_after_the_first_resolution(
-    host: str, waits: bool
+    host: str | Host, waits: bool
 ) -> None:
     app = Service("app", ["/usr/bin/app"], egress=Egress(hosts=[host]))
     unit = plan(Image("x", services=[app], network=Network(egress=Egress())), "production")
@@ -513,6 +534,115 @@ def test_a_service_whose_egress_names_a_host_starts_after_the_first_resolution(
 def test_an_egress_host_is_an_address_a_block_or_host_port(host: str, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         Egress(hosts=[host])
+
+
+PEER = Host("api.example", ["203.0.113.7", "203.0.113.8"], port=443, aliases=["rpc.example"])
+
+
+@pytest.mark.parametrize(
+    ("make", "message"),
+    [
+        (lambda: Host("api example", ["203.0.113.7"]), "not a host name"),
+        (lambda: Host("203.0.113.7", ["203.0.113.7"]), "not a host name"),
+        (lambda: Host("api.example", "203.0.113.7"), "takes a list of addresses"),
+        (lambda: Host("api.example", []), "addresses= is empty"),
+        (lambda: Host("api.example", ["203.0.113.0/24"]), "not an IP address"),
+        (lambda: Host("api.example", ["peer.example"]), "not an IP address"),
+        (lambda: Host("api.example", ["203.0.113.7", "203.0.113.7"]), "an address twice"),
+        (lambda: Host("api.example", ["203.0.113.7"], port=0), "not a port in 1..65535"),
+        (lambda: Host("api.example", ["203.0.113.7"], port=True), "not a port in 1..65535"),
+        (lambda: Host("api.example", ["203.0.113.7"], aliases="rpc.example"), "takes a list"),
+        (lambda: Host("api.example", ["203.0.113.7"], aliases=["api.example"]), "not another"),
+        (lambda: Host("api.example", ["203.0.113.7"], aliases=["10.0.0.5"]), "not another"),
+        (
+            lambda: Egress(hosts=[Host("metadata.google.internal", ["169.254.169.254"])]),
+            "cloud metadata server",
+        ),
+        (lambda: Egress(hosts=[443]), "not a host"),  # type: ignore[list-item]
+    ],
+)
+def test_a_host_pins_a_name_to_addresses_or_is_refused(
+    make: Callable[[], object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message) as raised:
+        make()
+    assert raised.value.hint
+    assert PEER.names == ("api.example", "rpc.example")
+    assert PEER.entries == ("203.0.113.7:443", "203.0.113.8:443")
+
+
+OTHER = Host("api.example", ["203.0.113.9"], port=443)
+OTHER_PEER = Host("logs.example", ["fd00::9"], port=19532)
+WINDOW = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])})
+
+
+@pytest.mark.parametrize(
+    ("image", "message"),
+    [
+        (
+            lambda: Image(
+                "x",
+                network=Network(egress=Egress(hosts=[PEER])),
+                services=[Service("app", ["/usr/bin/app"], egress=Egress(hosts=[OTHER]))],
+            ),
+            "Service\\('app'\\) pins api.example to 203.0.113.9, and Network\\(egress=\\) pins it",
+        ),
+        (
+            lambda: Image(
+                "x",
+                network=Network(egress=Egress(hosts=[PEER])),
+                components=[Firewall(modes={"production": Mode(egress=Egress(hosts=[OTHER]))})],
+            ),
+            "Firewall mode 'production' pins api.example",
+        ),
+        (
+            lambda: Image(
+                "x",
+                network=Network(egress=Egress(hosts=["api.example:443"])),
+                services=[Service("app", ["/usr/bin/app"], egress=Egress(hosts=[PEER]))],
+            ),
+            "names it as 'api.example:443', which DNS would resolve",
+        ),
+        (
+            lambda: Image(
+                "x",
+                network=Network(egress=Egress(hosts=[PEER])),
+                profiles={"ops": Profile(add=[Sink(host="rpc.example:19532")])},
+            ),
+            "names it as 'rpc.example:19532'",
+        ),
+    ],
+)
+def test_one_image_pins_a_name_once_and_never_leaves_it_to_dns(
+    image: Callable[[], Image], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message) as raised:
+        plan(image())
+    assert raised.value.hint
+
+
+def test_pinned_hosts_resolve_in_the_images_hosts_file() -> None:
+    mode = Mode(egress=Egress(hosts=[Host("deb.example", ["203.0.113.20"], port=443)]))
+    image = Image(
+        "x",
+        network=Network(egress=Egress(hosts=[PEER, "10.0.0.5:8545"])),
+        components=[Firewall(modes={"production": Mode(), "maintenance": mode})],
+        services=[Service("app", ["/usr/bin/app"], egress=Egress(hosts=[PEER, OTHER_PEER]))],
+    )
+    planned = plan(image, "production")
+    assert planned.file("/etc/hosts").text == "".join(f"{line}\n" for line in HOSTS_HEADER) + (
+        "203.0.113.7 api.example rpc.example\n"
+        "203.0.113.8 api.example rpc.example\n"
+        "203.0.113.20 deb.example\n"
+        "fd00::9 logs.example\n"
+    )
+    assert (
+        "ip daddr 203.0.113.20 tcp dport 443 ct mark set 0x00000002 accept comment "
+        '"maintenance mode (deb.example)"'
+    ) in planned.file("/etc/nftables.conf").text
+    assert (
+        "/etc/hosts" not in plan(Image("x", network=Network(egress=Egress())), "production").files
+    )
 
 
 def test_a_network_takes_dhcp_or_a_static_address() -> None:

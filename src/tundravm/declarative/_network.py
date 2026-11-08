@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from typing import Literal
 
 from tundravm.errors import ValidationError
-from tundravm.models import unit_name
+from tundravm.models import HostsEntry, unit_name
 
 from .model import (
     CLOUD_METADATA,
@@ -38,6 +38,27 @@ from .model import (
 
 NFTABLES_CONF = "/etc/nftables.conf"
 """The ruleset ``nftables.service`` loads at boot (``nft -f``), before the network is up."""
+
+HOSTS_FILE = "/etc/hosts"
+"""Where the pinned names live; ``systemd-resolved`` reads it first (``ReadEtcHosts=yes``)."""
+
+HOSTS_HEADER = (
+    "127.0.0.1 localhost",
+    "::1 localhost ip6-localhost ip6-loopback",
+    "ff02::1 ip6-allnodes",
+    "ff02::2 ip6-allrouters",
+)
+"""The loopback lines Debian's installer writes, which every ``/etc/hosts`` opens with."""
+
+
+def hosts_file(entries: Iterable[HostsEntry]) -> str:
+    """``/etc/hosts``: :data:`HOSTS_HEADER`, then one line per entry, the address, the name
+    and its aliases, in the order given, each line once."""
+    lines = dict.fromkeys(
+        (*HOSTS_HEADER, *(" ".join((address, *names)) for address, names in entries))
+    )
+    return "".join(f"{line}\n" for line in lines)
+
 
 NETWORKD_FIREWALL_DROPIN = (
     "/usr/lib/systemd/system/systemd-networkd.service.d/50-tundravm-firewall.conf"
