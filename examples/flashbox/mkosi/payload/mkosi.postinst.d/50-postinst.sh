@@ -2,7 +2,7 @@
 set -euo pipefail
 
 mkosi-chroot groupadd --system tdx
-mkosi-chroot groupadd --system --gid 60632 searcher-container
+mkosi-chroot groupadd --system --gid 60706 bob
 mkosi-chroot groupadd --system azure-complete-provisioning
 mkosi-chroot groupadd --system gcp-hostname
 mkosi-chroot groupadd --system gcp-forwarded-ips
@@ -11,9 +11,11 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind
 mkosi-chroot useradd --system --shell /usr/sbin/nologin nethermind-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse
 mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse-ready
-mkosi-chroot useradd --system --shell /usr/sbin/nologin --uid 60632 --gid searcher-container searcher-container
-mkosi-chroot useradd --system --shell /usr/sbin/nologin searcher-container-endpoint-8545
+mkosi-chroot useradd --system --shell /usr/sbin/nologin --uid 60706 --gid bob bob
+mkosi-chroot useradd --system --shell /usr/sbin/nologin bob-nethermind-rpc
 mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
+mkosi-chroot useradd --system --shell /usr/sbin/nologin delay-pipe
+mkosi-chroot useradd --system --shell /usr/sbin/nologin input-proxy
 mkosi-chroot useradd --shell /usr/bin/login-menu searcher
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-hostname.service
@@ -29,9 +31,9 @@ mkosi-chroot systemctl enable nethermind.service
 mkosi-chroot systemctl enable nethermind-ready.service
 mkosi-chroot systemctl enable lighthouse.service
 mkosi-chroot systemctl enable lighthouse-ready.service
-mkosi-chroot systemctl enable searcher-container.service
-mkosi-chroot systemctl enable searcher-container-ssh-keys.service
-mkosi-chroot systemctl enable searcher-container-endpoint-8545.socket
+mkosi-chroot systemctl enable bob.service
+mkosi-chroot systemctl enable bob-ssh-keys.service
+mkosi-chroot systemctl enable bob-nethermind-rpc.socket
 mkosi-chroot systemctl enable image-metrics.service
 mkosi-chroot systemctl enable prometheus-node-exporter.service
 mkosi-chroot systemctl enable metrics-export.service
@@ -43,7 +45,6 @@ mkosi-chroot systemctl enable tundravm-generated-jwt.service
 mkosi-chroot systemctl enable ssh-host-keys.service
 mkosi-chroot systemctl enable ssh.service
 mkosi-chroot systemctl enable systemd-user-sessions.service
-mkosi-chroot systemctl enable credential-searcher-keys.service
 mkosi-chroot systemctl enable nftables.service
 mkosi-chroot systemctl enable mode-switch.service
 mkosi-chroot systemctl enable egress-resolve.timer
@@ -63,8 +64,8 @@ ln -sf "/usr/lib/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/mini
 ln -sf "/usr/lib/systemd/system/systemd-networkd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-networkd.service"
 ln -sf "/usr/lib/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-networkd.socket"
 ln -sf "/usr/lib/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-networkd-wait-online.service"
-ln -sf "/usr/lib/systemd/system/searcher-container-ssh-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/searcher-container-ssh-keys.service"
-ln -sf "/usr/lib/systemd/system/searcher-container-endpoint-8545.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/searcher-container-endpoint-8545.socket"
+ln -sf "/usr/lib/systemd/system/bob-ssh-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/bob-ssh-keys.service"
+ln -sf "/usr/lib/systemd/system/bob-nethermind-rpc.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/bob-nethermind-rpc.socket"
 ln -sf "/usr/lib/systemd/system/image-metrics.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/image-metrics.service"
 ln -sf "/usr/lib/systemd/system/prometheus-node-exporter.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/prometheus-node-exporter.service"
 ln -sf "/usr/lib/systemd/system/metrics-export.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/metrics-export.service"
@@ -74,7 +75,6 @@ ln -sf "/usr/lib/systemd/system/tundravm-generated-jwt.service" "$BUILDROOT/etc/
 ln -sf "/usr/lib/systemd/system/ssh-host-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/ssh-host-keys.service"
 ln -sf "/usr/lib/systemd/system/ssh.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/ssh.service"
 ln -sf "/usr/lib/systemd/system/systemd-user-sessions.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-user-sessions.service"
-ln -sf "/usr/lib/systemd/system/credential-searcher-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/credential-searcher-keys.service"
 ln -sf "/usr/lib/systemd/system/nftables.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/nftables.service"
 ln -sf "/usr/lib/systemd/system/mode-switch.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/mode-switch.service"
 ln -sf "/usr/lib/systemd/system/egress-resolve.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/egress-resolve.timer"

@@ -74,14 +74,15 @@ BUILDERNET = [
     ]
 ]
 
-input_dir = data.directory("input", mode=0o755)
-delayed = data.directory("delayed")
+input_dir = data.directory("input")
+# The searcher's login reads the delayed log through its own group, without root.
+delayed = data.directory("delayed", group="searcher")
 searcher_state = data.directory("searcher")
 searcher = Container(
-    "searcher-container",
+    "bob",
     packages=["ca-certificates", "curl", "socat"],
     state=searcher_state,
-    ssh=ContainerSsh(port=SSH_PORT, keys=Secret("searcher-keys")),
+    ssh=ContainerSsh(port=SSH_PORT, owner=True),
     expose=[UDP(INPUT_UDP)],
     egress=Egress(hosts=[BUNDLES]),
     modes={
@@ -91,7 +92,7 @@ searcher = Container(
         ),
     },
     requires=[nethermind.rpc],
-    binds=[Bind(input_dir.path, writable=True)],
+    binds=[Bind(input_dir, writable=True)],
 )
 
 channels = Local("channels")
@@ -103,7 +104,7 @@ delay_pipe = Service(
         delayed / "output.log",
         DELAY,
     ],
-    user=searcher.run_user,
+    groups=[searcher.group],
     state=delayed,
     description=f"Copy the searcher's log to output.log, each line {DELAY} seconds late",
 )
@@ -114,7 +115,7 @@ input_proxy = Service(
         INPUT_TCP.address,
         input_dir / "input.sock",
     ],
-    user=searcher.run_user,
+    groups=[searcher.group],
     state=input_dir,
     expose=[INPUT_TCP],
     description=f"Carry input on {INPUT_TCP} into the searcher's socket, one way",
@@ -123,7 +124,7 @@ input_proxy = Service(
 firewall = Firewall(
     modes={
         "production": Mode(),
-        "maintenance": Mode(ingress=[TCP(SSH_PORT), TCP(30303), UDP(30303)]),
+        "maintenance": Mode(ingress=[searcher.ssh, TCP(30303), UDP(30303)]),
     }
 )
 ssh = SshAccess(

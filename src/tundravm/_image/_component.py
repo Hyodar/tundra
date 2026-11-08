@@ -12,9 +12,10 @@ typed values a caller references without knowing any of that: :class:`ServiceRea
 
 from __future__ import annotations
 
+import functools
 import re
-from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, field, fields, is_dataclass
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import TYPE_CHECKING, Any, ClassVar, dataclass_transform
 
 from tundravm._location import Located
@@ -142,6 +143,9 @@ class Endpoint(Keywords):
     provider: str | Component | None = field(default=None, compare=False, repr=False)
     """The component that publishes it (``provider=self``): a consumer holding this
     endpoint in a field requires that component, without naming it."""
+    export: str | None = field(default=None, compare=False, repr=False)
+    """The export it came from, ``<component>-<property>`` (``nethermind.rpc`` is
+    ``nethermind-rpc``): what a unit relaying it is named after."""
 
     def __post_init__(self) -> None:
         if isinstance(self.provider, Component):
@@ -271,6 +275,10 @@ class _ComponentMeta(type):
         namespace["__build_network__"] = bool(build_network)
         if "rules" in namespace:
             namespace["rules"] = _declared_rules(cls_name, namespace["rules"])
+        for attribute, value in list(namespace.items()):
+            if isinstance(value, property) and value.fget is not None:
+                getter = _exported(attribute, value.fget)
+                namespace[attribute] = property(getter, value.fset, value.fdel, value.__doc__)
         for attribute in namespace.get("__annotations__", {}):
             default = namespace.get(attribute)
             if isinstance(default, list):
@@ -404,6 +412,20 @@ class Component(Located, metaclass=_ComponentMeta):
             elif isinstance(item, Component):
                 found.extend(item.services())
         return tuple(found)
+
+
+def _exported(attribute: str, getter: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """*getter*, an export property's, naming each :class:`Endpoint` it returns after the
+    component and *attribute* (:attr:`Endpoint.export`)."""
+
+    @functools.wraps(getter)
+    def get(self: Component) -> Any:
+        found = getter(self)
+        if isinstance(found, Endpoint) and found.export is None:
+            return replace(found, export=f"{self.name}-{attribute.replace('_', '-')}")
+        return found
+
+    return get
 
 
 def _declared_rules(name: str, rules: object) -> tuple[Rule, ...]:

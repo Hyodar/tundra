@@ -131,6 +131,14 @@ WHOLE = frozenset({"/", "/etc", "/usr", "/var", "/run", "/root", "/home"})
 _KEYS_HINT = "owner=True for the key attest hands over, or keys=[...] baked into the root."
 
 
+def _account_name(stem: str) -> str:
+    """*stem* as a user name: itself, or past 32 characters its first 27 and 4 hex of its
+    sha256, as a veth past 12."""
+    if len(stem) <= 32:
+        return stem
+    return f"{stem[:27]}-{hashlib.sha256(stem.encode()).hexdigest()[:4]}"
+
+
 def _group_readable(hardening: Sandbox) -> Hardening:
     """*hardening* writing group-readable files, for the services in the container's group."""
     return replace(_sandbox(hardening), umask="0027")
@@ -741,8 +749,9 @@ class Container(Component):
         )
 
     def relay(self, endpoint: Endpoint) -> str:
-        """The socket in its namespace that relays *endpoint*."""
-        return f"{self.name}-endpoint-{endpoint.port}.socket"
+        """The socket in its namespace that relays *endpoint*, named after the export
+        (``bob-nethermind-rpc.socket`` for ``nethermind.rpc``), else its port."""
+        return f"{self.name}-{endpoint.export or f'endpoint-{endpoint.port}'}.socket"
 
     def compose(self) -> Iterator[object]:
         loader = self.loader
@@ -790,9 +799,14 @@ class Container(Component):
                 )
         for endpoint in self.requires:
             relay = self.relay(endpoint)
+            stem = relay.removesuffix(".socket")
+            account = _account_name(stem)
+            if account != stem:
+                yield dm.User(account)
             yield Service(
-                relay.removesuffix(".socket"),
+                stem,
                 [PROXY, endpoint.address],
+                user=None if account == stem else account,
                 socket=dm.Listen(endpoint.address),
                 requires=[endpoint],
                 description=f"Relay {endpoint.address} into container {self.name}",

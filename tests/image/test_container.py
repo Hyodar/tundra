@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,7 +13,7 @@ import pytest
 from tundravm import DebianConfig, File, Image, Kernel, Profile, Service
 from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
-from tundravm.components import Endpoint
+from tundravm.components import Component, Endpoint
 from tundravm.components.access import Command, DevAccess, Login, SshAccess
 from tundravm.components.container import Bind, Container, ContainerSsh
 from tundravm.components.network import Egress, Firewall, Host, Mode, Network
@@ -530,3 +530,32 @@ def test_a_bound_volume_directory_is_one_the_containers_group_traverses(
     dropin = planned.file("/usr/lib/systemd/system/web.service.d/20-container.conf").text
     path = bind.target
     assert f"{bind.directive}={path}:{path}" in dropin
+
+
+class Node(Component):
+    """A node exporting its RPC, as Nethermind does."""
+
+    @property
+    def json_rpc(self) -> Endpoint:
+        return self.service("node").endpoint(8545)
+
+    def compose(self) -> Iterator[object]:
+        yield Service("node", ["/usr/bin/node"], readiness=TcpProbe(8545))
+
+
+@pytest.mark.parametrize(
+    ("name", "endpoint", "relay", "user"),
+    [
+        ("bob", Node().json_rpc, "bob-node-json-rpc", "bob-node-json-rpc"),
+        ("bob", RPC.endpoint(8545), "bob-endpoint-8545", "bob-endpoint-8545"),
+        ("a" * 20, Node().json_rpc, f"{'a' * 20}-node-json-rpc", None),
+    ],
+)
+def test_a_relay_is_named_after_the_export_it_carries(
+    name: str, endpoint: Endpoint, relay: str, user: str | None
+) -> None:
+    container = Container(name, ["/usr/bin/app"], packages=["busybox"], requires=[endpoint])
+    image = Image("box", components=[container, Node()], services=[RPC])
+    unit = plan(image).file(f"/usr/lib/systemd/system/{relay}.service").text
+    found = next(line for line in unit.splitlines() if line.startswith("User="))
+    assert found == f"User={user}" if user else len(found) == len("User=") + 32

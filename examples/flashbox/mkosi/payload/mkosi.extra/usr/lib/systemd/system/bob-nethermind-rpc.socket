@@ -1,5 +1,5 @@
 [Unit]
-Description=Relay 127.0.0.1:8545 into container searcher-container
+Description=Relay 127.0.0.1:8545 into container bob
 
 [Socket]
 ListenStream=127.0.0.1:8545

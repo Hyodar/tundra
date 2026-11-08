@@ -26,7 +26,7 @@ func main() {
 		os.Exit(2)
 	}
 	delay := time.Duration(seconds) * time.Second
-	out, err := os.OpenFile(os.Args[2], os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	out, err := os.OpenFile(os.Args[2], os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "delay-pipe:", err)
 		os.Exit(1)

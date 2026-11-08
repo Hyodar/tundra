@@ -1,0 +1,13 @@
+#!/bin/sh
+# tundravm Container bob: this boot's SSH host key, owned by the container's user, and
+# the directory its delivered keys land in; its sshd binds both read-only.
+set -eu
+mkdir -p -m 0711 /run/tundravm /run/tundravm/containers /run/tundravm/containers/bob
+mkdir -p -m 0755 /run/tundravm/containers/bob/host /run/tundravm/containers/bob/keys
+if [ ! -s /run/tundravm/containers/bob/host/ssh_host_ed25519_key ] || [ ! -s /run/tundravm/containers/bob/host/ssh_host_ed25519_key.pub ]; then
+    rm -f /run/tundravm/containers/bob/host/ssh_host_ed25519_key /run/tundravm/containers/bob/host/ssh_host_ed25519_key.pub
+    ssh-keygen -q -t ed25519 -N '' -C bob -f /run/tundravm/containers/bob/host/ssh_host_ed25519_key
+fi
+chmod 0600 /run/tundravm/containers/bob/host/ssh_host_ed25519_key
+chown 60706:60706 /run/tundravm/containers/bob/host/ssh_host_ed25519_key
+echo "tundravm-container-ssh: bob $(ssh-keygen -l -f /run/tundravm/containers/bob/host/ssh_host_ed25519_key.pub | cut -d ' ' -f 2)"

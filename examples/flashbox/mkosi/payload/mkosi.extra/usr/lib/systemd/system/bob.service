@@ -1,11 +1,17 @@
 [Unit]
-Description=Wait for secret searcher-keys
+Description=Container bob
+After=nethermind-ready.service runtime-init-volume-data.service tdx-evidence.service
+Requires=nethermind-ready.service runtime-init-volume-data.service tdx-evidence.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh -c "until [ -e /run/tundravm/credentials/searcher-keys ]; do sleep 1; done"
-DynamicUser=yes
+Type=exec
+ExecStart=/usr/sbin/sshd -D -e -f /etc/ssh/tundravm/sshd_config
+User=bob
+WorkingDirectory=/persistent/data/searcher
+Environment=STATE_DIRECTORY=/persistent/data/searcher
+ReadWritePaths=-/persistent/data/searcher
+Restart=on-failure
+RestartSec=5s
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -25,11 +31,11 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
+SystemCallFilter=~@privileged
 SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-UMask=0077
+UMask=0027
 
 [Install]
-WantedBy=minimal.target
+WantedBy=tundravm-held.target

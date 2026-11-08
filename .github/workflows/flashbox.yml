@@ -72,11 +72,10 @@ jobs:
           receipt=.tundravm/instances/$INSTANCE/instance.json
           uv run tundravm attest "$INSTANCE" --policy "$policy" --identity "$RUNNER_TEMP/operator"
           jq -e '.attested.verdict == "simulated"' "$receipt"
-          cp "$RUNNER_TEMP/operator.pub" "$RUNNER_TEMP/searcher-keys"
           printf '[default]\naws_access_key_id = AKIDEXAMPLE\naws_secret_access_key = secret\n' \
             > "$RUNNER_TEMP/metrics-aws"
           uv run tundravm secrets deliver "$INSTANCE" --policy "$policy" \
-            "searcher-keys=@$RUNNER_TEMP/searcher-keys" "metrics-aws=@$RUNNER_TEMP/metrics-aws"
+            "metrics-aws=@$RUNNER_TEMP/metrics-aws"
           printf 'flashbox-test-passphrase\n' | uv run tundravm secrets unlock "$INSTANCE" data
           uv run tundravm attest "$INSTANCE" --policy "$policy" --identity "$RUNNER_TEMP/operator"
 
@@ -87,8 +86,8 @@ jobs:
         run: |
           probe=.tundravm/instances/$INSTANCE/probe.json
           others='[.results[] | select(.verdict == "fail")
-            | select(.check != "container:searcher-container:egress"
-              and .check != "container:searcher-container:udp:27017")] | length == 0'
+            | select(.check != "container:bob:egress"
+              and .check != "container:bob:udp:27017")] | length == 0'
           for attempt in $(seq 1 40); do
             uv run tundravm run probe "$INSTANCE" > "$RUNNER_TEMP/probe.txt" 2>&1 || true
             if jq -e "$others" "$probe" > /dev/null; then break; fi
@@ -136,7 +135,7 @@ jobs:
           inside() {
             ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
               -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
-              searcher-container@127.0.0.1 "$@"
+              bob@127.0.0.1 "$@"
           }
           inside true
           inside 'id -un; ls -d /persistent/data/searcher /persistent/data/input'
@@ -145,7 +144,8 @@ jobs:
       - name: Feed the input channel and write a log line the delay holds back
         if: ${{ !cancelled() }}
         # input-proxy relays tcp 27018 into the socket the container listens on and never
-        # answers; the bot's log line reaches the menu's `logs` only after the delay.
+        # answers, so the socket is group-writable for it (perm=0660); the bot's log line
+        # reaches the menu's `logs` only after the delay.
         run: |
           receipt=.tundravm/instances/$INSTANCE/instance.json
           known=.tundravm/instances/$INSTANCE/known_hosts
@@ -154,9 +154,9 @@ jobs:
           inside() {
             ssh -i "$RUNNER_TEMP/operator" -p "$ssh_port" -o IdentitiesOnly=yes -o BatchMode=yes \
               -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=yes \
-              searcher-container@127.0.0.1 "$@"
+              bob@127.0.0.1 "$@"
           }
-          inside 'nohup socat -u UNIX-LISTEN:/persistent/data/input/input.sock,fork \
+          inside 'nohup socat -u UNIX-LISTEN:/persistent/data/input/input.sock,fork,perm=0660 \
             OPEN:/persistent/data/searcher/input.out,creat,append > /dev/null 2>&1 &'
           sleep 3
           printf 'hello-input\n' | timeout 10 bash -c \
@@ -204,7 +204,7 @@ jobs:
           console=.tundravm/instances/$INSTANCE/console.log
           jq -r '.results[] | select(.check | test("nethermind|lighthouse|searcher|login|menu|firewall|volume|metrics|container"))
             | "\(.check) \(.verdict) \(.detail)"' "$probe" || true
-          grep -E 'nethermind|lighthouse|searcher-container|mode-switch' "$console" | tail -n 40 || true
+          grep -E 'nethermind|lighthouse|bob|mode-switch' "$console" | tail -n 40 || true
 
       - name: Upload the mkosi log of a failed build
         if: failure()

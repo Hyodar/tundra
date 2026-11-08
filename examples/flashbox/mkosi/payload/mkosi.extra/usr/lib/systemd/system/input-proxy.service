@@ -6,7 +6,8 @@ Requires=runtime-init-volume-data.service tdx-evidence.service
 [Service]
 Type=exec
 ExecStart=/usr/bin/input-proxy 0.0.0.0:27018 /persistent/data/input/input.sock
-User=searcher-container
+User=input-proxy
+SupplementaryGroups=bob
 WorkingDirectory=/persistent/data/input
 Environment=STATE_DIRECTORY=/persistent/data/input
 ReadWritePaths=-/persistent/data/input

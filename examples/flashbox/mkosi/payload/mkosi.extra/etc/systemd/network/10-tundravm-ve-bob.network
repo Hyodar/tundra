@@ -1,0 +1,6 @@
+# tundravm Container bob: ve-bob is bob-net.service's
+[Match]
+Name=ve-bob
+
+[Link]
+Unmanaged=yes

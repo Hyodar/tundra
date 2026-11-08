@@ -798,6 +798,7 @@ Endpoint(
     scheme: str = 'http',
     ready: ServiceReady | None = None,
     provider: str | Component | None = None,
+    export: str | None = None,
 )
 ```
 
@@ -1267,7 +1268,7 @@ Container(
 | `Container.metrics` | Its unit's series as PromQL selectors, for a `RecordingRule`: `f"max({searcher.metrics.active})"`. |
 | `Container.namespace` | The `<name>-net.service` that makes its namespace, `None` when it holds `lo` only (`PrivateNetwork=yes`). |
 | `Container.network() -> ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
-| `Container.relay(endpoint: Endpoint) -> str` | The socket in its namespace that relays *endpoint*. |
+| `Container.relay(endpoint: Endpoint) -> str` | The socket in its namespace that relays *endpoint*, named after the export (`bob-nethermind-rpc.socket` for `nethermind.rpc`), else its port. |
 | `Container.run_user` | The account the program runs as: *user*, else the container's name. |
 | `Container.sshd_unit` | The unit running sshd: the container's own without *argv*, `<name>-ssh` beside it with one; `None` without *ssh*. |
 | `Container.unit` | The container's `.service`. |

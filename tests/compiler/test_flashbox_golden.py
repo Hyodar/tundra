@@ -31,9 +31,9 @@ def test_flashbox_dev_profile_compiles_alone_to_its_golden_tree(flashbox: Recipe
     assert tuple(v.name for v in flashbox.variants) == ("production", "dev")
     assert sorted(p.name for p in (GOLDEN / "mkosi.images").iterdir()) == [
         "azure",
+        "bob",
         "gcp",
         "payload",
-        "searcher-container",
     ]
     diff = assert_tree_matches(flashbox, GOLDEN, profiles=["dev"], update=False)
     assert diff.is_clean

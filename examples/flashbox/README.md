@@ -53,7 +53,7 @@ $ tundravm attest flashbox-1 --policy POLICY --identity ~/.ssh/searcher
 $ tundravm secrets unlock flashbox-1 data
 $ tundravm secrets deliver flashbox-1 --policy POLICY searcher-keys=@searcher.pub metrics-aws=@aws-credentials
 $ ssh searcher@HOST toggle maintenance
-$ ssh -p 10022 searcher-container@HOST
+$ ssh -p 10022 bob@HOST
 ```
 
 `POLICY` is the build's `measurements.json`. The searcher attests first, so its key owns

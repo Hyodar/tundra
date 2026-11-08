@@ -6,7 +6,8 @@ Requires=runtime-init-volume-data.service tdx-evidence.service
 [Service]
 Type=exec
 ExecStart=/usr/bin/delay-pipe /persistent/data/searcher/bob.log /persistent/data/delayed/output.log 300
-User=searcher-container
+User=delay-pipe
+SupplementaryGroups=bob searcher
 WorkingDirectory=/persistent/data/delayed
 Environment=STATE_DIRECTORY=/persistent/data/delayed
 ReadWritePaths=-/persistent/data/delayed
@@ -35,7 +36,7 @@ SystemCallFilter=~@privileged @resources
 SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-UMask=0077
+UMask=0027
 
 [Install]
 WantedBy=tundravm-held.target

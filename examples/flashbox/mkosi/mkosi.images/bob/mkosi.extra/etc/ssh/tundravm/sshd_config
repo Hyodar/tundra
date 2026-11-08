@@ -2,7 +2,7 @@
 Port 10022
 HostKey /etc/ssh/tundravm/host/ssh_host_ed25519_key
 AuthorizedKeysFile /etc/ssh/tundravm/keys/authorized_keys
-AllowUsers searcher-container
+AllowUsers bob
 PermitRootLogin no
 PubkeyAuthentication yes
 PasswordAuthentication no

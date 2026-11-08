@@ -1,6 +1,0 @@
-# tundravm Container searcher-container: ve-searche-0bd8 is searcher-container-net.service's
-[Match]
-Name=ve-searche-0bd8
-
-[Link]
-Unmanaged=yes

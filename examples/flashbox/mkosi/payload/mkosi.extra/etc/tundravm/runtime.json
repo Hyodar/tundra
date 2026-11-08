@@ -13,13 +13,6 @@
       "units": [
         "metrics-export.service"
       ]
-    },
-    {
-      "location": "/run/tundravm/credentials/searcher-keys",
-      "name": "searcher-keys",
-      "required": true,
-      "source": null,
-      "units": []
     }
   ],
   "volumes": [

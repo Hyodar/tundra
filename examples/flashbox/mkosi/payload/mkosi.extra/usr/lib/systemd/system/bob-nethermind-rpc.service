@@ -1,12 +1,15 @@
 [Unit]
-Description=Generate this boot's SSH host key for container searcher-container
+Description=Relay 127.0.0.1:8545 into container bob
+After=bob-nethermind-rpc.socket nethermind-ready.service tdx-evidence.service
+Requires=bob-nethermind-rpc.socket nethermind-ready.service tdx-evidence.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh /usr/lib/tundravm/container-ssh/searcher-container
-TimeoutStartSec=60s
-ProtectSystem=full
+Type=exec
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:8545
+User=bob-nethermind-rpc
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
@@ -22,17 +25,11 @@ ProtectHostname=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 LockPersonality=yes
-RestrictAddressFamilies=none
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 SystemCallFilter=@setuid
-SystemCallFilter=@chown
 SystemCallErrorNumber=EPERM
-CapabilityBoundingSet=CAP_CHOWN
-AmbientCapabilities=CAP_CHOWN
+CapabilityBoundingSet=
 UMask=0077
-StandardOutput=journal+console
-
-[Install]
-WantedBy=minimal.target

@@ -819,10 +819,10 @@ check=service:nethermind.service
 probe_locked /persistent/data data operator || probe_service nethermind.service
 check=service:lighthouse.service
 probe_locked /persistent/data data operator || probe_service lighthouse.service
-check=service:searcher-container.service
-probe_locked /persistent/data data operator || probe_service searcher-container.service
-check=socket:searcher-container-endpoint-8545.socket
-probe_active searcher-container-endpoint-8545.socket 'the socket must listen; systemctl status names why it does not'
+check=service:bob.service
+probe_locked /persistent/data data operator || probe_service bob.service
+check=socket:bob-nethermind-rpc.socket
+probe_active bob-nethermind-rpc.socket 'the socket must listen; systemctl status names why it does not'
 check=service:image-metrics.service
 probe_service image-metrics.service
 check=service:delay-pipe.service
@@ -839,16 +839,16 @@ check=port:27018/tcp
 probe_locked /persistent/data data operator || probe_port tcp 27018
 check=volume:/persistent/data
 probe_volume /persistent/data yes operator /run/tundravm/owner/data
-check=container:searcher-container
-probe_locked /persistent/data data operator || probe_container searcher-container.service /usr/lib/tundravm/containers/searcher-container.raw veth 169.254.96.162
-check=container:searcher-container:egress
-probe_locked /persistent/data data operator || probe_container_egress searcher-container.service 18.221.59.61:443 192.0.2.1:9 169.254.169.254:80
-check=container:searcher-container:endpoint:8545
-probe_locked /persistent/data data operator || probe_container_endpoint searcher-container.service 127.0.0.1 8545 searcher-container-endpoint-8545.socket
-check=container:searcher-container:udp:27017
-probe_locked /persistent/data data operator || probe_container_udp searcher-container.service 27017
-check=container-ssh:searcher-container
-probe_locked /persistent/data data operator || probe_container_ssh searcher-container searcher-container 10022 8745
+check=container:bob
+probe_locked /persistent/data data operator || probe_container bob.service /usr/lib/tundravm/containers/bob.raw veth 169.254.222.98
+check=container:bob:egress
+probe_locked /persistent/data data operator || probe_container_egress bob.service 18.221.59.61:443 192.0.2.1:9 169.254.169.254:80
+check=container:bob:endpoint:8545
+probe_locked /persistent/data data operator || probe_container_endpoint bob.service 127.0.0.1 8545 bob-endpoint-8545.socket
+check=container:bob:udp:27017
+probe_locked /persistent/data data operator || probe_container_udp bob.service 27017
+check=container-ssh:bob
+probe_locked /persistent/data data operator || probe_container_ssh bob bob 10022 8745
 check=egress:192.0.2.1:9
 probe_egress 192.0.2.1 9
 check=egress:time.cloudflare.com
@@ -863,12 +863,16 @@ check=egress:metadata:nethermind
 probe_metadata nethermind - 169.254.169.254 no
 check=egress:metadata:lighthouse
 probe_metadata lighthouse - 169.254.169.254 no
-check=egress:metadata:searcher-container
-probe_metadata searcher-container - 169.254.169.254 no
-check=egress:metadata:searcher-container-endpoint-8545
-probe_metadata searcher-container-endpoint-8545 - 169.254.169.254 no
+check=egress:metadata:bob
+probe_metadata bob - 169.254.169.254 no
+check=egress:metadata:bob-nethermind-rpc
+probe_metadata bob-nethermind-rpc - 169.254.169.254 no
 check=egress:metadata:metrics-export
 probe_metadata metrics-export - 169.254.169.254 no
+check=egress:metadata:delay-pipe
+probe_metadata delay-pipe - 169.254.169.254 no
+check=egress:metadata:input-proxy
+probe_metadata input-proxy - 169.254.169.254 no
 check=egress:metadata:metrics-sink
 probe_metadata metrics-sink - 169.254.169.254 no
 check=egress:metadata:azure-complete-provisioning
@@ -890,13 +894,13 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.1:9091' 'flashbox:container_alive|flashbox:container_average_cpu_is_under_80_percent|flashbox:container_oom_kills_count|flashbox:disk_free_space_is_over_10_percent|flashbox:disk_free_space_is_over_128_gb|flashbox:network_is_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'flashbox:container_alive' 'flashbox:container_average_cpu_is_under_80_percent' 'flashbox:container_oom_kills_count' 'flashbox:disk_free_space_is_over_10_percent' 'flashbox:disk_free_space_is_over_128_gb' 'flashbox:network_is_up'
 check=observability:no-wait
-probe_nowait metrics-export.service -- tdxs.service nethermind.service lighthouse.service searcher-container.service searcher-container-endpoint-8545.service image-metrics.service delay-pipe.service input-proxy.service metrics-sink.service
+probe_nowait metrics-export.service -- tdxs.service nethermind.service lighthouse.service bob.service bob-nethermind-rpc.service image-metrics.service delay-pipe.service input-proxy.service metrics-sink.service
 check=hardening:nethermind.service
 probe_hardening nethermind.service 2.7 dotnet
 check=hardening:lighthouse.service
 probe_hardening lighthouse.service 2.5 static
-check=hardening:searcher-container-endpoint-8545.service
-probe_hardening searcher-container-endpoint-8545.service 2.5 static
+check=hardening:bob-nethermind-rpc.service
+probe_hardening bob-nethermind-rpc.service 2.5 static
 check=hardening:metrics-export.service
 probe_hardening metrics-export.service 2.5 static
 check=hardening:delay-pipe.service
