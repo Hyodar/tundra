@@ -13,7 +13,7 @@ from components.nethermind import Nethermind
 from components.searcher import Searcher
 
 from tundravm import Debian, DebianConfig, Image, Kernel, KernelFragment, RootFS
-from tundravm.components.access import Command, DevAccess, Int, Login, SshAccess
+from tundravm.components.access import Command, CommandParam, DevAccess, Login, SshAccess
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.components.observability import Observability, PrometheusRemoteWrite, Proxy, SigV4
 from tundravm.secrets import Generated, Secret
@@ -53,12 +53,35 @@ ssh = SshAccess(
     login=Login(
         "searcher",
         owner=True,
+        help="operate the flashbox searcher",
         commands={
             "status": firewall.commands.status,
-            "logs": Command("/usr/bin/tail", "--lines", Int("lines", 1, 10000), searcher.logs),
             "toggle": firewall.commands.switch,
-            "reboot": Command("/usr/bin/systemctl", "reboot", sudo=True),
-            "shell": Command("/usr/bin/bash", dev=True),
+            "logs": Command(
+                params=[
+                    CommandParam(
+                        "--lines",
+                        type=int,
+                        min=1,
+                        max=10000,
+                        default=200,
+                        help="lines from the end",
+                    ),
+                    CommandParam("--follow", type=bool, help="keep printing as the file grows"),
+                ],
+                runs=[
+                    "/usr/bin/tail",
+                    "--lines",
+                    "{{lines}}",
+                    "{{#follow}}-f{{/follow}}",
+                    searcher.logs,
+                ],
+                help="the searcher's delayed output",
+            ),
+            "reboot": Command(
+                runs=["/usr/bin/systemctl", "reboot"], sudo=True, help="reboot the VM"
+            ),
+            "shell": Command(runs=["/usr/bin/bash"], dev=True, help="a shell as searcher"),
         },
     )
 )

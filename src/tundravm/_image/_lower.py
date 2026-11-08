@@ -719,6 +719,14 @@ class _Lowering:
         self.developed_somewhere(found)
         return tuple(found)
 
+    def development_profiles(self) -> tuple[str, ...]:
+        """The image's development profiles: each whose ``production=`` is ``False``, and
+        ``dev`` with ``dev=``."""
+        found = [name for name, profile in self.image.profiles.items() if not profile.production]
+        if self.image.dev is not None:
+            found.append("dev")
+        return tuple(dict.fromkeys(found))
+
     def developed(self) -> list[object]:
         """The image's own components a development build holds otherwise: each
         ``SshAccess`` whose logins have ``dev=True`` commands."""
@@ -1070,11 +1078,15 @@ class _Lowering:
 
     def component(self, item: Component) -> dm.Fragment:
         """A ``Component`` as the fragment it is, nested components included; an
-        ``Observability`` as this image builds it."""
+        ``Observability`` as this image builds it, an ``SshAccess``'s logins compiled with
+        their ``dev=True`` commands in its development profiles."""
+        from tundravm.components.access import SshAccess
         from tundravm.components.observability import Observability
 
         if isinstance(item, Observability):
             item = item.for_image(self.image.name)
+        if isinstance(item, SshAccess):
+            item = item.built_in(self.development_profiles())
         items: list[dm.Declaration | dm.Fragment] = []
         outer, self.composer = self.composer, item
         for child in composed(item):

@@ -37,3 +37,9 @@ def test_flashbox_dev_profile_compiles_alone_to_its_golden_tree(flashbox: Recipe
     ]
     diff = assert_tree_matches(flashbox, GOLDEN, profiles=["dev"], update=False)
     assert diff.is_clean
+
+
+@pytest.mark.parametrize("name", ["main.go", "dev.go"])
+def test_the_searchers_program_is_the_runtimes_reference_program(name: str) -> None:
+    written = GOLDEN / "payload" / "tundravm-cli" / "searcher" / name
+    assert written.read_bytes() == (REPO_ROOT / "tools" / "logincli" / name).read_bytes()

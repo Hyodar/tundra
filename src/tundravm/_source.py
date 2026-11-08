@@ -680,6 +680,42 @@ class GoBuild:
         )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TreeGoBuild(GoBuild):
+    """A :class:`GoBuild` of a program the mkosi tree holds at ``payload/<tree>``, which
+    tundravm writes there (*files*, ``(name, text)`` each): the build copies that directory
+    instead of the source's checkout, whose pin and prefetched toolchain it still takes.
+
+    The profiles *development* names build it with ``-tags dev`` (decided from
+    ``$PROFILES`` in the build script); every other profile builds it without, so their
+    binary never compiles a ``//go:build dev`` file. *digest* covers *files*, so a change
+    to them is a new cache entry.
+    """
+
+    tree: str
+    development: tuple[str, ...] = ()
+    files: tuple[tuple[str, str], ...] = field(default=(), repr=False, metadata={"omit": True})
+    origin: object = field(default=None, compare=False, repr=False, metadata={"omit": True})
+    """What declared it (a ``Login``), for the boot probe."""
+    digest: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        GoBuild.__post_init__(self)
+        object.__setattr__(self, "development", tuple(self.development))
+        object.__setattr__(self, "files", tuple(self.files))
+        listing = {name: hashlib.sha256(text.encode()).hexdigest() for name, text in self.files}
+        object.__setattr__(self, "digest", manifest_digest(listing))
+
+    def copy(self, target: str) -> str:
+        """The shell command copying the tree's directory to *target*."""
+        source = f'"$SRCDIR/payload/{self.tree}"'
+        missing = shlex.quote(f"tundravm: payload/{self.tree} is missing: compile the tree again")
+        return (
+            f"{{ [ -d {source} ] || {{ echo {missing} >&2; exit 1; }}; }}"
+            f" && mkdir -p {target} && cp -a --no-preserve=ownership {source}/. {target}/"
+        )
+
+
 CARGO_RUSTFLAGS = (
     "-C",
     "target-cpu=generic",
@@ -995,6 +1031,8 @@ def _recipe_payload(build: BuildRecipe) -> dict[str, object]:
             continue
         value = getattr(build, item.name)
         if "payload_default" in item.metadata and value == item.metadata["payload_default"]:
+            continue
+        if item.metadata.get("omit"):
             continue
         if isinstance(value, Mapping):
             value = dict(sorted(value.items()))
@@ -1369,12 +1407,40 @@ class SourceBuild(NamedSource):
             )
             unpinned = f"# unpinned: {self.source.requested}\n"
             return f"{unpinned}echo {shlex.quote(message)} >&2 && exit 1"
+        if isinstance(self.build, TreeGoBuild):
+            return self._render_tree(self.build, effective, workdir, distribution or {})
         copy_deps, uses_deps = self._deps(effective)
         inner = f"{uses_deps}{build}".replace("'", "'\\''")
         command = f"{self._copy(effective)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
         fingerprint = self.cache_fingerprint(effective, distribution=distribution or {}, sdk=sdk)
         key = f"{self.cache_key or self.name}-{fingerprint}"
         return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
+
+    def _render_tree(
+        self, tree: TreeGoBuild, pin: str, workdir: str, distribution: Mapping[str, object]
+    ) -> str:
+        """A :class:`TreeGoBuild`'s hook: with ``-tags dev`` where ``$PROFILES`` names one of
+        its development profiles, else without, each cached on its own."""
+        copy_deps, uses_deps = self._deps(pin)
+        target = f'"{Build.build_path(self.name)}"'
+
+        def built(recipe: GoBuild) -> str:
+            spec = replace(self, build=recipe)
+            inner = f"{uses_deps}{resolve_recipe(recipe).command(f'/build/{workdir}')}"
+            inner = inner.replace("'", "'\\''")
+            command = f"{tree.copy(target)}{copy_deps} && mkosi-chroot bash -c '{inner}'"
+            fingerprint = spec.cache_fingerprint(pin, distribution=distribution)
+            key = f"{self.cache_key or self.name}-{fingerprint}"
+            return self._cache(key, workdir).wrap(command, root=MOUNTED_CACHE_ROOT)
+
+        production = built(tree)
+        if not tree.development:
+            return production
+        test = " || ".join(
+            f'[[ " ${{PROFILES:-}} " == *" {name} "* ]]' for name in tree.development
+        )
+        developed = built(replace(tree, tags=(*tree.tags, "dev")))
+        return f"if {test}; then\n    {developed}\nelse\n    {production}\nfi"
 
     def _copy(self, pin: str) -> str:
         """Copy the mounted checkout of *pin* to the build tree, without its marker."""

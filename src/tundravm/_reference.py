@@ -354,6 +354,8 @@ def _value(value: object) -> str:
     value a class constructs with no arguments."""
     if isinstance(value, Mapping) and not dataclasses.is_dataclass(value):
         return repr(dict(value))
+    if isinstance(value, type) and value.__module__ == "builtins":
+        return value.__name__
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         try:
             if type(value)() == value:

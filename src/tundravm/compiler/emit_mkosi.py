@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 
 from tundravm._modules.init import HELD_TARGET
 from tundravm._options import RootLayout
-from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
+from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource, TreeGoBuild
 from tundravm._units import v1
 from tundravm._units.render import service_unit
 from tundravm.compiler._split import UNIT_DIRECTORY, is_empty, split_profiles
@@ -1262,6 +1262,11 @@ class DeterministicMkosiEmitter:
         if not any(e.path == MACHINE_ID for e in shared.files):
             _write(payload / "mkosi.extra" / MACHINE_ID.lstrip("/"), "uninitialized\n", 0o444)
         self._emit_kernel_config(payload, config)
+        for state in effective.values():
+            for spec in state.source_builds.values():
+                if isinstance(spec.build, TreeGoBuild):
+                    for file, text in spec.build.files:
+                        _write(payload / spec.build.tree / file, text, FILE_MODE)
         script_paths: dict[str, dict[Phase, Path]] = {
             default_name: self._emit_all_scripts(
                 profile_dir=payload,

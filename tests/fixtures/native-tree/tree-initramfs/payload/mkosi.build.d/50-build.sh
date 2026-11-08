@@ -21,6 +21,6 @@ echo 'tundravm: source build disk-encryption is not pinned: run tundravm lock, t
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"attested-endpoint","package":"./cmd/attested-endpoint","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/attested-endpoint","kind":"artifact","mode":"0755"}],"name":"attested-endpoint","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
 echo 'tundravm: source build attested-endpoint is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
-# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"login-menu","package":"./cmd/login-menu","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/login-menu","kind":"file","mode":"0755","path":"build/login-menu"}],"name":"login-menu","source":{"kind":"local","path":"tundravm:tools"}}
+# tundravm build: {"build":{"development":["dev"],"digest":"ea4cb99702441c08d84cc318f42d600456be5f30b1714f8544e78f8831a886e3","env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"tenant","package":".","packages":["golang"],"tags":[],"tree":"tundravm-cli/tenant"},"install":[{"dest":"/usr/libexec/tundravm/cli/tenant","kind":"file","mode":"0755","path":"build/tenant"}],"name":"tundravm-cli-tenant","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
-echo 'tundravm: source build login-menu is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+echo 'tundravm: source build tundravm-cli-tenant is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

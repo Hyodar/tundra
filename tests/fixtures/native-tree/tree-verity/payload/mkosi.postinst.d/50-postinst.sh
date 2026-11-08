@@ -10,7 +10,7 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin web
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web-loopback
 mkosi-chroot useradd --system --shell /usr/sbin/nologin web-loopback-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin greeter
-mkosi-chroot useradd --home-dir /home/tenant --create-home --shell /usr/bin/login-menu tenant
+mkosi-chroot useradd --home-dir /home/tenant --create-home --shell /usr/libexec/tundravm/cli/tenant tenant
 mkosi-chroot useradd --system --shell /usr/sbin/nologin attested-tls-8443
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-hostname.service

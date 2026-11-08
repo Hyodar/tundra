@@ -415,11 +415,12 @@ jobs:
           echo "the container's maintenance port answered in maintenance"
           sleep 2
 
-      - name: Log in as the tenant into its menu, refuse root, close the window from it
+      - name: Log in as the tenant into its program, refuse root, close the window from it
         # The dev profile's Login("tenant", owner=True): attest handed it the operator's key
         # instead of root. Against the host key the quote bound (attest's known_hosts), an
-        # empty request lists the menu, entries run with typed arguments as the login or
-        # through one exact sudoers line, and what the menu does not offer is refused. Root
+        # empty request lists the commands, which run with typed params as the login or
+        # through the sudoers lines of their argvs, and what the program does not declare is
+        # refused. Root
         # has no key and PermitRootLogin no. Its `switch production` runs mode-switch locally,
         # which drops the session's own flow, so the client sees no answer.
         run: |
@@ -434,20 +435,21 @@ jobs:
               -o StrictHostKeyChecking=yes "$user@127.0.0.1" "$@"
           }
           as tenant | tee "$RUNNER_TEMP/menu.txt"
-          grep -Fx '  greeting' "$RUNNER_TEMP/menu.txt"
-          grep -E '^  logs <lines> +lines 1-1000, as root$' "$RUNNER_TEMP/menu.txt"
-          grep -E '^  switch <mode> +mode production\|maintenance, as root$' "$RUNNER_TEMP/menu.txt"
+          grep -E '^  greeting +the greeting$' "$RUNNER_TEMP/menu.txt"
+          grep -E '^  logs <lines> +the greeter.s last lines \(as root\)$' "$RUNNER_TEMP/menu.txt"
+          grep -E '^  switch <mode> +switch the firewall mode \(as root\)$' "$RUNNER_TEMP/menu.txt"
+          as tenant seen "$(printf '0%.0s' $(seq 64))" || [ $? = 1 ]
           as tenant greeting | tee "$RUNNER_TEMP/tenant.txt"
           grep -Fx 'hello from the payload' "$RUNNER_TEMP/tenant.txt"
           as tenant web | grep -Fx active
           as tenant logs 20 | tee "$RUNNER_TEMP/logs.txt"
           grep -Fx 'hello from the payload' "$RUNNER_TEMP/logs.txt"
-          for bad in 'logs 1001' 'logs 3;id' sh 'switch tdx'; do
+          for bad in 'logs 1001' 'logs 3;id' sh 'switch tdx' 'seen 0'; do
             if as tenant "$bad" 2> "$RUNNER_TEMP/refused.txt"; then
-              echo "the menu ran '$bad'"; exit 1
+              echo "the program ran '$bad'"; exit 1
             fi
             cat "$RUNNER_TEMP/refused.txt"
-            grep -E '^login-menu: ' "$RUNNER_TEMP/refused.txt"
+            grep -E '^tenant: ' "$RUNNER_TEMP/refused.txt"
             grep -E '^fix: ssh tenant@HOST' "$RUNNER_TEMP/refused.txt"
           done
           jq -r '.results[] | select(.check == "root" or .check == "login:tenant" or .check == "menu:tenant" or .check == "ssh:root")

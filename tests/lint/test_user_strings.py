@@ -95,10 +95,10 @@ DENYLIST = {
         r"\b[Uu]nknown variant|\bDeclared variants\b|\bin variant\b|\bvariant=(?:\{|\s*$)"
         r"|\bInherits: |\bvariants\.[a-z]"
     ),
-    "login argument mini-language (Int(name, low, high), Choice(name, ...))": re.compile(
+    "login argument mini-language (CommandParam(...) and {{name}} in runs=)": re.compile(
         r"\{[a-z][a-z0-9_]*:(?:int|choice)\b"
     ),
-    "a login command as a plain list (Command(path, word, ...))": re.compile(
+    "a login command as a plain list (Command(runs=[...]))": re.compile(
         r"\bcommands=\{\s*[\"'][a-z][a-z0-9-]*[\"']:\s*\["
     ),
 }
@@ -520,7 +520,8 @@ def test_renamed_guard_passes_the_current_spellings() -> None:
         'EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")\nmcopy ::EFI/BOOT/BOOTX64.EFI\n'
         'BootStep("s", "true", after=[disk.ready])\nUnit("a.service", U, needs=[s.ready])\n'
         'Repository("r", URL, "s", priority=10)\nRuntimeInit("x")\n'
-        '{"toggle": firewall.commands.switch, "reboot": Command("/x", sudo=True)}\n'
+        '{"toggle": firewall.commands.switch, "reboot": Command(runs=["/x"], sudo=True)}\n'
+        'CommandParam("--lines", type=int, min=1, max=9, default=1)\nInt(value, 1, 9)\n'
     )
     assert _renamed(source) == []
 

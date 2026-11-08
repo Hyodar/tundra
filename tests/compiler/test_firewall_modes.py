@@ -17,7 +17,7 @@ import pytest
 
 import tundravm
 from tundravm import DebianConfig, Image, Kernel
-from tundravm.components.access import Choice, Command
+from tundravm.components.access import Command, CommandParam
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.declarative._network import expand_firewall
 from tundravm.declarative.model import EgressRule, FirewallMode, Port
@@ -125,30 +125,27 @@ def test_modes_on_a_kernel_without_rtmr3_extends_are_warned(
 
 
 THREE = {"production": Mode(), "debug": Mode(ingress=[TCP(22)]), "sync": Mode(ingress=[TCP(9)])}
+STATUS = Command(
+    runs=["/usr/bin/mode-switch", "status"], sudo=True, help="the firewall mode in force"
+)
+
+
+def _switch(*modes: str) -> Command:
+    return Command(
+        params=[CommandParam("mode", choices=list(modes))],
+        runs=["/usr/bin/mode-switch", "to", "{{mode}}"],
+        sudo=True,
+        help="switch the firewall mode",
+    )
 
 
 @pytest.mark.parametrize(
     ("modes", "entry", "command"),
     [
-        (MODES, "status", Command("/usr/bin/mode-switch", "status", sudo=True)),
-        (
-            MODES,
-            "switch",
-            Command(
-                "/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance"), sudo=True
-            ),
-        ),
-        (THREE, "status", Command("/usr/bin/mode-switch", "status", sudo=True)),
-        (
-            THREE,
-            "switch",
-            Command(
-                "/usr/bin/mode-switch",
-                "to",
-                Choice("mode", "production", "debug", "sync"),
-                sudo=True,
-            ),
-        ),
+        (MODES, "status", STATUS),
+        (MODES, "switch", _switch("production", "maintenance")),
+        (THREE, "status", STATUS),
+        (THREE, "switch", _switch("production", "debug", "sync")),
         ({}, "status", None),
         ({}, "switch", None),
     ],

@@ -744,27 +744,27 @@ probe_menu() {
     name=$1 file=$2 sudoers=$3 bad=$4
     shift 4
     said=$(stat -c '%U:%G %a' "$file" 2>&1)
-    if [ "$said" != "root:root 444" ]; then
-        fail "$file is $said, not root:root 444: the login could change its own menu"
+    if [ "$said" != "root:root 755" ]; then
+        fail "$file is $said, not root:root 755: the login could change its own program"
         return
     fi
-    as_login() { setpriv --reuid "$name" --regid "$name" --init-groups env -i SSH_ORIGINAL_COMMAND="$1" /usr/bin/login-menu 2>&1; }
+    as_login() { setpriv --reuid "$name" --regid "$name" --init-groups env -i SSH_ORIGINAL_COMMAND="$1" "$file" 2>&1; }
     if ! listing=$(as_login ''); then
-        fail "login-menu as $name lists nothing: $listing"
+        fail "$file as $name lists nothing: $listing"
         return
     fi
     for entry in "$@"; do
         if ! printf '%s\n' "$listing" | grep -Eq "^  $entry( |\$)"; then
-            fail "login-menu as $name does not list $entry: $listing"
+            fail "$file as $name does not list $entry: $listing"
             return
         fi
     done
     if said=$(as_login sh); then
-        fail "login-menu as $name ran sh: $said"
+        fail "$file as $name ran sh: $said"
         return
     fi
     if [ "$bad" != - ] && said=$(as_login "$bad"); then
-        fail "login-menu as $name ran '$bad', outside its bounds: $said"
+        fail "$file as $name ran '$bad', outside its bounds: $said"
         return
     fi
     sudo=
@@ -777,7 +777,7 @@ probe_menu() {
         fi
         sudo="; sudo -l lists its $(printf '%s\n' "$want" | grep -c .) lines and no other"
     fi
-    ok "$file root:root 0444; lists $*; refuses sh${bad:+ and '$bad'}$sudo"
+    ok "$file root:root 0755; lists $*; refuses sh${bad:+ and '$bad'}$sudo"
 }
 probe_no_root() {
     if ! effective=$(sshd -T -C "user=root,host=probe,addr=127.0.0.1" 2>&1); then
@@ -929,9 +929,9 @@ probe_keys /etc/ssh/ssh_host_ed25519_key
 check=root
 probe_root
 check=login:searcher
-probe_login searcher /etc/sudoers.d/searcher '-' '/usr/bin/login-menu'
+probe_login searcher /etc/sudoers.d/searcher '-' '/usr/libexec/tundravm/cli/searcher'
 check=menu:searcher
-probe_menu searcher /etc/tundravm/logins/searcher.json /etc/sudoers.d/searcher 'logs 10001' logs reboot shell status toggle
+probe_menu searcher /usr/libexec/tundravm/cli/searcher /etc/sudoers.d/searcher 'logs --lines 10001' logs reboot shell status toggle
 check=ssh:root
 probe_no_root
 check=key:instance

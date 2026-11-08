@@ -2,8 +2,8 @@
 
 One service, one component, a Go program built from a git source and a Go and a Rust one
 from local directories, the ``azure`` and ``gcp`` wrapper subimages beside the QEMU disk, an
-attested TLS ingress (:data:`ATTESTED`), a tenant login (:data:`TENANT`) with a command
-menu that SSH reaches only in a firewall maintenance mode (:data:`FIREWALL`) and takes the
+attested TLS ingress (:data:`ATTESTED`), a tenant login (:data:`TENANT`) with its
+commands that SSH reaches only in a firewall maintenance mode (:data:`FIREWALL`) and takes the
 key ``attest`` hands over, root never logging in, and a ``dev`` profile that adds content: a
 scheduled job, an ``Observability`` export to an in-guest
 sink, a delivered secret, the two built programs run as services, and the ``box`` container
@@ -28,11 +28,12 @@ serves, the ``box`` container running in its own root, and the root file system 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Literal
 
 from tundravm import Debian, File, Image, Mkosi, Package, Profile, RootFS, Service
 from tundravm.components import Component
-from tundravm.components.access import Choice, Command, Int, Login, SshAccess
+from tundravm.components.access import Command, CommandParam, Login, ParamType, SshAccess
 from tundravm.components.container import Container, ContainerSsh
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.components.observability import (
@@ -243,33 +244,77 @@ are: the runtime contracts lower once for all profiles."""
 VAULT_STATE = VAULT.directory("ledger")
 """What :data:`VAULT` holds: the ``ledger`` service's state directory."""
 
+
+@dataclass(frozen=True, repr=False)
+class Hex(ParamType):
+    """A value of *digits* lower-case hex digits: the fixture's own param type."""
+
+    digits: int
+
+    def __repr__(self) -> str:
+        return f"Hex({self.digits})"
+
+    def usage(self) -> str:
+        return f"{self.digits} hex digits"
+
+    def check(self) -> str:
+        return f'Match(value, "{self.pattern()}")'
+
+    def pattern(self) -> str:
+        return f"^[0-9a-f]{{{self.digits}}}$"
+
+
 TENANT = Login(
     "tenant",
     owner=True,
+    help="read the greeter",
     commands={
-        "greeting": Command("/usr/bin/cat", "/etc/greeter/greeting"),
-        "web": Command("/usr/bin/systemctl", "is-active", "web", sudo=True),
+        "greeting": Command(runs=["/usr/bin/cat", "/etc/greeter/greeting"], help="the greeting"),
+        "web": Command(
+            runs=["/usr/bin/systemctl", "is-active", "web"], sudo=True, help="whether web runs"
+        ),
         "logs": Command(
-            "/usr/bin/journalctl",
-            "--unit",
-            "greeter.service",
-            "--lines",
-            Int("lines", 1, 1000),
-            "--no-pager",
-            "--output",
-            "cat",
+            params=[CommandParam("lines", type=int, min=1, max=1000)],
+            runs=[
+                "/usr/bin/journalctl",
+                "--unit",
+                "greeter.service",
+                "--lines",
+                "{{lines}}",
+                "--no-pager",
+                "--output",
+                "cat",
+            ],
             sudo=True,
+            help="the greeter's last lines",
+        ),
+        "seen": Command(
+            params=[CommandParam("digest", type=Hex(64), help="a sha256 in hex")],
+            runs=[
+                "/usr/bin/grep",
+                "--count",
+                "--fixed-strings",
+                "{{digest}}",
+                "/etc/greeter/greeting",
+            ],
+            sudo=True,
+            help="whether the greeting holds a digest",
         ),
         "switch": Command(
-            "/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance"), sudo=True
+            params=[CommandParam("mode", choices=["production", "maintenance"])],
+            runs=["/usr/bin/mode-switch", "to", "{{mode}}"],
+            sudo=True,
+            help="switch the firewall mode",
         ),
     },
     home=True,
 )
-"""A non-root login that takes the key ``attest`` hands over, instead of root, into a menu:
-the greeting as itself, and as root through one exact sudoers line each ``web``'s state, the
-greeter's last lines and a local firewall switch, which RTMR3 holds like the endpoint's. The
-probe's ``login:tenant``, ``menu:tenant`` and ``ssh:root`` rows read it back; CI logs in."""
+"""A non-root login that takes the key ``attest`` hands over, instead of root, into its
+program: the greeting as itself, and as root through the sudoers lines its argvs take
+``web``'s state, the greeter's last lines, whether the greeting holds a digest (a custom
+:class:`Hex` param, admitted by its pattern) and a local firewall switch, which RTMR3 holds
+like the endpoint's. The probe's ``login:tenant``, ``menu:tenant`` and ``ssh:root`` rows
+read it back; CI logs in."""
 
 FIREWALL = Firewall(
     modes={
@@ -280,7 +325,7 @@ FIREWALL = Firewall(
 """SSH and :data:`BOX`'s :data:`BOX_WINDOW_PORT` answer only in the ``maintenance`` mode,
 which CI's ``fixture-boot`` switches to with ``run switch``, logs in as :data:`TENANT`, and
 switches back from, the quote's RTMR3 holding both switches; every profile boots into
-``production``, both ports closed. A menu login that must answer in every mode leaves 22
+``production``, both ports closed. A login that must answer in every mode leaves 22
 out of the modes."""
 
 CONSOLE = DropIn(extra={"Service": {"StandardOutput": "journal+console"}})

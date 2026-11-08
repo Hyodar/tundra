@@ -211,6 +211,9 @@ def test_tree_has_the_native_shape() -> None:
         "payload/mkosi.profiles/dev/mkosi.postinst.d/50-postinst.sh",
         "payload/mkosi.profiles/production/mkosi.build.d/50-build.sh",
         "payload/mkosi.profiles/production/mkosi.postinst.d/50-postinst.sh",
+        "payload/tundravm-cli/tenant/cli.go",
+        "payload/tundravm-cli/tenant/go.mod",
+        "payload/tundravm-cli/tenant/main.go",
     ]
     for script in (
         "mkosi.images/azure/mkosi.postoutput.d/vhd",

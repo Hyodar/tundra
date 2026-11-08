@@ -88,10 +88,10 @@ The checks, each only when its declaration exists (:func:`derive`):
   password, its ``sudoers.d`` file parses (``visudo -c``), sshd's effective configuration
   for it (``sshd -T -C user=NAME``) forces its command (or none) and disables forwarding,
   and each baked key in its ``authorized_keys.d`` file carries the declared options;
-- ``menu:NAME``: each ``Login`` with ``commands=``: its menu file is ``root:root 0444``,
-  ``login-menu`` run as the login lists every command for an empty request and refuses
-  ``sh`` and an int above its bound, and ``sudo -l -U NAME`` lists exactly the lines its
-  ``sudoers.d`` file holds;
+- ``menu:NAME``: each ``Login`` with ``commands=``: its program is ``root:root 0755``,
+  run as the login it lists every command for an empty request and refuses ``sh`` and an
+  int above its bound, and ``sudo -l -U NAME`` lists exactly the lines its ``sudoers.d``
+  file holds;
 - ``ssh:root``: with ``PermitRootLogin no`` (an ``SshAccess`` without a key for root),
   sshd's effective configuration refuses root and root has no ``authorized_keys`` file;
 - ``root``: ``/`` is ``root:root 0755`` (always: the initramfs layout's own unit makes it
@@ -144,6 +144,7 @@ if TYPE_CHECKING:
         EgressRule,
         Firewall,
     )
+    from tundravm.declarative.utils import Command, Login
 
 UNIT = "tundravm-probe.service"
 SCRIPT_PATH = "/usr/lib/tundravm/probe"
@@ -767,17 +768,25 @@ def _metadata(items: Sequence[Declaration], glue: Sequence[Declaration]) -> list
 
 def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
     """``login:NAME`` for each ``Login``'s ``sshd_config.d`` file in *items*, ``menu:NAME``
-    for each with a menu, and ``ssh:root`` where sshd lets root in by no key."""
-    from tundravm.declarative.model import File
+    for each with commands, and ``ssh:root`` where sshd lets root in by no key."""
+    from tundravm._source import TreeGoBuild
+    from tundravm.declarative.model import Build, File
     from tundravm.declarative.utils import (
-        LOGIN_MENU_FILE,
         SSH_AUTHORIZED_KEYS_DIR,
         SSH_CONFIG,
         SSH_LOGIN_CONFIG,
         SUDOERS_DIRECTORY,
+        Login,
     )
 
     files = {item.path: item for item in items if isinstance(item, File)}
+    programs = {
+        item.using.origin.name: item.using.origin
+        for item in items
+        if isinstance(item, Build)
+        and isinstance(item.using, TreeGoBuild)
+        and isinstance(item.using.origin, Login)
+    }
     prefix, _, suffix = SSH_LOGIN_CONFIG.partition("{name}")
     for path, item in files.items():
         if not (path.startswith(prefix) and path.endswith(suffix)):
@@ -812,9 +821,10 @@ def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
             "login",
             ("ssh-host-keys.service",),
         )
-        menu_file = files.get(LOGIN_MENU_FILE.format(name=name))
-        if menu_file is not None and isinstance(menu_file.content, str):
-            yield _menu(name, menu_file.path, json.loads(menu_file.content), sudoers in files)
+        login = programs.get(name)
+        if login is not None:
+            developed = "PermitTTY yes" in config
+            yield _menu(login.development() if developed else login, sudoers in files)
     sshd = files.get(SSH_CONFIG)
     if sshd is not None and "PermitRootLogin no\n" in str(sshd.content):
         yield Check(
@@ -826,27 +836,15 @@ def _logins(items: Sequence[Declaration]) -> Iterator[Check]:
         )
 
 
-def _menu(name: str, path: str, menu: Mapping[str, object], sudo: bool) -> Check:
-    """``menu:NAME``: what ``login-menu`` lists and refuses as *name*, and the sudo lines."""
+def _menu(login: Login, sudo: bool) -> Check:
+    """``menu:NAME``: what the login's program lists and refuses as the login, and the sudo
+    lines."""
     from tundravm.declarative.utils import SUDOERS_DIRECTORY
 
-    entries = menu["entries"]
-    assert isinstance(entries, list)
-    bad = "-"
-    for entry in entries:
-        args = [word for word in entry["argv"] if "arg" in word]
-        if any("int" in word for word in args):
-            values, over = [], False
-            for word in args:
-                if "int" in word and not over:
-                    values.append(str(word["int"][1] + 1))
-                    over = True
-                else:
-                    values.append(str(word["int"][0]) if "int" in word else word["choice"][0])
-            bad = " ".join([entry["name"], *values])
-            break
-    names = [entry["name"] for entry in entries]
-    what = [f"{path} root:root 0444", f"lists {', '.join(names)}", "refuses sh"]
+    name, path = login.name, str(login.program_path)
+    bad = next(filter(None, (_over(n, c) for n, c in login.entries)), "-")
+    names = [entry for entry, _ in login.entries]
+    what = [f"{path} root:root 0755", f"lists {', '.join(names)}", "refuses sh"]
     if bad != "-":
         what.append(f"refuses {bad!r}")
     if sudo:
@@ -856,6 +854,31 @@ def _menu(name: str, path: str, menu: Mapping[str, object], sudo: bool) -> Check
     return Check(
         f"menu:{name}", "; ".join(what), " ".join(call), "menu", ("ssh-host-keys.service",)
     )
+
+
+def _over(name: str, command: Command) -> str | None:
+    """A request for *command* whose first int is one above its bound, every other value
+    in its domain; ``None`` when it takes no int or a value no request can name."""
+    words, over = [name], False
+    for param in command.params:
+        low, high = _bounds(param.type.usage()) if param.kind == "int" else (0, 0)
+        if param.kind == "int" and not over:
+            words += [param.name, str(high + 1)] if param.option else [str(high + 1)]
+            over = True
+        elif param.option:
+            continue
+        elif param.kind == "int":
+            words.append(str(low))
+        elif param.kind == "str":
+            words.append(param.type.usage().split("|")[0])
+        else:
+            return None
+    return " ".join(words) if over else None
+
+
+def _bounds(usage: str) -> tuple[int, int]:
+    low, _, high = usage.partition("-")
+    return int(low), int(high)
 
 
 def _resolver_name(file: object) -> str:
@@ -2123,27 +2146,27 @@ probe_menu() {
     name=$1 file=$2 sudoers=$3 bad=$4
     shift 4
     said=$(stat -c '%U:%G %a' "$file" 2>&1)
-    if [ "$said" != "root:root 444" ]; then
-        fail "$file is $said, not root:root 444: the login could change its own menu"
+    if [ "$said" != "root:root 755" ]; then
+        fail "$file is $said, not root:root 755: the login could change its own program"
         return
     fi
-    as_login() { setpriv --reuid "$name" --regid "$name" --init-groups env -i SSH_ORIGINAL_COMMAND="$1" /usr/bin/login-menu 2>&1; }
+    as_login() { setpriv --reuid "$name" --regid "$name" --init-groups env -i SSH_ORIGINAL_COMMAND="$1" "$file" 2>&1; }
     if ! listing=$(as_login ''); then
-        fail "login-menu as $name lists nothing: $listing"
+        fail "$file as $name lists nothing: $listing"
         return
     fi
     for entry in "$@"; do
         if ! printf '%s\\n' "$listing" | grep -Eq "^  $entry( |\\$)"; then
-            fail "login-menu as $name does not list $entry: $listing"
+            fail "$file as $name does not list $entry: $listing"
             return
         fi
     done
     if said=$(as_login sh); then
-        fail "login-menu as $name ran sh: $said"
+        fail "$file as $name ran sh: $said"
         return
     fi
     if [ "$bad" != - ] && said=$(as_login "$bad"); then
-        fail "login-menu as $name ran '$bad', outside its bounds: $said"
+        fail "$file as $name ran '$bad', outside its bounds: $said"
         return
     fi
     sudo=
@@ -2156,7 +2179,7 @@ probe_menu() {
         fi
         sudo="; sudo -l lists its $(printf '%s\\n' "$want" | grep -c .) lines and no other"
     fi
-    ok "$file root:root 0444; lists $*; refuses sh${bad:+ and '$bad'}$sudo"
+    ok "$file root:root 0755; lists $*; refuses sh${bad:+ and '$bad'}$sudo"
 }
 """,  # noqa: E501
     "noroot": """\

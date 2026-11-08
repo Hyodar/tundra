@@ -27,9 +27,9 @@ echo 'tundravm: source build disk-encryption is not pinned: run tundravm lock, t
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"attested-endpoint","package":"./cmd/attested-endpoint","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/attested-endpoint","kind":"artifact","mode":"0755"}],"name":"attested-endpoint","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
 echo 'tundravm: source build attested-endpoint is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
-# tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"login-menu","package":"./cmd/login-menu","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/login-menu","kind":"file","mode":"0755","path":"build/login-menu"}],"name":"login-menu","source":{"kind":"local","path":"tundravm:tools"}}
+# tundravm build: {"build":{"development":["dev"],"digest":"b4c78361507daacba7904023f07043fc091c3ced424d6ace95eae2fbfb812075","env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"searcher","package":".","packages":["golang"],"tags":[],"tree":"tundravm-cli/searcher"},"install":[{"dest":"/usr/libexec/tundravm/cli/searcher","kind":"file","mode":"0755","path":"build/searcher"}],"name":"tundravm-cli-searcher","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
-echo 'tundravm: source build login-menu is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
+echo 'tundravm: source build tundravm-cli-searcher is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1
 # tundravm build: {"build":{"env":{},"kind":"go","ldflags":"-s -w -buildid=","output":"mode-switch","package":"./cmd/mode-switch","packages":["golang"],"tags":[]},"install":[{"dest":"/usr/bin/mode-switch","kind":"file","mode":"0755","path":"build/mode-switch"}],"name":"mode-switch","source":{"kind":"local","path":"tundravm:tools"}}
 # unpinned: tundravm:tools
 echo 'tundravm: source build mode-switch is not pinned: run tundravm lock, then tundravm build' >&2 && exit 1

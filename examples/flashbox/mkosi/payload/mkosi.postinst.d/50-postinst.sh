@@ -16,7 +16,7 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin bob-nethermind-rpc
 mkosi-chroot useradd --system --shell /usr/sbin/nologin delay-pipe
 mkosi-chroot useradd --system --shell /usr/sbin/nologin input-proxy
 mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
-mkosi-chroot useradd --shell /usr/bin/login-menu searcher
+mkosi-chroot useradd --shell /usr/libexec/tundravm/cli/searcher searcher
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-hostname.service
 mkosi-chroot systemctl enable gcp-forwarded-ips.timer

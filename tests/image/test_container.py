@@ -409,7 +409,7 @@ def test_an_account_belongs_to_one_declaration(beside: Any, message: str) -> Non
 
 
 def neighbours() -> Any:
-    tenant = Login("tenant", owner=True, commands={"status": Command("/usr/bin/true")})
+    tenant = Login("tenant", owner=True, commands={"status": Command(runs=["/usr/bin/true"])})
     container = web(state=data.directory("web"), expose=[])
     reader = Service(
         "reader",
@@ -447,7 +447,7 @@ def test_a_host_service_beside_a_container_reads_it_through_a_group(where: str, 
 
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host"
-MENU = {"status": Command("/usr/bin/true")}
+MENU = {"status": Command(runs=["/usr/bin/true"])}
 
 
 @pytest.mark.parametrize(

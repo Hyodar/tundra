@@ -20,11 +20,12 @@ from dataclasses import KW_ONLY, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from tundravm._location import caller_location
 from tundravm._modules import devtools as _devtools
 from tundravm._modules import tdxs as _tdxs
 from tundravm._modules.base import tools_source as _tools_source
 from tundravm._modules.init import OWNERS_STEP
-from tundravm._source import FrozenMap, LocalSource
+from tundravm._source import FrozenMap, LocalSource, TreeGoBuild
 from tundravm.errors import MeasurementError, ValidationError
 from tundravm.measure.policy import (
     approved_registers,
@@ -34,7 +35,9 @@ from tundravm.measure.policy import (
 )
 
 from .._keywords import Keywords
+from . import _login
 from ._component import Composite, Export, HttpEndpoint, component
+from ._login import Command, CommandParam, ParamType
 from ._network import NETWORK_DIR
 from .config import ConfigFile
 from .model import (
@@ -1056,315 +1059,23 @@ file ends with that file, so Debian's own lines after the ``Include`` stay globa
 SUDOERS_DIRECTORY = "/etc/sudoers.d"
 """Where a :class:`Login` with ``sudo=True`` commands gets their lines, one file per login
 (``0440``)."""
-LOGIN_MENU = "/usr/bin/login-menu"
-"""``login-menu`` (``tools/cmd/login-menu``): a menu login's shell and forced command."""
-LOGIN_MENU_FILE = "/etc/tundravm/logins/{name}.json"
-"""Each menu login's entries, typed, which ``login-menu`` reads (``root:root 0444``)."""
+LOGIN_CLI = "/usr/libexec/tundravm/cli/{name}"
+"""Each command login's program: its shell and sshd's forced command (``root:root 0755``)."""
+LOGIN_CLI_TREE = "tundravm-cli/{name}"
+"""Where in the tree's ``payload/`` a login's program is written, which the build compiles."""
 NOLOGIN = "/usr/sbin/nologin"
 _LOGIN_NAME = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _ENTRY_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
-_ARGUMENT_NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")
-_OLD_ARGUMENT = re.compile(r"\{([a-z][a-z0-9_]{0,31}):(int|choice)(?::([^{}]*))?\}")
-_CHOICE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
-_MODE_NAME = re.compile(r"[a-z][a-z0-9]{0,23}")
-_MODE_RESERVED = frozenset({"tdx", "simulated"})
-_INT_MAX = 999_999_999
-_SUDO_REFUSED = frozenset("*?[]\\\"'")
-_PATTERN_WORD = re.compile(r"[A-Za-z0-9/_.+-]+")
-_SUDO_COMBINATIONS = 32
 _SHELL_REFUSED = frozenset('"\\\n')
-
-
-def _argument_name(kind: str, name: object) -> None:
-    if not isinstance(name, str) or not _ARGUMENT_NAME.fullmatch(name):
-        raise ValidationError(
-            f"{kind}: {name!r} is not an argument name.",
-            hint=f'Use lower-case letters, digits and "_": {kind}("lines", ...).',
-        )
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class Int:
-    """A word of a :class:`Command` the client types: a decimal number from *low* to *high*,
-    both included: ``Int("lines", 1, 10000)``. ``login-menu`` takes it in canonical decimal
-    only (no sign, no leading zero); a root command's sudoers line takes digits only."""
-
-    name: str
-    low: int
-    high: int
-
-    def __post_init__(self) -> None:
-        _argument_name("Int", self.name)
-        bounds = (self.low, self.high)
-        if any(isinstance(b, bool) or not isinstance(b, int) for b in bounds) or not (
-            0 <= self.low <= self.high <= _INT_MAX
-        ):
-            raise ValidationError(
-                f"Int {self.name}: bounds {self.low!r} to {self.high!r} are not two whole "
-                f"numbers from 0 to {_INT_MAX}, the low one first.",
-                hint=f'Int("{self.name}", 1, 1000).',
-            )
-
-    def __repr__(self) -> str:
-        return f"Int({json.dumps(self.name)}, {self.low}, {self.high})"
-
-    def menu(self) -> dict[str, object]:
-        """The word in the menu file ``login-menu`` reads."""
-        return {"arg": self.name, "int": [self.low, self.high]}
-
-    def shown(self) -> str:
-        """The word as ``show`` prints it: ``<lines 1-10000>``."""
-        return f"<{self.name} {self.low}-{self.high}>"
-
-    def pattern(self) -> str:
-        """The sudoers regular expression of the word: digits, as many as *high* has."""
-        return "[0-9]" + "[0-9]?" * (len(str(self.high)) - 1)
-
-
-@dataclass(frozen=True, slots=True, init=False, repr=False)
-class Choice:
-    """A word of a :class:`Command` the client types: one of *values*,
-    ``Choice("mode", "production", "maintenance")``. A root command gets one exact sudoers
-    line per value."""
-
-    name: str
-    values: tuple[str, ...]
-
-    def __init__(self, name: str, *values: str) -> None:
-        _argument_name("Choice", name)
-        object.__setattr__(self, "name", name)
-        object.__setattr__(self, "values", values)
-        bad = [v for v in values if not isinstance(v, str) or not _CHOICE.fullmatch(v)]
-        if not values or bad or len(set(values)) != len(values):
-            raise ValidationError(
-                f"Choice {name}: "
-                + (
-                    "offers no value."
-                    if not values
-                    else f"offers {', '.join(map(repr, bad)) or 'a value twice'}."
-                ),
-                hint=f'List distinct words, none starting with "-": Choice("{name}", "a", "b").',
-            )
-
-    def __repr__(self) -> str:
-        return f"Choice({', '.join(json.dumps(word) for word in (self.name, *self.values))})"
-
-    def menu(self) -> dict[str, object]:
-        """The word in the menu file ``login-menu`` reads."""
-        return {"arg": self.name, "choice": list(self.values)}
-
-    def shown(self) -> str:
-        """The word as ``show`` prints it: ``<mode production|maintenance>``."""
-        return f"<{self.name} {'|'.join(self.values)}>"
-
-
-Word = str | Int | Choice
-"""A word of a :class:`Command`: a literal string, or an argument the client types."""
-
-
-def _new_spelling(word: str) -> str:
-    """How *word* reads as a word of a :class:`Command`: an argument when it is written in
-    the removed mini-language, else the literal."""
-    found = _OLD_ARGUMENT.fullmatch(word)
-    if found is None:
-        return json.dumps(word)
-    name, kind, spec = found.groups()
-    if kind == "choice":
-        values = (spec or "a|b").split("|")
-        return f"Choice({', '.join(json.dumps(v) for v in (name, *values))})"
-    low, _, high = (spec or "0-65535").partition("-")
-    return f"Int({json.dumps(name)}, {low or 0}, {high or 65535})"
-
-
-@dataclass(frozen=True, slots=True, init=False, repr=False)
-class Command:
-    """A command of a :class:`Login`'s menu: ``Command("/usr/bin/app-status")`` runs as the
-    login, ``Command("/usr/bin/systemctl", "reboot", sudo=True)`` as root.
-
-    Each word is a positional argument, in the order the argv holds them: a string is a
-    literal word, :class:`Int` and :class:`Choice` are words the client types. The first is
-    the program's absolute path. *modes* offers the command in those ``Firewall(modes=)``
-    modes only (``login-menu`` refuses it in any other, naming the mode in force); without
-    it the command is offered in every mode. *dev* makes it exist in development builds
-    only: the profiles whose ``production=`` is ``False``, ``DevAccess``'s ``dev`` among them.
-    *sudo* runs it as root through ``sudo -n``, which ``/etc/sudoers.d/<login>`` admits for
-    exactly this argv: one line per :class:`Choice` value, or with an :class:`Int` one
-    anchored pattern taking digits only, and no wildcard, no quoting, no shell.
-    """
-
-    argv: tuple[Word, ...]
-    modes: tuple[str, ...]
-    dev: bool
-    sudo: bool
-
-    def __init__(
-        self,
-        *argv: str | Int | Choice,
-        modes: Sequence[str] = (),
-        dev: bool = False,
-        sudo: bool = False,
-    ) -> None:
-        object.__setattr__(self, "argv", argv)
-        object.__setattr__(self, "modes", modes)
-        object.__setattr__(self, "dev", dev)
-        object.__setattr__(self, "sudo", sudo)
-        self._check_words()
-        if isinstance(modes, str) or not isinstance(modes, Sequence):
-            raise ValidationError(
-                f"{self._kind}: modes={modes!r} is not a list of mode names.",
-                hint='modes=["maintenance"].',
-            )
-        object.__setattr__(self, "modes", tuple(modes))
-        for mode in self.modes:
-            if not isinstance(mode, str) or not _MODE_NAME.fullmatch(mode):
-                raise ValidationError(
-                    f"{self._kind}: modes= names {mode!r}, not a firewall mode's name.",
-                    hint='Name a mode of Firewall(modes=): modes=["maintenance"].',
-                )
-            if mode in _MODE_RESERVED:
-                raise ValidationError(
-                    f"{self._kind}: modes= names {mode!r}, a word of the security mode "
-                    "(run mode), not a firewall mode.",
-                    hint='Name a mode of Firewall(modes=): modes=["maintenance"].',
-                )
-        if len(set(self.modes)) != len(self.modes):
-            raise ValidationError(
-                f"{self._kind}: modes= names a mode twice.", hint="Name each mode once."
-            )
-        if not isinstance(dev, bool):
-            raise ValidationError(f"{self._kind}: dev= must be True or False.", hint="dev=True.")
-        if not isinstance(sudo, bool):
-            raise ValidationError(f"{self._kind}: sudo= must be True or False.", hint="sudo=True.")
-        if self.sudo:
-            self._check_sudo()
-
-    @property
-    def _kind(self) -> str:
-        return type(self).__name__
-
-    @property
-    def args(self) -> tuple[Int | Choice, ...]:
-        """The words the client types."""
-        return tuple(word for word in self.argv if not isinstance(word, str))
-
-    def developed(self) -> Command:
-        """The command as a development build holds it: there for every build."""
-        return type(self)(*self.argv, modes=self.modes, sudo=self.sudo)
-
-    def __repr__(self) -> str:
-        words = [json.dumps(w) if isinstance(w, str) else repr(w) for w in self.argv]
-        if self.modes:
-            words.append(f"modes={json.dumps(list(self.modes))}")
-        if self.dev:
-            words.append("dev=True")
-        if self.sudo:
-            words.append("sudo=True")
-        return f"{self._kind}({', '.join(words)})"
-
-    def shown(self) -> str:
-        """The argv as ``show`` prints it, each argument with its name and bounds."""
-        return " ".join(w if isinstance(w, str) else w.shown() for w in self.argv)
-
-    def menu(self, name: str) -> dict[str, object]:
-        """The entry in the menu file."""
-        words = [{"word": w} if isinstance(w, str) else w.menu() for w in self.argv]
-        return {"name": name, "argv": words, "root": self.sudo, "modes": list(self.modes)}
-
-    def commands(self) -> list[str]:
-        """The sudoers commands admitting this command: one per combination of its choices,
-        each exact, or with an int an anchored pattern taking digits only."""
-        lines: list[list[Word]] = [[]]
-        for word in self.argv:
-            options: tuple[Word, ...] = word.values if isinstance(word, Choice) else (word,)
-            lines = [[*line, option] for line in lines for option in options]
-        found = []
-        for line in lines:
-            path, rest = str(line[0]), line[1:]
-            if any(isinstance(word, Int) for word in rest):
-                parts = [
-                    w.pattern() if isinstance(w, Int) else re.sub(r"([.+])", r"[\1]", str(w))
-                    for w in rest
-                ]
-                found.append(f"{path} ^{' '.join(parts)}$")
-                continue
-            words = [re.sub(r"([,:=])", r"\\\1", str(word)) for word in line]
-            found.append(" ".join(words if rest else [*words, '""']))
-        return found
-
-    def _check_words(self) -> None:
-        kind = self._kind
-        if len(self.argv) == 1 and isinstance(self.argv[0], (list, tuple)):
-            spelled = ", ".join(
-                _new_spelling(w) if isinstance(w, str) else repr(w) for w in self.argv[0]
-            )
-            raise ValidationError(
-                f"{kind}: the argv is one list; each word is its own argument.",
-                hint=f"{kind}({spelled}{', sudo=True' if self.sudo else ''}).",
-            )
-        if not self.argv:
-            raise ValidationError(f"{kind}() runs nothing.", hint=f'{kind}("/usr/bin/app-status").')
-        for word in self.argv:
-            if isinstance(word, (Int, Choice)):
-                continue
-            if not isinstance(word, str) or not word or "\n" in word or "\0" in word:
-                raise ValidationError(
-                    f"{kind}: {word!r} is not a word.",
-                    hint='Each word is a non-empty str, Int("name", LOW, HIGH) or '
-                    'Choice("name", ...).',
-                )
-            found = _OLD_ARGUMENT.search(word)
-            if found is not None:
-                raise ValidationError(
-                    f"{kind}: {word!r} is a literal word; an argument is a value of its own.",
-                    hint=f"Write {_new_spelling(found[0])} in its place"
-                    + ("." if found[0] == word else ", a whole word apart from the rest."),
-                )
-        first = self.argv[0]
-        if not isinstance(first, str) or not first.startswith("/"):
-            raise ValidationError(
-                f"{kind}: {first!r} is not an absolute path, and login-menu runs nothing by name.",
-                hint=f'Start with the program\'s path: {kind}("/usr/bin/...", ...).',
-            )
-        named = [arg.name for arg in self.args]
-        if len(set(named)) != len(named):
-            raise ValidationError(
-                f"{kind} {first} names an argument twice.",
-                hint="Give each argument its own name.",
-            )
-
-    def _check_sudo(self) -> None:
-        """Refuse a root command sudoers would read as more than it says."""
-        where = f"{self._kind} {self.argv[0]} (sudo=True)"
-        literal = [w for w in self.argv if isinstance(w, str)]
-        pattern = any(isinstance(arg, Int) for arg in self.args)
-        for at, word in enumerate(literal):
-            refused = "".join(sorted(_SUDO_REFUSED & set(word)))
-            if refused or any(c.isspace() for c in word):
-                raise ValidationError(
-                    f"{where}: {word!r} holds {refused or 'a space'!r}, which sudoers reads as "
-                    "a wildcard, a quote or two words, so the line would allow more than it "
-                    "says.",
-                    hint="Write each word literally, one argv word per word.",
-                )
-            if pattern and at and not _PATTERN_WORD.fullmatch(word):
-                raise ValidationError(
-                    f"{where}: {word!r} beside an Int becomes part of a sudoers pattern, which "
-                    "takes only letters, digits and /_.+-.",
-                    hint='Spell the option apart from its value: "-n", Int("lines", 1, 1000).',
-                )
-        count = 1
-        for arg in self.args:
-            count *= len(arg.values) if isinstance(arg, Choice) else 1
-        if count > _SUDO_COMBINATIONS:
-            raise ValidationError(
-                f"{where} offers {count} combinations, one sudoers line each.",
-                hint=f"Offer at most {_SUDO_COMBINATIONS}: split the command or narrow its "
-                "choices.",
-            )
 
 
 def _command(login: str, name: object, value: object) -> Command:
     """The :class:`Command` ``commands={name: value}`` declares."""
+    if name == "help":
+        raise ValidationError(
+            f"Login {login}: help is the program's own command, which lists the others.",
+            hint='Name the command otherwise: commands={"usage": Command(...)}.',
+        )
     if not isinstance(name, str) or not _ENTRY_NAME.fullmatch(name):
         raise ValidationError(
             f"Login {login}: commands= names {name!r}, not a command word.",
@@ -1373,17 +1084,19 @@ def _command(login: str, name: object, value: object) -> Command:
     if isinstance(value, Command):
         return value
     words = value if isinstance(value, (list, tuple)) else [value]
-    spelled = ", ".join(_new_spelling(w) if isinstance(w, str) else repr(w) for w in words)
+    spelled = ", ".join(json.dumps(w) if isinstance(w, str) else repr(w) for w in words)
     raise ValidationError(
         f"Login {login}: command {name} is {value!r}, not a Command.",
-        hint=f"Command({spelled}) runs it as the login, Command({spelled}, sudo=True) as root.",
+        hint=f"Command(runs=[{spelled}]) runs it as the login, "
+        f"Command(runs=[{spelled}], sudo=True) as root.",
     )
 
 
 @dataclass(frozen=True, slots=True)
 class Login(Keywords):
-    """An account other than root that logs in over SSH into a menu of commands:
-    ``Login("tenant", keys=[...], commands={"status": Command("/usr/bin/app-status")})``.
+    """An account other than root that logs in over SSH into its commands:
+    ``Login("tenant", keys=[...], help="run the app", commands={"status":
+    Command(runs=["/usr/bin/app-status"])})``.
 
     The account has no password and no other way in. *keys* are public keys baked into the
     image (``/etc/ssh/authorized_keys.d/<name>``), or a ``Secret`` the attested endpoint
@@ -1394,18 +1107,21 @@ class Login(Keywords):
     *owner* makes the owner's key its only key instead: the key ``attest`` hands over, from
     the owner an ``OperatorKey()`` volume pins (in a simulated boot, the first). Root then
     takes no delivered key. *commands* maps each name the client may type to the
-    :class:`Command` it runs, as the login or with ``sudo=True`` as root, each word literal
-    or an :class:`Int` or :class:`Choice` the client fills; ``modes=`` and ``dev=`` say in
-    which firewall modes and builds it exists, and at least one exists in every build.
-    ``login-menu`` is the account's shell and sshd's forced command: no command lists
-    the menu, anything the menu does not offer is refused, and nothing reaches a shell.
+    :class:`Command` it runs, as the login or with ``sudo=True`` as root; ``modes=`` and
+    ``dev=`` say in which firewall modes and builds it exists, and at least one exists in
+    every build. tundravm writes a Go program for them into the tree
+    (``payload/tundravm-cli/<name>``), which the image build compiles to
+    ``/usr/libexec/tundravm/cli/<name>``: the account's shell and sshd's forced command,
+    which lists the commands and their help (*help* is its description), refuses
+    anything they do not declare and never reaches a shell. A development build compiles
+    its ``dev=True`` commands in too (``-tags dev``); the production build never holds them.
     *shell* is the escape hatch: a login shell the image ships, with a terminal and no
     sudo. One of them is required. Every key is ``restrict``-ed and sshd's ``Match User``
-    block disables forwarding, reads only those keys and gives a menu no terminal
+    block disables forwarding, reads only those keys and gives the program no terminal
     (``PermitTTY no``); a development build of a login with ``dev=True`` commands lifts
     both locks (``pty``, ``PermitTTY yes``), so ``ssh -t`` hands the command a terminal.
-    *home* makes ``/home/<name>``,
-    which the ``owners`` runtime-init step hands to the login at boot.
+    *home* makes ``/home/<name>``, which the ``owners`` runtime-init step hands to the
+    login at boot.
     """
 
     name: str
@@ -1414,11 +1130,18 @@ class Login(Keywords):
     shell: str | None = None
     owner: bool = False
     home: bool = False
+    help: str | None = None
     terminal: bool = field(default=False, init=False, repr=False)
-    """Whether sshd lets a menu have a terminal: a development build's login with
-    ``dev=True`` commands (:meth:`development`)."""
+    """Whether this is the login as a development build holds it (:meth:`development`): its
+    ``dev=True`` commands' sudoers lines, and a terminal."""
+    development_profiles: tuple[str, ...] = field(default=(), init=False, repr=False)
+    """The profiles whose build compiles its ``dev=True`` commands (:meth:`built_in`)."""
+    source: str = field(default="", init=False, repr=False, compare=False)
+    """The file that declares it, which its program's first line names."""
 
     def __post_init__(self) -> None:
+        location = caller_location().rpartition(":")[0]
+        object.__setattr__(self, "source", Path(location).name if location else "")
         if not isinstance(self.name, str) or not _LOGIN_NAME.fullmatch(self.name):
             raise ValidationError(
                 f"Login: {self.name!r} is not an account name.",
@@ -1436,13 +1159,20 @@ class Login(Keywords):
                     f"Login {self.name}: {keyword}= must be True or False.",
                     hint=f"Pass {keyword}=True.",
                 )
+        if self.help is not None and (
+            not isinstance(self.help, str) or not self.help.strip() or "\n" in self.help
+        ):
+            raise ValidationError(
+                f"Login {self.name}: help={self.help!r} is not one line of text.",
+                hint=f'Login("{self.name}", help="operate the app", ...).',
+            )
         self._check_keys()
         if self.shell is not None:
             words = self.shell.split() if isinstance(self.shell, str) else []
             if len(words) != 1 or not words[0].startswith("/") or _SHELL_REFUSED & set(words[0]):
                 raise ValidationError(
                     f"Login {self.name}: shell={self.shell!r} is not one absolute path.",
-                    hint=f'Login("{self.name}", shell="/usr/bin/bash"), or commands= for a menu.',
+                    hint=f'Login("{self.name}", shell="/usr/bin/bash"), or commands= instead.',
                 )
             object.__setattr__(self, "shell", words[0])
         if (self.commands is None) == (self.shell is None):
@@ -1454,14 +1184,14 @@ class Login(Keywords):
                     else "has both commands= and shell=."
                 ),
                 hint=f'Login("{self.name}", commands='
-                '{"status": Command("/usr/bin/app-status")}), '
+                '{"status": Command(runs=["/usr/bin/app-status"])}), '
                 "or shell= alone for a login shell the image ships.",
             )
         if self.commands is not None:
             if not isinstance(self.commands, Mapping) or not self.commands:
                 raise ValidationError(
                     f"Login {self.name}: commands= takes a dict of command names to commands.",
-                    hint='commands={"status": Command("/usr/bin/app-status")}.',
+                    hint='commands={"status": Command(runs=["/usr/bin/app-status"])}.',
                 )
             for name, value in self.commands.items():
                 _command(self.name, name, value)
@@ -1469,7 +1199,7 @@ class Login(Keywords):
             if all(command.dev for command in self.commands.values()):
                 raise ValidationError(
                     f"Login {self.name}: every command says dev=True, so a production build "
-                    "would hold an empty menu.",
+                    "would hold an empty program.",
                     hint="Give it one command for every build, or leave the Login to a "
                     "development profile's add=.",
                 )
@@ -1512,27 +1242,33 @@ class Login(Keywords):
 
     @property
     def entries(self) -> tuple[tuple[str, Command], ...]:
-        """The menu this build holds, sorted by command name: every command but a
-        ``dev=True`` one (:meth:`development` holds those too)."""
+        """The commands this build holds, sorted by name: every command but a ``dev=True``
+        one, which :meth:`development` holds too."""
         if self.commands is None:
             return ()
-        return tuple((n, c) for n, c in sorted(self.commands.items()) if not c.dev)
+        return tuple((n, c) for n, c in sorted(self.commands.items()) if self.terminal or not c.dev)
 
     @property
     def developed(self) -> bool:
         """Whether a development build holds more of it: a command says ``dev=True``."""
         return any(command.dev for command in (self.commands or {}).values())
 
-    def development(self) -> Login:
-        """The login as a development build holds it: its ``dev=True`` commands too, and a
-        terminal for whichever command the client asks one for (``ssh -t``)."""
-        if not self.developed:
-            return self
-        assert self.commands is not None
-        commands = {name: command.developed() for name, command in self.commands.items()}
-        login = replace(self, commands=commands)
-        object.__setattr__(login, "terminal", True)
+    def _copy(self, **changes: object) -> Login:
+        login = replace(self)
+        for name in ("terminal", "development_profiles", "source"):
+            object.__setattr__(login, name, changes.get(name, getattr(self, name)))
         return login
+
+    def development(self) -> Login:
+        """The login as a development build holds it: its ``dev=True`` commands' sudoers
+        lines too, and a terminal for whichever command the client asks one for
+        (``ssh -t``). Its program is the same; the build compiles ``dev.go`` in."""
+        return self._copy(terminal=True) if self.developed else self
+
+    def built_in(self, development: Sequence[str]) -> Login:
+        """The login in an image whose *development* profiles compile its ``dev=True``
+        commands."""
+        return self._copy(development_profiles=tuple(development))
 
     @property
     def delivered(self) -> bool:
@@ -1545,22 +1281,22 @@ class Login(Keywords):
         return f"{SSH_AUTHORIZED_KEYS_DIR}/{self.name}"
 
     @property
-    def menu_file(self) -> str | None:
-        """``/etc/tundravm/logins/<name>.json``, or ``None`` for a shell login."""
-        return LOGIN_MENU_FILE.format(name=self.name) if self.commands is not None else None
+    def program_path(self) -> str | None:
+        """``/usr/libexec/tundravm/cli/<name>``, or ``None`` for a shell login."""
+        return LOGIN_CLI.format(name=self.name) if self.commands is not None else None
 
     @property
     def options(self) -> str:
-        """The ``authorized_keys`` options every baked key carries: a menu's allow a
+        """The ``authorized_keys`` options every baked key carries: the program's allow a
         terminal (``pty``) only with :attr:`terminal`."""
         if self.commands is None:
             return "restrict,pty"
-        return f'restrict{",pty" if self.terminal else ""},command="{LOGIN_MENU}"'
+        return f'restrict{",pty" if self.terminal else ""},command="{self.program_path}"'
 
     @property
     def account_shell(self) -> str:
-        """The login shell: ``login-menu`` for a menu, else *shell*."""
-        return LOGIN_MENU if self.commands is not None else str(self.shell)
+        """The login shell: its program, else *shell*."""
+        return self.program_path or str(self.shell)
 
     @property
     def sudoers_file(self) -> str | None:
@@ -1570,33 +1306,45 @@ class Login(Keywords):
         return None
 
     def config(self) -> str:
-        """The ``sshd_config.d`` file: its own keys only, no forwarding, its menu if any,
+        """The ``sshd_config.d`` file: its own keys only, no forwarding, its program if any,
         with a terminal only in a development build (:attr:`terminal`)."""
         lines = [
             f"# tundravm Login {self.name}: its own keys, no forwarding"
-            + (", its menu only" if self.commands is not None else ""),
+            + (", its program only" if self.commands is not None else ""),
             f"Match User {self.name}",
             f"    AuthorizedKeysFile {SSH_AUTHORIZED_KEYS_DIR}/%u",
             "    DisableForwarding yes",
         ]
         if self.commands is not None:
             tty = "yes" if self.terminal else "no"
-            lines += [f"    PermitTTY {tty}", f"    ForceCommand {LOGIN_MENU}"]
+            lines += [f"    PermitTTY {tty}", f"    ForceCommand {self.program_path}"]
         return "\n".join(lines) + "\n"
 
-    def menu(self) -> str:
-        """The menu file ``login-menu`` reads: each entry with its words typed."""
-        payload = {"login": self.name, "entries": [c.menu(n) for n, c in self.entries]}
-        return json.dumps(payload, indent=2) + "\n"
+    def program(self) -> dict[str, str]:
+        """The files of its program, by name: ``main.go``, ``dev.go`` with ``dev=True``
+        commands, ``cli.go`` (the runtime, ``tools/logincli/cli.go`` of the tundravm that
+        runs) and ``go.mod`` (no dependency, the tools' ``go`` line)."""
+        assert self.commands is not None
+        main, dev = _login.program(self.name, self.help, self.commands, self.source or "image.py")
+        runtime, go = _login.runtime()
+        files = {"main.go": main, "cli.go": runtime, "go.mod": f"module {self.name}\n\ngo {go}\n"}
+        if dev is not None:
+            files["dev.go"] = dev
+        return dict(sorted(files.items()))
+
+    def listing(self) -> list[str]:
+        """What its program prints for an empty request, every command of this build."""
+        head = f"{self.name}: {self.help}" if self.help else self.name
+        rows = [(c.usage(n), _login.annotated(c.help, c.notes(True))) for n, c in self.entries]
+        return [head, f"ssh {self.name}@HOST COMMAND", *_login.table(rows)]
 
     def sudo_rules(self) -> tuple[str, ...]:
-        """The ``sudoers`` lines: each root command's exact argv, or its digits-only
-        pattern."""
+        """The ``sudoers`` lines: every argv each root command of this build can produce."""
         return tuple(
             f"{self.name} ALL=(root) NOPASSWD: {line}"
             for _, command in self.entries
             if command.sudo
-            for line in command.commands()
+            for line in command.sudoers()
         )
 
     def sudoers(self) -> str:
@@ -1605,7 +1353,7 @@ class Login(Keywords):
         return f"# tundravm Login {self.name}: its root commands, nothing else\n{rules}"
 
     def declarations(self) -> Iterator[Declaration]:
-        """The account, its sshd block, its keys, its menu and its sudo lines."""
+        """The account, its sshd block, its keys, its program and its sudo lines."""
         home = f"/home/{self.name}" if self.home else None
         owner = f"Login({self.name!r})"
         yield User(self.name, system=False, home=home, shell=self.account_shell, owner=owner)
@@ -1620,12 +1368,16 @@ class Login(Keywords):
             # the endpoint may write only an existing directory (ReadWritePaths=-...)
             script = f'mkdir -p "$BUILDROOT{SSH_AUTHORIZED_KEYS_DIR}"'
             yield Hook(f"ssh-login-{self.name}-keys", "postinst", script)
-        if self.menu_file is not None:
-            go = Go(package="./cmd/login-menu", output="login-menu")
-            yield Build(
-                "login-menu", tools_source(), using=go, install=(Install(go.artifact, LOGIN_MENU),)
+        if self.program_path is not None:
+            go = TreeGoBuild(
+                output=self.name,
+                tree=LOGIN_CLI_TREE.format(name=self.name),
+                development=self.development_profiles,
+                files=tuple(self.program().items()),
+                origin=self,
             )
-            yield File.text(self.menu_file, self.menu(), mode=0o444)
+            install = (Install(go.artifact, self.program_path),)
+            yield Build(f"tundravm-cli-{self.name}", tools_source(), using=go, install=install)
         if self.sudoers_file is not None:
             yield Package("sudo")
             yield File.text(self.sudoers_file, self.sudoers(), mode=0o440)
@@ -1755,7 +1507,7 @@ class SshAccess(Composite):
             "PermitTunnel no\n"
             "MaxAuthTries 3\n"
             "LoginGraceTime 30\n"
-            "# a login's menu may face the network in every mode: bound what one source asks\n"
+            "# a login may face the network in every mode: bound what one source asks\n"
             "MaxStartups 10:30:60\n"
             "PerSourceMaxStartups 4\n"
             "MaxSessions 1\n"
@@ -1930,8 +1682,8 @@ def _step_name(prefix: str, path: str) -> str:
 
 __all__ = [
     "Backports",
-    "Choice",
     "Command",
+    "CommandParam",
     "CargoBinary",
     "Composite",
     "ConfigFile",
@@ -1941,12 +1693,12 @@ __all__ = [
     "Firewall",
     "GoBinary",
     "HttpEndpoint",
-    "Int",
-    "LOGIN_MENU",
-    "LOGIN_MENU_FILE",
+    "LOGIN_CLI",
+    "LOGIN_CLI_TREE",
     "Login",
     "NETWORK_FILE",
     "Network",
+    "ParamType",
     "Port",
     "RUN_STAGES",
     "Run",

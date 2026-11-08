@@ -1,5 +1,5 @@
 """The ways in for people: ``SshAccess`` (root, and each non-root ``Login`` with its
-menu of ``Command`` values) and ``DevAccess`` (``image.dev``).
+``Command`` values) and ``DevAccess`` (``image.dev``).
 """
 
 from __future__ import annotations
@@ -17,18 +17,18 @@ from tundravm._image._values import (
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
 from tundravm.declarative._network import MODES_CONFIG
-from tundravm.declarative.utils import Choice, Command, Int, Login
+from tundravm.declarative.utils import Command, CommandParam, Login, ParamType
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 from ._base import _diagnostic
 
 __all__ = [
-    "Choice",
     "Command",
+    "CommandParam",
     "DevAccess",
-    "Int",
     "Login",
+    "ParamType",
     "SshAccess",
 ]
 
@@ -47,7 +47,8 @@ class SshAccess(Component):
     of an ``OperatorKey()`` volume confirmed, so a TDX image without one gets no delivered
     key at all: bake it with *keys*. *login* is an account other than root, or a list of
     them: a :class:`Login` gets in with its own keys, or the owner's (``owner=True``), into
-    its command menu, its root commands through exact sudoers lines, and nothing else. An
+    the program of its commands, its root commands through exact sudoers lines, and
+    nothing else. An
     image whose ``SshAccess`` declares a login hands root no delivered key unless
     *from_delivery* says so, and root without a key never logs in. A key or a login is
     required. The port is opened in the firewall; host keys are generated per instance at
@@ -76,7 +77,8 @@ class SshAccess(Component):
         if isinstance(logins, str) or not all(isinstance(item, Login) for item in logins):
             raise ValidationError(
                 f"SshAccess: login= takes a Login or a list of them, got {self.login!r}.",
-                hint='Pass login=Login("tenant", keys=[...], commands={"status": Command(...)}).',
+                hint='Pass login=Login("tenant", keys=[...], '
+                'commands={"status": Command(runs=[...])}).',
             )
         object.__setattr__(self, "login", tuple(logins))
         if not self.keys and not self.from_delivery and not self.login:
@@ -105,6 +107,11 @@ class SshAccess(Component):
         assert isinstance(self.login, tuple)
         return self.login
 
+    def built_in(self, development: Sequence[str]) -> SshAccess:
+        """The access in an image whose *development* profiles compile each login's
+        ``dev=True`` commands into its program."""
+        return replace(self, login=tuple(login.built_in(development) for login in self.logins))
+
     def development(self) -> SshAccess:
         """What a development build holds: each login's ``dev=True`` commands too."""
         if not any(login.developed for login in self.logins):
@@ -123,16 +130,16 @@ class SshAccess(Component):
         Rule(
             "ssh-login-shell",
             "warning",
-            "A production login gets an interactive shell and no command menu, so whoever "
+            "A production login gets an interactive shell and no commands, so whoever "
             "holds its key runs whatever that shell allows.",
             "Pin what it runs: "
-            'Login("tenant", commands={"status": Command("/usr/bin/app-status")}).',
+            'Login("tenant", commands={"status": Command(runs=["/usr/bin/app-status"])}).',
         ),
         Rule(
             "login-mode-undeclared",
             "error",
             "A login's command names a firewall mode the image's Firewall does not declare, so "
-            "login-menu would never offer it.",
+            "its program would never offer it.",
             'Name a mode of Firewall(modes=): Command(..., modes=["maintenance"]), or declare '
             'the mode: Firewall(modes={"production": Mode(), "maintenance": Mode(...)}).',
         ),
@@ -140,7 +147,7 @@ class SshAccess(Component):
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them;
-        ``ssh-login-shell``: a production login with a shell and no command menu;
+        ``ssh-login-shell``: a production login with a shell and no commands;
         ``login-mode-undeclared``: a command offered in a mode the firewall lacks."""
         found = [
             dm.Diagnostic(
@@ -150,7 +157,7 @@ class SshAccess(Component):
                 "holds its key runs whatever that shell allows",
                 subject=login.name,
                 hint=f'Login("{login.name}", commands='
-                '{"status": Command("/usr/bin/app-status")}) pins what it runs.',
+                '{"status": Command(runs=["/usr/bin/app-status"])}) pins what it runs.',
             )
             for login in self.logins
             if resolved.production and login.shell is not None

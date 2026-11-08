@@ -191,16 +191,25 @@ class FirewallCommands:
     @property
     def status(self) -> du.Command:
         """Prints the mode in force, the switches since boot and whether RTMR3 replays them:
-        ``Command("/usr/bin/mode-switch", "status", sudo=True)``."""
+        ``Command(runs=["/usr/bin/mode-switch", "status"], sudo=True, help="the firewall
+        mode in force")``."""
         self._switchable("status")
-        return du.Command(MODE_SWITCH, "status", sudo=True)
+        return du.Command(
+            runs=[MODE_SWITCH, "status"], sudo=True, help="the firewall mode in force"
+        )
 
     @property
     def switch(self) -> du.Command:
         """Switches to the mode the client names, one of *modes*, extended into RTMR3:
-        ``Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)``."""
+        ``Command(params=[CommandParam("mode", choices=[*modes])], runs=["/usr/bin/mode-switch",
+        "to", "{{mode}}"], sudo=True, help="switch the firewall mode")``."""
         self._switchable("switch")
-        return du.Command(MODE_SWITCH, "to", du.Choice("mode", *self.modes), sudo=True)
+        return du.Command(
+            params=[du.CommandParam("mode", choices=list(self.modes))],
+            runs=[MODE_SWITCH, "to", "{{mode}}"],
+            sudo=True,
+            help="switch the firewall mode",
+        )
 
     def _switchable(self, entry: str) -> None:
         if not self.modes:
@@ -302,12 +311,11 @@ class Firewall(Component):
     @property
     def commands(self) -> FirewallCommands:
         """Its :class:`~tundravm.components.access.Login` commands, both run as root and
-        refused without *modes*: ``firewall.commands.status`` is
-        ``Command("/usr/bin/mode-switch", "status", sudo=True)``, which prints the mode in
-        force, the switches since boot and whether RTMR3 replays them, and
-        ``firewall.commands.switch`` is
-        ``Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)``, which
-        switches to the mode the client names and extends RTMR3 with it."""
+        refused without *modes*: ``firewall.commands.status`` runs
+        ``/usr/bin/mode-switch status``, which prints the mode in force, the switches since
+        boot and whether RTMR3 replays them, and ``firewall.commands.switch`` runs
+        ``/usr/bin/mode-switch to {{mode}}``, its ``mode`` param one of *modes*, which
+        switches to that mode and extends RTMR3 with it."""
         return FirewallCommands(tuple(self.modes))
 
     def compose(self) -> Iterator[object]:

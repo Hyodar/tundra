@@ -61,7 +61,7 @@ def declared(
     ``observability=``), never the implied baseline; services are the image's and those its
     components compose, each with the component that holds it; content is what the image
     names itself (``packages=``, ``files=``, ``users=``, ``groups=``); logins are each
-    ``SshAccess`` login's menu, every command with the profiles it exists in. Within a call,
+    ``SshAccess`` login's commands, each with the profiles it exists in. Within a call,
     a component, service or volume the file binds at its top level (*bindings*, by name)
     is that name, and what one exports is ``name.attribute`` (:func:`call`).
     """
@@ -303,8 +303,9 @@ def _profiles(image: Image) -> list[dict[str, object]]:
 
 def _logins(image: Image) -> list[dict[str, object]]:
     """Each login of an ``SshAccess`` the image or a profile holds: how its keys arrive,
-    its shell or menu, and per command who runs it, its typed argv, the firewall modes it
-    is offered in (none: every mode) and the profiles it exists in."""
+    its shell or program, and per command its help, params, ``runs`` template, whether
+    root runs it, the firewall modes it is offered in (none: every mode) and the profiles
+    it exists in."""
     from .components.access import SshAccess
 
     rows = _profiles(image)
@@ -341,14 +342,15 @@ def _logins(image: Image) -> list[dict[str, object]]:
                     if login.delivered
                     else f"{baked} baked key{'s' * (baked != 1)}",
                     "shell": login.shell,
+                    "help": login.help,
+                    "program": login.program_path,
                     "commands": [
                         {
-                            "name": name,
-                            "runs_as": "root" if command.sudo else login.name,
-                            "argv": command.menu(name)["argv"],
+                            **command.payload(
+                                name, [p for p in builds if not command.dev or p in development]
+                            ),
+                            "usage": command.usage(name),
                             "shown": command.shown(),
-                            "modes": list(command.modes),
-                            "profiles": [p for p in builds if not command.dev or p in development],
                         }
                         for name, command in commands
                     ],
@@ -1119,19 +1121,25 @@ def declared_sections(report: Mapping[str, Any]) -> list[Section]:
 
 
 def _login_row(row: Mapping[str, Any]) -> Row:
-    """A login's head (``searcher  the owner's key, a menu``), then one line per command:
-    its name, who runs it, its argv, and the modes and profiles it is limited to."""
-    way = f"shell {row['shell']}" if row["shell"] else "a menu"
-    items: list[Item] = []
+    """A login's head (``searcher  the owner's key, /usr/libexec/tundravm/cli/searcher``),
+    the listing its program prints, each command limited to some profiles saying which,
+    then each command's ``runs:`` line."""
+    from .declarative._login import annotated, table
+
+    if row["shell"]:
+        return Row(f"{row['name']}  {row['keys']}, shell {row['shell']}")
+    head = f"{row['name']}: {row['help']}" if row["help"] else row["name"]
+    listed = []
     for command in row["commands"]:
-        limits = []
+        notes = ["as root"] if command["sudo"] else []
         if command["modes"]:
-            limits.append("modes " + ", ".join(command["modes"]))
+            notes.append(" or ".join(command["modes"]) + " only")
         if command["profiles"] != row["profiles"]:
-            limits.append("profiles " + (", ".join(command["profiles"]) or "none"))
-        argv = command["shown"] + (f"  ({'; '.join(limits)})" if limits else "")
-        items.append((command["name"], command["runs_as"], argv))
-    return Row(f"{row['name']}  {row['keys']}, {way}", tuple(items))
+            notes.append("profiles " + (", ".join(command["profiles"]) or "none"))
+        listed.append((command["usage"], annotated(command["help"], notes)))
+    items: list[Item] = [head, f"ssh {row['name']}@HOST COMMAND", *table(listed)]
+    items += [(command["name"], f"runs: {command['shown']}") for command in row["commands"]]
+    return Row(f"{row['name']}  {row['keys']}, {row['program']}", tuple(items))
 
 
 def _component_row(row: Mapping[str, Any]) -> Row:

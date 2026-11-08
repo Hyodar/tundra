@@ -1,19 +1,27 @@
-"""``SshAccess(login=Login(...))``: a non-root login into a command menu or a shell, keys
-baked, delivered or the owner's, its commands typed (``Command``, ``Int``, ``Choice``),
-offered by firewall mode and by build, its ``sudo=True`` commands as exact sudoers lines,
-what ``show`` says of it, its probe rows and its lint."""
+"""``SshAccess(login=Login(...))``: a non-root login into its program or a shell, keys
+baked, delivered or the owner's, its commands argparse-like (``Command``, ``CommandParam``,
+a ``ParamType``) and offered by firewall mode and by build, the Go program the tree holds
+for them, its ``sudo=True`` commands as the sudoers lines of every argv they produce, what
+``show`` says of it, its probe rows and its lint."""
 
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
 from tundravm import Image, Profile, Service
 from tundravm._describe import declared, declared_sections, render_sections
-from tundravm.components.access import Choice, Command, DevAccess, Int, Login, SshAccess
+from tundravm.components.access import (
+    Command,
+    CommandParam,
+    Login,
+    ParamType,
+    SshAccess,
+)
 from tundravm.components.network import Firewall, Mode
+from tundravm.declarative.state import source_build
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
 from tundravm.secrets import Secret
@@ -23,14 +31,43 @@ from tundravm.testing import plan
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host"
-STATUS = {"status": Command("/usr/bin/systemctl", "status", "app")}
+STATUS = {"status": Command(runs=["/usr/bin/systemctl", "status", "app"])}
 CONFIG = "/etc/ssh/sshd_config.d/60-tundravm-login-tenant.conf"
 SSHD = "/etc/ssh/sshd_config.d/50-tundravm.conf"
-MENU = "/etc/tundravm/logins/tenant.json"
 SUDOERS = "/etc/sudoers.d/tenant"
-LOGIN_MENU = "/usr/bin/login-menu"
+PROGRAM = "/usr/libexec/tundravm/cli/tenant"
+BUILD = "tundravm-cli-tenant"
 DATA = Volume("data", unlock=OperatorKey())
 MODES = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[TCP(22)])})
+LINES = CommandParam("--lines", type=int, min=1, max=1000, default=100, help="lines")
+FOLLOW = CommandParam("--follow", type=bool)
+MODE = CommandParam("mode", choices=["a", "b"])
+
+
+@dataclass(frozen=True)
+class Hex(ParamType):
+    digits: int
+
+    def usage(self) -> str:
+        return f"{self.digits} hex digits"
+
+    def check(self) -> str:
+        return f'Match(value, "{self.pattern()}")'
+
+    def pattern(self) -> str:
+        return f"^[0-9a-f]{{{self.digits}}}$"
+
+
+@dataclass(frozen=True)
+class Unbounded(ParamType):
+    def usage(self) -> str:
+        return "anything"
+
+    def check(self) -> str:
+        return "nil"
+
+    def pattern(self) -> None:
+        return None
 
 
 def _image(*logins: Login, from_delivery: bool = False, firewall: Firewall = MODES) -> Image:
@@ -53,12 +90,11 @@ def _postinst(planned: object) -> str:
         (
             Login("tenant", keys=[KEY], commands=STATUS),
             {
-                "/etc/ssh/authorized_keys.d/tenant": f'restrict,command="{LOGIN_MENU}" {KEY}\n',
-                CONFIG: "    PermitTTY no\n    ForceCommand /usr/bin/login-menu\n",
-                MENU: '"word": "/usr/bin/systemctl"',
+                "/etc/ssh/authorized_keys.d/tenant": f'restrict,command="{PROGRAM}" {KEY}\n',
+                CONFIG: f"    PermitTTY no\n    ForceCommand {PROGRAM}\n",
             },
             [SUDOERS],
-            "/usr/bin/login-menu",
+            PROGRAM,
         ),
         (
             Login("tenant", keys=[KEY], shell="/usr/bin/menu", home=True),
@@ -67,22 +103,22 @@ def _postinst(planned: object) -> str:
                 CONFIG: "    AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u\n"
                 "    DisableForwarding yes\n",
             },
-            [MENU, SUDOERS],
+            [SUDOERS],
             "/usr/bin/menu",
         ),
         (
             Login(
                 "tenant",
                 owner=True,
-                commands={"web": Command("/usr/bin/systemctl", "restart", sudo=True)},
+                commands={"web": Command(runs=["/usr/bin/systemctl", "restart"], sudo=True)},
             ),
             {SUDOERS: "tenant ALL=(root) NOPASSWD: /usr/bin/systemctl restart\n"},
             ["/etc/ssh/authorized_keys.d/tenant"],
-            "/usr/bin/login-menu",
+            PROGRAM,
         ),
     ],
 )
-def test_a_login_lowers_to_its_account_keys_menu_and_rules(
+def test_a_login_lowers_to_its_account_keys_program_and_rules(
     login: Login, files: dict[str, str], absent: list[str], shell: str
 ) -> None:
     planned = plan(_image(login), "production")
@@ -93,9 +129,7 @@ def test_a_login_lowers_to_its_account_keys_menu_and_rules(
     user = planned.users["tenant"]
     assert (user.shell, user.home) == (shell, "/home/tenant" if login.home else None)
     assert "systemd-user-sessions.service" in _postinst(planned)
-    if MENU in planned.files:
-        assert planned.file(MENU).mode == 0o444
-        assert "login-menu" in planned.builds
+    assert (BUILD in planned.builds) == (login.commands is not None)
     if login.sudoers_file:
         assert planned.file(SUDOERS).mode == 0o440
         assert f"mkosi-chroot visudo -c -f {SUDOERS}" in _postinst(planned)
@@ -123,55 +157,74 @@ def test_the_owners_key_goes_to_the_owner_login_and_root_takes_none_without_aski
 @pytest.mark.parametrize(
     ("command", "rules"),
     [
-        (Command("/usr/bin/toggle", sudo=True), ['/usr/bin/toggle ""']),
-        (Command("/usr/bin/x", "a=b,c", sudo=True), ["/usr/bin/x a\\=b\\,c"]),
+        (Command(runs=["/usr/bin/toggle"], sudo=True), ['/usr/bin/toggle ""']),
+        (Command(runs=["/usr/bin/x", "a=b,c"], sudo=True), ["/usr/bin/x a\\=b\\,c"]),
         (
-            Command(
-                "/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance"), sudo=True
-            ),
-            ["/usr/bin/mode-switch to production", "/usr/bin/mode-switch to maintenance"],
+            Command(params=[MODE], runs=["/usr/bin/x", "to", "{{mode}}"], sudo=True),
+            ["/usr/bin/x to a", "/usr/bin/x to b"],
+        ),
+        (
+            Command(params=[FOLLOW], runs=["/usr/bin/x", "{{#follow}}-f{{/follow}}"], sudo=True),
+            ["/usr/bin/x -f", '/usr/bin/x ""'],
+        ),
+        (
+            Command(params=[LINES], runs=["/usr/bin/x", "-n", "{{lines}}", "a.log"], sudo=True),
+            ["/usr/bin/x ^-n [0-9]+ a[.]log$"],
         ),
         (
             Command(
-                "/usr/bin/journalctl", "-u", "a.service", "-n", Int("lines", 1, 1000), sudo=True
+                params=[CommandParam("digest", type=Hex(64))],
+                runs=["/usr/bin/x", "{{digest}}"],
+                sudo=True,
             ),
-            ["/usr/bin/journalctl ^-u a[.]service -n [0-9][0-9]?[0-9]?[0-9]?$"],
+            ["/usr/bin/x ^[0-9a-f]{64}$"],
         ),
-        (Command("/usr/bin/x", modes=["maintenance"], sudo=True), ['/usr/bin/x ""']),
-        (Command("/usr/bin/x"), []),
+        (Command(runs=["/usr/bin/x"], modes=["maintenance"], sudo=True), ['/usr/bin/x ""']),
+        (Command(runs=["/usr/bin/x"]), []),
     ],
 )
-def test_a_root_command_is_exact_sudoers_lines(command: Command, rules: list[str]) -> None:
-    login = Login("tenant", keys=[KEY], commands={"run": command, "status": STATUS["status"]})
+def test_a_root_command_is_the_sudoers_lines_of_every_argv(
+    command: Command, rules: list[str]
+) -> None:
+    login = Login("tenant", keys=[KEY], commands={"run": command, **STATUS})
     assert login.sudo_rules() == tuple(f"tenant ALL=(root) NOPASSWD: {r}" for r in rules)
 
 
 @pytest.mark.parametrize(
-    ("command", "entry"),
+    ("words", "params", "go", "shown"),
     [
-        (
-            Command("/bin/x", Int("n", 0, 65535), Choice("m", "a", "b")),
-            {
-                "argv": [
-                    {"word": "/bin/x"},
-                    {"arg": "n", "int": [0, 65535]},
-                    {"arg": "m", "choice": ["a", "b"]},
-                ],
-                "root": False,
-                "modes": [],
-            },
-        ),
-        (
-            Command("/bin/x", modes=["maintenance"], sudo=True),
-            {"argv": [{"word": "/bin/x"}], "root": True, "modes": ["maintenance"]},
-        ),
+        (["/x", "lit"], [], '"/x", "lit"', "/x lit"),
+        (["/x", "{{mode}}"], [MODE], '"/x", v.Get("mode")', "/x <mode>"),
+        (["/x", "--n={{lines}}"], [LINES], '"/x", "--n="+v.Get("lines")', "/x --n=<lines>"),
+        (["/x", "{{#follow}}-f{{/follow}}"], [FOLLOW], '"/x", v.If("follow", "-f")', "/x [-f]"),
     ],
 )
-def test_the_menu_types_each_word_and_names_its_modes(
-    command: Command, entry: dict[str, object]
+def test_each_template_form_is_a_word_of_the_program(
+    words: list[str], params: list[CommandParam], go: str, shown: str
 ) -> None:
-    menu = json.loads(Login("tenant", keys=[KEY], commands={"logs": command}).menu())
-    assert menu["entries"] == [{"name": "logs", **entry}]
+    command = Command(params=params, runs=words)
+    main = Login("tenant", keys=[KEY], commands={"run": command}).program()["main.go"]
+    assert f"return Words({go})" in main
+    assert command.shown() == shown
+
+
+def test_the_program_is_the_four_files_the_build_compiles() -> None:
+    login = Login(
+        "tenant",
+        owner=True,
+        commands={**STATUS, "shell": Command(runs=["/bin/sh"], dev=True)},
+    )
+    planned = plan(_image(login), "production")
+    tree = {e.path for e in planned.tree.entries}
+    names = ["cli.go", "dev.go", "go.mod", "main.go"]
+    assert {f"payload/tundravm-cli/tenant/{name}" for name in names} <= tree
+    build = planned.builds[BUILD]
+    assert [step.destination for step in build.install] == [PROGRAM]
+    hook = source_build(build).render("0" * 64)
+    developed, production = hook.split("\nelse\n")
+    assert hook.split("\n")[1] == 'if [[ " ${PROFILES:-} " == *" dev "* ]]; then'
+    assert "-tags dev" in developed and "-tags" not in production
+    assert '"$SRCDIR/payload/tundravm-cli/tenant"' in production
 
 
 @pytest.mark.parametrize(
@@ -185,9 +238,8 @@ def test_the_menu_types_each_word_and_names_its_modes(
 def test_a_command_names_only_modes_the_firewall_declares(
     modes: list[str], firewall: Firewall, found: str | None
 ) -> None:
-    login = Login(
-        "tenant", owner=True, commands={**STATUS, "x": Command("/x", modes=modes, sudo=True)}
-    )
+    command = Command(runs=["/x"], modes=modes, sudo=True)
+    login = Login("tenant", owner=True, commands={**STATUS, "x": command})
     messages = [
         d.message
         for d in plan(_image(login, firewall=firewall), "production").lint()
@@ -197,34 +249,29 @@ def test_a_command_names_only_modes_the_firewall_declares(
 
 
 @pytest.mark.parametrize(
-    ("profile", "menu", "sudoers", "terminal"),
+    ("profile", "sudoers", "terminal"),
     [
-        ("production", ["status"], None, False),
-        ("staging", ["status"], None, False),
-        (
-            "dev",
-            ["debug", "shell", "status"],
-            'tenant ALL=(root) NOPASSWD: /usr/bin/debug ""\n',
-            True,
-        ),
+        ("production", None, False),
+        ("staging", None, False),
+        ("dev", 'tenant ALL=(root) NOPASSWD: /usr/bin/debug ""\n', True),
     ],
 )
 def test_a_dev_command_exists_in_development_builds_only(
-    profile: str, menu: list[str], sudoers: str | None, terminal: bool
+    profile: str, sudoers: str | None, terminal: bool
 ) -> None:
     login = Login(
         "tenant",
         owner=True,
         commands={
             **STATUS,
-            "shell": Command("/usr/bin/bash", dev=True),
-            "debug": Command("/usr/bin/debug", dev=True, sudo=True),
+            "shell": Command(runs=["/usr/bin/bash"], dev=True),
+            "debug": Command(runs=["/usr/bin/debug"], dev=True, sudo=True),
         },
     )
-    baked = Login("guest", keys=[KEY], commands={**STATUS, "sh": Command("/bin/sh", dev=True)})
+    baked = Login(
+        "guest", keys=[KEY], commands={**STATUS, "sh": Command(runs=["/bin/sh"], dev=True)}
+    )
     planned = plan(_image(login, baked), profile)
-    names = [entry["name"] for entry in json.loads(planned.file(MENU).text)["entries"]]
-    assert names == menu
     pty = ",pty" if terminal else ""
     assert f"    PermitTTY {'yes' if terminal else 'no'}\n" in planned.file(CONFIG).text
     assert planned.file("/etc/ssh/authorized_keys.d/guest").text.startswith(f"restrict{pty},")
@@ -237,7 +284,8 @@ def test_a_dev_command_exists_in_development_builds_only(
 
 
 def test_a_dev_command_needs_a_development_profile() -> None:
-    login = Login("tenant", owner=True, commands={**STATUS, "shell": Command("/bin/sh", dev=True)})
+    shell = Command(runs=["/bin/sh"], dev=True)
+    login = Login("tenant", owner=True, commands={**STATUS, "shell": shell})
     image = Image(
         "x",
         services=[Service("app", ["/usr/bin/app"], state=DATA.directory("app"))],
@@ -245,56 +293,78 @@ def test_a_dev_command_needs_a_development_profile() -> None:
     )
     with pytest.raises(ValidationError, match="no development profile"):
         plan(image, "production").files  # noqa: B018
-    with_dev = Image(
-        "x",
-        services=[Service("app", ["/usr/bin/app"], state=DATA.directory("app"))],
-        components=[SshAccess(login=login)],
-        dev=DevAccess(password="x"),
-    )
-    assert "/bin/sh" in plan(with_dev, "dev").file("/etc/tundravm/logins/tenant.json").text
 
 
-def test_show_prints_each_command_who_runs_it_its_argv_modes_and_profiles() -> None:
+def test_show_prints_each_logins_listing_and_what_each_command_runs() -> None:
     login = Login(
         "tenant",
         owner=True,
+        help="run the app",
         commands={
             "logs": Command(
-                "/usr/bin/tail", "-n", Int("lines", 1, 1000), "/var/log/app", sudo=True
+                params=[LINES, FOLLOW],
+                runs=["/usr/bin/tail", "-n", "{{lines}}", "{{#follow}}-f{{/follow}}", "/a.log"],
+                sudo=True,
+                help="the app's log",
             ),
-            "shell": Command("/usr/bin/bash", dev=True),
+            "shell": Command(runs=["/usr/bin/bash"], dev=True, help="a shell"),
             "toggle": MODES.commands.switch,
-            "debug": Command("/usr/bin/debug", modes=["maintenance"], sudo=True),
+            "debug": Command(runs=["/usr/bin/debug"], modes=["maintenance"], sudo=True),
         },
     )
     report = declared(_image(login), ["production", "dev", "staging"], {"firewall": MODES})
     shown = render_sections(declared_sections(report))
     assert '"toggle": firewall.commands.switch' in shown
     assert shown.split("Logins (1):\n")[1] == (
-        "  tenant  the owner's key, a menu\n"
-        "    debug   root    /usr/bin/debug  (modes maintenance)\n"
-        "    logs    root    /usr/bin/tail -n <lines 1-1000> /var/log/app\n"
-        "    shell   tenant  /usr/bin/bash  (profiles dev)\n"
-        "    toggle  root    /usr/bin/mode-switch to <mode production|maintenance>"
+        f"  tenant  the owner's key, {PROGRAM}\n"
+        "    tenant: run the app\n"
+        "    ssh tenant@HOST COMMAND\n"
+        "      debug                        (as root, maintenance only)\n"
+        "      logs [--lines N] [--follow]  the app's log (as root)\n"
+        "      shell                        a shell (profiles dev)\n"
+        "      toggle <mode>                switch the firewall mode (as root)\n"
+        "    debug   runs: /usr/bin/debug (as root)\n"
+        "    logs    runs: /usr/bin/tail -n <lines> [-f] /a.log (as root)\n"
+        "    shell   runs: /usr/bin/bash\n"
+        "    toggle  runs: /usr/bin/mode-switch to <mode> (as root)"
     )
     rows: Any = report["logins"]
-    assert rows[0]["commands"][2] == {
-        "name": "shell",
-        "runs_as": "tenant",
-        "argv": [{"word": "/usr/bin/bash"}],
-        "shown": "/usr/bin/bash",
+    assert rows[0]["commands"][1] == {
+        "name": "logs",
+        "help": "the app's log",
+        "params": [
+            {
+                "name": "lines",
+                "option": "--lines",
+                "type": "int",
+                "usage": "1-1000",
+                "default": "100",
+                "help": "lines",
+            },
+            {
+                "name": "follow",
+                "option": "--follow",
+                "type": "bool",
+                "usage": "",
+                "default": None,
+                "help": None,
+            },
+        ],
+        "runs": ["/usr/bin/tail", "-n", "{{lines}}", "{{#follow}}-f{{/follow}}", "/a.log"],
+        "sudo": True,
         "modes": [],
-        "profiles": ["dev"],
+        "profiles": ["production", "dev", "staging"],
+        "usage": "logs [--lines N] [--follow]",
+        "shown": "/usr/bin/tail -n <lines> [-f] /a.log (as root)",
     }
 
 
-def test_the_dev_probe_checks_each_login_its_menu_and_root() -> None:
-    login = Login(
-        "tenant", owner=True, commands={"logs": Command("/bin/x", Int("n", 1, 9), sudo=True)}
-    )
+def test_the_dev_probe_checks_each_login_its_program_and_root() -> None:
+    logs = Command(params=[LINES], runs=["/bin/x", "{{lines}}"], sudo=True)
+    login = Login("tenant", owner=True, commands={"logs": logs})
     probe = plan(_image(login), "dev").file("/usr/lib/tundravm/probe").text
-    assert "probe_login tenant /etc/sudoers.d/tenant '-' '/usr/bin/login-menu'\n" in probe
-    assert f"probe_menu tenant {MENU} /etc/sudoers.d/tenant 'logs 10' logs\n" in probe
+    assert f"probe_login tenant /etc/sudoers.d/tenant '-' '{PROGRAM}'\n" in probe
+    assert f"probe_menu tenant {PROGRAM} /etc/sudoers.d/tenant 'logs --lines 1001' logs\n" in probe
     assert "check=ssh:root\nprobe_no_root\n" in probe
 
 
@@ -312,6 +382,10 @@ def test_a_production_shell_login_warns(shell: bool, production: bool, found: bo
     assert ("ssh-login-shell" in codes) is found
 
 
+def _choices(count: int) -> CommandParam:
+    return CommandParam("--m", choices=[f"v{n}" for n in range(count)], default="v0")
+
+
 @pytest.mark.parametrize(
     ("make", "message"),
     [
@@ -326,35 +400,69 @@ def test_a_production_shell_login_warns(shell: bool, production: bool, found: bo
         (lambda: Login("tenant", keys=[KEY], shell="/bin/sh", commands=STATUS), "both"),
         (lambda: Login("tenant", keys=[KEY], shell="/bin/sh -r"), "not one absolute path"),
         (
-            lambda: Login("t", keys=[KEY], commands={"x": ["/bin/x", "{n:int:1-9}"]}),  # type: ignore[dict-item]
-            r'Command\("/bin/x", Int\("n", 1, 9\)\) runs it as the login',
+            lambda: Login("t", keys=[KEY], commands={"x": ["/bin/x", "a"]}),  # type: ignore[dict-item]
+            r'Command\(runs=\["/bin/x", "a"\]\) runs it as the login',
         ),
-        (lambda: Login("t", keys=[KEY], commands={"X": Command("/bin/x")}), "not a command word"),
+        (lambda: Login("t", keys=[KEY], commands={"X": STATUS["status"]}), "not a command word"),
+        (lambda: Login("t", keys=[KEY], commands={"help": STATUS["status"]}), "program's own"),
         (
-            lambda: Login("t", keys=[KEY], commands={"x": Command("/x", dev=True)}),
-            "empty menu",
+            lambda: Login("t", keys=[KEY], commands={"x": Command(runs=["/x"], dev=True)}),
+            "empty program",
         ),
-        (lambda: Command("x"), "not an absolute path"),
+        (
+            lambda: Command("/usr/bin/x", "reboot", sudo=True),  # type: ignore[arg-type]
+            r'Command\(runs=\["/usr/bin/x", "reboot"\], sudo=True\)',
+        ),
         (lambda: Command(), "runs nothing"),
-        (lambda: Command("/x", "--n={n:int}"), r'Write Int\("n", 0, 65535\)'),
-        (lambda: Command("/x", "{m:choice:a|b}"), r'Write Choice\("m", "a", "b"\)'),
+        (lambda: Command(runs=[]), "runs= is empty"),
+        (lambda: Command(runs=["x"]), "not the program's absolute path"),
+        (lambda: Command(params=[MODE], runs=["{{mode}}"]), "not the program's absolute path"),
+        (lambda: Command(runs=["/x", "a b"]), "never split"),
+        (lambda: Command(params=[MODE], runs=["/x"]), "login-param-unused"),
+        (lambda: Command(runs=["/x", "{{mode}}"]), "login-param-unknown"),
+        (lambda: Command(params=[MODE, MODE], runs=["/x", "{{mode}}"]), "twice"),
+        (lambda: Command(params=[FOLLOW], runs=["/x", "{{follow}}"]), "is a flag"),
+        (lambda: Command(params=[MODE], runs=["/x", "{{#mode}}-m{{/mode}}"]), "no flag"),
+        (lambda: Command(params=[FOLLOW], runs=["/x", "-{{#follow}}f{{/follow}}"]), "flag's word"),
+        (lambda: Command(runs=["/x", "a}}"]), "brace"),
+        (lambda: Command(runs=["/x"], modes="maintenance"), "not a list"),
+        (lambda: Command(runs=["/x"], modes=["tdx"]), "security mode"),
+        (lambda: Command(runs=["/x"], modes=["Maint"]), "not a firewall mode"),
+        (lambda: Command(runs=["/x", "*"], sudo=True), "wildcard"),
         (
-            lambda: Command(["/x", "{n:int:1-9}"], sudo=True),  # type: ignore[arg-type]
-            r'Command\("/x", Int\("n", 1, 9\), sudo=True\)',
+            lambda: Command(params=[LINES], runs=["/x", "--n={{lines}}"], sudo=True),
+            "part of a sudoers pattern",
         ),
-        (lambda: Command("/x", Int("n", 0, 1), Int("n", 0, 1)), "twice"),
-        (lambda: Command("/x", modes="maintenance"), "not a list"),
-        (lambda: Command("/x", modes=["tdx"]), "security mode"),
-        (lambda: Command("/x", modes=["Maint"]), "not a firewall mode"),
-        (lambda: Int("n", 9, 1), "low one first"),
-        (lambda: Int("n", -1, 1), "from 0"),
-        (lambda: Int("N", 0, 1), "not an argument name"),
-        (lambda: Choice("m"), "offers no value"),
-        (lambda: Choice("m", "-f"), "offers '-f'"),
-        (lambda: Choice("m", "a", "a"), "a value twice"),
-        (lambda: Command("/x", "*", sudo=True), "wildcard"),
-        (lambda: Command("/x", "a b", sudo=True), "a space"),
-        (lambda: Command("/x", "a=b", Int("n", 0, 1), sudo=True), "pattern"),
+        (
+            lambda: Command(
+                params=[CommandParam("--v", type=Unbounded(), default="a")],
+                runs=["/x", "{{v}}"],
+                sudo=True,
+            ),
+            "has no pattern",
+        ),
+        (
+            lambda: Command(
+                params=[_choices(9), CommandParam("--n", choices=[*"abcdefgh"], default="a")],
+                runs=["/x", "{{m}}", "{{n}}"],
+                sudo=True,
+            ),
+            "login-sudo-lines",
+        ),
+        (lambda: CommandParam("n", type=int), "takes min= and max="),
+        (lambda: CommandParam("n", type=int, min=9, max=1), "min first"),
+        (lambda: CommandParam("n"), "takes choices="),
+        (lambda: CommandParam("n", choices=["-f"]), "offer '-f'"),
+        (lambda: CommandParam("n", choices=["a", "a"]), "a value twice"),
+        (lambda: CommandParam("f", type=bool), "is an option"),
+        (lambda: CommandParam("--f", type=bool, default=True), "has no default"),
+        (lambda: CommandParam("n", choices=["a"], default="a"), "is required"),
+        (lambda: CommandParam("--n", choices=["a"]), "needs default="),
+        (lambda: CommandParam("--n", type=int, min=1, max=9, default=10), "from 1 to 9"),
+        (lambda: CommandParam("--help", type=bool), "program's own help"),
+        (lambda: CommandParam("-h", type=bool), "program's own help"),
+        (lambda: CommandParam("-n", type=bool), "neither a positional"),
+        (lambda: CommandParam("n", type=float), "not int, str, bool"),
         (lambda: SshAccess(login=["tenant"]), "takes a Login"),  # type: ignore[list-item]
         (
             lambda: SshAccess(
@@ -376,7 +484,7 @@ def test_a_production_shell_login_warns(shell: bool, production: bool, found: bo
 def test_a_bad_login_is_refused(make: object, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         result = make()  # type: ignore[operator]
-        list(result) if not isinstance(result, (Login, Command, SshAccess, Int, Choice)) else None
+        list(result) if not isinstance(result, (Login, Command, CommandParam, SshAccess)) else None
 
 
 def test_an_owner_login_needs_the_attested_endpoint() -> None:
