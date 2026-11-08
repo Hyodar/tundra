@@ -379,11 +379,12 @@ Cloudflare's pair by default: no target cloud's resolver speaks TLS. The firewal
 credential=, rules=, export=))` ships the journal and node metrics. A development profile
 sends each to the guest's receiver (`journal-sink`, `metrics-sink`), as a production one
 without `url=` does. Otherwise the delivered credential authenticates it. An `http://` sink
-warns. `rules=[RecordingRule("box:up", "min(up)")]` computes series in the guest
-([a task](howto.md#ship-booleans-not-raw-series)). A rule's series leaves unless it says
+warns. `rules=[RecordingRule("box:up", f"max({box.metrics.active})")]` computes series in
+the guest ([a task](howto.md#ship-booleans-not-raw-series)); services, containers and
+volumes carry `.metrics` selectors. A rule's series leaves unless
 `export=False`. `export=` adds raw series and presets; the image's identity always
-leaves. Record names carry a colon; `promtool check rules` checks them at build time.
-With rules Prometheus runs in server mode, its query API on the loopback. `image-metrics`
+leaves. Records carry a colon; `promtool check rules` checks them at build.
+With rules Prometheus runs in server mode, its API closed. `image-metrics`
 logs the digest and RTMR0-3 at boot.
 `Observability(proxy="IP:PORT")` reaches every sink through one address.
 `proxy=Proxy("10.88.0.100", 443, passthrough=True)` is a TCP relay: each sink's name is
