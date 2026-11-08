@@ -127,3 +127,7 @@ An argument inside a word (`--lines=N`), and free strings.
 Franco preferred the flag to a subclass ("I think it should be Command(..., sudo=True)"), so
 `Sudo` is gone and a root command is `Command("/usr/bin/systemctl", "reboot", sudo=True)`;
 the first rejection above no longer holds. The menu and sudoers bytes are unchanged.
+
+The firewall's menu moved under one namespace ("Also Firewall.commands.switch and status"):
+`firewall.commands.status` and `firewall.commands.switch`, so a `Firewall` has one attribute
+about its menu, and `show` spells both by that path.

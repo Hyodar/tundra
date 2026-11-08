@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 
 from tundravm._image._component import Component, Readied, ServiceReady
 from tundravm._image._values import (
@@ -179,6 +180,37 @@ def _kernel_version(resolved: dm.Resolved) -> tuple[int, int] | None:
     return DEBIAN_KERNEL
 
 
+@dataclass(frozen=True, slots=True)
+class FirewallCommands:
+    """A switchable :class:`Firewall`'s :class:`~tundravm.components.access.Login` commands,
+    ``firewall.commands``, both run as root: :attr:`status` and :attr:`switch`."""
+
+    modes: tuple[str, ...]
+    """The firewall's mode names, in the order ``modes=`` gives them."""
+
+    @property
+    def status(self) -> du.Command:
+        """Prints the mode in force, the switches since boot and whether RTMR3 replays them:
+        ``Command("/usr/bin/mode-switch", "status", sudo=True)``."""
+        self._switchable("status")
+        return du.Command(MODE_SWITCH, "status", sudo=True)
+
+    @property
+    def switch(self) -> du.Command:
+        """Switches to the mode the client names, one of *modes*, extended into RTMR3:
+        ``Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)``."""
+        self._switchable("switch")
+        return du.Command(MODE_SWITCH, "to", du.Choice("mode", *self.modes), sudo=True)
+
+    def _switchable(self, entry: str) -> None:
+        if not self.modes:
+            raise ValidationError(
+                f"Firewall: firewall.commands.{entry} is a login command for a switchable "
+                "firewall, and this one has no modes.",
+                hint='Add modes={"production": Mode(), "maintenance": Mode(...)}.',
+            )
+
+
 class Firewall(Component):
     """The inbound (and optionally outbound) packet filter, nftables in the image.
 
@@ -268,28 +300,15 @@ class Firewall(Component):
         )
 
     @property
-    def status(self) -> du.Command:
-        """A :class:`~tundravm.components.access.Login` command printing the mode in force,
-        the switches since boot and whether RTMR3 replays them:
-        ``Command("/usr/bin/mode-switch", "status", sudo=True)``."""
-        self._switchable("status")
-        return du.Command(MODE_SWITCH, "status", sudo=True)
-
-    @property
-    def switch(self) -> du.Command:
-        """A :class:`~tundravm.components.access.Login` command switching to the mode the
-        client names, one of *modes*, extended into RTMR3:
-        ``Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)``."""
-        self._switchable("switch")
-        return du.Command(MODE_SWITCH, "to", du.Choice("mode", *self.modes), sudo=True)
-
-    def _switchable(self, entry: str) -> None:
-        if not self.modes:
-            raise ValidationError(
-                f"Firewall: {entry} is a login command for a switchable firewall, and this one "
-                "has no modes.",
-                hint='Add modes={"production": Mode(), "maintenance": Mode(...)}.',
-            )
+    def commands(self) -> FirewallCommands:
+        """Its :class:`~tundravm.components.access.Login` commands, both run as root and
+        refused without *modes*: ``firewall.commands.status`` is
+        ``Command("/usr/bin/mode-switch", "status", sudo=True)``, which prints the mode in
+        force, the switches since boot and whether RTMR3 replays them, and
+        ``firewall.commands.switch`` is
+        ``Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)``, which
+        switches to the mode the client names and extends RTMR3 with it."""
+        return FirewallCommands(tuple(self.modes))
 
     def compose(self) -> Iterator[object]:
         allow = tuple(dm.Port(p.port, p.protocol) for p in self.allow)

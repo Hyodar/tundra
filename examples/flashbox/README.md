@@ -19,7 +19,7 @@ attested node's `nethermind.py` and `lighthouse.py` are linked there file by fil
 | flashbots-images | tundravm |
 |---|---|
 | podman, `init-container.sh` | `Searcher(...)`, which composes `Container("bob", ssh=, expose=, egress=, modes=, binds=)` |
-| `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `Mode(ingress=[searcher.ssh])`, `firewall.switch` as the menu's `toggle` |
+| `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `Mode(ingress=[searcher.ssh])`, `firewall.commands.switch` as the menu's `toggle` |
 | `searchersh.c`, `99-searcher`, dropbear | `Login("searcher", owner=True, commands={...})`: `Command(...)` as the login, `Command(..., sudo=True)` as root, `dev=True` in development builds only |
 | tdx-init, `persistent-mount.service` | `Volume("data", unlock=OperatorKey())` |
 | `lighthouse.service`, `lighthouse_logs` | `Lighthouse(disable_quic=, logs=, ...)`, `Generated("jwt")`, `Searcher(logs_from=)` |

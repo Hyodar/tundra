@@ -147,7 +147,7 @@ ssh = SshAccess(login=Login(
     commands={
         "status": Command("/usr/bin/app-status"),
         "logs": Command("/usr/bin/journalctl", "-u", "app", "-n", Int("lines", 1, 1000), sudo=True),
-        "toggle": firewall.switch,
+        "toggle": firewall.commands.switch,
         "shell": Command("/usr/bin/bash", dev=True),
     },
 ))

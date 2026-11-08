@@ -984,9 +984,8 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 | Member | Does |
 |---|---|
 | `Firewall.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
+| `Firewall.commands` | Its `Login` commands, both run as root and refused without *modes*: `firewall.commands.status` is `Command("/usr/bin/mode-switch", "status", sudo=True)`, which prints the mode in force, the switches since boot and whether RTMR3 replays them, and `firewall.commands.switch` is `Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)`, which switches to the mode the client names and extends RTMR3 with it. |
 | `Firewall.lowered_modes() -> tuple[FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
-| `Firewall.status` | A `Login` command printing the mode in force, the switches since boot and whether RTMR3 replays them: `Command("/usr/bin/mode-switch", "status", sudo=True)`. |
-| `Firewall.switch` | A `Login` command switching to the mode the client names, one of *modes*, extended into RTMR3: `Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)`. |
 
 ### `Host`
 

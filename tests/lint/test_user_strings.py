@@ -162,6 +162,9 @@ RENAMED = {
         r"\bservice-command-not-shipped\b"
     ),
     "Sudo (Command(..., sudo=True))": re.compile(r"(?<![\w.])Sudo\("),
+    "firewall.status/switch (firewall.commands.status/switch)": re.compile(
+        r"\b[Ff]irewall\.(?:status|switch)\b"
+    ),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {
@@ -498,6 +501,7 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         "the variant-empty finding",
         'Secret("jwt", rotation="restart")',
         '"reboot": Sudo("/usr/bin/systemctl", "reboot"),',
+        '"toggle": firewall.switch,',
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:
@@ -516,6 +520,7 @@ def test_renamed_guard_passes_the_current_spellings() -> None:
         'EfiStub(snapshot=SNAPSHOT, version="257.8-1~deb13u1")\nmcopy ::EFI/BOOT/BOOTX64.EFI\n'
         'BootStep("s", "true", after=[disk.ready])\nUnit("a.service", U, needs=[s.ready])\n'
         'Repository("r", URL, "s", priority=10)\nRuntimeInit("x")\n'
+        '{"toggle": firewall.commands.switch, "reboot": Command("/x", sudo=True)}\n'
     )
     assert _renamed(source) == []
 

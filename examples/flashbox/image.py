@@ -54,9 +54,9 @@ ssh = SshAccess(
         "searcher",
         owner=True,
         commands={
-            "status": firewall.status,
+            "status": firewall.commands.status,
             "logs": Command("/usr/bin/tail", "--lines", Int("lines", 1, 10000), searcher.logs),
-            "toggle": firewall.switch,
+            "toggle": firewall.commands.switch,
             "reboot": Command("/usr/bin/systemctl", "reboot", sudo=True),
             "shell": Command("/usr/bin/bash", dev=True),
         },

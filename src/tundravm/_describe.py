@@ -496,25 +496,13 @@ class _References:
     @functools.cached_property
     def exports(self) -> list[tuple[str, object]]:
         """``(name.attribute, value)`` of each property a bound component or service
-        exports that is a value of its own: an endpoint, a login entry, a readiness."""
-        from ._image import Component, Service
-
+        exports that is a value of its own: an endpoint, a login entry, a readiness, and
+        one level down a group's (``firewall.commands.status``)."""
         found: list[tuple[str, object]] = []
         for owner, name in self._owners():
-            seen: set[str] = set()
-            for kind in type(owner).__mro__:
-                for attribute, member in vars(kind).items():
-                    if attribute in seen or attribute.startswith("_"):
-                        continue
-                    seen.add(attribute)
-                    if not isinstance(member, property):
-                        continue
-                    try:
-                        value = getattr(owner, attribute)
-                    except (TdxError, AttributeError, TypeError, ValueError):
-                        continue
-                    if _exported(value) and not isinstance(value, (Component, Service)):
-                        found.append((f"{name}.{attribute}", value))
+            for spelled, value in _properties(owner, name):
+                found.append((spelled, value))
+                found += _properties(value, spelled)
         return found
 
     def _owners(self) -> list[tuple[object, str]]:
@@ -560,6 +548,29 @@ class _References:
 
 
 _REFERENCES: ContextVar[_References | None] = ContextVar("references", default=None)
+
+
+def _properties(owner: object, name: str) -> list[tuple[str, object]]:
+    """``(name.attribute, value)`` of each public property of *owner* whose value is one
+    of its own (:func:`_exported`), neither a component nor a service."""
+    from ._image import Component, Service
+
+    found: list[tuple[str, object]] = []
+    seen: set[str] = set()
+    for kind in type(owner).__mro__:
+        for attribute, member in vars(kind).items():
+            if attribute in seen or attribute.startswith("_"):
+                continue
+            seen.add(attribute)
+            if not isinstance(member, property):
+                continue
+            try:
+                value = getattr(owner, attribute)
+            except (TdxError, AttributeError, TypeError, ValueError):
+                continue
+            if _exported(value) and not isinstance(value, (Component, Service)):
+                found.append((f"{name}.{attribute}", value))
+    return found
 
 
 def _exported(value: object) -> bool:

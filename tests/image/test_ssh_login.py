@@ -263,12 +263,14 @@ def test_show_prints_each_command_who_runs_it_its_argv_modes_and_profiles() -> N
                 "/usr/bin/tail", "-n", Int("lines", 1, 1000), "/var/log/app", sudo=True
             ),
             "shell": Command("/usr/bin/bash", dev=True),
-            "toggle": MODES.switch,
+            "toggle": MODES.commands.switch,
             "debug": Command("/usr/bin/debug", modes=["maintenance"], sudo=True),
         },
     )
-    report = declared(_image(login), ["production", "dev", "staging"])
-    assert render_sections(declared_sections(report)).split("Logins (1):\n")[1] == (
+    report = declared(_image(login), ["production", "dev", "staging"], {"firewall": MODES})
+    shown = render_sections(declared_sections(report))
+    assert '"toggle": firewall.commands.switch' in shown
+    assert shown.split("Logins (1):\n")[1] == (
         "  tenant  the owner's key, a menu\n"
         "    debug   root    /usr/bin/debug  (modes maintenance)\n"
         "    logs    root    /usr/bin/tail -n <lines 1-1000> /var/log/app\n"

@@ -156,9 +156,9 @@ THREE = {"production": Mode(), "debug": Mode(ingress=[TCP(22)]), "sync": Mode(in
 def test_a_switchable_firewall_hands_out_its_login_commands(
     modes: dict[str, Mode], entry: str, command: Command | None
 ) -> None:
-    firewall = Firewall(modes=modes)
+    commands = Firewall(modes=modes).commands
     if command is None:
-        with pytest.raises(ValidationError, match="no modes"):
-            getattr(firewall, entry)
+        with pytest.raises(ValidationError, match=f"firewall.commands.{entry} .* no modes"):
+            getattr(commands, entry)
         return
-    assert getattr(firewall, entry) == command
+    assert getattr(commands, entry) == command

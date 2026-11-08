@@ -302,8 +302,8 @@ account, are refused.
 A login takes exactly one of `commands=` and `shell=`. A command's words are literal
 strings, `Int("lines", 1, 10000)` or `Choice("mode", "a", "b")`, which the client fills in.
 `modes=` offers it in those firewall modes only, and `login-mode-undeclared` catches a mode
-the `Firewall` lacks; `dev=True` offers it in development builds only. `firewall.status` and
-`firewall.switch` are two such commands, run as root.
+the `Firewall` lacks; `dev=True` offers it in development builds only.
+`firewall.commands.status` and `firewall.commands.switch` are two such commands, run as root.
 
 `login-menu` is the account's shell and sshd's forced command: an empty request lists the
 menu, a request runs exactly the argv it names, and anything else is refused. Each `sudo=True`
@@ -526,7 +526,7 @@ ports ([a task](howto.md#open-a-maintenance-window)):
   minutes by default.
 
 A switch goes over the attested endpoint, signed by the owner, or through a login's
-`firewall.switch`. `mode-switch` extends RTMR3 with it before it swaps the ruleset, so old
+`firewall.commands.switch`. `mode-switch` extends RTMR3 with it before it swaps the ruleset, so old
 flows drop on their next packet and the probe's `mode:firewall` row can check the history
 against RTMR3. Refused: 22 in `production`, `lasts=` on `production`, a mode named `tdx` or
 `simulated`, and a switch on a production build without an owner. On TDX the extend needs
