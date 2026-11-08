@@ -125,6 +125,25 @@ def test_attest_deliver_and_unlock_over_the_bound_session(
     assert again.code == EXIT_ERROR and "refused /credentials (409)" in again.err
 
 
+def test_a_torn_write_leaves_the_known_hosts_as_they_were(
+    instance: instances.Instance, endpoint: FakeEndpoint, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hosts = instances.known_hosts(instance)
+    hosts.write_text("old\n")
+    real = Path.write_text
+
+    def torn(path: Path, text: str, *args: object, **kwargs: object) -> int:
+        if instances.KNOWN_HOSTS in path.name:
+            real(path, text[:1])
+            raise OSError("disk full")
+        return real(path, text, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", torn)
+    with pytest.raises(OSError, match="disk full"):
+        bootstrap.pin_host_keys(instance)
+    assert hosts.read_text() == "old\n"
+
+
 def test_a_local_boot_pins_its_host_keys_from_its_own_measurements(
     instance: instances.Instance, endpoint: FakeEndpoint
 ) -> None:

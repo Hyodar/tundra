@@ -665,7 +665,7 @@ def verify(
 
 def _known_hosts(instance: Instance, evidence: Evidence) -> None:
     """The bound host keys as ``known_hosts``: the host's on its SSH port, each
-    container's on the host port that reaches its sshd."""
+    container's on the host port that reaches its sshd, replacing the file whole."""
 
     def name(guest: int) -> str:
         port = instance.port(guest) or guest
@@ -673,7 +673,10 @@ def _known_hosts(instance: Instance, evidence: Evidence) -> None:
 
     lines = [f"{name(SSH_PORT)} {key}\n" for key in evidence.host_keys]
     lines += [f"{name(c.port)} {key}\n" for c in evidence.containers for key in c.host_keys]
-    known_hosts(instance).write_text("".join(lines), encoding="utf-8")
+    hosts = known_hosts(instance)
+    scratch = hosts.with_name(f".{hosts.name}.new")
+    scratch.write_text("".join(lines), encoding="utf-8")
+    os.replace(scratch, hosts)
 
 
 def pin_host_keys(instance: Instance, *, connect: Connector | None = None) -> Attestation:
