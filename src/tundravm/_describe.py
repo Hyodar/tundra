@@ -1160,9 +1160,8 @@ def _profile_rows(profiles: Sequence[Mapping[str, Any]]) -> list[Row]:
     width = max((len(row["name"]) for row in profiles), default=0)
     rows: list[Row] = []
     for row in profiles:
-        kind = "production" if row["production"] else "non-production"
         what = "the image" if row["extends"] is None else f"extends {row['extends']}"
-        what += "" if row["production"] and row["extends"] is None else f", {kind}"
+        what += "" if row["production"] else ", non-production"
         items = [f"adds {item}" for item in row["adds"]] + list(row["changes"])
         rows.append(Row(f"{row['name']:<{width}}  {what}", tuple(items)))
     return rows
@@ -1446,6 +1445,8 @@ def diff_rows(old: Sequence[Row], new: Sequence[Row]) -> list[Row]:
             continue
         gone = [i for i in known.items if i not in row.items]
         came = [i for i in row.items if i not in known.items]
+        if not gone and not came:
+            continue
         width = _cut_after(gone, came)
         removed = [f"- {_text(i, width)}" for i in gone]
         added = [f"+ {_text(i, width)}" for i in came]

@@ -440,7 +440,7 @@ $ tundravm show --diff stages/05-attested.py stages/06-operate.py
 
 ```text
 Profiles:
-  + staging     extends production, production
+  + staging     extends production
     + edits File("/etc/motd"): content="attested-node: staging\n"
   + bench       extends production, non-production
     + adds Package("fio")

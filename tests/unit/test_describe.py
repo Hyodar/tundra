@@ -3,7 +3,15 @@ from copy import deepcopy
 
 import pytest
 
-from tundravm._describe import Row, Section, describe, diff_rows, render_sections, resolved_rows
+from tundravm._describe import (
+    Row,
+    Section,
+    _profile_rows,
+    describe,
+    diff_rows,
+    render_sections,
+    resolved_rows,
+)
 from tundravm.declarative import (
     BootStep,
     Debian,
@@ -167,6 +175,30 @@ def test_describe_includes_kernel() -> None:
 
 
 @pytest.mark.parametrize(
+    ("extends", "production", "line"),
+    [
+        (None, True, "a  the image"),
+        ("production", True, "a  extends production"),
+        ("production", False, "a  extends production, non-production"),
+    ],
+    ids=["image", "production", "non-production"],
+)
+def test_profile_line_names_a_kind_only_off_production(
+    extends: str | None, production: bool, line: str
+) -> None:
+    row: dict[str, object] = {
+        "name": "a",
+        "extends": extends,
+        "production": production,
+        "adds": [],
+        "changes": [],
+    }
+    assert render_sections([Section("Profiles", tuple(_profile_rows([row])))]).splitlines()[1] == (
+        f"  {line}"
+    )
+
+
+@pytest.mark.parametrize(
     ("old", "new", "changed"),
     [
         (
@@ -181,8 +213,9 @@ def test_describe_includes_kernel() -> None:
             [Row("- Kernel: 6.1"), Row("+ Kernel: 6.2")],
         ),
         ((Row("Files", ("x",)),), (Row("Files", ("x",)),), []),
+        ((Row("Units", ("a", "b"), inline=True),), (Row("Units", ("b", "a"), inline=True),), []),
     ],
-    ids=["inline", "block", "line", "same"],
+    ids=["inline", "block", "line", "same", "reordered"],
 )
 def test_diff_rows_keeps_only_what_differs(
     old: tuple[Row, ...], new: tuple[Row, ...], changed: list[Row]
