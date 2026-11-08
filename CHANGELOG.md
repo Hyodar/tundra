@@ -210,5 +210,6 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `POST /credentials` stages every target of a delivery in a temporary file beside it before renaming any, and removes the staged files when one fails, so a delivery lands in all its targets or in none.
 - `disk-setup` writes a new volume's init token only after `mkfs`, so a kill in between leaves a volume the next boot formats again, and closes the mapping when any later step of the format fails.
 - `disk-setup` passes `--key-file=-` to `luksFormat` and `luksOpen`, so the whole passphrase is the key, not its first line.
+- `GET /evidence` quotes for four clients at once and answers 503 past them (headers capped at 16 KiB); the endpoint reads at most 1 MiB of a `tdxs` answer, `tdxs` at most 1 MiB and 30 s per socket request and 30 s per answer, the cloud issuers 64 KiB of metadata within 10 s, and `image-metrics` 16 MiB of the CCEL; `image-metrics` escapes label values as the Prometheus exposition format does (backslash, double quote, line feed), not with Go's `%q`.
 - The unit suite runs on every core: `pytest-xdist` is a dev dependency and `pytest -m "not integration"` spreads over `-n auto`; a run that may select the integration tests stays serial.
 

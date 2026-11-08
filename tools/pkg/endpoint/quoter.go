@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -25,6 +26,10 @@ type SocketQuoter struct {
 	Path    string
 	Timeout time.Duration
 }
+
+// maxQuoteReply bounds one tdxs answer: a hex quote document and its metadata are tens
+// of KiB.
+const maxQuoteReply = 1 << 20
 
 type reply struct {
 	Data  json.RawMessage `json:"data"`
@@ -54,7 +59,10 @@ func (q SocketQuoter) call(ctx context.Context, method string, data any) (json.R
 	if _, err := conn.Write(append(request, '\n')); err != nil {
 		return nil, fmt.Errorf("evidence service %s: %w", q.Path, err)
 	}
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	line, err := bufio.NewReader(io.LimitReader(conn, maxQuoteReply+1)).ReadBytes('\n')
+	if len(line) > maxQuoteReply {
+		return nil, fmt.Errorf("evidence service %s answered more than %d bytes", q.Path, maxQuoteReply)
+	}
 	if err != nil && len(line) == 0 {
 		return nil, fmt.Errorf("evidence service %s: %w", q.Path, err)
 	}

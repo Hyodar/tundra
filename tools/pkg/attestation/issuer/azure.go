@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/Hyodar/tundra/tools/pkg/attestation"
@@ -67,7 +66,7 @@ func WithAzureIMDSURL(url string) AzureTDXIssuerOption {
 // with Azure's IMDS attestation token.
 func NewAzureTDXIssuer(opts ...AzureTDXIssuerOption) (*AzureTDXIssuer, error) {
 	issuer := &AzureTDXIssuer{
-		httpClient: http.DefaultClient,
+		httpClient: metadataClient,
 		imdsURL:    azureIMDSAttestationURL,
 	}
 	for _, o := range opts {
@@ -156,9 +155,9 @@ func (a *AzureTDXIssuer) fetchIMDSAttestation(ctx context.Context) (json.RawMess
 		return nil, fmt.Errorf("IMDS returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readMetadata(resp.Body, "the IMDS response")
 	if err != nil {
-		return nil, fmt.Errorf("reading IMDS response: %w", err)
+		return nil, err
 	}
 
 	return json.RawMessage(body), nil

@@ -160,3 +160,20 @@ func TestUnits(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelsEscapeAsTheExpositionFormatSays: backslash, double quote and line feed, and
+// nothing else, which Go's %q would escape too.
+func TestLabelsEscapeAsTheExpositionFormatSays(t *testing.T) {
+	cases := []struct{ value, want string }{
+		{"box.service", `"box.service"`},
+		{`a\b`, `"a\\b"`},
+		{`say "hi"`, `"say \"hi\""`},
+		{"two\nlines", `"two\nlines"`},
+		{"tab\there é", "\"tab\there é\""},
+	}
+	for _, c := range cases {
+		if got := label(c.value); got != c.want {
+			t.Errorf("label(%q) = %s, want %s", c.value, got, c.want)
+		}
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/Hyodar/tundra/tools/pkg/attestation"
@@ -61,7 +60,7 @@ func WithGCPMetadataURL(url string) GCPTDXIssuerOption {
 // with a GCP instance identity token.
 func NewGCPTDXIssuer(opts ...GCPTDXIssuerOption) (*GCPTDXIssuer, error) {
 	issuer := &GCPTDXIssuer{
-		httpClient:  http.DefaultClient,
+		httpClient:  metadataClient,
 		metadataURL: gcpMetadataIdentityURL,
 	}
 	for _, o := range opts {
@@ -150,9 +149,9 @@ func (g *GCPTDXIssuer) fetchInstanceIdentityToken(ctx context.Context) (string, 
 		return "", fmt.Errorf("metadata server returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readMetadata(resp.Body, "the metadata response")
 	if err != nil {
-		return "", fmt.Errorf("reading metadata response: %w", err)
+		return "", err
 	}
 
 	return string(body), nil

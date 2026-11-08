@@ -31,6 +31,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -60,6 +61,9 @@ const (
 	evBootServicesApplication = 0x80000003
 	// The CCEL's MR index of RTMR1 (0 is MRTD).
 	ccelRTMR1 = 2
+	// maxEventLog bounds the CCEL read: its size is the host's firmware's to say, and a
+	// TD's log is tens of KiB.
+	maxEventLog = 16 << 20
 )
 
 type identity struct {
@@ -94,7 +98,7 @@ func readIdentity() identity {
 	if mode, err := os.ReadFile(modeFile); err == nil {
 		id.mode = strings.TrimSpace(string(mode))
 	}
-	if eventLog, err := os.ReadFile(ccelPath); err == nil {
+	if eventLog, err := readBounded(ccelPath, maxEventLog); err == nil {
 		digest, err := ukiDigest(eventLog)
 		if err != nil {
 			log.Printf("%s: %v", ccelPath, err)
@@ -111,6 +115,23 @@ func readIdentity() identity {
 		}
 	}
 	return id
+}
+
+// readBounded reads path whole, refusing a file larger than limit.
+func readBounded(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, limit)
+	}
+	return data, nil
 }
 
 // imageName is the os-release IMAGE_ID mkosi writes: the image's name.
@@ -302,23 +323,31 @@ func parseUnits(shown string) []unit {
 	return found
 }
 
+// labelEscaper escapes a label value as the Prometheus text exposition format reads it:
+// backslash, double quote and line feed, nothing else (Go's %q escapes more, which a
+// scraper keeps as literal backslashes).
+var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
+
+// label is value as a quoted Prometheus label value.
+func label(value string) string { return `"` + labelEscaper.Replace(value) + `"` }
+
 func render(id identity, state string, failed int, units []unit) []byte {
 	var out strings.Builder
 	gauge := func(name, help string) {
 		fmt.Fprintf(&out, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
 	}
 	gauge("tundravm_image_digest", "The image this VM booted: the UKI's Authenticode SHA-384 RTMR1's event log records.")
-	fmt.Fprintf(&out, "tundravm_image_digest{image=%q,digest=%q} 1\n", id.image, id.digest)
+	fmt.Fprintf(&out, "tundravm_image_digest{image=%s,digest=%s} 1\n", label(id.image), label(id.digest))
 	if len(id.rtmrs) > 0 {
 		gauge("tundravm_image_rtmr", "The RTMRs the TD reports.")
 		for i, value := range id.rtmrs {
-			fmt.Fprintf(&out, "tundravm_image_rtmr{index=\"%d\",value=%q} 1\n", i, value)
+			fmt.Fprintf(&out, "tundravm_image_rtmr{index=\"%d\",value=%s} 1\n", i, label(value))
 		}
 	}
 	gauge("tundravm_mode", "What the execution gate recorded: tdx or simulated.")
-	fmt.Fprintf(&out, "tundravm_mode{mode=%q} 1\n", id.mode)
+	fmt.Fprintf(&out, "tundravm_mode{mode=%s} 1\n", label(id.mode))
 	gauge("tundravm_system_state", "What systemctl is-system-running says.")
-	fmt.Fprintf(&out, "tundravm_system_state{state=%q} 1\n", state)
+	fmt.Fprintf(&out, "tundravm_system_state{state=%s} 1\n", label(state))
 	gauge("tundravm_units_failed", "The units in the failed state.")
 	fmt.Fprintf(&out, "tundravm_units_failed %d\n", failed)
 	if len(units) > 0 {
@@ -328,12 +357,12 @@ func render(id identity, state string, failed int, units []unit) []byte {
 			if u.active {
 				active = 1
 			}
-			fmt.Fprintf(&out, "tundravm_unit_active{unit=%q} %d\n", u.name, active)
+			fmt.Fprintf(&out, "tundravm_unit_active{unit=%s} %d\n", label(u.name), active)
 		}
 		fmt.Fprintf(&out, "# HELP tundravm_unit_cpu_seconds_total The CPU time systemd accounts to each service's cgroup.\n# TYPE tundravm_unit_cpu_seconds_total counter\n")
 		for _, u := range units {
 			if u.cpu >= 0 {
-				fmt.Fprintf(&out, "tundravm_unit_cpu_seconds_total{unit=%q} %g\n", u.name, u.cpu)
+				fmt.Fprintf(&out, "tundravm_unit_cpu_seconds_total{unit=%s} %g\n", label(u.name), u.cpu)
 			}
 		}
 	}

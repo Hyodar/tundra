@@ -295,6 +295,31 @@ func TestDeliveredValuesLandWhereTheConfigSays(t *testing.T) {
 	}
 }
 
+func TestEvidenceQuotesForAFewClientsAtOnce(t *testing.T) {
+	cases := []struct {
+		name   string
+		busy   int // quotes already being made
+		status int
+	}{
+		{"a free slot quotes", maxQuoting - 1, http.StatusOK},
+		{"every slot taken answers busy", maxQuoting, http.StatusServiceUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := start(t)
+			for range c.busy {
+				f.server.quoting <- struct{}{}
+			}
+			resp, err := f.session().Get(fmt.Sprintf("https://%s/evidence?nonce=%s", f.addr, nonce(15)))
+			must(t, err)
+			resp.Body.Close()
+			if resp.StatusCode != c.status {
+				t.Fatalf("status %d, want %d", resp.StatusCode, c.status)
+			}
+		})
+	}
+}
+
 func TestADeliveryLandsInEveryTargetOrInNone(t *testing.T) {
 	cases := []struct {
 		name   string

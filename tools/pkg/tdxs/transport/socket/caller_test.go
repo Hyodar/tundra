@@ -34,10 +34,11 @@ func serve(t *testing.T, uid uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tdxs.sock")
 	server := &SocketTransport{
-		cfg:    &SocketTransportConfig{FilePath: path},
-		logger: slog.Default(),
-		peer:   func(net.Conn) (uint32, error) { return uid, nil },
-		lookup: passwd,
+		cfg:     &SocketTransportConfig{FilePath: path},
+		logger:  slog.Default(),
+		peer:    func(net.Conn) (uint32, error) { return uid, nil },
+		lookup:  passwd,
+		timeout: 5 * time.Second,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

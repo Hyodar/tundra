@@ -3,12 +3,14 @@ package socket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/user"
 	"strconv"
+	"time"
 
 	"github.com/Hyodar/tundra/tools/pkg/tdxs/api"
 	"github.com/Hyodar/tundra/tools/pkg/tdxs/logger"
@@ -27,6 +29,31 @@ type SocketTransport struct {
 	// peer reads a connection's uid and lookup names it: SO_PEERCRED and /etc/passwd.
 	peer   func(net.Conn) (uint32, error)
 	lookup func(string) (*user.User, error)
+	// timeout bounds the wait for each request and the write of each answer.
+	timeout time.Duration
+}
+
+// maxRequest bounds one request: a validate request's document is a quote of a few KiB.
+const maxRequest = 1 << 20
+
+var errTooLarge = fmt.Errorf("the request is larger than %d bytes", maxRequest)
+
+// budget reads from r until n bytes are spent, then fails with errTooLarge.
+type budget struct {
+	r io.Reader
+	n int64
+}
+
+func (b *budget) Read(p []byte) (int, error) {
+	if b.n <= 0 {
+		return 0, errTooLarge
+	}
+	if int64(len(p)) > b.n {
+		p = p[:b.n]
+	}
+	n, err := b.r.Read(p)
+	b.n -= int64(n)
+	return n, err
 }
 
 type SocketTransportConfig struct {
@@ -57,10 +84,11 @@ func NewSocketTransport(cfg *SocketTransportConfig, logger logger.Logger) (trans
 	}
 
 	return &SocketTransport{
-		cfg:    cfg,
-		logger: logger,
-		peer:   peerUID,
-		lookup: user.LookupId,
+		cfg:     cfg,
+		logger:  logger,
+		peer:    peerUID,
+		lookup:  user.LookupId,
+		timeout: 30 * time.Second,
 	}, nil
 }
 
@@ -148,8 +176,15 @@ func (t *SocketTransport) acceptConnections(ctx context.Context) {
 func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	decoder := json.NewDecoder(conn)
+	// Each request gets maxRequest bytes and the timeout to arrive, each answer the timeout
+	// to leave: a caller that sends without end, or never reads, ties up nothing.
+	limit := &budget{r: conn}
+	decoder := json.NewDecoder(limit)
 	encoder := json.NewEncoder(conn)
+	reply := func(v any) {
+		_ = conn.SetWriteDeadline(time.Now().Add(t.timeout))
+		_ = encoder.Encode(v)
+	}
 	// Who asks comes from the kernel, never from the request: the issuer binds it.
 	caller, callerErr := t.identify(conn)
 
@@ -160,19 +195,22 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 		default:
 		}
 
+		limit.n = maxRequest
+		_ = conn.SetReadDeadline(time.Now().Add(t.timeout))
 		var req SocketTransportRequest
 		if err := decoder.Decode(&req); err != nil {
-			if err == io.EOF {
+			var timeout net.Error
+			if err == io.EOF || (errors.As(err, &timeout) && timeout.Timeout()) {
 				return
 			}
 			// A decoder that failed keeps failing: answer once and hang up, or the loop spins.
-			encoder.Encode(NewIssueResponseFromError(fmt.Errorf("failed to decode request: %w", err)))
+			reply(NewIssueResponseFromError(fmt.Errorf("failed to decode request: %w", err)))
 			return
 		}
 
 		apiRequest, err := req.UnmarshalData()
 		if err != nil {
-			encoder.Encode(NewIssueResponseFromError(fmt.Errorf("failed to unmarshal request data: %w", err)))
+			reply(NewIssueResponseFromError(fmt.Errorf("failed to unmarshal request data: %w", err)))
 			continue
 		}
 
@@ -182,7 +220,7 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 			tagged, err := tag(caller, callerErr, issueReq.Caller, issueReq.UserData)
 			if err != nil {
 				t.logger.Warn("Refused a quote", "error", err)
-				encoder.Encode(NewIssueResponseFromError(err))
+				reply(NewIssueResponseFromError(err))
 				continue
 			}
 			issueReq.UserData = tagged
@@ -195,13 +233,13 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 			case t.queues.IssueQueue <- wrapper:
 				select {
 				case resp := <-wrapper.Response:
-					encoder.Encode(NewIssueResponseFromAPI(resp))
+					reply(NewIssueResponseFromAPI(resp))
 				case <-ctx.Done():
-					encoder.Encode(NewIssueResponseFromError(fmt.Errorf("context cancelled")))
+					reply(NewIssueResponseFromError(fmt.Errorf("context cancelled")))
 					return
 				}
 			case <-ctx.Done():
-				encoder.Encode(NewIssueResponseFromError(fmt.Errorf("context cancelled")))
+				reply(NewIssueResponseFromError(fmt.Errorf("context cancelled")))
 				return
 			}
 
@@ -216,13 +254,13 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 			case t.queues.MetadataQueue <- wrapper:
 				select {
 				case resp := <-wrapper.Response:
-					encoder.Encode(NewMetadataResponseFromAPI(resp))
+					reply(NewMetadataResponseFromAPI(resp))
 				case <-ctx.Done():
-					encoder.Encode(NewMetadataResponseFromError(fmt.Errorf("context cancelled")))
+					reply(NewMetadataResponseFromError(fmt.Errorf("context cancelled")))
 					return
 				}
 			case <-ctx.Done():
-				encoder.Encode(NewMetadataResponseFromError(fmt.Errorf("context cancelled")))
+				reply(NewMetadataResponseFromError(fmt.Errorf("context cancelled")))
 				return
 			}
 
@@ -237,18 +275,18 @@ func (t *SocketTransport) handleConnection(ctx context.Context, conn net.Conn) {
 			case t.queues.ValidateQueue <- wrapper:
 				select {
 				case resp := <-wrapper.Response:
-					encoder.Encode(NewValidateResponseFromAPI(resp))
+					reply(NewValidateResponseFromAPI(resp))
 				case <-ctx.Done():
-					encoder.Encode(NewValidateResponseFromError(fmt.Errorf("context cancelled")))
+					reply(NewValidateResponseFromError(fmt.Errorf("context cancelled")))
 					return
 				}
 			case <-ctx.Done():
-				encoder.Encode(NewValidateResponseFromError(fmt.Errorf("context cancelled")))
+				reply(NewValidateResponseFromError(fmt.Errorf("context cancelled")))
 				return
 			}
 
 		default:
-			encoder.Encode(NewIssueResponseFromError(fmt.Errorf("unknown method: %s", req.Method)))
+			reply(NewIssueResponseFromError(fmt.Errorf("unknown method: %s", req.Method)))
 		}
 	}
 }

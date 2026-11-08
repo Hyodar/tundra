@@ -33,6 +33,7 @@ const (
 	minNonce        = 16
 	maxNonce        = 64
 	maxBody         = 1 << 20
+	maxQuoting      = 4
 	sessionNonces   = 8
 	authorizedKeys  = "authorized_keys"
 	keyRestrictions = "no-port-forwarding,no-agent-forwarding,no-X11-forwarding"
@@ -95,6 +96,9 @@ type Server struct {
 	// headerWait bounds how long a rotation waits for disk-setup to write the new owner
 	// into the headers: past its owner watcher's wait for a disk and one interval.
 	headerWait time.Duration
+	// quoting holds a slot per GET /evidence quoting now: anyone may ask for evidence, so
+	// at most maxQuoting quotes are made at once.
+	quoting chan struct{}
 }
 
 type sessionKey struct{}
@@ -172,6 +176,7 @@ func New(cfg *Config, quoter Quoter, log *slog.Logger) (*Server, error) {
 		delivered:  map[string]bool{},
 		unlocked:   map[string]bool{},
 		headerWait: 60 * time.Second,
+		quoting:    make(chan struct{}, maxQuoting),
 	}, nil
 }
 
@@ -196,6 +201,7 @@ func (s *Server) HTTPServer() *http.Server {
 		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
 			return context.WithValue(ctx, sessionKey{}, &session{})
 		},
+		MaxHeaderBytes:    16 << 10,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      90 * time.Second,
@@ -296,6 +302,13 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 	nonce, err := hex.DecodeString(r.URL.Query().Get("nonce"))
 	if err != nil || len(nonce) < minNonce || len(nonce) > maxNonce {
 		fail(w, http.StatusBadRequest, "nonce must be %d to %d bytes of hex", minNonce, maxNonce)
+		return
+	}
+	select {
+	case s.quoting <- struct{}{}:
+		defer func() { <-s.quoting }()
+	default:
+		fail(w, http.StatusServiceUnavailable, "the endpoint is quoting for %d clients already: retry in a second", maxQuoting)
 		return
 	}
 	hostKeys, err := ReadHostKeys(s.cfg.SSHHostKeys)
