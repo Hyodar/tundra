@@ -53,7 +53,7 @@ kernel=Kernel.build(
 
 Pass it to `Image(kernel=...)`. It compiles Linux 6.12.113 from Debian's config with every
 driver built in, which takes about half an hour the first time. tundravm's hardening merges
-first, so a fragment cannot turn back on what the hardening turns off. [The
+first, and a fragment that names one of its options overrides it. [The
 kernel](manual.md#the-kernel) gives the merge order.
 
 ## Use a private source
