@@ -237,10 +237,10 @@ grants one while allowing back what it needs (`ProtectClock=` goes, `@clock` ret
 ### Timers, sockets and the rest
 
 A timer runs the service as a scheduled oneshot that keeps every other keyword. It binds
-secrets and a volume `state=`, waiting for them as a long-lived service does, and refuses
-what only a long-lived service has: `socket=`, `readiness=` and `expose=`. Writing a unit
-under `/etc/systemd/system` at boot is the `unit-written-at-runtime` error, so declare it
-instead.
+secrets, `InstanceKey()` among them, and a volume `state=`, waiting as a long-lived service
+does, and refuses what only a long-lived service has: `socket=`, `readiness=` and `expose=`.
+Writing a unit under `/etc/systemd/system` at boot is the `unit-written-at-runtime` error,
+so declare it instead.
 
 `Service.packaged("prometheus-node-exporter.service")` runs the unit a Debian package ships
 and installs the package, or the one `package=` names. Its sandbox is `hardening=`, `static`
