@@ -62,6 +62,18 @@ ROWS: list[tuple[str, Callable[[Path], object], str, str]] = [
         "environment=",
     ),
     (
+        "method-keyword-misspelt",
+        lambda _: Service("app", APP).endpoint(8080, schme="https"),
+        'Service("app").endpoint() takes no keyword schme=',
+        "scheme=",
+    ),
+    (
+        "classmethod-keyword-misspelt",
+        lambda _: File.copy("/etc/app.conf", "app.conf", mdoe=0o644),
+        "File.copy() takes no keyword mdoe=",
+        'File.copy("/etc/app.conf", "app.conf", mode=...)',
+    ),
+    (
         "component-keyword-unknown",
         lambda _: Network(egres=Egress()),
         "Network takes no keyword egres=",

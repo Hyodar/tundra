@@ -3,16 +3,19 @@
 Python's own refusal of an unknown keyword, a missing argument or a positional too many is
 a ``TypeError`` naming ``__init__()``. :class:`Keywords` turns each into a
 :class:`~tundravm.errors.ValidationError` that names the class and the keyword as the image
-file spells them, with the closest keyword the class takes as its fix.
+file spells them, with the closest keyword the class takes as its fix. A public method of
+the class (``Service.endpoint``, ``File.copy``) refuses a keyword it does not take the same
+way.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import difflib
+import functools
 import inspect
-from collections.abc import Mapping, Sequence
-from typing import Self
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Self
 from weakref import WeakKeyDictionary
 
 from tundravm.errors import ValidationError
@@ -29,6 +32,53 @@ class Keywords:
     def __new__(cls, *args: object, **kwargs: object) -> Self:
         check_call(cls, args, kwargs)
         return object.__new__(cls)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, member in list(vars(cls).items()):
+            checked = _checked_method(cls.__name__, name, member)
+            if checked is not None:
+                setattr(cls, name, checked)
+
+
+_CHECKED = "__tundravm_keywords__"
+"""The attribute that marks a method :func:`_checked_method` already wraps: a slotted
+dataclass is built again from the class's namespace, which holds the wrapper."""
+
+
+def _checked_method(kind: str, name: str, member: object) -> object | None:
+    """*member* refusing a keyword it does not take as :func:`check_call` refuses one, when
+    it is a public method, classmethod or staticmethod that takes keywords but no ``**``."""
+    binding = type(member) if isinstance(member, (classmethod, staticmethod)) else None
+    function = getattr(member, "__func__", None) if binding is not None else member
+    if name.startswith("_") or not inspect.isfunction(function) or hasattr(function, _CHECKED):
+        return None
+    parameters = list(inspect.signature(function).parameters.values())
+    parameters = parameters if binding is staticmethod else parameters[1:]
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters):
+        return None
+    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    keywords = tuple(p.name for p in parameters if p.kind in named)
+    if not keywords:
+        return None
+    method: Callable[..., object] = function
+    taken = frozenset(keywords)
+
+    @functools.wraps(method)
+    def checked(*args: object, **kwargs: object) -> object:
+        if not kwargs.keys() <= taken:
+            given = args if binding is staticmethod else args[1:]
+            if binding is None:
+                owner = subject(args[0])
+            elif binding is classmethod:
+                owner = _PUBLIC.get(getattr(args[0], "__name__", kind), kind)
+            else:
+                owner = _PUBLIC.get(kind, kind)
+            _refuse_keyword(f"{owner}.{name}()", f"{owner}.{name}", given, kwargs, keywords)
+        return method(*args, **kwargs)
+
+    setattr(checked, _CHECKED, keywords)
+    return checked if binding is None else binding(checked)
 
 
 def check_call(cls: type, args: Sequence[object], kwargs: Mapping[str, object]) -> None:
@@ -108,15 +158,7 @@ def _refuse(cls: type, args: Sequence[object], kwargs: Mapping[str, object], spe
     named = bool(args) and positional[:1] == ("name",) and _word(args[0]) != "..."
     subject = f"{kind}({_word(args[0])})" if named else kind
     given = [_word(arg) for arg in args[: len(positional)]]
-    for key in kwargs:
-        if key not in keywords:
-            close = difflib.get_close_matches(key, keywords, n=1)
-            raise ValidationError(
-                f"{subject} takes no keyword {key}=.",
-                hint=f"{kind}({', '.join([*given, f'{close[0]}=...'])})"
-                if close
-                else f"Spell one it takes: {_listing(keywords)}.",
-            )
+    _refuse_keyword(subject, kind, args[: len(positional)], kwargs, keywords)
     if len(args) > len(positional):
         rest = [name for name in keywords if name not in positional]
         raise ValidationError(
@@ -131,6 +173,27 @@ def _refuse(cls: type, args: Sequence[object], kwargs: Mapping[str, object], spe
         f"{subject} needs {_listing(missing)}.",
         hint=f"{kind}({', '.join([*given, *filled])})",
     )
+
+
+def _refuse_keyword(
+    subject: str,
+    call: str,
+    args: Sequence[object],
+    kwargs: Mapping[str, object],
+    keywords: Sequence[str],
+) -> None:
+    """Refuse the first of *kwargs* that is not one of *keywords*, its fix *call* with the
+    closest one: ``Service("app") takes no keyword enviroment=``."""
+    given = [_word(arg) for arg in args]
+    for key in kwargs:
+        if key not in keywords:
+            close = difflib.get_close_matches(key, keywords, n=1)
+            raise ValidationError(
+                f"{subject} takes no keyword {key}=.",
+                hint=f"{call}({', '.join([*given, f'{close[0]}=...'])})"
+                if close
+                else f"Spell one it takes: {_listing(keywords)}.",
+            )
 
 
 _PUBLIC = {
