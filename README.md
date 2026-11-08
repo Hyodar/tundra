@@ -12,10 +12,8 @@
 <br>
 
 tundravm builds confidential VM images without making you learn mkosi. You describe the
-operating system as one Python `Image` value. tundravm turns it into a plain mkosi
-directory and builds a Debian image with systemd. The image boots as an Intel TDX VM. The
-host cannot read the memory of such a VM, and a remote party can verify what it runs.
-tundravm is for people who know Linux and Docker and need a VM that others can check.
+OS as one Python `Image`, and tundravm turns it into a Debian image that boots as an Intel
+TDX VM, whose memory the host cannot read and whose contents anyone can verify.
 
 ## First run
 
@@ -27,32 +25,23 @@ $ tundravm new my-image && cd my-image
 $ uv run tundravm dev
 ```
 
-The packages are for Debian 13 or Ubuntu 24.04. `doctor` tells you how to fix anything
-that is missing. `new` writes a project whose image is stage 1 of the [guide](docs/guide.md).
-`dev` builds that image, boots it under QEMU without TDX and prints its boot probe, a short
-checklist the image runs on itself.
+On Debian 13 or Ubuntu 24.04. `dev` builds the new image and boots it under QEMU.
 
 ## Next
 
-1. [Terms](docs/terms.md) explains the ideas in the order the guide needs them.
-2. [The guide](docs/guide.md) builds one image up in six stages.
-3. [How do I](docs/howto.md) covers the tasks around that story, from a lock to a
-   maintenance window.
-4. [The manual](docs/manual.md) describes every slot, rule and file.
-5. [Trust, limits and recovery](docs/trust.md) says what the image defends against.
-6. The [commands](docs/reference/cli.md), the [API](docs/reference/api.md) and the
-   [check codes](docs/reference/lint.md) are generated from the code. [Releasing](docs/release.md)
-   says what a tag pins.
+- [Terms](docs/terms.md): the ideas, in the order you meet them.
+- [The guide](docs/guide.md): one image, built in six stages.
+- [How do I](docs/howto.md): the tasks around it.
+- [The manual](docs/manual.md), with the generated [command](docs/reference/cli.md),
+  [API](docs/reference/api.md) and [check code](docs/reference/lint.md) references.
+- [Trust, limits and recovery](docs/trust.md): what the image defends against.
 
-[`examples/flashbox`](examples/flashbox/) ports the searcher sandbox of flashbots-images to
-one image.
+[`examples/flashbox`](examples/flashbox/) ports flashbots-images' searcher sandbox to one
+image.
 
 ## Development
 
 ```console
 $ uv sync
 $ uv run ruff check . && uv run mypy . && uv run pytest -q -m "not integration"
-$ uv run python -m tundravm._reference docs/reference
 ```
-
-Run the last command after you change a docstring or the parser, to regenerate the reference.
