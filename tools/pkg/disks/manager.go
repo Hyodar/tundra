@@ -115,8 +115,8 @@ func (m *Manager) SetupAll(ctx context.Context) error {
 //  2. If encryption_key is set (encrypted disk):
 //     a. Check if device is already LUKS.
 //     b. Determine whether to format based on the format policy.
-//     c. Format path: get key -> FormatLuks -> StoreInitToken -> OpenLuks ->
-//     CreateFilesystem -> MountDevice -> CreateMountDirs.
+//     c. Format path: get key -> FormatLuks -> OpenLuks -> CreateFilesystem ->
+//     StoreInitToken -> MountDevice -> CreateMountDirs, closing on any failure.
 //     d. Mount existing path: get key -> OpenLuks -> MountDevice.
 //  3. If encryption_key is empty (plain disk):
 //     a. Check if device has a filesystem; format or mount accordingly.
@@ -217,10 +217,6 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
-	if err := m.luks.StoreInitToken(ctx, md.DevicePath, md.Name); err != nil {
-		return fmt.Errorf("disk %q: %w", md.Name, err)
-	}
-
 	if pinned != "" {
 		if err := m.luks.WriteOwner(ctx, md.DevicePath, pinned); err != nil {
 			return fmt.Errorf("disk %q: %w", md.Name, err)
@@ -231,34 +227,42 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
-	if err := m.fs.CreateFilesystem(ctx, md.MapperDevice); err != nil {
-		return fmt.Errorf("disk %q: %w", md.Name, err)
-	}
-
-	if err := m.fs.MountDevice(ctx, md.MapperDevice, md.Config.MountAt); err != nil {
-		return fmt.Errorf("disk %q: %w", md.Name, err)
-	}
-
-	if pinned != "" {
-		if err := owner.WriteCopy(filepath.Join(md.Config.MountAt, owner.VolumeCopy), pinned); err != nil {
-			return fmt.Errorf("disk %q: %w", md.Name, err)
-		}
-		if err := owner.WriteFile(md.Config.Owner+owner.ConfirmedSuffix, pinned); err != nil {
-			return fmt.Errorf("disk %q: %w", md.Name, err)
-		}
-		if err := writeHeaderOwner(md.Config.Owner, pinned); err != nil {
-			return fmt.Errorf("disk %q: %w", md.Name, err)
-		}
-	}
-
-	dirs := md.Config.EffectiveDirs()
-	if err := CreateMountDirs(md.Config.MountAt, dirs); err != nil {
+	if mounted, err := m.fillVolume(ctx, md, pinned); err != nil {
+		m.closeVolume(ctx, md, mounted)
 		return fmt.Errorf("disk %q: %w", md.Name, err)
 	}
 
 	md.Initialized = true
 	slog.InfoContext(ctx, "encrypted disk formatted and mounted", "name", md.Name, "device", md.DevicePath)
 	return nil
+}
+
+// fillVolume makes the filesystem on md's open mapping, and only then writes the init
+// token, so a kill before mkfs leaves a volume the next boot formats again; it mounts it,
+// creates its directories and writes the owner's copy. It says whether it mounted.
+func (m *Manager) fillVolume(ctx context.Context, md *ManagedDisk, pinned string) (bool, error) {
+	if err := m.fs.CreateFilesystem(ctx, md.MapperDevice); err != nil {
+		return false, err
+	}
+	if err := m.luks.StoreInitToken(ctx, md.DevicePath, md.Name); err != nil {
+		return false, err
+	}
+	if err := m.fs.MountDevice(ctx, md.MapperDevice, md.Config.MountAt); err != nil {
+		return false, err
+	}
+	if err := CreateMountDirs(md.Config.MountAt, md.Config.EffectiveDirs()); err != nil {
+		return true, err
+	}
+	if pinned == "" {
+		return true, nil
+	}
+	if err := owner.WriteCopy(filepath.Join(md.Config.MountAt, owner.VolumeCopy), pinned); err != nil {
+		return true, err
+	}
+	if err := owner.WriteFile(md.Config.Owner+owner.ConfirmedSuffix, pinned); err != nil {
+		return true, err
+	}
+	return true, writeHeaderOwner(md.Config.Owner, pinned)
 }
 
 // mountExistingEncrypted opens and mounts an already-formatted LUKS device; an owned

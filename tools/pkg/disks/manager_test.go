@@ -109,6 +109,68 @@ func TestManager_SetupDisk_EncryptedFormat(t *testing.T) {
 	}
 }
 
+// TestFormatWritesTheInitTokenAfterMkfs: a volume is marked initialized only once it has
+// a filesystem, and a format that fails after the open closes the mapping.
+func TestFormatWritesTheInitTokenAfterMkfs(t *testing.T) {
+	ctx := context.Background()
+	initToken := "cryptsetup token import --token-id 1 /dev/sdb"
+	cases := []struct {
+		name   string
+		fails  string // the command that fails, "" for none
+		tokens bool   // the init token is written
+	}{
+		{"a format that completes", "", true},
+		{"mkfs fails", "mkfs.ext4", false},
+		{"the mount fails", "mount", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mountPoint := filepath.Join(t.TempDir(), "persistent")
+			cfg := &Config{Disks: map[string]DiskConfig{"persistent": {
+				Strategy: "largest", Format: "on_initialize", EncryptionKey: "k", MountAt: mountPoint,
+			}}}
+			mr := newMockRunner()
+			failing := func(name string) error {
+				if name == c.fails {
+					return fmt.Errorf("%s failed", name)
+				}
+				return nil
+			}
+			mr.on("", fmt.Errorf("not LUKS"), "cryptsetup", "isLuks", "/dev/sdb")
+			mr.on("", nil, "cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "/dev/sdb")
+			mr.on("", nil, "cryptsetup", "token", "import", "--token-id", "1", "/dev/sdb")
+			mr.on("", nil, "cryptsetup", "luksOpen", "/dev/sdb", "crypt_disk_persistent")
+			mr.on("", failing("mkfs.ext4"), "mkfs.ext4", "-F", "/dev/mapper/crypt_disk_persistent")
+			mr.on("", failing("mount"), "mount", "/dev/mapper/crypt_disk_persistent", mountPoint)
+			mr.on("", nil, "cryptsetup", "luksClose", "crypt_disk_persistent")
+			setupMountsFile(t, "")
+			err := newTestManager(t, cfg, &staticKeyProvider{key: "k"}, mr, "/dev/sdb").SetupDisk(ctx, "persistent")
+			if (err != nil) != (c.fails != "") {
+				t.Fatalf("SetupDisk = %v, want a failure: %v", err, c.fails != "")
+			}
+			var ran []string
+			for _, call := range mr.calls {
+				ran = append(ran, strings.Join(call.args, " "))
+			}
+			tokened, mkfs := -1, -1
+			for i, cmd := range ran {
+				if cmd == initToken {
+					tokened = i
+				}
+				if strings.HasPrefix(cmd, "mkfs.ext4") {
+					mkfs = i
+				}
+			}
+			if (tokened >= 0) != c.tokens || (tokened >= 0 && tokened < mkfs) {
+				t.Fatalf("the init token is not written right after a working mkfs: %v", ran)
+			}
+			if closed := ran[len(ran)-1] == "cryptsetup luksClose crypt_disk_persistent"; closed != (c.fails != "") {
+				t.Fatalf("the mapping is closed %v after %v", closed, ran)
+			}
+		})
+	}
+}
+
 func TestManager_SetupDisk_EncryptedMountExisting(t *testing.T) {
 	// Scenario: encrypted disk, format "on_initialize", device is LUKS and
 	// initialized. Should just open and mount.
