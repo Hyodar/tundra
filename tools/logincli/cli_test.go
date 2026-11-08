@@ -101,6 +101,24 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestMatchHoldsTheWholeValue(t *testing.T) {
+	cases := []struct {
+		pattern, value string
+		ok             bool
+	}{
+		{"^[0-9a-f]{4}$", "beef", true},
+		{"[0-9a-f]{4}", "beef", true},
+		{"[0-9a-f]{4}", "--output=beef", false},
+		{"[0-9a-f]{4}", "beef\n", false},
+		{"a|b", "xb", false},
+	}
+	for _, c := range cases {
+		if err := Match(c.value, c.pattern); (err == nil) != c.ok {
+			t.Errorf("Match(%q, %q) = %v; want ok %v", c.value, c.pattern, err, c.ok)
+		}
+	}
+}
+
 func TestShellIsCompiledOnlyIntoADevelopmentBuild(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	argv, _ := program.run("shell", unread, &stdout, &stderr)

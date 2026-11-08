@@ -121,9 +121,10 @@ func OneOf(value string, choices ...string) error {
 	return fmt.Errorf("is %q, not one of %s", value, strings.Join(choices, "|"))
 }
 
-// Match refuses value unless the anchored regular expression pattern matches it.
+// Match refuses value unless the regular expression pattern matches the whole of it,
+// anchored or not.
 func Match(value, pattern string) error {
-	if !regexp.MustCompile(pattern).MatchString(value) {
+	if !regexp.MustCompile(`^(?:` + pattern + `)$`).MatchString(value) {
 		return fmt.Errorf("is %q, not matching %s", value, pattern)
 	}
 	return nil
