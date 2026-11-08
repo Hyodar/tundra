@@ -572,9 +572,9 @@ def test_tls_reads_its_certificate_as_a_credential() -> None:
     assert not relay.values("Service", "AmbientCapabilities")  # 8443 needs no capability
 
 
-def test_the_prover_shape_lints_clean_apart_from_unpinned_sources(planned: PlannedImage) -> None:
+def test_the_prover_shape_lints_clean(planned: PlannedImage) -> None:
     shipped = File.text("/usr/bin/app", "#!/bin/sh\n", mode=0o755)
-    assert_clean(prover(files=[shipped]), allow=("source-unpinned",))
+    assert_clean(prover(files=[shipped]))
 
 
 # ── The root layout ─────────────────────────────────────────────────────

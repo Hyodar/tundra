@@ -65,8 +65,7 @@ LOCKFILE = PROJECT / "build" / "tundravm.lock"
 
 def test_lints_clean() -> None:
     for profile in PROFILES:
-        # A tundravm checkout's tools/ is unpinned until `tundravm lock`.
-        assert_clean(plan(IMAGE, profile), allow=($codes,))
+        assert_clean(plan(IMAGE, profile))
 
 
 def test_compiles_every_profile() -> None:
@@ -520,10 +519,6 @@ def render_workflow() -> str:
 PROFILES: tuple[str, ...] = ("production", "dev")
 """The profiles the image ``new`` writes declares."""
 
-EXPECTED_FINDINGS: tuple[str, ...] = ("source-unpinned",)
-"""Lint codes a freshly generated image reports by design: ``tundravm lock`` clears
-``source-unpinned``."""
-
 
 def render_recipe_template(
     *,
@@ -556,9 +551,8 @@ def render_test_module(*, filename: str) -> str:
 
     It imports only ``tundravm`` and ``tundravm.testing``.
     """
-    codes = ", ".join(f'"{code}"' for code in EXPECTED_FINDINGS)
     profiles = ", ".join(f'"{name}"' for name in PROFILES)
-    return Template(TEST_TEMPLATE).substitute(filename=filename, codes=codes, profiles=profiles)
+    return Template(TEST_TEMPLATE).substitute(filename=filename, profiles=profiles)
 
 
 def render_pyproject(
@@ -622,7 +616,6 @@ def render_readme(*, title: str, filename: str, tests: bool) -> str:
 __all__ = [
     "EXPLICIT_BACKENDS",
     "EDITABLE_INSTALL",
-    "EXPECTED_FINDINGS",
     "FIRST_STEPS",
     "GITIGNORE_BLOCK",
     "GITIGNORE_MARKER",

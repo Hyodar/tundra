@@ -60,6 +60,7 @@ from .check import (
     explain,
     explain_command,
     failing,
+    lock_pins,
     render,
     render_github,
     render_summary,
@@ -965,9 +966,11 @@ def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     )
     resolved = not any(d.severity == "error" for d in diagnostics)
     if locked is None:
+        pins = lock_pins(_lowered(loaded, found).select(names)) if resolved else ""
         _err(
-            f"note: no lockfile at {found.lockfile}: `{lock_command()}` writes it; without "
-            "it a production build stops (error lock-missing)"
+            f"note: no lockfile at {found.lockfile}: `{lock_command()}` "
+            f"{f'pins {pins}' if pins else 'writes it'}; a production build stops without it "
+            "(error lock-missing)"
         )
     elif resolved:
         diagnostics.extend(lock_status(loaded.recipe, locked, variants=names))

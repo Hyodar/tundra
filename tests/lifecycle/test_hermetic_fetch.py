@@ -42,7 +42,7 @@ from tundravm.declarative import (
     lower,
 )
 from tundravm.declarative import lifecycle as lifecycle_module
-from tundravm.declarative.lifecycle import bake_image, check_report, compile_image
+from tundravm.declarative.lifecycle import bake_image, compile_image
 from tundravm.declarative.utils import EfiStub
 from tundravm.errors import ErrorCode, LockfileError, PolicyError, SourceError, StateError
 from tundravm.lockfile import LockedToolchain, parse_lockfile
@@ -1331,14 +1331,13 @@ def test_efi_stub_drifts_until_locked(
 
 def test_unpinned_efi_stub_is_reported_until_locked() -> None:
     recipe = _recipe(_stub("20251113T083151Z"))
-    found = [d for d in lint(recipe) if d.code == "source-unpinned"]
+    assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
+    found = [d for d in lint(recipe, lock=lock(_recipe())) if d.code == "source-unpinned"]
     assert [(d.severity, d.subject) for d in found] == [("warning", "sources.efi-stub")]
     assert "systemd-boot-efi_257.8-1~deb13u1_amd64.deb" in found[0].message
+    assert found[0].hint is not None and "`tundravm lock`" in found[0].hint
     locked = lock(recipe, resolver=lambda source: "b" * 64)
     assert not [d for d in lint(recipe, lock=locked) if d.code == "source-unpinned"]
-    report = check_report(recipe, None, variants=None)
-    (unpinned,) = (d for d in report if d.code == "source-unpinned")
-    assert unpinned.hint is not None and "`tundravm lock`" in unpinned.hint
 
 
 def test_a_build_named_efi_stub_collides_with_the_package(

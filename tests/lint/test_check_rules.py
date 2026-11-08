@@ -17,12 +17,15 @@ from tundravm.check import Diagnostic, check, render, render_github
 from tundravm.cli import main
 from tundravm.declarative import (
     BootStep,
+    Build,
     Debloat,
     Declaration,
     ExternalDelivery,
     File,
     Fragment,
+    Git,
     Hook,
+    Install,
     Package,
     Recipe,
     Secret,
@@ -36,9 +39,10 @@ from tundravm.declarative import (
     Variant,
     compile,
     lint,
+    lock,
     lower,
 )
-from tundravm.declarative.lifecycle import check_report
+from tundravm.declarative.lifecycle import NO_LOCK, check_report
 
 DEFAULT = Variant("default", outputs=("qemu",))
 KERNEL = Package("linux-image-amd64")
@@ -324,14 +328,34 @@ def test_keep_modules_keeps_the_path_out_of_finalize() -> None:
     ids=["ssh-key-only", "external"],
 )
 def test_secret_delivery_applied_is_fine(secrets: Secrets) -> None:
-    # The delivery tool builds from an unpinned branch; that is source-unpinned's concern.
-    assert [d for d in report(recipe(secrets)) if d.code != "source-unpinned"] == []
+    assert report(recipe(secrets)) == []
 
 
-# k. kernel-missing
+# k. source-unpinned
+
+TOOL = Build(
+    "tool",
+    Git("https://example.com/tool.git", "main"),
+    script="make",
+    install=(Install("out/tool", "/usr/bin/tool"),),
+)
 
 
-# l. image-arch-unsupported
+@pytest.mark.parametrize(
+    ("locked", "unpinned"),
+    [(False, []), (True, ["sources.tool"])],
+    ids=["no-lock-notes-it-once", "lock-lacks-one-source"],
+)
+def test_source_unpinned_names_what_the_lock_lacks(locked: bool, unpinned: list[str]) -> None:
+    pins = lock(recipe()) if locked else NO_LOCK
+    found = check_report(recipe(TOOL), None, variants=None, lock=pins)
+    assert [d.subject for d in found if d.code == "source-unpinned"] == unpinned
+
+
+# l. kernel-missing
+
+
+# m. image-arch-unsupported
 
 
 # rendering + ordering

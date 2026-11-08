@@ -44,8 +44,8 @@ def test_load_refuses_a_file_that_only_binds_a_recipe(tmp_path: Path) -> None:
     assert "`image`" in str(caught.value)
 
 
-def test_the_starter_lints_clean_apart_from_the_unpinned_evidence_service() -> None:
-    assert_clean(starter(), allow=("source-unpinned",))
+def test_the_starter_lints_clean() -> None:
+    assert_clean(starter())
 
 
 def test_the_starter_compiles_to_a_tree_mkosi_resolves(tmp_path: Path) -> None:

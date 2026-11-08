@@ -94,8 +94,8 @@ def test_the_prover_compiles_to_a_tree_mkosi_resolves(prover_file: Path, tmp_pat
     assert manifest["ingress"][0]["port"] == 443
 
 
-def test_the_prover_lints_clean_apart_from_unpinned_sources(prover_file: Path) -> None:
-    assert_clean(tundravm.load(prover_file), allow=("source-unpinned",))
+def test_the_prover_lints_clean(prover_file: Path) -> None:
+    assert_clean(tundravm.load(prover_file))
 
 
 def test_the_prover_locks_without_the_network(prover_file: Path) -> None:

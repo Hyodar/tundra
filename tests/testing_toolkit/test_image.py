@@ -55,7 +55,7 @@ def test_fragment_plan_boots_on_the_test_platform() -> None:
     assert image.packages["linux-image-amd64"] == "runtime"
     assert image.packages["curl"] == "runtime"
     assert image.packages["gcc"] == "build"
-    assert_clean(image, allow=("source-unpinned",))
+    assert_clean(image)
     assert TEST_PLATFORM.name in image.resolved.components
 
 

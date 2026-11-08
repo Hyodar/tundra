@@ -400,7 +400,9 @@ def test_inspect_and_lint_report_the_kernel_pin(tmp_path: Path, config: Path) ->
     recipe = _recipe(Kernel("6.1", Git("https://k.example/linux", "v6.1"), config=config))
     info = describe(lower(recipe), profile="default")
     assert info["kernel"]["pinned"] is None  # type: ignore[index]
-    (unpinned,) = [d for d in lint(recipe) if d.code == "source-unpinned"]
+    assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
+    older = lock(Recipe("k", variants=(Variant("default"),)))
+    (unpinned,) = [d for d in lint(recipe, lock=older) if d.code == "source-unpinned"]
     assert unpinned.subject == "sources.kernel"
     assert unpinned.message == (
         "kernel 6.1 (git https://k.example/linux @ v6.1) is not pinned in the lockfile"

@@ -93,8 +93,8 @@ def _ghost(*, where: str = "image") -> Image:
 
 
 def _warning_only() -> Image:
-    """One warning: the implied evidence service's source is unpinned."""
-    return Image("demo", network=FILTERED)
+    """One warning: the debloat empties the file's directory."""
+    return Image("demo", network=FILTERED, files=[PublicFile.text("/var/log/app.txt", "x\n")])
 
 
 # ── compile_tree / CompiledTree ──────────────────────────────────────
@@ -150,11 +150,11 @@ def test_compile_tree_writes_the_tree_compile_returns(tmp_path: Path) -> None:
 def test_assert_clean_fails_on_warnings_for_every_input() -> None:
     image = _warning_only()
     for subject in (image, plan(image).lint(), plan(image)):
-        with pytest.raises(AssertionError, match="warning source-unpinned"):
+        with pytest.raises(AssertionError, match="warning debloat-removes-declared-file"):
             assert_clean(subject)
         found = assert_clean(subject, warnings="allow")
-        assert [d.code for d in found] == ["source-unpinned"]
-        assert_clean(subject, allow=("source-unpinned",))
+        assert [d.code for d in found] == ["debloat-removes-declared-file"]
+        assert_clean(subject, allow=("debloat-removes-declared-file",))
 
 
 def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
@@ -164,16 +164,16 @@ def test_assert_clean_fails_on_errors_with_rendered_report() -> None:
     message = str(excinfo.value)
     assert "error service-user-missing [production] app.service" in message
     assert "hint:" in message
-    assert_clean(image, allow=["service-user-missing", "source-unpinned"])
+    assert_clean(image, allow=["service-user-missing"])
 
 
 def test_assert_clean_checks_selected_profiles() -> None:
     image = _ghost(where="dev")
-    assert_clean(image, profiles="production", allow=["source-unpinned"])
+    assert_clean(image, profiles="production")
     with pytest.raises(AssertionError, match=r"\[dev\]"):
-        assert_clean(image, allow=["source-unpinned"])
+        assert_clean(image)
     with pytest.raises(AssertionError, match=r"\[dev\]"):
-        assert_clean(image, profiles=["dev"], allow=["source-unpinned"])
+        assert_clean(image, profiles=["dev"])
 
 
 def test_assert_clean_returns_lint_diagnostics_as_given() -> None:
@@ -205,9 +205,9 @@ def test_assert_diagnostic_failure_lists_every_finding() -> None:
         assert_diagnostic(image, "service-user-missing", subject="app")
     message = str(excinfo.value)
     assert "code='service-user-missing', subject='app'" in message
-    assert "warning source-unpinned [image] tundravm's tools (1): " in message
+    assert "warning debloat-removes-declared-file [production] /var/log/app.txt: " in message
     with pytest.raises(AssertionError, match="severity='error'"):
-        assert_diagnostic(image, "source-unpinned", severity="error")
+        assert_diagnostic(image, "debloat-removes-declared-file", severity="error")
 
 
 def test_plan_takes_a_component_alone() -> None:

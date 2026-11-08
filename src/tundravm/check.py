@@ -604,8 +604,10 @@ def _rule_debloat_removes_declared_file(
 def _rule_source_unpinned(
     image: Lowered, profile_name: str, state: ProfileState
 ) -> Iterator[Diagnostic]:
+    """A lockable source the lockfile lacks; nothing without a lockfile, which ``check``
+    notes once."""
     sources = image.select(profile_name).lock_sources()
-    if not sources:
+    if not sources or not image.lock_path.exists():
         return
     pins = image.source_pins()
     for spec in sources.values():
@@ -621,6 +623,18 @@ def _rule_source_unpinned(
             subject=f"sources.{spec.name}",
             context=_TOOLS if tools else (),
         )
+
+
+def lock_pins(image: Lowered) -> str:
+    """What ``tundravm lock`` pins of *image*: ``3 sources and the tools``, or ``""`` when
+    every source is immutable."""
+    unpinned = [spec for spec in image.lock_sources().values() if spec.pin_from({}) is None]
+    tools = [
+        s for s in unpinned if isinstance(s.source, LocalSource) and s.source.path == TOOLS_LOCAL
+    ]
+    own = len(unpinned) - len(tools)
+    words = [_plural(own, "source")] if own else []
+    return " and ".join([*words, *(["the tools"] if tools else [])])
 
 
 _TOOLS = (("source", TOOLS_LOCAL),)
@@ -1442,10 +1456,12 @@ _REGISTRY: tuple[Rule, ...] = (
     Rule(
         "source-unpinned",
         "warning",
-        "A source build, built kernel or downloaded package has no pin in the lockfile, so "
-        "a moving ref builds different bytes; a production build stops until it is pinned.",
-        "Run `tundravm lock` to pin every source at once (`tundravm build` then "
-        "fetches each on the host), or declare an immutable source: Git(url, ref) with a "
+        "The lockfile has no pin for a source build, built kernel or downloaded package the "
+        "image gained since `tundravm lock` ran, so a moving ref builds different bytes; a "
+        "production build stops until it is pinned. Without a lockfile there is no finding "
+        "per source: `check` notes the missing lock once.",
+        "Run `tundravm lock` again to pin it (`tundravm build` then fetches it on the "
+        "host), or declare an immutable source: Git(url, ref) with a "
         "40-hex commit ref, or Http(url, sha256=...). Locking names a dead upstream ref, "
         "with every other source it cannot resolve, before anything is written.",
         (_rule_source_unpinned,),
@@ -2175,6 +2191,7 @@ __all__ = [
     "explain_command",
     "unit_declaration_check",
     "failing",
+    "lock_pins",
     "render",
     "render_github",
     "render_summary",

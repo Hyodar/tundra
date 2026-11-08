@@ -450,8 +450,10 @@ def test_show_lists_sources_at_their_pins(
 
 def test_check_rule_source_unpinned() -> None:
     recipe = _recipe(_build())
+    assert not [d for d in lint(recipe) if d.code == "source-unpinned"]
+    # lint reads the pins of ./build/tundravm.lock, as `tundravm check` does.
+    write_lock(lock(_recipe()), Path("build") / "tundravm.lock")
     found = [d for d in lint(recipe) if d.code == "source-unpinned"]
     assert [(d.severity, d.subject) for d in found] == [("warning", "sources.tool")]
-    # lint reads the pins of ./build/tundravm.lock, as `tundravm lint` does.
     write_lock(lock(recipe, resolver=_Fixed(SHA_A)), Path("build") / "tundravm.lock")
     assert not [d for d in lint(recipe) if d.code == "source-unpinned"]

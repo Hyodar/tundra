@@ -480,6 +480,7 @@ and the tools tree share this release's snapshot; `Debian(snapshot=)` overrides 
   `checkout`: the `tools/` digest stands in for the version.
 - A production build refuses a missing (`lock-missing`) or stale lock and builds every
   source at its pin. A development build writes a missing lock, re-pinning `Local` sources.
+  `check` notes a missing lock once; `source-unpinned`, a source it lacks.
 - `build --offline` checks an `InRelease` against the lock instead of fetching it.
 
 ## The mkosi tree
@@ -529,8 +530,7 @@ image = Image("node", network=Network(egress=Egress()))
 
 
 def test_lints_clean() -> None:
-    # The evidence service's source stays unpinned until `tundravm lock`.
-    assert_clean(plan(image), allow=("source-unpinned",))
+    assert_clean(plan(image))
 
 
 def test_egress_is_filtered() -> None:

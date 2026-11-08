@@ -18,10 +18,10 @@ from tundravm.recipe import load_file
 from tundravm.templates import render_recipe_template
 from tundravm.testing import plan
 
-ALLOWED = frozenset({"source-unpinned", "observability-sink-unset", "observability-export-unset"})
-"""The warnings a stage reports: ``tundravm lock`` pins its sources, and stage 6's
-production profiles ship the journal and the metrics to in-guest receivers, keeping the
-metrics' health preset, until the operator passes each ``url=`` and ``export=``."""
+ALLOWED = frozenset({"observability-sink-unset", "observability-export-unset"})
+"""The warnings a stage reports: stage 6's production profiles ship the journal and the
+metrics to in-guest receivers, keeping the metrics' health preset, until the operator
+passes each ``url=`` and ``export=``."""
 
 
 def _names(path: Path) -> tuple[set[str], set[str]]:

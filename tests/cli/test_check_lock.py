@@ -75,7 +75,7 @@ def test_explain_prints_what_a_code_checks_and_its_fix(cli: Cli) -> None:
     result = cli("check", *(f"--explain={code}" for code in codes), "demo.py")
     assert result.code == EXIT_OK, result.err
     assert result.out.startswith("source-unpinned: warning\n")
-    assert "\n    fix: Run `tundravm lock` to pin every source" in result.out
+    assert "\n    fix: Run `tundravm lock` again to pin it" in result.out
     assert "\n\ntree-drift: error\n" in result.out
     unknown = cli("check", "--explain", "source-unpined")
     assert unknown.code == EXIT_ERROR
@@ -234,9 +234,8 @@ def test_a_local_source_is_pinned_by_its_content(project: Path, cli: Cli) -> Non
     (project / "app").mkdir()
     main = project / "app" / "main.go"
     main.write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
-    unpinned = cli("check")
-    assert unpinned.code == EXIT_OK
-    assert "source-unpinned [image] sources.app: source build 'app' (local app)" in unpinned.out
+    unlocked = cli("check")
+    assert unlocked.code == EXIT_OK and "source-unpinned" not in unlocked.out
     assert cli("lock").code == EXIT_OK
     assert cli("lock", "--check").out == "lock is up to date\n"
     main.write_text("package main\n\nfunc main() { println() }\n", encoding="utf-8")
@@ -267,8 +266,7 @@ def test_a_hint_names_the_lock_command_that_runs_here(
 ) -> None:
     (project / "other.py").write_text(STARTER, encoding="utf-8")
     checked = cli("check", *given)
-    assert f"not in the lockfile yet: `{command}` pins them\n" in checked.out
-    assert f"`{command}` writes it" in checked.err
+    assert f"`{command}` pins the tools; a production build" in checked.err
     assert "IMAGE" not in checked.out + checked.err
 
 

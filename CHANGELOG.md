@@ -188,6 +188,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `firewall-modes-kernel` (warning) flags `Firewall(modes=)` on a kernel older than Linux 6.16, where every switch on TDX is refused, and names a `Kernel.build(...)` that has it.
 - **Breaking:** `source-unpinned` is image-wide, subject `sources.NAME`.
 - `source-unpinned` is a warning, the one level an `Image` file reaches; its `error` and `info` levels are gone.
+- Without a lockfile `check` reports no `source-unpinned`: its note says once what `tundravm lock` pins; with one, the rule names each source the lock lacks.
 - New: `egress-unfiltered`, `service-metadata`, `volume-tpm-on-cloud`, `unit-written-at-runtime`, `observability-sink-unset`, `observability-export-unset`, `kernel-cmdline-repeated`, `kernel-unhardened`, `ssh-login-shell`, `container-shell`.
 - A finding's message speaks the image file too: no mkosi tree, build stage or internal spelling (`file-path-duplicate`, `debloat-removes-declared-file`, `service-runs-as-root`, `hardening-relaxed`), and an order only a shipped component writes says to report it.
 - A finding several profiles share prints once, `[image]` marks an image-wide one, the report ends with its `--explain` line, and a hint names the lock command that runs where you are.
