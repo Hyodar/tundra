@@ -50,6 +50,7 @@ from ._runtime import (
     Reads,
     Runtime,
     RuntimeFragment,
+    account_groups,
     check_owner_login,
     container_ports,
     key_files,
@@ -557,7 +558,7 @@ class _Lowering:
             for service in self.runtime.services
             if isinstance(service.state, VolumeDirectory) and service.state.group is not None
         }
-        declared = {group.name for group in self.image.groups}
+        declared = {group.name for group in self.image.groups} | account_groups(self.image)
         return tuple(sorted(groups - declared))
 
     def kernel(self) -> dm.Kernel:
@@ -1126,7 +1127,7 @@ class _Lowering:
             ports=tuple(dm.Port(port.port, port.protocol) for port in item.expose),
             requires=requires,
             after=requires,
-            hardening=cast("Hardening", item.hardening),
+            hardening=_sandbox_of(item),
             egress=_own_egress(item),
             socket=item.socket,
             timeout_stop=None if shutdown is None else shutdown.timeout,
@@ -1232,7 +1233,7 @@ class _Lowering:
             after=requires,
             requires=requires,
             needs=_outputs(item),
-            hardening=cast("Hardening", item.hardening),
+            hardening=_sandbox_of(item),
             egress=_own_egress(item),
             timeout_stop=None if shutdown is None else shutdown.timeout,
             kill_mode=None if shutdown is None else shutdown.kill_mode,
@@ -1527,6 +1528,20 @@ def component_classes(recipe: dm.Recipe) -> tuple[type[Component], ...]:
                 found[cls] = None
             pending.extend(item.items)
     return tuple(found)
+
+
+GROUP_UMASK = "0027"
+"""What a service writes into a ``group=`` directory is group-readable, never group-writable."""
+
+
+def _sandbox_of(item: Service) -> Hardening:
+    """*item*'s sandbox, with :data:`GROUP_UMASK` when its state is a ``group=`` directory, so
+    the group reads what it writes there."""
+    hardening = cast("Hardening", item.hardening)
+    state = item.state
+    if isinstance(state, VolumeDirectory) and state.group is not None:
+        return replace(hardening, umask=GROUP_UMASK)
+    return hardening
 
 
 def _own_egress(item: Service) -> tuple[dm.EgressRule, ...]:

@@ -1254,6 +1254,7 @@ Container(
 | `Container.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `container-shell`: a production container whose program is a shell. |
 | `Container.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where the container answers the host on *port*, a port of *serves*: its veth address, which nothing outside the host reaches, ready once *probe* connects (`lighthouse = Lighthouse(execution=searcher.endpoint(8551))`). |
 | `Container.exposed` | The ports DNATed to it: *expose*'s, and its sshd's. |
+| `Container.group` | The group a host service joins to read what the container writes (`Service(..., groups=[searcher.group])`): its account's own, whose gid `uid` pins. The container writes group-readable files (`UMask=0027`), so a service in it reads them without running as the container's uid. |
 | `Container.image` | Where the payload ships its root image. |
 | `Container.kernel() -> tuple[KernelFragment, ...]` | With a veth, what a built kernel needs for it: veth and the firewall's nat. |
 | `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there. |

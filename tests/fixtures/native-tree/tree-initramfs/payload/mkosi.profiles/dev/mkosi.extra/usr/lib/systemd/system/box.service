@@ -32,7 +32,7 @@ SystemCallFilter=~@privileged @resources
 SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-UMask=0077
+UMask=0027
 
 [Install]
 WantedBy=minimal.target

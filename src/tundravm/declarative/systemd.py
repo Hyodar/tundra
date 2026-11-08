@@ -464,9 +464,11 @@ _NONE = Hardening.strict(
 
 def ceiling(hardening: Hardening) -> tuple[str, float] | None:
     """``(preset, exposure ceiling)`` when *hardening* is exactly a preset (or
-    :meth:`Hardening.relaxed`), else ``None``: see :data:`CEILINGS`."""
+    :meth:`Hardening.relaxed`), whatever umask it writes with, else ``None``: see
+    :data:`CEILINGS`."""
     for name in PRESETS:
-        if hardening == Hardening.preset(name):  # type: ignore[arg-type]
+        preset = Hardening.preset(name)  # type: ignore[arg-type]
+        if dataclasses.replace(hardening, umask=preset.umask) == preset:
             return name, CEILINGS[name]
     if hardening == _RELAXED:
         return "relaxed", CEILINGS["relaxed"]

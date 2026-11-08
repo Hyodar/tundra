@@ -14,7 +14,7 @@ from tundravm import File, Image, Profile, Service
 from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
 from tundravm.components import Endpoint
-from tundravm.components.access import DevAccess, Login, SshAccess
+from tundravm.components.access import Command, DevAccess, Login, SshAccess
 from tundravm.components.container import Bind, Container, ContainerSsh
 from tundravm.components.network import Egress, Firewall, Host, Mode, Network
 from tundravm.declarative._network import HOSTS_HEADER
@@ -127,7 +127,8 @@ def test_a_container_lowers_to_a_subimage_its_unit_runs_from(tmp_path: Path) -> 
     assert (units / "web.service.d/20-container.conf").read_text(encoding="utf-8") == (
         "[Unit]\nAfter=web-loop.service\nRequires=web-loop.service\n\n"
         "[Service]\nBindPaths=/persistent/data/web:/persistent/data/web\nMountAPIVFS=yes\n"
-        "PrivateNetwork=yes\nPrivateUsers=yes\nRootImage=/usr/lib/tundravm/containers/web.raw\n"
+        "PrivateNetwork=yes\nPrivatePIDs=yes\nPrivateUsers=yes\nProtectProc=invisible\n"
+        "RootImage=/usr/lib/tundravm/containers/web.raw\n"
     )
     assert "WorkingDirectory=/persistent/data/web\n" in read(units, "web.service")
     loader = read(units, "web-loop.service")
@@ -185,8 +186,8 @@ def test_a_networked_container_lowers_to_a_veth_the_firewall_forwards() -> None:
     assert dropin == (
         "[Unit]\nAfter=web-loop.service web-net.service web-endpoint-8545.socket\n"
         "Requires=web-loop.service web-net.service web-endpoint-8545.socket\n\n"
-        "[Service]\nMountAPIVFS=yes\nNetworkNamespacePath=/run/netns/web\nPrivateUsers=yes\n"
-        "RootImage=/usr/lib/tundravm/containers/web.raw\n"
+        "[Service]\nMountAPIVFS=yes\nNetworkNamespacePath=/run/netns/web\nPrivatePIDs=yes\n"
+        "PrivateUsers=yes\nProtectProc=invisible\nRootImage=/usr/lib/tundravm/containers/web.raw\n"
     )
     net = planned.file("/usr/lib/systemd/system/web-net.service").text
     for line in (
@@ -379,3 +380,41 @@ def test_an_account_belongs_to_one_declaration(beside: Any, message: str) -> Non
     with pytest.raises(ValidationError, match=re.escape(message)) as raised:
         compile_image(Image("box", components=components, services=services))
     assert raised.value.hint
+
+
+def neighbours() -> Any:
+    tenant = Login("tenant", owner=True, commands={"status": Command("/usr/bin/true")})
+    container = web(state=data.directory("web"), expose=[])
+    reader = Service(
+        "reader",
+        ["/usr/bin/reader", data.directory("web") / "bot.log"],
+        groups=[container.group],
+        state=data.directory("out", group="tenant"),
+    )
+    image = Image("box", components=[container, SshAccess(login=tenant)], services=[reader])
+    return plan(image, "production")
+
+
+@pytest.mark.parametrize(
+    ("where", "line"),
+    [
+        ("/usr/lib/systemd/system/web.service.d/20-container.conf", "PrivatePIDs=yes"),
+        ("/usr/lib/systemd/system/web.service.d/20-container.conf", "ProtectProc=invisible"),
+        ("/usr/lib/systemd/system/web.service", "UMask=0027"),
+        ("/usr/lib/systemd/system/reader.service", "SupplementaryGroups=web tenant"),
+        ("/usr/lib/systemd/system/reader.service", "UMask=0027"),
+        ("volume-data", "/usr/bin/install -d -o reader -g tenant -m 0750 /persistent/data/out"),
+        ("volume-data", "/usr/bin/install -d -o web -g web -m 0750 /persistent/data/web"),
+    ],
+)
+def test_a_host_service_beside_a_container_reads_it_through_a_group(where: str, line: str) -> None:
+    """The tenant sees no host process and writes what its group reads; a host service joins
+    that group instead of taking the tenant's uid, and a group= directory it writes is
+    readable by the group (a Login's own here) without root."""
+    planned = neighbours()
+    if where.startswith("/"):
+        assert line in planned.file(where).text.splitlines()
+    else:
+        (step,) = [step for step in planned.init_steps if step.name == where]
+        assert line in step.script.splitlines()
+    assert set(planned.groups) & {"tenant", "web"} == {"web"}

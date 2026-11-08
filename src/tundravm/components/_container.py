@@ -98,6 +98,11 @@ WHOLE = frozenset({"/", "/etc", "/usr", "/var", "/run", "/root", "/home"})
 _KEYS_HINT = 'keys=Secret("searcher-keys") for keys delivered after attestation.'
 
 
+def _group_readable(hardening: Sandbox) -> Hardening:
+    """*hardening* writing group-readable files, for the services in the container's group."""
+    return replace(_sandbox(hardening), umask="0027")
+
+
 def uid(user: str) -> int:
     """The uid and gid of a container's *user*, the same on the host and in its root
     (``PrivateUsers=yes`` maps the unit's own ids to themselves): a hash of the name into
@@ -611,6 +616,14 @@ class Container(Component):
         return self.user or self.name
 
     @property
+    def group(self) -> str:
+        """The group a host service joins to read what the container writes
+        (``Service(..., groups=[searcher.group])``): its account's own, whose gid :func:`uid`
+        pins. The container writes group-readable files (``UMask=0027``), so a service in it
+        reads them without running as the container's uid."""
+        return self.run_user
+
+    @property
     def sshd_unit(self) -> str | None:
         """The unit running sshd: the container's own without *argv*, ``<name>-ssh``
         beside it with one; ``None`` without *ssh*."""
@@ -682,7 +695,7 @@ class Container(Component):
             list(self.argv) or sshd,
             state=self.state,
             user=self.run_user,
-            hardening=self.hardening if self.argv else SSHD_SANDBOX,
+            hardening=_group_readable(self.hardening if self.argv else SSHD_SANDBOX),
             requires=list(self.requires),
             readiness=None
             if self.probe is None or network is None
@@ -697,7 +710,7 @@ class Container(Component):
                     f"{self.name}-ssh",
                     sshd,
                     user=self.run_user,
-                    hardening=SSHD_SANDBOX,
+                    hardening=_group_readable(SSHD_SANDBOX),
                     unit=self._dropin(f"{self.name}-ssh.service", units),
                     description=f"SSH into container {self.name}",
                 )
@@ -757,7 +770,9 @@ class Container(Component):
         directives: dict[str, str | tuple[str, ...]] = {
             "RootImage": self.image,
             "MountAPIVFS": "yes",
+            "PrivatePIDs": "yes",
             "PrivateUsers": "yes",
+            "ProtectProc": "invisible",
         }
         extra: dict[str, dict[str, str | tuple[str, ...]]] = {}
         needs = list(units)

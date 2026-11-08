@@ -76,6 +76,7 @@ __all__ = [
     "RuntimeFragment",
     "bound",
     "check_bindings",
+    "account_groups",
     "check_owner_login",
     "container_ports",
     "key_files",
@@ -141,6 +142,24 @@ def _logins(items: Iterable[object]) -> Iterator[du.Login]:
             yield from item.logins
         elif isinstance(item, Component):
             yield from _logins(composed(item))
+
+
+def account_groups(image: object) -> frozenset[str]:
+    """The groups an account makes for itself: each ``Login``'s (useradd's own group) and
+    each ``Container``'s, which a ``group=`` directory may name and nothing declares again."""
+    from tundravm.components.container import Container
+
+    def containers(items: Iterable[object]) -> Iterator[Container]:
+        for item in items:
+            if isinstance(item, Container):
+                yield item
+            elif isinstance(item, Component):
+                yield from containers(composed(item))
+
+    items = _image_items(image)
+    return frozenset(
+        (*(login.name for login in _logins(items)), *(c.group for c in containers(items)))
+    )
 
 
 def _containers(items: Iterable[object]) -> Iterator[Container]:
@@ -509,15 +528,19 @@ class Runtime:
     def directories(self, volume: Volume) -> dict[str, tuple[str, str, int]]:
         """``path -> (owner, group, mode)`` of each directory a service binds on *volume*."""
         found: dict[str, tuple[str, str, int]] = {}
+        users: dict[str, set[str]] = {}
         for service in self.services:
             state = service.state
             if not isinstance(state, VolumeDirectory) or state.volume != volume:
                 continue
             user = service.user or service.stem
-            if state.group is not None:
-                found[state.path] = ("root", state.group, state.mode)
-            else:
+            users.setdefault(state.path, set()).add(user)
+            if state.group is None:
                 found[state.path] = (user, user, state.mode)
+            elif len(users[state.path]) == 1:
+                found[state.path] = (user, state.group, state.mode)
+            else:
+                found[state.path] = ("root", state.group, state.mode)
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:

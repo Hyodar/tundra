@@ -255,8 +255,10 @@ class Volume(Located):
     ) -> VolumeDirectory:
         """The directory *name* on this volume, for a service's (or component's) state.
 
-        One service owns it, with *mode*; several services share it only through *group*
-        (the directory is ``root:<group>`` and each of them joins the group).
+        One service owns it, with *mode*; *group* is who else reads it: the directory is
+        ``<service>:<group>``, and what the service writes there is group-readable (``UMask=0027``).
+        Several services share it only through *group* (``root:<group>``, each joins it). A
+        ``Login``'s own name is a group *group* may name.
         """
         return VolumeDirectory(self, name, mode=mode, group=group)
 

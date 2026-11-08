@@ -35,7 +35,7 @@ SystemCallFilter=~@privileged
 SystemCallFilter=@setuid
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-UMask=0077
+UMask=0027
 
 [Install]
 WantedBy=tundravm-held.target
