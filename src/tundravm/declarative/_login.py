@@ -9,6 +9,7 @@ of a ``sudo=True`` command are every argv it can produce (:meth:`Command.sudoers
 
 from __future__ import annotations
 
+import ast
 import builtins
 import itertools
 import json
@@ -40,6 +41,8 @@ _PATTERN_REFUSED = frozenset(" \t\n\\,:=\"'")
 _PATTERN_BRACKET = re.compile(r"\[\]?[^]]*\]")
 _GO_LITERAL = r'[0-9]+|"(?:[^"\\\x00-\x1f\x7f]|\\[^\x00-\x1f\x7f])*"'
 _CHECK_CALL = re.compile(rf"(?:Int|OneOf|Match)\(value(?:, (?:{_GO_LITERAL}))*\)")
+_MATCH_CALL = re.compile(rf"Match\(value, ({_GO_LITERAL})\)")
+_SAFE_ESCAPES = frozenset("dws")
 SUDO_LINES = 64
 """The most sudoers lines one ``sudo=True`` command may take (``login-sudo-lines``)."""
 
@@ -199,6 +202,7 @@ class CommandParam:
                     "min= and max= say nothing.",
                     hint=f'CommandParam("{name}", type={kind!r}).',
                 )
+            self._refuse_option_like(kind)
             return kind, repr(kind)
         if kind is int:
             if choices is not None or low is None or high is None:
@@ -238,6 +242,23 @@ class CommandParam:
             hint=f'CommandParam("{name}", type=int, min=1, max=1000), choices=[...] for str, '
             "type=bool for a flag, or an instance of a ParamType subclass.",
         )
+
+    def _refuse_option_like(self, kind: ParamType) -> None:
+        """Refuse a type whose ``pattern()`` or ``Match`` check may admit a value starting with
+        ``-``, which the program it fills would read as an option."""
+        check = kind.check()
+        matched = _MATCH_CALL.fullmatch(check) if isinstance(check, str) else None
+        regexes = [kind.pattern(), _go_text(matched.group(1)) if matched else None]
+        for regex in (r for r in regexes if isinstance(r, str)):
+            if _option_like(regex):
+                raise ValidationError(
+                    f"CommandParam {self.name}: type={kind!r} admits a value starting with "
+                    f"'-' ({regex!r}), which the program would read as an option "
+                    "(login-param-option-like).",
+                    hint="Anchor the pattern so a value cannot start with -: "
+                    "'^[0-9a-f][0-9a-f-]*$'.",
+                    context={"rule": "login-param-option-like"},
+                )
 
     def _choices(self, choices: object, low: object, high: object) -> _Choices:
         name = self.name
@@ -810,6 +831,91 @@ def _joined(parts: Sequence[tuple[bool, str]]) -> tuple[bool, str]:
             text if pattern else re.sub(r"([.+])", r"[\1]", text) for pattern, text in parts
         )
     return False, "".join(text for _, text in parts)
+
+
+def _go_text(literal: str) -> str:
+    """The text of a Go string *literal*, ``-`` for one Python cannot read (always refused)."""
+    try:
+        text = ast.literal_eval(literal)
+    except (SyntaxError, ValueError):
+        return "-"
+    return text if isinstance(text, str) else "-"
+
+
+def _option_like(regex: str) -> bool:
+    """Whether *regex* may match a value starting with ``-``: unless every alternative
+    begins, after its ``^``, with a literal character or a class that leaves ``-`` out,
+    and no quantifier lets that first atom be absent."""
+    for alternative in _alternatives(regex):
+        rest = alternative.lstrip("^")
+        if not rest or rest == "$":
+            continue
+        atom, after = _first_atom(rest)
+        if atom is None or _admits_dash(atom) or after.startswith(("?", "*", "{0,", "{0}")):
+            return True
+    return False
+
+
+def _alternatives(regex: str) -> list[str]:
+    """*regex* split at each ``|`` outside brackets and parentheses."""
+    found, depth, start, at = [], 0, 0, 0
+    while at < len(regex):
+        char = regex[at]
+        if char == "\\":
+            at += 2
+            continue
+        if char == "[":
+            at = _bracket_end(regex, at)
+            continue
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if char == "|" and depth == 0:
+            found.append(regex[start:at])
+            start = at + 1
+        at += 1
+    return [*found, regex[start:]]
+
+
+def _bracket_end(regex: str, at: int) -> int:
+    """The index just past the class opening at *at*."""
+    at += 1
+    at += regex[at : at + 1] == "^"
+    at += regex[at : at + 1] == "]"
+    while at < len(regex) and regex[at] != "]":
+        at += 2 if regex[at] == "\\" else 1
+    return at + 1
+
+
+def _first_atom(rest: str) -> tuple[str | None, str]:
+    """The first atom of *rest* and what follows it, ``None`` for a group or ``.``."""
+    if rest[0] in "(.":
+        return None, ""
+    end = _bracket_end(rest, 0) if rest[0] == "[" else 2 if rest[0] == "\\" else 1
+    return rest[:end], rest[end:]
+
+
+def _admits_dash(atom: str) -> bool:
+    """Whether the atom (a character, an escape or a class) matches ``-``."""
+    if atom.startswith("\\"):
+        escaped = atom[1:]
+        return escaped not in _SAFE_ESCAPES and (escaped.isalnum() or escaped == "-")
+    if not atom.startswith("["):
+        return atom == "-"
+    body = atom[1:-1]
+    if body.startswith("^") or "[:" in body:
+        return True
+    at = 0
+    while at < len(body):
+        low = body[at : at + 2] if body[at] == "\\" else body[at]
+        at += len(low)
+        if body[at : at + 1] == "-" and at + 1 < len(body):
+            high = body[at + 1 : at + 3] if body[at + 1] == "\\" else body[at + 1]
+            at += 1 + len(high)
+            if len(low) > 1 or len(high) > 1 or ord(low) <= ord("-") <= ord(high):
+                return True
+            continue
+        if low in ("-", "\\-"):
+            return True
+    return False
 
 
 def _sudo_pattern(pattern: object) -> bool:

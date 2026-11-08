@@ -540,7 +540,7 @@ def _choices(count: int) -> CommandParam:
                 ),
                 "of one word",
             )
-            for pattern in ("[0-9]+", "^[0-9]+", "^a$|^b$", "^.+$", "^[^/]+$", "^a\tb$", "^é$")
+            for pattern in ("[0-9]+", "^[0-9]+", "^a$|^b$", "^a.+$", "^a[^/]+$", "^a\tb$", "^é$")
         ),
         (
             lambda: Command(
@@ -569,6 +569,15 @@ def _choices(count: int) -> CommandParam:
                 sudo=True,
             ),
             "produces 18446744073709551616 argvs",
+        ),
+        *(
+            (lambda kind=kind: CommandParam("v", type=kind), "login-param-option-like")
+            for kind in (
+                Pattern("^[-0-9a-f]+$"),
+                Pattern("^.*$"),
+                Pattern("^a|-b$"),
+                Checked('Match(value, "[0-9-]+")'),
+            )
         ),
         (lambda: CommandParam("n", type=int), "takes min= and max="),
         (lambda: CommandParam("n", type=int, min=9, max=1), "min first"),
