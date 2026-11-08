@@ -32,7 +32,7 @@ _INT_MAX = 999_999_999
 _TEMPLATE = re.compile(r"\{\{([^{}]*)\}\}")
 _FLAG_WORD = re.compile(r"\{\{#([^{}]*)\}\}(.*)\{\{/([^{}]*)\}\}", re.DOTALL)
 _SUDO_REFUSED = frozenset("*?[]\\\"'")
-_SUDO_ESCAPED = re.compile(r"([,:=])")
+_SUDO_ESCAPED = re.compile(r"([,:=#])")
 _PATTERN_LITERAL = re.compile(r"[A-Za-z0-9/_.+-]*")
 _PATTERN_REFUSED = frozenset(" \t\n\\,:=\"'")
 SUDO_LINES = 64
@@ -715,9 +715,11 @@ class Command:
                 parts = [
                     text if pattern else re.sub(r"([.+])", r"[\1]", text) for pattern, text in rest
                 ]
-                found.append(f"{path} ^{' '.join(parts)}$")
+                found.append(f"{_sudo_word(path)} ^{' '.join(parts)}$")
                 continue
-            words = [_SUDO_ESCAPED.sub(r"\\\1", text) for _, text in line]
+            words = [_sudo_word(text) for _, text in line]
+            if rest and words[1].startswith("^"):
+                words[1] = f"\\{words[1]}"
             found.append(" ".join(words if rest else [*words, '""']))
         return found
 
@@ -764,6 +766,12 @@ class Command:
             "modes": list(self.modes),
             "profiles": list(profiles),
         }
+
+
+def _sudo_word(text: str) -> str:
+    """*text* as sudoers reads it literally: ``,``, ``:``, ``=`` and ``#`` (a comment to the
+    end of the line otherwise) escaped."""
+    return _SUDO_ESCAPED.sub(r"\\\1", text)
 
 
 def _joined(parts: Sequence[tuple[bool, str]]) -> tuple[bool, str]:

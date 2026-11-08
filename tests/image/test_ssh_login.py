@@ -159,6 +159,12 @@ def test_the_owners_key_goes_to_the_owner_login_and_root_takes_none_without_aski
     [
         (Command(runs=["/usr/bin/toggle"], sudo=True), ['/usr/bin/toggle ""']),
         (Command(runs=["/usr/bin/x", "a=b,c"], sudo=True), ["/usr/bin/x a\\=b\\,c"]),
+        (Command(runs=["/usr/bin/x", "a#b", "#c"], sudo=True), ["/usr/bin/x a\\#b \\#c"]),
+        (Command(runs=["/usr/bin/x", "^a", "b$"], sudo=True), ["/usr/bin/x \\^a b$"]),
+        (
+            Command(params=[LINES], runs=["/usr/bin/a=b#c", "{{lines}}"], sudo=True),
+            ["/usr/bin/a\\=b\\#c ^[0-9]+$"],
+        ),
         (
             Command(params=[MODE], runs=["/usr/bin/x", "to", "{{mode}}"], sudo=True),
             ["/usr/bin/x to a", "/usr/bin/x to b"],
