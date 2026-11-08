@@ -8,8 +8,8 @@ run](../README.md#first-run) comes first.
 
 ## Before you start
 
-The stages live in the tundravm repository, so clone it and run every command from the
-example's directory:
+Clone the tundravm repository and run every command from `examples/attested-node/`, a uv
+project on the checkout, under `uv run`, which the blocks leave out:
 
 ```console
 $ git clone https://github.com/Hyodar/tundra
