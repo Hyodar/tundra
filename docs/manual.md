@@ -15,7 +15,7 @@ not.
 |---|---|
 | The mkosi tree, `payload.efi`, `qemu.raw`, `azure.vhd`, `gcp.tar.gz`, both root layouts | built in CI from a fixture; `qemu.raw` boots through its ESP and from dm-verity; two builds match, `azure.vhd` included |
 | An `Image` and its slots | CI builds stage 1 of the example and boots its dev build; every slot compiles under mkosi in the tests |
-| The thirteen commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
+| The fourteen commands, build directories, signed manifests | `verify` checked a signed manifest from a second checkout |
 | `run --mode simulated --probe` | CI runs the fixture's dev build: every probe check passes and its page is fetched |
 | The fail-closed production profile | CI boots it without TDX: `tdx-evidence.service` refuses and no service starts |
 | `Kernel.build` | a weekly CI workflow compiles Debian's 6.12 with every target's drivers built in and boots it |
@@ -321,9 +321,9 @@ and `pattern()` the anchored regex sudo admits, which must take the same values.
 
 tundravm writes each login's Go program into the tree (`payload/tundravm-cli/<name>/`),
 which the build compiles to `/usr/libexec/tundravm/cli/<name>`, the account's shell and
-forced command. `ssh name@HOST` lists the commands, `ssh name@HOST COMMAND --help` prints
-one command's params with their domains and defaults and the argv it runs, and the program
-refuses anything else.
+forced command. `tundravm ssh INSTANCE` lists the commands, `COMMAND --help` prints one
+command's params with their domains, defaults and the argv it runs, and the program refuses
+anything else.
 
 A `sudo=True` command gets one sudoers line per argv it can produce (each flag given and
 not, each choice), at most 64 (`login-sudo-lines`). Only a development build compiles

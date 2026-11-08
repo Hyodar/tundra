@@ -9,7 +9,7 @@
 
 tundravm v2 makes mkosi accessible for confidential VMs by making the choices: Debian
 trixie, systemd, a measured UKI, Intel TDX. You declare one Python `Image`, the compiler
-writes one plain mkosi 27.1 tree, and thirteen commands take it to a locked, reproducible,
+writes one plain mkosi 27.1 tree, and fourteen commands take it to a locked, reproducible,
 signed build that runs, deploys and attests. No compatibility alias is kept. The attested
 endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
@@ -96,7 +96,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### CLI
 
-- **Breaking:** tundravm has thirteen commands, `new`, `check`, `lock`, `build`, `show`, `run`, `dev`, `deploy`, `attest`, `secrets`, `verify`, `convert` and `doctor`, and with no arguments it prints the first four, `doctor`, `new`, `check` and `dev`, and points at `--help`.
+- **Breaking:** tundravm has fourteen commands, `new`, `check`, `lock`, `build`, `show`, `run`, `dev`, `deploy`, `attest`, `secrets`, `verify`, `convert`, `doctor` and `ssh`, and with no arguments it prints the first four, `doctor`, `new`, `check` and `dev`, and points at `--help`.
 - **Breaking:** `new NAME [--ci]` writes stage 1 of the attested node, its tests and `pyproject.toml` and nothing else (the `minimal`, `service`, `cloud` and `prover` templates and `--template` are gone), and its printed loop, README, tests and workflow run as written, `ruff format` clean, ending at `tundravm dev`.
 - `new --ci` writes `.github/workflows/image.yml` (was `tundravm.yml`), whose every push checks `uv.lock`, the image, the lock and the committed tree, then builds the production profile and uploads its manifest, measurements and SBOM, and whose `v*` tag rebuilds that build on a second runner with `verify --rebuild`, attests the provenance of every released file and releases the image, the manifest, `measurements.json`, the SBOM and `SHA256SUMS`, naming `gh attestation verify` only where the attestation ran.
 - `doctor` prints one row per capability, then a `fix:` block with the one command that clears each row (`sudo apt install qemu-system-x86 ovmf`, the user-namespace sysctl, the cloud login), in `--json` too, where `build:go` never blocks and names the image's Go sources and `verify:qemu` says what a build predicts.
@@ -125,6 +125,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `attest` prints what a `simulated` verdict does not prove, and `run status` and `run mode` name the tdxs issuer an instance uses.
 - `attest --tls PORT` also connects to the `AttestedTLS` listener on that port and refuses unless its certificate carries the key the same evidence binds, printing the certificate's `sha256:` fingerprint in the text, `--json` and the receipt.
 - **Breaking:** for an image with an `OperatorKey()` volume, `secrets deliver`, `secrets unlock` and `run switch` sign each write with the key the last `attest` used (its `--identity`, recorded in the receipt, signed with `ssh-keygen -Y sign` in the namespace `tundravm-endpoint`) and refuse before sending when another key owns the instance or its volume came back without the owner the receipt names, `secrets rotate INSTANCE --identity KEY` hands the volumes to another key, and `attest`, `secrets unlock`, the receipt and `run status` name the owner's fingerprint.
+- `ssh INSTANCE [COMMAND ...]` logs in to a local or deployed instance as its image's one `Login` (`--login NAME` for another or a `ContainerSsh` user), on the receipt's address and port, with the key `attest --identity` recorded and the host key checked strictly against the `known_hosts` attest wrote, refusing without one, and `--print` prints the ssh command instead of running it.
 - `run switch INSTANCE MODE` and `deploy switch INSTANCE MODE` put a firewall mode in force over the attested endpoint, signed by the owner and refused on a production build that pins none, while `attest` prints `modes  production; N switches since boot: ...` replayed against RTMR3, a policy's `"modes": ["production"]` refuses an instance that left production, and `run status` shows the mode last seen.
 - **Breaking:** `convert --from systemd` prints an `Image` file, without `--mode`, with `hardening="<name>"` where a unit's sandbox is exactly a preset, and both conversions write double-quoted Python, broken as `ruff format` breaks it even where ruff is not installed.
 - **Breaking:** `convert --from mkosi` ends with one line per setting the tree sets, `kept` (the image's tree resolves it to the same value), `mapped` (the slot, named), `defaulted` (the opinion, named) or `refused` (why, and what to do), the files mkosi read for no selection included, in place of the `# unsupported:` lines, and `--json` prints source and report as one object.

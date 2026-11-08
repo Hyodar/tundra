@@ -59,8 +59,9 @@ $ tundravm deploy gcp --build build/flashbox/production/ID --volume data=create:
 $ tundravm attest flashbox-1 --policy POLICY --identity ~/.ssh/searcher
 $ tundravm secrets unlock flashbox-1 data
 $ tundravm secrets deliver flashbox-1 --policy POLICY metrics-aws=@aws-credentials
-$ ssh -o UserKnownHostsFile=.tundravm/instances/flashbox-1/known_hosts searcher@HOST toggle maintenance
-$ ssh -o UserKnownHostsFile=.tundravm/instances/flashbox-1/known_hosts -p 10022 bob@HOST
+$ tundravm ssh flashbox-1 toggle maintenance
+$ tundravm ssh flashbox-1 logs --lines 500
+$ tundravm ssh flashbox-1 --login bob
 ```
 
 This directory is a uv project that depends on the checkout around it, so `uv run tundravm`
@@ -70,9 +71,10 @@ is the build's `measurements.json`.
 
 The searcher attests first, so its key owns the volume and logs in both as `searcher`,
 whose program runs `status`, `logs --lines 500` (the delayed copy), `toggle` and
-`reboot`, and as `bob` inside the container. `attest` pins both host keys in the instance's `known_hosts`,
-so neither login asks to trust a key on first use. CI boots the dev profile and drives it
-this way (`.github/workflows/flashbox.yml`).
+`reboot`, and as `bob` inside the container. `attest` pins both host keys in the instance's
+`known_hosts`, so neither login asks to trust a key on first use, and `tundravm ssh --print`
+shows the long form: the ssh command with that file, the port and the key. CI boots the dev
+profile and drives it this way (`.github/workflows/flashbox.yml`).
 
 ## What tundravm still lacks
 
