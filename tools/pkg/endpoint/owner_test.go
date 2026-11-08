@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Hyodar/tundra/tools/pkg/owner"
 	"golang.org/x/crypto/ssh"
@@ -180,6 +181,50 @@ func TestRotationLeavesTheOldOwnerForTheHeader(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "ssh", authorizedKeys)); !os.IsNotExist(err) {
 		t.Fatalf("a rotation wrote authorized_keys before any SSH key was taken: %v", err)
+	}
+}
+
+func TestARotationAnswersOnceTheHeadersNameTheNewOwner(t *testing.T) {
+	a, b := newOperator(t), newOperator(t)
+	cases := []struct {
+		name   string
+		header string // "": the volume has no header this boot
+		writes bool   // disk-setup writes the new owner into the header
+		status int
+	}{
+		{"a volume without a header answers at once", "", false, http.StatusOK},
+		{"a header disk-setup rewrites", a.key(), true, http.StatusOK},
+		{"a header still naming the old owner", a.key(), false, http.StatusGatewayTimeout},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, path := owned(t, a.key())
+			f.server.headerWait = 300 * time.Millisecond
+			if c.header != "" {
+				must(t, owner.WriteFile(path+owner.HeaderSuffix, c.header))
+			}
+			stop := make(chan struct{})
+			defer close(stop)
+			if c.writes {
+				go func() {
+					for {
+						select {
+						case <-stop:
+							return
+						case <-time.After(20 * time.Millisecond):
+						}
+						if current, _ := owner.ReadFile(path); current == b.key() {
+							_ = owner.WriteFile(path+owner.HeaderSuffix, current)
+							return
+						}
+					}
+				}()
+			}
+			body := a.signed(map[string]any{"nonce": nonce(47), "key": b.key(), "key_signature": b.over()})
+			if status, said := f.write("/owner", body); status != c.status {
+				t.Fatalf("status %d, want %d: %s", status, c.status, said)
+			}
+		})
 	}
 }
 

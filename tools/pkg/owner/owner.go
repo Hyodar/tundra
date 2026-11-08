@@ -43,6 +43,12 @@ const (
 	// MismatchSuffix names the file beside a volume's owner file that says the header's
 	// token and the volume's own copy name different keys (MismatchMessage).
 	MismatchSuffix = ".mismatch"
+	// HeaderSuffix names the file beside a volume's owner file that disk-setup writes once
+	// the volume's LUKS header (and its encrypted copy, when the volume is open) names that
+	// owner, empty while the header names none; it is there only for a volume that has a
+	// header this boot. The endpoint answers a rotation only once each such file names the
+	// new key, so a kill after the answer cannot leave the old owner in a header.
+	HeaderSuffix = ".header"
 	// VolumeCopy is the owner's copy inside the encrypted volume, relative to its root
 	// (root-only): a host can rewrite the plaintext header, not this.
 	VolumeCopy = ".tundravm/owner"

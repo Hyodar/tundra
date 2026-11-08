@@ -92,6 +92,9 @@ type Server struct {
 	delivered map[string]bool
 	unlocked  map[string]bool
 	sshKey    string
+	// headerWait bounds how long a rotation waits for disk-setup to write the new owner
+	// into the headers: past its owner watcher's wait for a disk and one interval.
+	headerWait time.Duration
 }
 
 type sessionKey struct{}
@@ -161,13 +164,14 @@ func New(cfg *Config, quoter Quoter, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("making the TLS certificate: %w", err)
 	}
 	return &Server{
-		cfg:       cfg,
-		quoter:    quoter,
-		log:       log,
-		cert:      tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key},
-		spki:      spki,
-		delivered: map[string]bool{},
-		unlocked:  map[string]bool{},
+		cfg:        cfg,
+		quoter:     quoter,
+		log:        log,
+		cert:       tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key},
+		spki:       spki,
+		delivered:  map[string]bool{},
+		unlocked:   map[string]bool{},
+		headerWait: 60 * time.Second,
 	}, nil
 }
 

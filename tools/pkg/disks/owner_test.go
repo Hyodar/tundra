@@ -112,6 +112,12 @@ func TestReconcile(t *testing.T) {
 			if got, _ := owner.ReadFile(path); got != c.want {
 				t.Fatalf("boot owner = %q, want %q", got, c.want)
 			}
+			if got, err := owner.ReadFile(path + owner.HeaderSuffix); err != nil || got != c.wantHeader {
+				t.Fatalf("%s names %q (%v), want the header's %q", owner.HeaderSuffix, got, err, c.wantHeader)
+			}
+			if _, err := os.Stat(path + owner.HeaderSuffix); err != nil {
+				t.Fatalf("no %s for a volume with a header: %v", owner.HeaderSuffix, err)
+			}
 		})
 	}
 }

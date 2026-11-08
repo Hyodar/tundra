@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Hyodar/tundra/tools/pkg/owner"
 )
@@ -149,7 +150,9 @@ func (s *Server) authorize(w http.ResponseWriter, userData []byte, req Signed) (
 
 // rotate is POST /owner: the owner's signed write naming a new key, with that key's own
 // signature over the same nonce, replaces the owner in every owner file (the old one kept
-// beside it until disk-setup has written the new one into the header) and the SSH key.
+// beside it until disk-setup has written the new one into the header) and the SSH key. It
+// answers once disk-setup has written the new key into every header (and open volume's
+// copy) there is this boot, so a client never records a rotation a reboot would undo.
 func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 	var req ownerRequest
 	userData, ok := s.bound(w, r, &req, &req.Nonce)
@@ -198,8 +201,37 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 		}
 		s.sshKey = key
 	}
+	if pending := s.awaitHeaders(key); len(pending) > 0 {
+		fail(w, http.StatusGatewayTimeout, "the header of %s does not name %s after %s: this boot takes %s "+
+			"only, but a reboot now keeps %s\nfix: check tundravm-volume-owner.service; once it has written the "+
+			"header, the new key operates the instance (attest --identity NEW)", strings.Join(pending, ", "), owner.Fingerprint(key),
+			s.headerWait, owner.Fingerprint(key), owner.Fingerprint(old))
+		return
+	}
 	s.log.Info("owner rotated", "from", owner.Fingerprint(old), "to", owner.Fingerprint(key))
 	answer(w, map[string]string{"owner": owner.Fingerprint(key)})
+}
+
+// awaitHeaders waits up to headerWait until every volume with a header this boot (an
+// owner.HeaderSuffix file) has key in it and in its encrypted copy, as disk-setup records,
+// and returns the owner files still behind.
+func (s *Server) awaitHeaders(key string) []string {
+	deadline := time.Now().Add(s.headerWait)
+	for {
+		var pending []string
+		for _, path := range s.ownerFiles() {
+			if _, err := os.Stat(path + owner.HeaderSuffix); err != nil {
+				continue
+			}
+			if found, err := owner.ReadFile(path + owner.HeaderSuffix); err != nil || found != key {
+				pending = append(pending, filepath.Base(path))
+			}
+		}
+		if len(pending) == 0 || !time.Now().Before(deadline) {
+			return pending
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // writeSSHKey makes key the one authorized_keys line: root's (and KeyPath's blob), or the

@@ -246,6 +246,9 @@ func (m *Manager) formatAndMountEncrypted(ctx context.Context, md *ManagedDisk) 
 		if err := owner.WriteFile(md.Config.Owner+owner.ConfirmedSuffix, pinned); err != nil {
 			return fmt.Errorf("disk %q: %w", md.Name, err)
 		}
+		if err := writeHeaderOwner(md.Config.Owner, pinned); err != nil {
+			return fmt.Errorf("disk %q: %w", md.Name, err)
+		}
 	}
 
 	dirs := md.Config.EffectiveDirs()
@@ -430,8 +433,29 @@ func (m *Manager) getEncryptionKey(ctx context.Context, md *ManagedDisk) (string
 // reconcile brings together md's owner token and the boot's owner file: the header wins
 // while the file is empty (at boot), the file wins when the header has no token (a volume
 // made before tokens) or when it rotates from the header's key (the .from file names it).
-// Any other difference is refused. It returns the owner, "" for none.
+// Any other difference is refused. It returns the owner, "" for none, and records it as the
+// header's (owner.HeaderSuffix) once the header and an open volume's copy carry it.
 func (m *Manager) reconcile(ctx context.Context, md *ManagedDisk) (string, error) {
+	found, err := m.reconcileHeader(ctx, md)
+	if err != nil {
+		return "", err
+	}
+	return found, writeHeaderOwner(md.Config.Owner, found)
+}
+
+// writeHeaderOwner records key as what the header of the volume owned through path names:
+// an empty file for none.
+func writeHeaderOwner(path, key string) error {
+	if key != "" {
+		return owner.WriteFile(path+owner.HeaderSuffix, key)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path+owner.HeaderSuffix, nil, 0o644)
+}
+
+func (m *Manager) reconcileHeader(ctx context.Context, md *ManagedDisk) (string, error) {
 	path := md.Config.Owner
 	boot, err := owner.ReadFile(path)
 	if err != nil {

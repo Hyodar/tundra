@@ -18,7 +18,7 @@ ours, C Codex. **B** breaks a trust claim, **W** weakens it, **H** hygiene.
 | 10 | W | AC | `verify.AttestedTLS` | The certificate is checked on a throwaway connection against any bound port. | Return a `tls.Config` pinning the requested port's key. | no |
 | 11 | W | C | in-guest validators | Before NTS syncs, the host's clock judges certificates. | Order after `time-sync.target`. | yes: time-sync |
 | 12 | W | C | `verifier/*` | DEBUG TDs are `Valid`; `VerifyIdentityToken`, `VerifyIMDS` check presence only. | Refuse DEBUG; verify or drop the options. | yes: refuse DEBUG, drop tokens |
-| 13 | W | C | `rotate`, `WatchOwners` | A kill after the 200, before the header write, keeps the old owner. | Answer once header and copy are written. | no |
+| 13 | W | C | `rotate`, `WatchOwners` | A kill after the 200, before the header write, keeps the old owner. | Answer once header and copy are written. | yes: rotate waits for headers |
 | 14 | W | C | signer `signResult` | Signatures omit method, params, freshness. | Sign request, result and a challenge. | no |
 | 15 | W | C | `mountExistingEncrypted`, `checkCopy` | A failure after `luksOpen` left the mapping open. | Close on every failure. | yes |
 | 16 | H | A | `tdxs` `handleConnection` | A malformed request spun forever (sticky decoder error). | Answer once, hang up. | yes |
