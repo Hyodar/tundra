@@ -823,14 +823,18 @@ check=service:bob.service
 probe_locked /persistent/data data operator || probe_service bob.service
 check=socket:bob-nethermind-rpc.socket
 probe_active bob-nethermind-rpc.socket 'the socket must listen; systemctl status names why it does not'
-check=service:image-metrics.service
-probe_service image-metrics.service
 check=service:delay-pipe.service
 probe_locked /persistent/data data operator || probe_service delay-pipe.service
 check=service:input-proxy.service
 probe_locked /persistent/data data operator || probe_service input-proxy.service
+check=service:image-metrics.service
+probe_service image-metrics.service
 check=service:metrics-sink.service
 probe_service metrics-sink.service
+check=port:30303/tcp
+probe_locked /persistent/data data operator || probe_port tcp 30303
+check=port:30303/udp
+probe_locked /persistent/data data operator || probe_port udp 30303
 check=port:9000/tcp
 probe_locked /persistent/data data operator || probe_port tcp 9000
 check=port:9000/udp
@@ -867,12 +871,12 @@ check=egress:metadata:bob
 probe_metadata bob - 169.254.169.254 no
 check=egress:metadata:bob-nethermind-rpc
 probe_metadata bob-nethermind-rpc - 169.254.169.254 no
-check=egress:metadata:metrics-export
-probe_metadata metrics-export - 169.254.169.254 no
 check=egress:metadata:delay-pipe
 probe_metadata delay-pipe - 169.254.169.254 no
 check=egress:metadata:input-proxy
 probe_metadata input-proxy - 169.254.169.254 no
+check=egress:metadata:metrics-export
+probe_metadata metrics-export - 169.254.169.254 no
 check=egress:metadata:metrics-sink
 probe_metadata metrics-sink - 169.254.169.254 no
 check=egress:metadata:azure-complete-provisioning
@@ -894,19 +898,19 @@ probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
 check=observability:series
 probe_series 'http://127.0.0.1:9091' 'flashbox:container_alive|flashbox:container_average_cpu_is_under_80_percent|flashbox:container_oom_kills_count|flashbox:disk_free_space_is_over_10_percent|flashbox:disk_free_space_is_over_128_gb|flashbox:network_is_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'flashbox:container_alive' 'flashbox:container_average_cpu_is_under_80_percent' 'flashbox:container_oom_kills_count' 'flashbox:disk_free_space_is_over_10_percent' 'flashbox:disk_free_space_is_over_128_gb' 'flashbox:network_is_up'
 check=observability:no-wait
-probe_nowait metrics-export.service -- tdxs.service nethermind.service lighthouse.service bob.service bob-nethermind-rpc.service image-metrics.service delay-pipe.service input-proxy.service metrics-sink.service
+probe_nowait metrics-export.service -- tdxs.service nethermind.service lighthouse.service bob.service bob-nethermind-rpc.service delay-pipe.service input-proxy.service image-metrics.service metrics-sink.service
 check=hardening:nethermind.service
 probe_hardening nethermind.service 2.7 dotnet
 check=hardening:lighthouse.service
 probe_hardening lighthouse.service 2.5 static
 check=hardening:bob-nethermind-rpc.service
 probe_hardening bob-nethermind-rpc.service 2.5 static
-check=hardening:metrics-export.service
-probe_hardening metrics-export.service 2.5 static
 check=hardening:delay-pipe.service
 probe_hardening delay-pipe.service 2.5 static
 check=hardening:input-proxy.service
 probe_hardening input-proxy.service 2.5 static
+check=hardening:metrics-export.service
+probe_hardening metrics-export.service 2.5 static
 check=hardening:metrics-sink.service
 probe_hardening metrics-sink.service 2.5 static
 check=kernel:symbols

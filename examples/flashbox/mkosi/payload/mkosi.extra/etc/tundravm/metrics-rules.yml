@@ -8,10 +8,10 @@ groups:
       - record: flashbox:container_average_cpu_is_under_80_percent
         expr: "(avg_over_time(flashbox:container_cpu_ratio[15m]) < bool 0.8) * (max_over_time(flashbox:container_cpu_ratio[10m] offset 5m) < bool 0.7)"
       - record: flashbox:container_oom_kills_count
-        expr: node_vmstat_oom_kill
+        expr: "tundravm_unit_oom_kills_total{unit=\"bob.service\"}"
       - record: flashbox:disk_free_space_is_over_10_percent
-        expr: "(node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) > bool 0.1"
+        expr: "(1 - node_filesystem_avail_bytes{mountpoint=\"/persistent/data\"} / node_filesystem_size_bytes{mountpoint=\"/persistent/data\"}) < bool 0.9"
       - record: flashbox:disk_free_space_is_over_128_gb
         expr: "node_filesystem_avail_bytes{mountpoint=\"/persistent/data\"} > bool 137438953472"
       - record: flashbox:network_is_up
-        expr: "(sum(rate(node_network_receive_bytes_total{device!~\"lo\"}[5m])) + sum(rate(node_network_transmit_bytes_total{device!~\"lo\"}[5m]))) > bool 0"
+        expr: "(sum(rate(node_network_receive_bytes_total{device!~\"lo|ve-.*\"}[5m])) + sum(rate(node_network_transmit_bytes_total{device!~\"lo|ve-.*\"}[5m]))) > bool 0"

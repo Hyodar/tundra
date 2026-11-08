@@ -21,7 +21,7 @@
           "word": "/persistent/data/delayed/output.log"
         }
       ],
-      "root": true,
+      "root": false,
       "modes": []
     },
     {

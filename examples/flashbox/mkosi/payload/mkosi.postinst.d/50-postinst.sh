@@ -13,9 +13,9 @@ mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse
 mkosi-chroot useradd --system --shell /usr/sbin/nologin lighthouse-ready
 mkosi-chroot useradd --system --shell /usr/sbin/nologin --uid 60706 --gid bob bob
 mkosi-chroot useradd --system --shell /usr/sbin/nologin bob-nethermind-rpc
-mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
 mkosi-chroot useradd --system --shell /usr/sbin/nologin delay-pipe
 mkosi-chroot useradd --system --shell /usr/sbin/nologin input-proxy
+mkosi-chroot useradd --system --shell /usr/sbin/nologin metrics-export
 mkosi-chroot useradd --shell /usr/bin/login-menu searcher
 mkosi-chroot systemctl enable azure-complete-provisioning.service
 mkosi-chroot systemctl enable gcp-hostname.service
@@ -34,11 +34,11 @@ mkosi-chroot systemctl enable lighthouse-ready.service
 mkosi-chroot systemctl enable bob.service
 mkosi-chroot systemctl enable bob-ssh-keys.service
 mkosi-chroot systemctl enable bob-nethermind-rpc.socket
+mkosi-chroot systemctl enable delay-pipe.service
+mkosi-chroot systemctl enable input-proxy.service
 mkosi-chroot systemctl enable image-metrics.service
 mkosi-chroot systemctl enable prometheus-node-exporter.service
 mkosi-chroot systemctl enable metrics-export.service
-mkosi-chroot systemctl enable delay-pipe.service
-mkosi-chroot systemctl enable input-proxy.service
 mkosi-chroot systemctl enable tundravm-volume-owner.service
 mkosi-chroot systemctl enable tundravm-endpoint.service
 mkosi-chroot systemctl enable tundravm-generated-jwt.service

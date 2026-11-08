@@ -1,51 +1,30 @@
 """flashbox: flashbots-images' flashbox-l1, the BoB searcher sandbox, as one image.
 
-The image runs an L1 node, Nethermind and Lighthouse on mainnet, beside the searcher's
-container. Both keep their state on a volume that only the searcher's key opens. The
-firewall boots into production mode. In maintenance mode it also opens the container's
-SSH. The searcher switches between the two modes, and every switch lands in RTMR3. Only
-recorded health booleans leave the image, signed for Amazon Managed Prometheus.
-
-The execution client runs on the host, not in the container as in flashbox: the engine
-API's jwt cannot be bound into a container, so only a host client can share it with
-Lighthouse. The searcher reads the client's RPC at the same loopback address.
+An L1 node, Nethermind and Lighthouse on mainnet, runs beside the searcher's container,
+and both keep their state on one volume whose unlock the searcher's key signs. The
+firewall boots into production mode; maintenance also opens the container's SSH, and
+every switch lands in RTMR3. What leaves the image is the records the health rules
+export and the image's identity series, signed for Amazon Managed Prometheus.
 """
 
+from components.health import health_rules
 from components.lighthouse import Lighthouse
 from components.nethermind import Nethermind
+from components.searcher import Searcher
 
-from tundravm import (
-    Debian,
-    DebianConfig,
-    Image,
-    Kernel,
-    KernelFragment,
-    RootFS,
-    Service,
-)
+from tundravm import Debian, DebianConfig, Image, Kernel, KernelFragment, RootFS
 from tundravm.components.access import Command, DevAccess, Int, Login, SshAccess, Sudo
-from tundravm.components.container import Bind, Container, ContainerSsh
-from tundravm.components.network import Egress, Firewall, Host, Mode, Network
-from tundravm.components.observability import (
-    Observability,
-    PrometheusRemoteWrite,
-    Proxy,
-    RecordingRule,
-    SigV4,
-)
-from tundravm.ports import TCP, UDP
+from tundravm.components.network import Egress, Firewall, Mode, Network
+from tundravm.components.observability import Observability, PrometheusRemoteWrite, Proxy, SigV4
 from tundravm.secrets import Generated, Secret
-from tundravm.sources import Git, GoBinary, Local
+from tundravm.sources import Git
 from tundravm.storage import OperatorKey, Volume
-
-SSH_PORT = 10022
-INPUT_UDP = 27017
-INPUT_TCP = TCP(27018)
-DELAY = 300
 
 data = Volume("data", unlock=OperatorKey())
 jwt = Generated("jwt")
-nethermind = Nethermind(jwt=jwt, config="mainnet", state=data.directory("nethermind"))
+nethermind = Nethermind(
+    jwt=jwt, config="mainnet", state=data.directory("nethermind"), expose_p2p=True
+)
 lighthouse = Lighthouse(
     execution=nethermind.engine_api,
     jwt=jwt,
@@ -57,129 +36,37 @@ lighthouse = Lighthouse(
     disable_optimistic_finalized_sync=True,
     state_cache_size=32,
 )
-
-TX_STREAM = Host("tx.tee-searcher.flashbots.net", ["3.149.14.12", "3.136.107.142"], port=443)
-BUNDLES = Host("backruns.tee-searcher.flashbots.net", ["18.221.59.61", "3.15.88.156"], port=443)
-BUILDERNET = [
-    Host(
-        f"{node}.nodes.buildernet.org", [address], port=443, aliases=[region, "rpc.buildernet.org"]
-    )
-    for node, address, region in [
-        ("fb-om-use1-00", "200.225.47.181", "direct-us.buildernet.org"),
-        ("fb-om-use1-01", "200.225.47.183", "direct-us.buildernet.org"),
-        ("fb-om-euw1-00", "198.203.202.53", "direct-eu.buildernet.org"),
-        ("fb-om-euw1-01", "198.203.202.55", "direct-eu.buildernet.org"),
-        ("fb-gcp-ane1-00", "34.104.157.101", "direct-ap.buildernet.org"),
-        ("fb-gcp-ane1-01", "35.213.62.127", "direct-ap.buildernet.org"),
-    ]
-]
-
-input_dir = data.directory("input")
-# The searcher's login reads the delayed log through its own group, without root.
-delayed = data.directory("delayed", group="searcher")
-searcher_state = data.directory("searcher")
-searcher = Container(
-    "bob",
-    packages=["ca-certificates", "curl", "socat"],
-    state=searcher_state,
-    ssh=ContainerSsh(port=SSH_PORT, owner=True),
-    expose=[UDP(INPUT_UDP)],
-    egress=Egress(hosts=[BUNDLES]),
-    modes={
-        "production": Egress(hosts=[TX_STREAM, *BUILDERNET]),
-        "maintenance": Egress(
-            ports=[TCP(53), UDP(53), TCP(80), TCP(443), TCP(853)],
-        ),
-    },
-    requires=[nethermind.rpc],
-    binds=[Bind(input_dir, writable=True)],
+searcher = Searcher(
+    rpc=nethermind.rpc,
+    state=data.directory("searcher"),
+    input=data.directory("input"),
+    # The searcher's login reads the delayed log through its own group, without root.
+    delayed=data.directory("delayed", group="searcher"),
+    delay=300,
 )
 
-channels = Local("channels")
-delay_pipe = Service(
-    "delay-pipe",
-    [
-        GoBinary(channels, package="./cmd/delay-pipe"),
-        searcher_state / "bob.log",
-        delayed / "output.log",
-        DELAY,
-    ],
-    groups=[searcher.group],
-    state=delayed,
-    description=f"Copy the searcher's log to output.log, each line {DELAY} seconds late",
-)
-input_proxy = Service(
-    "input-proxy",
-    [
-        GoBinary(channels, package="./cmd/input-proxy"),
-        INPUT_TCP.address,
-        input_dir / "input.sock",
-    ],
-    groups=[searcher.group],
-    state=input_dir,
-    expose=[INPUT_TCP],
-    description=f"Carry input on {INPUT_TCP} into the searcher's socket, one way",
-)
-
-firewall = Firewall(
-    modes={
-        "production": Mode(),
-        "maintenance": Mode(ingress=[searcher.ssh, TCP(30303), UDP(30303)]),
-    }
-)
+firewall = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[searcher.ssh])})
 ssh = SshAccess(
     login=Login(
         "searcher",
         owner=True,
         commands={
             "status": firewall.status,
-            "logs": Sudo(
-                "/usr/bin/tail", "--lines", Int("lines", 1, 10000), delayed / "output.log"
-            ),
+            "logs": Command("/usr/bin/tail", "--lines", Int("lines", 1, 10000), searcher.logs),
             "toggle": firewall.switch,
             "reboot": Sudo("/usr/bin/systemctl", "reboot"),
             "shell": Command("/usr/bin/bash", dev=True),
         },
     )
 )
-
-RULES = [
-    RecordingRule(
-        "flashbox:container_alive", f'max(tundravm_unit_active{{unit="{searcher.unit}"}})'
-    ),
-    RecordingRule(
-        "flashbox:container_cpu_ratio",
-        f'sum(rate(tundravm_unit_cpu_seconds_total{{unit="{searcher.unit}"}}[5m]))'
-        ' / count(node_cpu_seconds_total{mode="idle"})',
-        export=False,
-    ),
-    RecordingRule(
-        "flashbox:container_average_cpu_is_under_80_percent",
-        "(avg_over_time(flashbox:container_cpu_ratio[15m]) < bool 0.8)"
-        " * (max_over_time(flashbox:container_cpu_ratio[10m] offset 5m) < bool 0.7)",
-    ),
-    RecordingRule("flashbox:container_oom_kills_count", "node_vmstat_oom_kill"),
-    RecordingRule(
-        "flashbox:disk_free_space_is_over_10_percent",
-        '(node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})'
-        " > bool 0.1",
-    ),
-    RecordingRule(
-        "flashbox:disk_free_space_is_over_128_gb",
-        f'node_filesystem_avail_bytes{{mountpoint="{data.mount}"}} > bool {128 * 1024**3}',
-    ),
-    RecordingRule(
-        "flashbox:network_is_up",
-        '(sum(rate(node_network_receive_bytes_total{device!~"lo"}[5m]))'
-        ' + sum(rate(node_network_transmit_bytes_total{device!~"lo"}[5m]))) > bool 0',
-    ),
-]
 metrics = PrometheusRemoteWrite(
     url="https://metrics.flashbox.example/api/v1/write",
     credential=SigV4("us-east-2", Secret("metrics-aws")),
-    rules=RULES,
+    rules=health_rules(searcher, data),
 )
 
+# flashbots-images builds gregkh's 6.18.57 on the config of Debian's 6.18.15 backport;
+# olddefconfig gives each option added since then its default.
 kernel = Kernel.build(
     "6.18.57",
     Git("https://github.com/gregkh/linux", "2ff600d29ee478d0a8d46ef8a58afb5e038fe692"),
@@ -190,11 +77,7 @@ kernel = Kernel.build(
     ),
     fragments=[
         KernelFragment(
-            {
-                "CONFIG_DEFAULT_FQ": "y",
-                "CONFIG_TCP_CONG_BBR": "y",
-                "CONFIG_DEFAULT_BBR": "y",
-            },
+            {"CONFIG_DEFAULT_FQ": "y", "CONFIG_TCP_CONG_BBR": "y", "CONFIG_DEFAULT_BBR": "y"},
             reason="fq paces TCP and BBR is flashbox's congestion control",
         )
     ],
@@ -206,7 +89,6 @@ image = Image(
     base=Debian("trixie", snapshot="20261018T143805Z"),
     sysctl={"vm.max_map_count": 2097152},
     components=[nethermind, lighthouse, searcher, ssh, firewall],
-    services=[delay_pipe, input_proxy],
     network=Network(egress=Egress()),
     kernel=kernel,
     rootfs=RootFS.verity(),
