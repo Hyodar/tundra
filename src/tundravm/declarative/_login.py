@@ -46,6 +46,9 @@ _MATCH_CALL = re.compile(rf"Match\(value, ({_GO_LITERAL})\)")
 _SAFE_ESCAPES = frozenset("dws")
 SUDO_LINES = 64
 """The most sudoers lines one ``sudo=True`` command may take (``login-sudo-lines``)."""
+SUDO_LINE_LENGTH = 1024
+"""The longest sudoers command one line may hold, sudo's limit on a regular expression
+(``login-sudo-line-length``)."""
 
 
 class ParamType(ABC):
@@ -497,9 +500,10 @@ class Command:
     *sudo* runs it as root through ``sudo -n``, which ``/etc/sudoers.d/<login>`` admits for
     exactly the argvs it can produce: each flag given and not, one line per choice, a
     type's pattern for any other value (named once), at most 64 lines
-    (``login-sudo-lines``). *modes* offers it in those ``Firewall(modes=)`` modes only;
-    *dev* makes it exist in development builds only, the profiles whose ``production=`` is
-    ``False``. *help* is its line in the listing.
+    (``login-sudo-lines``) of at most 1024 characters each (``login-sudo-line-length``).
+    *modes* offers it in those ``Firewall(modes=)`` modes only; *dev* makes it exist in
+    development builds only, the profiles whose ``production=`` is ``False``. *help* is
+    its line in the listing.
     """
 
     params: tuple[CommandParam, ...]
@@ -724,6 +728,14 @@ class Command:
                 f"{where} produces {count} argvs, one sudoers line each (login-sudo-lines).",
                 hint=f"Keep it to {SUDO_LINES}: fewer flags or choices, or split the command.",
                 context={"rule": "login-sudo-lines"},
+            )
+        longest = max(self.sudoers(), key=len)
+        if len(longest) > SUDO_LINE_LENGTH:
+            raise ValidationError(
+                f"{where} has a sudoers line of {len(longest)} characters, which sudo refuses "
+                f"at run time past {SUDO_LINE_LENGTH} (login-sudo-line-length).",
+                hint="Shorten its literals or offer fewer choices.",
+                context={"rule": "login-sudo-line-length"},
             )
 
     def sudoers(self) -> list[str]:

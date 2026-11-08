@@ -227,6 +227,7 @@ def test_the_owners_key_goes_to_the_owner_login_and_root_takes_none_without_aski
             ["/usr/bin/x -f -v", '/usr/bin/x ""'],
         ),
         (Command(runs=["/usr/bin/x"], modes=["maintenance"], sudo=True), ['/usr/bin/x ""']),
+        (Command(runs=["/x", "b" * 1021], sudo=True), ["/x " + "b" * 1021]),
         (Command(runs=["/usr/bin/x"]), []),
     ],
 )
@@ -579,6 +580,11 @@ def _choices(count: int) -> CommandParam:
                 Checked('Match(value, "[0-9-]+")'),
             )
         ),
+        (
+            lambda: Command(params=[LINES], runs=["/x", "{{lines}}", "a" * 1020], sudo=True),
+            "login-sudo-line-length",
+        ),
+        (lambda: Command(runs=["/x", "b" * 1022], sudo=True), "login-sudo-line-length"),
         (lambda: CommandParam("n", type=int), "takes min= and max="),
         (lambda: CommandParam("n", type=int, min=9, max=1), "min first"),
         (lambda: CommandParam("n"), "takes choices="),
