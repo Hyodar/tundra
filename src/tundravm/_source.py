@@ -42,6 +42,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from ._go_toolchain import GO_TOOLCHAIN_MODULE, fetch_go
 from ._secret_scan import redact, url_credential
 from .build_cache import Build, Cache, CacheDecl, CacheDir, CacheFile
 from .errors import LockfileError, SourceError, StateError, TdxError, ValidationError
@@ -76,8 +77,6 @@ BUILD_MARKER = "# tundravm build: "
 (:meth:`SourceBuild.marker`)."""
 _NETWORK_TIMEOUT = 60.0
 """Seconds :func:`default_resolver` waits on ``git ls-remote`` or a stalled download."""
-GO_TOOLCHAIN_MODULE = "golang.org/toolchain"
-"""The module the Go proxy serves each Go release as, ``@v0.0.1-<go>.linux-amd64``."""
 GO_TOOLCHAIN_LOCAL = "local"
 """``GOTOOLCHAIN`` of a source whose go.mod predates toolchain modules: Debian's ``go``."""
 GO_MOD_TOOLCHAIN = "<go.mod>"
@@ -587,8 +586,9 @@ class GoBuild:
     ``reproducible`` adds ``-buildvcs=false``, ``CGO_ENABLED=0`` (unless ``cgo``
     or ``env`` sets it) and ``SOURCE_DATE_EPOCH`` (the build's, else ``0``); ``None``
     (the default) is on. The build runs the Go release the source's go.mod names
-    (:func:`go_toolchain`), which ``tundravm build`` fetches on the host with the modules;
-    ``env`` cannot set ``GOTOOLCHAIN``.
+    (:func:`go_toolchain`), which ``tundravm build`` fetches on the host with the modules
+    (with the host's ``go``, else with that release fetched itself); ``env`` cannot set
+    ``GOTOOLCHAIN``.
     """
 
     output: str
@@ -604,7 +604,8 @@ class GoBuild:
 
     kind: Literal["go"] = field(default="go", init=False, repr=False)
     tool: ClassVar[str] = "go"
-    """The host executable ``tundravm build`` prefetches the dependencies with."""
+    """The executable ``tundravm build`` prefetches the dependencies with: the host's, else
+    the release the go.mod names, fetched (``tundravm._go_toolchain.fetch_go``)."""
     deps: ClassVar[str] = "go"
     """The dependency cache, ``<out>/.sources/deps/go``: a ``GOMODCACHE``."""
 
@@ -622,9 +623,10 @@ class GoBuild:
     ) -> tuple[tuple[str, ...], dict[str, str]]:
         """``go mod download`` into the module cache *cache* with the Go *toolchain*.
 
-        ``GOTOOLCHAIN=<toolchain>`` makes the host ``go``, whatever its version, switch to
-        that release, which it downloads into *cache* when absent. ``-modcacherw`` keeps
-        the cache removable without ``go clean -modcache``.
+        ``GOTOOLCHAIN=<toolchain>`` makes a host ``go`` of another version switch to that
+        release, which it downloads into *cache* when absent; without a host ``go`` the
+        prefetch runs that release, fetched, under ``GOTOOLCHAIN=local``. ``-modcacherw``
+        keeps the cache removable without ``go clean -modcache``.
         """
         env = {
             **self.env,
@@ -652,7 +654,7 @@ class GoBuild:
     def _toolchain_env(record: str) -> str:
         """The export selecting the toolchain the prefetch wrote to *record*.
 
-        Without a record (no host ``go``), ``local``: Debian's ``go``, which refuses a
+        Without a record (never prefetched), ``local``: Debian's ``go``, which refuses a
         go.mod newer than itself instead of downloading a toolchain.
         """
         return f'export GOTOOLCHAIN="$(cat {record} 2>/dev/null || echo {GO_TOOLCHAIN_LOCAL})"'
@@ -1962,31 +1964,34 @@ def host_go_version() -> str | None:
     return words[2] if completed.returncode == 0 and len(words) > 2 else None
 
 
-def require_host_go(builds: Iterable[NamedSource]) -> None:
-    """Refuse *builds* holding a Go build when the host has no ``go`` 1.21+ to prefetch it.
+def _go_prefetcher(build: SourceBuild, name: str) -> tuple[str, dict[str, str]]:
+    """Which ``go`` prefetches *build*, whose go.mod names release *name*, and its environment.
 
-    Raised before anything is fetched, since the offline sandbox cannot build a Go source
-    whose toolchain and modules the host did not fetch.
+    The host's ``go`` when it can switch to *name* (1.21 or newer), or any host ``go`` for
+    a go.mod older than toolchain modules; else *name* itself, fetched and checked against
+    the checksum database (``tundravm._go_toolchain.fetch_go``), first on ``PATH`` under
+    ``GOTOOLCHAIN=local``. A go.mod older than Go 1.21 without a host ``go`` raises
+    ``SourceError``: no toolchain module serves it.
     """
-    go = [b.key for b in builds if isinstance(b, SourceBuild) and isinstance(b.build, GoBuild)]
-    if not go:
-        return
     found = host_go_version()
     key = _go_version_key(found.removeprefix("go")) if found else None
-    if key is not None and key >= _GO_FIRST_TOOLCHAIN:
-        return
-    names = ", ".join(repr(name) for name in go)
-    noun = f"Go source build {names} needs" if len(go) == 1 else f"Go source builds {names} need"
-    have = "there is no go on PATH" if found is None else f"the host's go is {found}"
-    raise StateError(
-        f"{noun} Go 1.21 or newer on the host to fetch the toolchain and modules each "
-        f"go.mod names: {have}.",
-        hint=(
-            "Install Go 1.21 or newer (the Debian package golang, or https://go.dev/dl), "
-            "then check the host with `tundravm doctor --for build`."
-        ),
-        context={"sources": ", ".join(go), "go": found or "none"},
-    )
+    switches = key is not None and key >= _GO_FIRST_TOOLCHAIN
+    if found is not None and (switches or name == GO_TOOLCHAIN_LOCAL):
+        return f"host {found}", {}
+    if name == GO_TOOLCHAIN_LOCAL:
+        reason = "its go.mod names Go older than 1.21, which no toolchain module serves"
+        raise SourceError(
+            f"Cannot prefetch Go source build {build.key!r}: {reason}, and the host has no go.",
+            source=build.source.describe(),
+            reason=reason,
+            hint=(
+                "Install golang (sudo apt install golang), or build a revision whose go.mod "
+                "names Go 1.21 or newer."
+            ),
+        )
+    root = fetch_go(name)
+    path = os.pathsep.join((str(root / "bin"), os.environ.get("PATH", "")))
+    return f"fetched {name}", {"GOTOOLCHAIN": GO_TOOLCHAIN_LOCAL, "PATH": path}
 
 
 def _go_toolchain_module(name: str) -> str:
@@ -2023,11 +2028,12 @@ def _go_toolchain_entries(name: str, cache: Path) -> tuple[dict[str, object], di
 def _fetch_go_toolchain(
     build: SourceBuild, name: str, workdir: Path, cache: Path, env: Mapping[str, str]
 ) -> tuple[dict[str, object], dict[str, str]]:
-    """Download Go release *name* into the module cache *cache* with the host ``go``.
+    """Download Go release *name* into the module cache *cache* with the prefetching ``go``.
 
-    ``go mod download golang.org/toolchain@...`` under ``GOTOOLCHAIN=<name>``: a host
-    ``go`` of another version switches to *name* first, which downloads it; one of that
-    version downloads the module itself. Either way the checksum database vouches for it.
+    ``go mod download golang.org/toolchain@...`` under *env* (:func:`_go_prefetcher`): a
+    host ``go`` of another version switches to *name* first, which downloads it; *name*
+    itself (the host's, or the one tundravm fetched) downloads the module. Either way the
+    checksum database vouches for it.
     Returns :func:`_go_toolchain_entries`; a failure raises ``SourceError`` naming the
     release, its module and the fix.
     """
@@ -2789,9 +2795,11 @@ def prefetch_deps(
 
     The host's toolchain (``go mod download``, ``cargo fetch --locked``, ``dotnet
     restore --packages``) runs as the invoking user in a scratch copy of
-    *checkout* (subdirectory included), so the checkout stays clean, after the host's
-    ``rustup`` installed the toolchain a Cargo source pins into ``<root>/deps/rustup``
-    (:func:`rust_toolchain`; its own ``cargo`` fetches) or the .NET SDK the lock pins as
+    *checkout* (subdirectory included), so the checkout stays clean, after the Go
+    release the go.mod names was fetched when the host has no ``go`` 1.21+
+    (:func:`_go_prefetcher`), the host's ``rustup`` installed the toolchain a Cargo
+    source pins into ``<root>/deps/rustup`` (:func:`rust_toolchain`; its own ``cargo``
+    fetches) or the .NET SDK the lock pins as
     *sdk* (else the one the checkout's ``global.json`` resolves to now,
     :func:`lock_dotnet_sdk`) was unpacked into ``<root>/deps/dotnet`` (its own
     ``dotnet`` restores), and a marker (:meth:`SourceBuild.deps_marker`) records the
@@ -2814,7 +2822,7 @@ def prefetch_deps(
     incomplete = problem not in (None, NOT_PREFETCHED)
     rust = None if offline else checkout_rust_toolchain(build, checkout)
     tool = recipe.tool if rust is None else "rustup"
-    fetched_tool = isinstance(recipe, DotnetBuild)
+    fetched_tool = isinstance(recipe, DotnetBuild | GoBuild)
     if offline or (not fetched_tool and shutil.which(tool) is None):
         if incomplete:
             return f"{recipe.deps}: incomplete ({problem})"
@@ -2824,6 +2832,7 @@ def prefetch_deps(
     scratch = Path(tempfile.mkdtemp(prefix=f".{build.pin_dir(pin)}.", dir=deps))
     toolchain: dict[str, object] | None = None
     files: dict[str, str] = {}
+    prefetcher: str | None = None
     try:
         tree = scratch / "tree"
         shutil.copytree(
@@ -2837,6 +2846,8 @@ def prefetch_deps(
             found = _go_mod_file(workdir, tree)
             name = go_toolchain(found.read_text(encoding="utf-8") if found else "")
             argv, env = recipe._prefetch(str(cache.resolve()), name)
+            prefetcher, selected = _go_prefetcher(build, name)
+            env.update(selected)
             if name == GO_TOOLCHAIN_LOCAL:
                 toolchain, _ = _go_toolchain_entries(name, cache)
             else:
@@ -2889,6 +2900,8 @@ def prefetch_deps(
     }
     if toolchain is not None:
         record["toolchain"] = toolchain
+    if prefetcher is not None:
+        record["prefetched_by"] = prefetcher
     if files:
         record["toolchain_contents"] = files
     text = json.dumps(record, indent=2, sort_keys=True) + "\n"
@@ -3403,7 +3416,6 @@ __all__ = [
     "manifest_digest",
     "prefetch_deps",
     "read_dotnet_manifest",
-    "require_host_go",
     "require_host_rustup",
     "resolve_dotnet_sdk",
     "resolve_pins",

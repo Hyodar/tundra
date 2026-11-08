@@ -133,5 +133,4 @@ class FakeSources:
         setattr(lifecycle, "fetch_source", self.fetch_source)
         setattr(lifecycle, "prefetch_deps", self.prefetch_deps)
         setattr(lifecycle, "lock_dotnet_sdk", self.lock_dotnet_sdk)
-        setattr(lifecycle, "require_host_go", lambda builds: None)
         return self

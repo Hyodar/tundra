@@ -834,9 +834,9 @@ def build_parser() -> argparse.ArgumentParser:
         "One row per capability: ready, blocked, optional, unavailable or unsupported, then\n"
         "a fix: block, the one command that clears each row (apt packages on Debian or\n"
         "Ubuntu). --for limits it to one: build, run (simulated), tdx, azure, gcp. Exit 1\n"
-        "when a build row (or, with --for, a row of that area) is blocked. build:go blocks\n"
-        "without go, image or not (every image's Tdxs is Go); build:rustup only when IMAGE\n"
-        "has a Cargo source that pins a Rust toolchain.",
+        "when a build row (or, with --for, a row of that area) is blocked. build:go never\n"
+        "blocks (without go, tundravm fetches the toolchain each go.mod names); build:rustup\n"
+        "blocks only when IMAGE has a Cargo source that pins a Rust toolchain.",
         image,
         as_json,
     )

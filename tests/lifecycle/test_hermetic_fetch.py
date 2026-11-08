@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -161,7 +162,7 @@ def _toolchain_download(argv: Sequence[str], env: Mapping[str, str]) -> bool:
     """Fill the module cache as ``go mod download golang.org/toolchain@...`` would."""
     if tuple(argv[:3]) != ("go", "mod", "download") or len(argv) != 4:
         return False
-    assert argv[3] == TOOLCHAIN_MODULE and env["GOTOOLCHAIN"] == TOOLCHAIN
+    assert argv[3] == TOOLCHAIN_MODULE and env["GOTOOLCHAIN"] in (TOOLCHAIN, "local")
     cache = Path(env["GOMODCACHE"])
     (cache / TOOLCHAIN_MODULE / "bin").mkdir(parents=True, exist_ok=True)
     (cache / TOOLCHAIN_MODULE / "bin" / "go").write_text("go\n", encoding="utf-8")
@@ -308,35 +309,40 @@ def test_the_toolchain_is_the_one_go_mod_names(go_mod: str, toolchain: str) -> N
 
 
 @pytest.mark.parametrize(
-    ("host", "refused"),
-    [(None, "there is no go on PATH"), ("go1.19.8", "the host's go is go1.19.8"), (HOST_GO, None)],
+    ("host", "prefetcher"),
+    [
+        (None, f"fetched {TOOLCHAIN}"),
+        ("go1.19.8", f"fetched {TOOLCHAIN}"),
+        (HOST_GO, "host go1.24.4"),
+    ],
     ids=["missing", "too-old", "fine"],
 )
-def test_a_go_source_needs_go_1_21_on_the_host_before_anything_runs(
+def test_without_a_host_go_that_switches_the_release_go_mod_names_prefetches_itself(
     tmp_path: Path,
     go_repo: tuple[str, str],
     monkeypatch: pytest.MonkeyPatch,
     host: str | None,
-    refused: str | None,
+    prefetcher: str,
 ) -> None:
+    """A host go 1.21+ prefetches, switching to the go.mod's release; without one, that
+    release is fetched and runs first on PATH, never switching again; the marker says which."""
     url, first = go_repo
     tools = _GoModules(monkeypatch, ["go"])
     monkeypatch.setattr(_source, "host_go_version", lambda: host)
+    fetched = tmp_path / "toolchains" / TOOLCHAIN
+    monkeypatch.setattr(_source, "fetch_go", lambda name: fetched if name == TOOLCHAIN else None)
     recipe = _recipe(_build(url, "go"))
-    if refused is None:
-        (fetched,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
-        assert fetched.deps == "go: prefetched"
-        return
-    with pytest.raises(StateError) as error:
-        fetch(recipe, lock=_locked(recipe, first), build=tmp_path)
-    message = str(error.value)
-    assert (
-        f"Go source build 'tool' needs Go 1.21 or newer on the host to fetch the toolchain "
-        f"and modules each go.mod names: {refused}." in message
-    )
-    assert "golang" in message and "https://go.dev/dl" in message
-    assert "tundravm doctor --for build" in message
-    assert tools.calls == [] and not (tmp_path / ".sources").exists()
+    (done,) = fetch(recipe, lock=_locked(recipe, first), build=tmp_path / "out")
+    assert done.deps == "go: prefetched"
+    (marker,) = (tmp_path / "out" / ".sources" / "deps").glob("*.go.json")
+    assert json.loads(marker.read_text(encoding="utf-8"))["prefetched_by"] == prefetcher
+    for argv, _, env in tools.calls:
+        assert argv[0] == "go"
+        if host == HOST_GO:
+            assert env["GOTOOLCHAIN"] == TOOLCHAIN and env["PATH"] == os.environ["PATH"]
+        else:
+            assert env["GOTOOLCHAIN"] == "local"
+            assert env["PATH"].split(os.pathsep)[0] == str(fetched / "bin")
 
 
 def test_a_toolchain_that_is_not_a_release_is_refused() -> None:

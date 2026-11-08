@@ -114,7 +114,7 @@ def test_the_ci_runner_installs_what_doctor_asks_of_a_bare_ubuntu_host() -> None
     workflow = render_workflow()
     (installs,) = {line.strip() for line in workflow.splitlines() if "apt-get install" in line}
     commands = [fix.split(" (")[0] for fix in fixes if fix]
-    assert len(commands) == 4
+    assert len(commands) == 2
     for command in commands:
         if command.startswith("sudo apt install "):
             assert set(command.split()[3:]) <= set(installs.split()[5:]), command

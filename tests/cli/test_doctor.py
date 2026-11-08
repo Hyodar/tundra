@@ -15,7 +15,7 @@ import pytest
 from tests.helpers import run_main
 from tundravm.backends.local_linux import DEBIAN_KEYRING
 from tundravm.capabilities import (
-    GO_FIX,
+    GO_ABSENT,
     GO_PURPOSE,
     RUSTUP_PURPOSE,
     Host,
@@ -119,7 +119,7 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
 
     assert rows == [
         f"build:x86-64     ready (mkosi {MKOSI_PIN.version}, user namespaces)",
-        f"build:go         ready (go1.24.4, which {GO_PURPOSE})",
+        f"build:go         {ROW_GO}",
         f"build:rustup     ready (rustup 1.28.2, which {RUSTUP_PURPOSE})",
         "run:simulated    ready (qemu 9.2.0, OVMF /usr/share/OVMF/OVMF_CODE_4M.fd, KVM)",
         "run:tdx          unavailable: no Intel TDX host: kvm_intel tdx is not enabled",
@@ -135,17 +135,26 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
     assert _fixes(host) == {}
 
 
-NO_GO = f"no go on PATH, which {GO_PURPOSE}"
+NO_GO = f"no go on PATH: {GO_ABSENT}"
 NO_RUSTUP = f"no rustup on PATH, which {RUSTUP_PURPOSE}"
 NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
+ROW_GO = f"ready (go1.24.4, which {GO_PURPOSE})"
 
 
 @pytest.mark.parametrize(
     ("tool", "version", "needs", "row", "code"),
     [
-        ("go", None, NEEDS_BOTH, f"blocked: {NO_GO}", EXIT_FAILURE),
+        ("go", None, NEEDS_BOTH, f"optional: {NO_GO}", EXIT_OK),
+        (
+            "go",
+            "go version go1.19.8 linux/amd64",
+            NEEDS_BOTH,
+            f"optional: go1.19.8 predates toolchain switching (Go 1.21): {GO_ABSENT}",
+            EXIT_OK,
+        ),
+        ("go", "go version go1.24.4 linux/amd64", NEEDS_BOTH, ROW_GO, EXIT_OK),
         ("rustup", None, NEEDS_BOTH, f"blocked: {NO_RUSTUP}", EXIT_FAILURE),
-        ("go", None, None, f"blocked: {NO_GO}", EXIT_FAILURE),
+        ("go", None, None, f"optional: {NO_GO}", EXIT_OK),
         ("rustup", None, None, f"optional: {NO_RUSTUP}", EXIT_OK),
         (
             "rustup",
@@ -162,14 +171,23 @@ NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
             EXIT_OK,
         ),
     ],
-    ids=["no-go", "no-rustup", "no-image-go", "no-image-rustup", "unneeded", "unneeded-present"],
+    ids=[
+        "no-go",
+        "old-go",
+        "go",
+        "no-rustup",
+        "no-image-go",
+        "no-image-rustup",
+        "unneeded",
+        "unneeded-present",
+    ],
 )
 def test_the_host_toolchain_rows_block_only_for_an_image_that_needs_them(
     tool: str, version: str | None, needs: ToolchainNeeds | None, row: str, code: int
 ) -> None:
-    """build:go and build:rustup say what each tool is for, and block only when the image's
-    sources need it; without an image a missing go blocks (every image's Tdxs is Go) and a
-    missing rustup is optional."""
+    """build:go and build:rustup say what each tool is for; a missing rustup blocks only
+    when the image's sources need it, and a missing or old go never blocks, since tundravm
+    then fetches the release each go.mod names itself."""
     tools = {k: v for k, v in TOOLS.items() if k != tool}
     host, _ = _host(tools if version is None else {**tools, tool: version}, files=LINUX_FILES)
     assert _rows(host, needs=needs)[f"build:{tool}"] == row
@@ -225,13 +243,6 @@ AZ = "install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure
 @pytest.mark.parametrize(
     ("given", "name", "row", "fix"),
     [
-        ({"tools": _without("go")}, "build:go", f"blocked: {NO_GO}", GO_FIX),
-        (
-            {"tools": {**TOOLS, "go": "go version go1.19.8 linux/amd64"}},
-            "build:go",
-            f"blocked: go1.19.8 predates toolchain switching (Go 1.21), and go {GO_PURPOSE}",
-            "install Go 1.21 or newer: https://go.dev/dl",
-        ),
         (
             {"tools": _without("rustup")},
             "build:rustup",
@@ -327,8 +338,6 @@ AZ = "install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure
         ({"accounts": {}}, "deploy:azure", "blocked: az is not logged in", "az login"),
     ],
     ids=[
-        "no-go",
-        "old-go",
         "no-rustup",
         "no-apt",
         "no-keyring",
@@ -435,12 +444,12 @@ def test_doctor_without_for_prints_every_row_and_fails_only_on_build() -> None:
         "verify:gcp",
         "verify:azure",
     ]
-    blocked, _ = _host(_without("go", "qemu-system-x86_64"), files=(DEBIAN_KEYRING,))
+    blocked, _ = _host(_without("go", "qemu-system-x86_64"), files=())
     out = io.StringIO()
     assert doctor(out, host=blocked) == EXIT_FAILURE
     assert out.getvalue().split("\n\n")[1].splitlines() == [
         "fix:",
-        f"  build:go         {GO_FIX}",
+        "  build:x86-64     sudo apt install debian-archive-keyring",
         "  run:simulated    sudo apt install qemu-system-x86 ovmf",
     ]
 

@@ -42,7 +42,6 @@ from tundravm._source import (
     is_fetched,
     lock_dotnet_sdk,
     prefetch_deps,
-    require_host_go,
     require_host_rustup,
     resolve_pins,
     write_marker,
@@ -904,10 +903,12 @@ def fetch_image(
     packages (``Lowered.lock_sources``). Once every source is checked out, each Go,
     Cargo and .NET build's dependencies are prefetched into ``<build>/.sources/deps``
     with the host's toolchain (``prefetch_deps``); without it the build downloads them
-    as before. A Cargo source that pins a Rust toolchain needs the host's ``rustup``,
-    which ``require_host_rustup`` checks before any toolchain runs. A .NET build's SDK is
-    the one *locked* pins, else the one its checkout's ``global.json`` resolves to now
-    (``lock_dotnet_sdk``); its own ``dotnet`` restores, so the host needs none.
+    as before. A Go build without a host ``go`` prefetches with the Go release its go.mod
+    names, fetched and checked against the checksum database. A Cargo source that pins a
+    Rust toolchain needs the host's ``rustup``, which ``require_host_rustup`` checks before
+    any toolchain runs. A .NET build's SDK is the one *locked* pins, else the one its
+    checkout's ``global.json`` resolves to now (``lock_dotnet_sdk``); its own ``dotnet``
+    restores, so the host needs none.
 
     Pins come from *locked*; sources it does not pin are resolved first (as
     :func:`lock` would, through *resolver*), which ``mutable_ref_policy="error"``
@@ -929,8 +930,6 @@ def fetch_image(
         else:
             pins[name] = pin
     offline = img.policy.network_mode == "offline"
-    if not offline:
-        require_host_go(builds.values())
     if pending:
         pins.update(_resolve_for_fetch(img, pending, resolver=resolver, offline=offline))
     root = Path(build) / SOURCES_DIRNAME

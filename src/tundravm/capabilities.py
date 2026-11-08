@@ -5,8 +5,9 @@ Each row is ``<area>:<what>`` and a verdict:
 - ``ready`` (with what it will use),
 - ``blocked: <why>`` when something installable or configurable is missing,
 - ``unavailable: <why>`` when this host cannot do it (no TDX hardware),
-- ``optional: <why>`` when the image needs no such tool (``not needed by this image``), or
-  no image says whether it does and the tool (``rustup``) is missing (never a failure),
+- ``optional: <why>`` when the image needs no such tool (``not needed by this image``),
+  no image says whether it does and the tool (``rustup``) is missing, or tundravm does
+  without it (``go``) (never a failure),
 - ``unsupported: <why>`` when tundravm does not do it anywhere.
 
 A row's *fix* is the one command that clears it, an apt package on Debian or Ubuntu; a
@@ -42,7 +43,7 @@ BuildBackendKind = Literal["local", "lima"]
 @dataclass(frozen=True, slots=True)
 class Capability:
     """One row: *name* (``build:x86-64``), its *verdict*, the *detail* after it and its
-    *fix*, one command (``sudo apt install golang``), ``""`` for none."""
+    *fix*, one command (``sudo apt install qemu-system-x86 ovmf``), ``""`` for none."""
 
     name: str
     verdict: Verdict
@@ -195,23 +196,19 @@ def _linux_build(name: str, host: Host) -> Capability:
 
 
 GO_PURPOSE = (
-    "fetches each Go source's modules and the toolchain its go.mod names for the offline "
-    "build (every image's Tdxs is one)"
+    "prefetches each Go source's modules and the toolchain its go.mod names for the offline build"
 )
-"""What the host ``go`` is for, in every ``build:go`` row."""
+"""What the host ``go`` is for, in a ready ``build:go`` row."""
+
+GO_ABSENT = "tundravm fetches the toolchain each go.mod names, checked against sum.golang.org"
+"""What prefetches Go sources instead of a host ``go``, in an optional ``build:go`` row."""
 
 KEYRING_PACKAGE = "debian-archive-keyring"
 """The package holding the keyring mkosi checks its Debian tools tree against."""
 
-GO_PACKAGE = "golang"
-"""The Debian and Ubuntu package of the host ``go``."""
-
-BUILD_HOST_PACKAGES: tuple[str, ...] = (KEYRING_PACKAGE, GO_PACKAGE)
-"""What a bare Debian or Ubuntu host installs to clear the ``build:x86-64`` and ``build:go``
-fixes: the packages the workflow ``new --ci`` writes installs on its runner."""
-
-GO_FIX = f"sudo apt install {GO_PACKAGE} (Debian 13, Ubuntu 24.04; older: https://go.dev/dl)"
-"""The fix of a host without ``go``: Debian 13's and Ubuntu 24.04's golang are 1.21+."""
+BUILD_HOST_PACKAGES: tuple[str, ...] = (KEYRING_PACKAGE,)
+"""What a bare Debian or Ubuntu host installs to clear the ``build:x86-64`` fixes: the
+packages the workflow ``new --ci`` writes installs on its runner."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,8 +238,9 @@ def _as_needed(row: Capability, wanted: Sequence[str] | None) -> Capability:
 
 def go_capability(host: Host, needs: ToolchainNeeds | None = None) -> Capability:
     """``build:go``: the host ``go`` that prefetches Go sources (1.21+ switches toolchains),
-    blocked when the image *needs* it (:func:`_as_needed`) and, without an image, when it
-    is missing: every image builds its evidence service (``Tdxs``) from Go."""
+    ``optional`` when it is missing or older, since tundravm then fetches the release each
+    go.mod names itself, or when the image *needs* none (:func:`_as_needed`); never
+    blocked."""
     row = _go_row(host)
     return row if needs is None else _as_needed(row, needs.go)
 
@@ -252,14 +250,11 @@ def _go_row(host: Host) -> Capability:
     words = (host.output("go", "version") or "").split()
     found = words[2] if len(words) > 2 and words[2].startswith("go1.") else None
     if found is None:
-        return Capability(name, "blocked", f"no go on PATH, which {GO_PURPOSE}", GO_FIX)
+        return Capability(name, "optional", f"no go on PATH: {GO_ABSENT}")
     minor = found.removeprefix("go1.").split(".", 1)[0]
     if not minor.isdigit() or int(minor) < 21:
         return Capability(
-            name,
-            "blocked",
-            f"{found} predates toolchain switching (Go 1.21), and go {GO_PURPOSE}",
-            "install Go 1.21 or newer: https://go.dev/dl",
+            name, "optional", f"{found} predates toolchain switching (Go 1.21): {GO_ABSENT}"
         )
     return Capability(name, "ready", f"{found}, which {GO_PURPOSE}")
 
