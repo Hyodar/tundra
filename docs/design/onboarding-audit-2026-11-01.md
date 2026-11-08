@@ -236,9 +236,9 @@ demo's and surge's trees; surge through `check --tree` and `show`.
 
 15. `egress-unfiltered` puts its fix in the message and prints no `hint:` (S;
     `components/_base.py`).
-17. The API reference: `File(mode=420)` in decimal, `Firewall.check(resolved:
+17. ~~The API reference: `File(mode=420)` in decimal, `Firewall.check(resolved:
     dm.Resolved)`, `FakeMkosi.invoke`/`verbs` and `FakeSources.*` without a line
-    (S; `_reference.py`, `components/_base.py`, `testing/`).
+    (S; `_reference.py`, `components/_base.py`, `testing/`).~~ (done: reference-polish)
 18. `tundravm.bake` keeps the old verb in the API beside `build` (S, breaking).
 
 ## 7. First run

@@ -173,6 +173,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `README.md` and `docs/release.md` name the four Debian or Ubuntu packages `dev` needs beside tundravm: `debian-archive-keyring`, `golang`, `qemu-system-x86`, `ovmf`.
 - The pages read end to end as a first user after each day's landings: every term defined before its use, every claim about a command matching what it prints, a how-to task for each feature, and the old example's names gone (`docs/design/walkthrough-4-2026-11-01.md`, `docs/design/walkthrough-5-2026-11-03.md`).
 - The API reference prints a file mode default in octal (`mode: int = 0o644`), as an image file writes it, not as `420`.
+- The API reference spells every type in a signature by the name its namespace exports (`Firewall.check(resolved: Resolved)`, not `dm.Resolved`), prints defaults as values (`Hardening`'s strict-profile values, `{}`), gives each alias a signature uses (`Argument`, `Binding`, `Sandbox`, `PortValue`, `Target`...) an entry under Type aliases, and gives the testing fakes' members their line.
 
 ### Removed
 
