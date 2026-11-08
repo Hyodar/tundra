@@ -12,20 +12,24 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import http.client
 import io
 import os
 import platform
 import re
 import shutil
+import ssl
 import stat
 import tempfile
 import zipfile
 import zlib
 from collections.abc import Callable
 from pathlib import Path
+from time import monotonic
+from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from .errors import SourceError
 from .project import host_cache
@@ -47,7 +51,19 @@ against, written last before the release is renamed into place."""
 Fetcher = Callable[[str], bytes]
 """The body at a url; raises ``OSError`` (``HTTPError``, ``URLError``) when it cannot."""
 
+_HOSTS = frozenset({urlsplit(GO_PROXY).hostname or "", urlsplit(SUMDB).hostname or ""})
+"""The only hosts tundravm asks for a Go release."""
+_REDIRECTS = {"proxy.golang.org": frozenset({"storage.googleapis.com"})}
+"""Where else a host may redirect: the proxy serves its zips from Google Cloud Storage."""
 _TIMEOUT = 60.0
+"""Seconds a connection may stay silent."""
+_TEXT_LIMIT = 1 << 20
+"""Bytes a lookup or a tile may take: a tile is 8 KiB, a lookup under 1 KiB."""
+_TEXT_SECONDS = 60.0
+_ZIP_LIMIT = 200 << 20
+"""Bytes a release zip may take: Go 1.25's is 64 MB."""
+_ZIP_SECONDS = 1200.0
+"""Seconds a release zip may take: 64 MB at 1 Mbit/s with room to spare."""
 _TILE_HEIGHT = 8
 _HASH_SIZE = 32
 _DECIMAL = re.compile(rb"0|[1-9][0-9]{0,17}")
@@ -187,10 +203,68 @@ def _not_fetched(name: str, module: str, reason: str) -> SourceError:
     )
 
 
+class _Redirect(HTTPRedirectHandler):
+    """Follows a redirect only over HTTPS, to the same host or one :data:`_REDIRECTS` allows."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        origin, target = urlsplit(req.full_url).hostname or "", urlsplit(newurl)
+        allowed = _REDIRECTS.get(origin, frozenset()) | {origin}
+        if target.scheme != "https" or target.hostname not in allowed:
+            fp.close()
+            where = f"{target.scheme}://{target.netloc}{target.path}"
+            raise _Refused(f"{origin} redirected to {where}, which tundravm does not fetch from")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = build_opener(_Redirect(), HTTPSHandler(context=ssl.create_default_context()))
+
+
 def _download(url: str) -> bytes:
-    with urlopen(url, timeout=_TIMEOUT) as response:
-        body: bytes = response.read()
-    return body
+    """The body at *url*, on one of :data:`_HOSTS` over HTTPS with certificates checked.
+
+    A lookup or tile within :data:`_TEXT_LIMIT` bytes and :data:`_TEXT_SECONDS`, a zip
+    within :data:`_ZIP_LIMIT` and :data:`_ZIP_SECONDS`, and never :data:`_TIMEOUT` seconds
+    without a byte; a body cut short raises ``ConnectionError``.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.scheme != "https" or host not in _HOSTS:
+        raise _Refused(f"{url} is not on {' or '.join(sorted(_HOSTS))}")
+    zipped = parts.path.endswith(".zip")
+    limit, seconds = (_ZIP_LIMIT, _ZIP_SECONDS) if zipped else (_TEXT_LIMIT, _TEXT_SECONDS)
+    try:
+        with _OPENER.open(url, timeout=_TIMEOUT) as response:
+            return _read(response, host, limit, seconds)
+    except http.client.HTTPException as exc:
+        raise ConnectionError(f"{host} broke off its answer ({type(exc).__name__})") from None
+
+
+def _read(response: http.client.HTTPResponse, host: str, limit: int, seconds: float) -> bytes:
+    """*response*'s body from *host*: refused past *limit* bytes, declared or sent, and a
+    ``TimeoutError`` once it takes more than *seconds* (each read returns after one
+    ``recv``, so a server trickling bytes cannot stretch it)."""
+    declared = response.getheader("Content-Length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise _Refused(f"{host} answers {declared} bytes, more than {limit >> 20} MiB")
+    deadline = monotonic() + seconds
+    body = bytearray()
+    while chunk := response.read1(_CHUNK):
+        body += chunk
+        if len(body) > limit:
+            raise _Refused(f"{host} answers more than {limit >> 20} MiB")
+        if monotonic() > deadline:
+            raise TimeoutError(f"{host} took more than {seconds:.0f} s to answer")
+    if response.length:
+        raise ConnectionError(f"{host} broke off its answer, {response.length} bytes short")
+    return bytes(body)
 
 
 def _zip_url(module: str) -> str:

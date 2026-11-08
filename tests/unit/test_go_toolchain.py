@@ -5,15 +5,20 @@ from __future__ import annotations
 import base64
 import functools
 import hashlib
+import http.client
 import io
 import os
+import socket
 import stat
 import struct
 import zipfile
 import zlib
+from collections.abc import Callable
 from email.message import Message
 from pathlib import Path
+from typing import cast
 from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
 import pytest
 
@@ -490,3 +495,106 @@ def test_a_toolchains_directory_others_can_write_is_refused(
     with pytest.raises(SourceError, match="others can write it") as failed:
         go.fetch_go(NAME, fetcher=_fetcher({}))
     assert f"Remove {directory}" in str(failed.value.hint)
+
+
+class _Socket:
+    """What ``http.client.HTTPResponse`` reads a raw answer from."""
+
+    def __init__(self, raw: bytes) -> None:
+        self.raw = raw
+
+    def makefile(self, mode: str) -> io.BytesIO:
+        return io.BytesIO(self.raw)
+
+
+def _answer(head: str, body: bytes) -> http.client.HTTPResponse:
+    response = http.client.HTTPResponse(cast(socket.socket, _Socket(head.encode() + body)))
+    response.begin()
+    return response
+
+
+def _clock(step: float) -> Callable[[], float]:
+    """A ``monotonic`` advancing *step* seconds each time it is read."""
+    now = [0.0]
+
+    def monotonic() -> float:
+        now[0] += step
+        return now[0]
+
+    return monotonic
+
+
+OK = "HTTP/1.1 200 OK\r\n"
+CHUNKED = "Transfer-Encoding: chunked\r\n\r\n"
+
+
+@pytest.mark.parametrize(
+    ("head", "body", "step", "outcome"),
+    [
+        (f"{OK}Content-Length: 5\r\n\r\n", b"hello", 0.0, b"hello"),
+        (f"{OK}Content-Length: 2000000\r\n\r\n", b"x", 0.0, "answers 2000000 bytes"),
+        ("HTTP/1.0 200 OK\r\n\r\n", b"x" * (1 << 20) + b"x", 0.0, "more than 1 MiB"),
+        (OK + CHUNKED, b"100001\r\n" + b"x" * 0x100001 + b"\r\n0\r\n\r\n", 0.0, "more than"),
+        (f"{OK}Content-Length: 10\r\n\r\n", b"hello", 0.0, "5 bytes short"),
+        (f"{OK}Content-Length: 5\r\n\r\n", b"hello", 61.0, "took more than 60 s"),
+    ],
+    ids=["within", "declared-too-big", "sent-too-big", "chunked-too-big", "cut-short", "slow"],
+)
+def test_an_answer_is_read_within_its_size_and_time(
+    monkeypatch: pytest.MonkeyPatch, head: str, body: bytes, step: float, outcome: bytes | str
+) -> None:
+    """A lookup or tile is refused past 1 MiB, declared or sent; one cut short or taking
+    longer than its deadline is a network failure."""
+    monkeypatch.setattr(go, "monotonic", _clock(step))
+    response = _answer(head, body)
+    if isinstance(outcome, bytes):
+        assert go._read(response, "sum.golang.org", go._TEXT_LIMIT, go._TEXT_SECONDS) == outcome
+        return
+    with pytest.raises((go._Refused, OSError), match=outcome):
+        go._read(response, "sum.golang.org", go._TEXT_LIMIT, go._TEXT_SECONDS)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"http://proxy.golang.org/{PATH}/@v/{VERSION}.zip",
+        "https://proxy.golang.org.example.com/x",
+        "https://example.com/lookup/x",
+        "file:///etc/passwd",
+    ],
+    ids=["plain-http", "lookalike-host", "other-host", "file"],
+)
+def test_a_download_goes_only_to_the_proxy_and_the_database_over_https(url: str) -> None:
+    with pytest.raises(go._Refused, match="is not on proxy.golang.org or sum.golang.org"):
+        go._download(url)
+
+
+@pytest.mark.parametrize(
+    ("origin", "target", "followed"),
+    [
+        ("https://proxy.golang.org/m/@v/v.zip", "https://storage.googleapis.com/p/m.zip", True),
+        ("https://proxy.golang.org/m/@v/v.zip", "https://proxy.golang.org/n/@v/v.zip", True),
+        ("https://proxy.golang.org/m/@v/v.zip", "http://storage.googleapis.com/p/m.zip", False),
+        ("https://proxy.golang.org/m/@v/v.zip", "https://evil.example/m.zip", False),
+        ("https://sum.golang.org/lookup/m", "https://storage.googleapis.com/p/m", False),
+        ("https://storage.googleapis.com/p/m.zip", "https://evil.example/m.zip", False),
+    ],
+    ids=["to-storage", "same-host", "to-plain-http", "to-other-host", "database", "chained"],
+)
+def test_a_redirect_is_followed_only_to_the_proxys_storage(
+    origin: str, target: str, followed: bool
+) -> None:
+    """proxy.golang.org serves its zips from storage.googleapis.com; no other redirect is
+    followed, and none over plain HTTP."""
+    handler = go._Redirect()
+    request = Request(origin)
+    if followed:
+        redirected = handler.redirect_request(
+            request, io.BytesIO(), 302, "Found", http.client.HTTPMessage(), target
+        )
+        assert redirected is not None and redirected.full_url == target
+        return
+    with pytest.raises(go._Refused, match="which tundravm does not fetch from"):
+        handler.redirect_request(
+            request, io.BytesIO(), 302, "Found", http.client.HTTPMessage(), target
+        )
