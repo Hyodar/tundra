@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import collections.abc as abc
 import difflib
 import re
+import sys
+import typing
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -66,6 +70,53 @@ def test_every_exported_name_has_an_entry() -> None:
     for module in _reference.MODULES:
         for name in importlib.import_module(module).__all__:
             assert f"\n### `{name}`\n" in text, f"{module}.{name} has no entry"
+
+
+def _signatures(text: str) -> str:
+    """Every signature ``api.md`` prints: its code blocks and its member cells."""
+    blocks = re.findall(r"^```python\n(.*?)^```", text, re.M | re.S)
+    cells = re.findall(r"^\| `(.+?)` \|", text, re.M)
+    return "\n".join([*blocks, *cells])
+
+
+def _matches(pattern: str) -> Callable[[str], list[str]]:
+    return lambda text: re.findall(rf".{{0,30}}{pattern}.{{0,30}}", _signatures(text))
+
+
+def _aliases_without_entry(text: str) -> list[str]:
+    """The names a signature uses that tundravm binds to a type alias (and to no class, which
+    the name could mean instead) without an entry."""
+    stdlib = {id(value) for module in (typing, abc) for value in vars(module).values()}
+    aliases, classes = set(), set()
+    for module in list(sys.modules.values()):
+        if module.__name__.split(".")[0] != "tundravm":
+            continue
+        for name, value in vars(module).items():
+            if isinstance(value, type):
+                classes.add(name)
+            elif id(value) not in stdlib and (
+                isinstance(value, typing.TypeAliasType) or typing.get_origin(value) is not None
+            ):
+                aliases.add(name)
+    used = set(re.findall(r"\b[A-Z]\w*", _signatures(text)))
+    entries = set(re.findall(r"^### `([^`]+)`$", text, re.M))
+    return sorted((used & (aliases - classes)) - entries)
+
+
+@pytest.mark.parametrize(
+    ("what", "offenders"),
+    [
+        ("an internal module alias", _matches(r"\b(?:dm|du)\.")),
+        ("a marker's repr as a default", _matches(r"= <")),
+        ("a private module path", _matches(r"\b_image\.|\b_values\b|\btundravm\._")),
+        ("the probe's Report for ProbeReport", _matches(r"(?<!Probe)\bReport\b")),
+        ("an alias without an entry", _aliases_without_entry),
+    ],
+)
+def test_api_signatures_print_only_what_a_reader_can_use(
+    what: str, offenders: Callable[[str], list[str]]
+) -> None:
+    assert offenders(_reference.render("api.md")) == [], f"api.md prints {what}"
 
 
 def test_the_width_does_not_leak_into_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
