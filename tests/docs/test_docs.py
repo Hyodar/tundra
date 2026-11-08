@@ -273,7 +273,7 @@ def test_slugs_follow_github() -> None:
 @pytest.mark.parametrize(
     ("page", "limit"),
     [
-        ("README.md", 350),
+        ("README.md", 250),
         ("docs/terms.md", 1000),
         ("docs/guide.md", 2200),
         ("docs/howto.md", 1300),
