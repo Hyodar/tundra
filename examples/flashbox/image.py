@@ -149,18 +149,18 @@ ssh = SshAccess(
 
 RULES = [
     RecordingRule(
-        "flashbox:container_alive", 'max(tundravm_unit_active{unit="searcher-container.service"})'
+        "flashbox:container_alive", f'max(tundravm_unit_active{{unit="{searcher.unit}"}})'
     ),
     RecordingRule(
-        "local:container_cpu_ratio",
-        'sum(rate(tundravm_unit_cpu_seconds_total{unit="searcher-container.service"}[5m]))'
+        "flashbox:container_cpu_ratio",
+        f'sum(rate(tundravm_unit_cpu_seconds_total{{unit="{searcher.unit}"}}[5m]))'
         ' / count(node_cpu_seconds_total{mode="idle"})',
         export=False,
     ),
     RecordingRule(
         "flashbox:container_average_cpu_is_under_80_percent",
-        "(avg_over_time(local:container_cpu_ratio[15m]) < bool 0.8)"
-        " * (max_over_time(local:container_cpu_ratio[10m] offset 5m) < bool 0.7)",
+        "(avg_over_time(flashbox:container_cpu_ratio[15m]) < bool 0.8)"
+        " * (max_over_time(flashbox:container_cpu_ratio[10m] offset 5m) < bool 0.7)",
     ),
     RecordingRule("flashbox:container_oom_kills_count", "node_vmstat_oom_kill"),
     RecordingRule(

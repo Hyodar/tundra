@@ -3,10 +3,10 @@ groups:
     rules:
       - record: flashbox:container_alive
         expr: "max(tundravm_unit_active{unit=\"searcher-container.service\"})"
-      - record: local:container_cpu_ratio
+      - record: flashbox:container_cpu_ratio
         expr: "sum(rate(tundravm_unit_cpu_seconds_total{unit=\"searcher-container.service\"}[5m])) / count(node_cpu_seconds_total{mode=\"idle\"})"
       - record: flashbox:container_average_cpu_is_under_80_percent
-        expr: "(avg_over_time(local:container_cpu_ratio[15m]) < bool 0.8) * (max_over_time(local:container_cpu_ratio[10m] offset 5m) < bool 0.7)"
+        expr: "(avg_over_time(flashbox:container_cpu_ratio[15m]) < bool 0.8) * (max_over_time(flashbox:container_cpu_ratio[10m] offset 5m) < bool 0.7)"
       - record: flashbox:container_oom_kills_count
         expr: node_vmstat_oom_kill
       - record: flashbox:disk_free_space_is_over_10_percent

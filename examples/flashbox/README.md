@@ -70,4 +70,3 @@ CI boots the dev profile (`.github/workflows/flashbox.yml`).
   Lighthouse has no log-directory keyword.
 - Egress that excludes: maintenance allows 443 everywhere, flashbox drops the tx stream.
 - TLS in `input-proxy`: flashbox's pins the searcher's key; this one relays plain bytes.
-- A profile that points `Observability` at the in-guest sink, so dev cannot check metrics.
