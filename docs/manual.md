@@ -295,33 +295,40 @@ account, are refused.
 | `name` | the account |
 | `keys=` | its public keys: baked, or a `Secret` the attested endpoint writes to `/etc/ssh/authorized_keys.d/<name>` |
 | `owner=True` | the owner's key, the one `attest` hands over, in place of keys of its own |
-| `commands={...}` | a name mapped to each `Command(params=[...], runs=[...])`, run as the login, or with `sudo=True` as root |
+| `commands={...}` | each command's name, mapped to its `Command` |
 | `help=` | what it is for, atop its listing |
 | `shell=` | the escape hatch: a login shell the image ships, with a terminal and no sudo; `ssh-login-shell` warns in production |
 | `home=True` | `/home/<name>`, handed to the login at boot |
 
-A login takes exactly one of `commands=` and `shell=`. A command's `runs` is its argv,
-the program's absolute path first. `modes=` offers it in those firewall modes only, and
-`login-mode-undeclared` catches a mode the `Firewall` lacks; `dev=True` offers it in
-development builds only. `firewall.commands.status` and `.switch` are two, run as root.
+A login takes exactly one of `commands=` and `shell=`. A command reads like an argparse
+subparser: `params=` holds the `CommandParam`s below, `runs` the argv over them, its
+program's absolute path first, and `help=` its listing line. `sudo=True` runs it as root,
+`modes=` in those firewall modes only (`login-mode-undeclared`), and
+`firewall.commands.status` and `.switch` come ready-made.
 
 | `CommandParam` | Means |
 |---|---|
-| `"name"`, `"--name"` | positional, required in order, or an option, which needs `default=` |
+| `"name"`, `"--name"` | positional, required in order, or an option, which needs `default=` unless a flag |
 | `type=int` | a number from `min=` to `max=` |
 | `type=str` | one of `choices=`: no free strings |
 | `type=bool` | a flag, given or not |
 | in `runs` | `"{{name}}"` is its value, also within a word; `"{{#name}}-f{{/name}}"` a flag's word |
 
-Another domain is a `ParamType` subclass, whose `check()` the program runs and whose
-`pattern()` sudo admits, so the two must take the same values.
+Every param must appear in `runs`, whose words are never split or handed to a shell. Another
+domain is a `ParamType` subclass: `usage()` spells it in the help, `check()` is a Go
+expression over `value` yielding an `error` (with the runtime's `Int`, `OneOf` or `Match`),
+and `pattern()` the anchored regex sudo admits, which must take the same values.
 
-tundravm writes a Go program into the tree (`payload/tundravm-cli/<name>`), the account's
-shell and forced command, which lists the commands, prints `COMMAND --help` and refuses
-anything else; only a development build compiles `dev=True` commands in. A `sudo=True`
-command gets a sudoers line per argv it can produce, at most 64 (`login-sudo-lines`). A
-login gets no terminal (`PermitTTY no`, `restrict` keys) but in a development build with
-`dev=True` commands, where `ssh -t` gets one.
+tundravm writes each login's Go program into the tree (`payload/tundravm-cli/<name>/`),
+which the build compiles to `/usr/libexec/tundravm/cli/<name>`, the account's shell and
+forced command. `ssh name@HOST` lists the commands, `ssh name@HOST COMMAND --help` prints
+one command's params with their domains and defaults and the argv it runs, and the program
+refuses anything else.
+
+A `sudo=True` command gets one sudoers line per argv it can produce (each flag given and
+not, each choice), at most 64 (`login-sudo-lines`). Only a development build compiles
+`dev=True` commands in, giving a login with such commands the terminal (`ssh -t`) that
+`PermitTTY no` and `restrict` keys deny it elsewhere.
 
 A `Login` in `SshAccess` takes root's delivered key away unless `from_delivery=True`, and
 root without a key never logs in (`PermitRootLogin no`). sshd bounds unauthenticated
