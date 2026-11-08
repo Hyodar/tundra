@@ -295,26 +295,37 @@ account, are refused.
 | `name` | the account |
 | `keys=` | its public keys: baked, or a `Secret` the attested endpoint writes to `/etc/ssh/authorized_keys.d/<name>` |
 | `owner=True` | the owner's key, the one `attest` hands over, in place of keys of its own |
-| `commands={...}` | its menu: a word mapped to a `Command(...)`, run as the login, or with `sudo=True` as root |
+| `commands={...}` | a name mapped to each `Command(params=[...], runs=[...])`, run as the login, or with `sudo=True` as root |
+| `help=` | what it is for, atop its listing |
 | `shell=` | the escape hatch: a login shell the image ships, with a terminal and no sudo; `ssh-login-shell` warns in production |
 | `home=True` | `/home/<name>`, handed to the login at boot |
 
-A login takes exactly one of `commands=` and `shell=`. A command's words are literal
-strings, `Int("lines", 1, 10000)` or `Choice("mode", "a", "b")`, which the client fills in.
-`modes=` offers it in those firewall modes only, and `login-mode-undeclared` catches a mode
-the `Firewall` lacks; `dev=True` offers it in development builds only.
-`firewall.commands.status` and `firewall.commands.switch` are two such commands, run as root.
+A login takes exactly one of `commands=` and `shell=`. A command's `runs` is its argv,
+the program's absolute path first. `modes=` offers it in those firewall modes only, and
+`login-mode-undeclared` catches a mode the `Firewall` lacks; `dev=True` offers it in
+development builds only. `firewall.commands.status` and `.switch` are two, run as root.
 
-`login-menu` is the account's shell and sshd's forced command: an empty request lists the
-menu, a request runs exactly the argv it names, and anything else is refused. Each `sudo=True`
-command gets exact `/etc/sudoers.d/<name>` lines. A menu gets no terminal, through two locks
-(`PermitTTY no` and `restrict` keys), except in a development build of a login with
-`dev=True` commands, which lifts both (`PermitTTY yes`, `restrict,pty`) so that `ssh -t`
-gives whichever command the client asks for a terminal.
+| `CommandParam` | Means |
+|---|---|
+| `"name"`, `"--name"` | positional, required in order, or an option, which needs `default=` |
+| `type=int` | a number from `min=` to `max=` |
+| `type=str` | one of `choices=`: no free strings |
+| `type=bool` | a flag, given or not |
+| in `runs` | `"{{name}}"` is its value, also within a word; `"{{#name}}-f{{/name}}"` a flag's word |
+
+Another domain is a `ParamType` subclass, whose `check()` the program runs and whose
+`pattern()` sudo admits, so the two must take the same values.
+
+tundravm writes a Go program into the tree (`payload/tundravm-cli/<name>`), the account's
+shell and forced command, which lists the commands, prints `COMMAND --help` and refuses
+anything else; only a development build compiles `dev=True` commands in. A `sudo=True`
+command gets a sudoers line per argv it can produce, at most 64 (`login-sudo-lines`). A
+login gets no terminal (`PermitTTY no`, `restrict` keys) but in a development build with
+`dev=True` commands, where `ssh -t` gets one.
 
 A `Login` in `SshAccess` takes root's delivered key away unless `from_delivery=True`, and
 root without a key never logs in (`PermitRootLogin no`). sshd bounds unauthenticated
-connections per source (`PerSourceMaxStartups 4`, `MaxSessions 1`), so a menu login can face
+connections per source (`PerSourceMaxStartups 4`, `MaxSessions 1`), so a login can face
 the network, and a login that must always answer leaves 22 out of every mode, which keeps
 it open in all of them ([the modes](#the-firewall-and-its-modes)).
 
@@ -783,7 +794,7 @@ A development profile carries `tundravm-probe.service`, which prints
 | `hardening:` | a preset's `systemd-analyze security` score is under its ceiling |
 | `kernel:` | no disabled symbol in `/proc/kallsyms` (`Kernel.build`), else no uncurated module |
 | `host-keys` | with SSH, the host key is root-owned, read-only to others |
-| `login:`, `menu:`, `ssh:root` | each login's sshd block, keys and sudoers hold, its menu lists and refuses as declared, and sshd refuses root |
+| `login:`, `menu:`, `ssh:root` | each login's sshd block, keys and sudoers hold, its program lists and refuses as declared, and sshd refuses root |
 | `container:`, `container-ssh:` | each container runs in its root, its egress, endpoints and ports work, and its sshd's host key is the one evidence binds |
 | `mode:firewall` | the mode in force and its switches replay against RTMR3 |
 | `key:instance` | the instance key is `root:root 0600` and its public key file matches |

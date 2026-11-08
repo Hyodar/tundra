@@ -162,6 +162,12 @@ RENAMED = {
         r"\bservice-command-not-shipped\b"
     ),
     "Sudo (Command(..., sudo=True))": re.compile(r"(?<![\w.])Sudo\("),
+    "Int, Choice (CommandParam(type=int, min=, max=), CommandParam(choices=))": re.compile(
+        r"(?<![\w.])(?:Int|Choice)\([\"']"
+    ),
+    "a command's argv as positional words (Command(runs=[...]))": re.compile(
+        r"(?<![\w.])Command\(\s*[\"']/"
+    ),
     "firewall.status/switch (firewall.commands.status/switch)": re.compile(
         r"\b[Ff]irewall\.(?:status|switch)\b"
     ),
@@ -502,6 +508,9 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         'Secret("jwt", rotation="restart")',
         '"reboot": Sudo("/usr/bin/systemctl", "reboot"),',
         '"toggle": firewall.switch,',
+        'Int("lines", 1, 1000)',
+        'Choice("mode", "a", "b")',
+        'Command("/usr/bin/systemctl", "reboot", sudo=True)',
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:
