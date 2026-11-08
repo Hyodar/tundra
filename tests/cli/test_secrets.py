@@ -20,6 +20,7 @@ from tundravm import bootstrap, instances
 from tundravm._ssh_sig import fingerprint as fingerprint_of
 from tundravm.builds import Build
 from tundravm.cli import EXIT_ERROR, EXIT_FAILURE, EXIT_OK
+from tundravm.errors import AttestationError
 from tundravm.testing import FakeEndpoint
 from tundravm.testing._endpoint import (
     CONTAINER_KEY,
@@ -123,6 +124,35 @@ def test_attest_deliver_and_unlock_over_the_bound_session(
     assert kinds == ["attested", "delivered", "unlocked"]
     again = cli("secrets", "deliver", instance.id, "--policy", simulated, f"api-token=@{token}")
     assert again.code == EXIT_ERROR and "refused /credentials (409)" in again.err
+
+
+@pytest.mark.parametrize(
+    ("key", "pinned"),
+    [
+        ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", True),
+        ("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY=", True),
+        ("ssh-rsa AAAAB3NzaC1yc2E=", True),
+        ("ssh-ed25519 AAAA\n* ssh-ed25519 BBBB", False),
+        ("ssh-ed25519 AAAA me@host", False),
+        ("ssh-dss AAAAB3NzaC1kc3M=", False),
+        ("@cert-authority * ssh-ed25519 AAAA", False),
+    ],
+)
+def test_only_host_key_lines_are_pinned(
+    instance: instances.Instance,
+    endpoint: FakeEndpoint,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    pinned: bool,
+) -> None:
+    monkeypatch.setattr("tundravm.testing._endpoint.HOST_KEY", key)
+    if pinned:
+        assert bootstrap.pin_host_keys(instance).passed
+        assert f" {key}\n" in instances.known_hosts(instance).read_text()
+    else:
+        with pytest.raises(AttestationError, match="not one SSH host key"):
+            bootstrap.pin_host_keys(instance)
+        assert not instances.known_hosts(instance).exists()
 
 
 def test_a_torn_write_leaves_the_known_hosts_as_they_were(

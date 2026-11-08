@@ -71,6 +71,7 @@ SIGNATURE_NAMESPACE = "tundravm-endpoint"
 """The SSH signature namespace of a write to an endpoint that pins its operator."""
 TIMEOUT_S = 60.0
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_HOST_KEY = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-[a-z0-9]+|ssh-rsa) [A-Za-z0-9+/]+={0,2}")
 
 
 def binding(
@@ -424,6 +425,16 @@ def fetch_evidence(channel: Channel, nonce: bytes, where: str) -> Evidence:
     if binding(nonce, key, host_keys, instance_bytes, ingress, containers) != user_data:
         raise AttestationError(
             "Refused: the bound material does not hash to the quote's user data.", hint=hint
+        )
+    keys = [*host_keys, *(key for c in containers for key in c.host_keys)]
+    odd = next((key for key in keys if not _HOST_KEY.fullmatch(key)), None)
+    if odd is not None:
+        raise AttestationError(
+            f"Refused: the evidence from {where} binds {odd!r}, not one SSH host key "
+            "(ssh-ed25519, ecdsa-sha2-* or ssh-rsa, then its base64), so no known_hosts line "
+            "is written from it.",
+            hint="The endpoint writes each key as `type base64`; read `journalctl -u "
+            "tundravm-endpoint` in the guest.",
         )
     metadata = said.get("metadata")
     accepts = said.get("accepts")
