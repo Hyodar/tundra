@@ -1293,8 +1293,8 @@ class Service(Declared):
     ``service-runs-as-root``). ``type=None``/``restart_sec=None`` omit the
     line; ``remain_after_exit`` renders ``RemainAfterExit=yes`` (a ``Task`` is the usual
     spelling of a oneshot). ``security`` is
-    the deprecated spelling of ``hardening`` (``"strict"``: the historical nine lines;
-    ``"default"``/``"none"``: ``Hardening.none()``). ``state`` is also the default
+    what a parsed unit file sets in place of ``hardening`` (``"strict"``: the historical
+    nine lines; ``"default"``/``"none"``: ``Hardening.none()``). ``state`` is also the default
     ``WorkingDirectory=``.
     ``requires``/``wants``/``binds_to`` also order the unit ``After=`` them. ``needs`` lists the
     runtime-init steps the unit waits for (the default, :data:`RUNTIME_INIT`, is the whole
@@ -1412,7 +1412,7 @@ class Service(Declared):
             raise _fail(
                 self,
                 f"service {self.name!r} sets both security= and hardening=.",
-                hint="Drop security= (deprecated): hardening= replaces it.",
+                hint="Keep hardening= and drop security=: hardening= sets the whole sandbox.",
             )
         stem = self.default_user
         if self.user is None and not (_GROUP_NAME.fullmatch(stem) and len(stem) <= 32):

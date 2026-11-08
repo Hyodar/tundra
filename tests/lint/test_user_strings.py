@@ -104,6 +104,7 @@ DENYLIST = {
     "a runtime-init step by its name (the component, or what the step does)": re.compile(
         r"\bboot step (?:'|$)"
     ),
+    "a keyword called deprecated (what to write instead)": re.compile(r"\(deprecated\)"),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -369,6 +370,10 @@ def test_removed_verbs_are_caught(text: str) -> None:
         (
             "boot step 'render' writes /etc/systemd/system/a.service at boot",
             "a runtime-init step by its name (the component, or what the step does)",
+        ),
+        (
+            "Drop security= (deprecated): hardening= replaces it.",
+            "a keyword called deprecated (what to write instead)",
         ),
     ],
 )
