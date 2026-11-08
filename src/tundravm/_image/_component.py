@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import TYPE_CHECKING, Any, ClassVar, dataclass_transform
 
-from tundravm._location import Located
+from tundravm._location import Located, anchored
 from tundravm._source import FrozenMap
 from tundravm.declarative import model as dm
 from tundravm.diagnostics import Rule
@@ -473,7 +473,19 @@ def _default_user(item: dm.Service | dm.Task) -> str:
 
 
 def composed(owner: Component) -> tuple[object, ...]:
-    """What ``owner.compose()`` returned, as a tuple; a non-iterable is refused."""
+    """What ``owner.compose()`` returned, as a tuple; a non-iterable is refused.
+
+    It runs at the line that constructed *owner*, so a relative path ``compose`` passes to
+    a ``Local`` or a ``File`` is beside that file in every call, an export's included.
+    """
+    location = owner.declared_at
+    if not location:
+        return _composed(owner)
+    with anchored(location):
+        return _composed(owner)
+
+
+def _composed(owner: Component) -> tuple[object, ...]:
     items = owner.compose()
     if isinstance(items, (str, bytes)) or not isinstance(items, Iterable):
         raise ValidationError(

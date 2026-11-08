@@ -9,6 +9,7 @@ import pytest
 
 from tundravm import AptRepository, File, Image, Kernel, Mkosi, Package, Profile, Service, Tree
 from tundravm._image import recipe_of
+from tundravm._image._component import composed
 from tundravm._image._values import RESERVED_SETTINGS
 from tundravm.components import Component, Diagnostic, Endpoint, Resolved, Rule
 from tundravm.components.access import DevAccess
@@ -278,6 +279,43 @@ def test_a_relative_host_path_is_beside_the_file_that_declares_it(
     declare: Callable[[], object], path: str
 ) -> None:
     assert declare() == Path(__file__).parent / path
+
+
+APP = """
+from tundravm import File
+from tundravm.components import Component
+from tundravm.sources import Build, Install, Local
+
+
+class App(Component):
+    def compose(self):
+        yield Build("app", Local("prog"), script="true", install=(Install("app", "/usr/bin/app"),))
+        yield File.copy("app.conf", "/etc/app.conf")
+"""
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        lambda app: app.services(),
+        lambda app: recipe_of(Image("x", components=[app])),
+    ],
+    ids=["an export", "the lowering"],
+)
+def test_a_relative_path_in_compose_is_beside_the_file_constructing_the_component(
+    tmp_path: Path, run: Callable[[Component], object]
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "prog").mkdir()
+    (tmp_path / "components").mkdir()
+    namespace: dict[str, object] = {"__name__": "app"}
+    exec(compile(APP, str(tmp_path / "components" / "app.py"), "exec"), namespace)
+    exec(compile("app = App()", str(tmp_path / "image.py"), "exec"), namespace)
+    app = namespace["app"]
+    assert isinstance(app, Component)
+    run(app)
+    files = [item.content for item in composed(app) if isinstance(item, File)]
+    assert files == [tmp_path / "app.conf"]
 
 
 def test_a_profile_removes_a_service_by_reference() -> None:
