@@ -42,9 +42,9 @@ image = "demo.py"
 build = "build"
 ```
 
-Each setting resolves from the command line, then the environment, then the table, then
-the default. Commands use the nearest `pyproject.toml` with the table, walking up.
-Relative paths are relative to that file.
+A setting resolves from the command line, the environment, the table, then the default.
+Commands use the nearest `pyproject.toml` with the table, walking up; relative paths are
+relative to it.
 
 | Key | Environment | Default |
 |---|---|---|
@@ -59,9 +59,9 @@ The host picks the backend; an image file names none.
 | `local` | Linux x86-64 | Python, apt and dpkg with `debian-archive-keyring`, and unprivileged user namespaces or `sudo` |
 | `lima` | macOS, other Linux | Lima; the guest is x86-64 Debian running the same pinned mkosi |
 
-`local` runs mkosi 27.1 in-process, never from `PATH`. Every other build tool comes from
-mkosi's tools tree, pinned to the same Debian snapshot. A build never switches backend on
-failure. `doctor --for build` names what a build here lacks.
+`local` runs mkosi 27.1 in-process, never from `PATH`; every other build tool comes from
+mkosi's tools tree, pinned to the same snapshot. A build never switches backend on
+failure; `doctor --for build` names what it lacks.
 
 ## The image
 
@@ -150,7 +150,7 @@ the way systemd parses it. The one spelling for a shell is
 
 Every image generates an instance key at boot: a fresh secp256k1 key on tmpfs, root-only.
 A service takes it with `credentials=[InstanceKey()]`, and nothing else may name it.
-`show` says which service takes it; `run status` and `attest` print its public key.
+`show` names its taker; `run status` and `attest` print its public key.
 
 `expose=[TCP(8080)]` (or `UDP(53)`) opens that port in the firewall. The only other open
 ports are an [ingress](#ingress)'s and the [control plane](#the-control-plane)'s. `expose=`
@@ -207,7 +207,7 @@ and installs the package (`package=` names another). Its sandbox is `hardening=`
 unless said, which replaces the package's own. Beside it only `requires=`, a probe
 `readiness=`, `expose=` and `unit=DropIn(...)` apply. A capability the daemon needs is a
 `Hardening.preset("static", capabilities=["CAP_SYS_TIME"])` deviation. One it lacks shows
-at boot, as the probe's `service:` failure naming it.
+at boot in the probe's `service:` failure.
 
 ## Components
 
@@ -275,10 +275,10 @@ login. Any other profile is a `Profile`:
 | `changes` | `value.ref.edit(...)` or `value.ref.remove()` on something the image declares |
 | `production` | `False` makes its builds development builds |
 
-A change names a declaration that exists, or the image does not resolve. Removing a
-service removes its unit, its user, its firewall rule and the dependencies nothing else
-uses. A component's service is `component.service("name").ref`. An edit takes the keywords
-of the value's own constructor and is checked like a new value. Refused: another built
+A change must name a declaration that exists. Removing a service removes its unit, its
+user, its firewall rule and the dependencies nothing else uses. A component's service is
+`component.service("name").ref`. An edit takes the value's own keywords and is checked
+like a new value. Refused: another built
 binary, a credential bound through argv or `environment=` (bind it in `credentials=`),
 another `user=` for a directory on a volume, dropping a required readiness.
 
@@ -294,9 +294,9 @@ The image collects each volume and secret from the services that bind it.
 ### Volumes
 
 `Volume(name, unlock=)` is a LUKS2 volume with ext4 inside, mounted at `/persistent/<name>`
-unless `mount=` says otherwise. Its size and disk are deployment configuration. The image
-finds the disk by name through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order.
-It formats a volume only while it carries no initialisation token: an unlock failure never
+unless `mount=` says otherwise. Its size and disk are deployment configuration; the image
+finds the disk through `/dev/disk/by-id/*-tundravm-<name>`, never by probe order, and
+formats it only while it carries no initialisation token, so an unlock failure never
 permits formatting.
 
 `unlock=` is the trust decision and has no default:
@@ -307,12 +307,12 @@ permits formatting.
 | `TpmSeal(platform=, pcrs=, recovery="none")` | a random key sealed to one stated vTPM: `azure`, `gcp` or `swtpm` | `key-gen` seals without a PCR policy today; `pcrs` is recorded, enforced in gate 3 |
 | `BrokerKey(url, audience=)` | a key broker releases the key after attestation | no pull client yet: the image waits as for an operator |
 
-`TpmSeal` is refused for `targets=` that boot with another vTPM: a key sealed on one
-platform does not open on another.
+`TpmSeal` is refused for `targets=` booting another vTPM: a sealed key opens on one
+platform only.
 
-`data.directory("nethermind")` is a directory on the volume. A service binds it with
-`state=`. The image creates it, owned by that service, once the volume is open, and the
-service waits for it. `directory(name, group=)` shares it through a group.
+`data.directory("nethermind")` is a directory on the volume, bound with `state=`: the
+image creates it, owned by that service, once the volume is open, and the service waits
+for it. `directory(name, group=)` shares it through a group.
 
 ### Secrets
 
@@ -359,11 +359,16 @@ the build with both sizes. The manifest records the layout and the cap.
 traffic. It accepts what the baseline (NTS time, resolvers) and each component's
 `outbound()` send. `Service(egress=Egress(...))` accepts more for that service's user
 alone. The cloud metadata server and its identity token take only tundravm's cloud glue
-and a service with `Egress(metadata=True)` (`service-metadata` warns). A host may be
-`HOST:PORT`. `"logs.example:443"` opens 443 only to the addresses the name resolves to,
-which `egress-resolve` asks over DNS over TLS at boot and every 30s; until then it is
-unreachable. A service whose own egress names a host starts after the first resolution.
-A production profile without a filter warns `egress-unfiltered`.
+and a service with `Egress(metadata=True)` (`service-metadata` warns).
+`"logs.example:443"` opens 443 to the addresses the name resolves to, which
+`egress-resolve` asks over DNS over TLS at boot and every 30s; until the first answer the
+name is unreachable and its services wait. `Host("api.example", ["203.0.113.7"],
+port=443, aliases=[...])` pins a peer: the firewall accepts those addresses alone, and
+the name resolves to them in `/etc/hosts`, which `systemd-resolved` reads first
+(`ReadEtcHosts=yes` by default). The image's `Egress`, a `Service`'s and a `Mode`'s fill
+the image's file, a `Container`'s `egress=` and `modes=` its root's; a name is pinned
+once, never also left to DNS. A production profile without a filter warns
+`egress-unfiltered`.
 
 `TeeBase` resolves through `systemd-resolved` over strict DNS over TLS, with no fallback,
 LLMNR or mDNS. The host can neither read nor forge a lookup.
@@ -376,13 +381,13 @@ sends each to the guest's receiver (`journal-sink`, `metrics-sink`), as a produc
 without `url=` does. Otherwise the delivered credential authenticates it. An `http://` sink
 warns. `rules=[RecordingRule("box:up", "min(up)")]` computes series in the guest
 ([a task](howto.md#ship-booleans-not-raw-series)). A rule's series leaves unless it says
-`export=False`. `export=` adds raw series and presets, and the image's identity always
-leaves. A record name has a colon, and `promtool check rules` checks them at build time.
+`export=False`. `export=` adds raw series and presets; the image's identity always
+leaves. Record names carry a colon; `promtool check rules` checks them at build time.
 With rules Prometheus runs in server mode, its query API on the loopback. `image-metrics`
 logs the digest and RTMR0-3 at boot.
-`Observability(proxy="IP:PORT")` reaches every sink through that one address.
-`proxy=Proxy("10.88.0.100", 443, passthrough=True)` is a TCP relay: each sink's name maps to
-the address in `/etc/hosts`, so its TLS, SNI and `Host` stay the sink's.
+`Observability(proxy="IP:PORT")` reaches every sink through one address.
+`proxy=Proxy("10.88.0.100", 443, passthrough=True)` is a TCP relay: each sink's name is
+pinned to the address, so its TLS, SNI and `Host` stay the sink's.
 `credential=SigV4("us-east-2", Secret("metrics-aws"))` signs each write with the AWS key
 file the secret holds, as Amazon Managed Prometheus requires.
 
@@ -393,11 +398,10 @@ makes it switchable ([a task](howto.md#open-a-maintenance-window)). A port a mod
 opens in that mode only. A mode's `egress=` adds to the image's. The image boots into
 `production`. A switch goes over the attested endpoint, or through a login's
 `firewall.switch`. `mode-switch` extends RTMR3 with it, then swaps the ruleset, and old flows drop on
-their next packet. A window closes
-itself after `lasts` (30 minutes by default) of boot time. The probe's `mode:firewall` row
+their next packet. A window closes after `lasts` (default 30 minutes). The probe's `mode:firewall` row
 checks the history against RTMR3. Refused: 22 in `production`, a mode named `tdx` or
 `simulated`, and a switch on a production build without an owner. On TDX the extend
-needs Linux 6.16, so a 6.12 kernel refuses every switch.
+needs Linux 6.16; a 6.12 kernel refuses every switch.
 
 ### The control plane
 
@@ -405,8 +409,8 @@ An image with a secret, `AttestedTLS`, firewall modes or a volume an operator or
 unlocks runs the attested endpoint on port 8745. The endpoint needs nothing on a volume
 ([trust](trust.md#what-first-contact-proves)). The image also runs SSH on 22, for the key
 `attest` hands over: root's, or a `Login(owner=True)`'s. On TDX that key comes only from the
-[owner](terms.md#stages-2-to-6), so an image without an `OperatorKey()` volume has no
-delivered SSH there.
+[owner](terms.md#stages-2-to-6): without an `OperatorKey()` volume there is no delivered
+SSH.
 `/etc/tundravm/runtime.json` records every volume, secret and ingress.
 
 ## Sources and toolchains
@@ -422,12 +426,12 @@ crate graph from the binary.
 one program in the build environment, never in the image. `files=[build]` ships what its
 `install=` names.
 
-A build takes one source, which `tundravm lock` pins: `Local("app")`, a directory beside
+A build takes one source, which `lock` pins: `Local("app")`, a directory beside
 the image file, by the digest of its files; `Git(url, ref)` by commit; `Http(url, sha256=)`
 by sha256. `Git(url, ref, auth="GITHUB_TOKEN")` builds a private repository
-([a task](howto.md#use-a-private-source)). The token is read from that host variable and
-never written anywhere. A credential pasted into a URL is refused. git sends the token as
-an `Authorization` header. A host other than github.com or `gitlab.*` names its scheme:
+([a task](howto.md#use-a-private-source)). The token is read from that host variable,
+never written anywhere, and sent as an `Authorization` header; a credential pasted into a
+URL is refused. A host other than github.com or `gitlab.*` names its scheme:
 
 | Host | `auth=` |
 |---|---|

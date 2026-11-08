@@ -15,6 +15,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 
 ### SDK
 
+- **Breaking:** `Host(name, addresses, port=, aliases=)` in `Egress(hosts=)` pins a peer: the firewall accepts exactly those addresses on that port, and the name resolves to them in `/etc/hosts`, the image's or a container root's, which `Container(files=)` may no longer write; one image pins a name once and never also as `"NAME:PORT"`. `Proxy(tls_name=)` and a passthrough pin their names through the same file instead of a fragment merged at each exporter's start.
 - `Firewall(modes=)` hands a login menu its entries: `firewall.status` and `firewall.switch` (a choice of every mode), and `state / "output.log"` is a path inside a volume directory, refusing one that leaves it.
 - `Image(sysctl={"vm.max_map_count": 2097152})` writes kernel parameters to `/etc/sysctl.d/60-<name>.conf` and refuses a key `TeeBase`'s hardening sets.
 - A `Login` enables `systemd-user-sessions.service`, so `/run/nologin` no longer turns a non-root login away after boot.
