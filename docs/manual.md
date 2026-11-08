@@ -289,7 +289,7 @@ or keeps of what another removes, goes in `payload/mkosi.profiles/<name>/`. A co
 
 ## Volumes, secrets and ingress
 
-The image collects each volume and secret from the services that bind it.
+The image collects each volume and secret from what binds it.
 
 ### Volumes
 
@@ -329,7 +329,7 @@ unit's read-only `$CREDENTIALS_DIRECTORY` at start.
 | `required=False` | nothing waits: the boot completes and the service starts without it, reading one newline |
 | `source=BrokerKey(...)` | a broker delivers it instead of an operator (no pull client yet) |
 
-The endpoint delivers each secret once per boot.
+Each profile takes, once per boot, only the secrets it reads.
 `Generated(name)` needs no delivery: each boot a root oneshot writes 32 random bytes as
 hex to `/run/tundravm/secrets/<name>`.
 
