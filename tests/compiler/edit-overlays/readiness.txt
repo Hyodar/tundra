@@ -1,7 +1,3 @@
-== production/mkosi.conf
-[Content]
-Packages=
-    acpid
 == production/mkosi.extra/usr/lib/systemd/system/db-ready.service
 [Unit]
 Description=Wait until db.service is ready
@@ -41,82 +37,14 @@ UMask=0077
 
 [Install]
 WantedBy=minimal.target
-== production/mkosi.extra/usr/lib/systemd/system/tundravm-power-button.service
-[Unit]
-Description=Power off on the ACPI power button
-
-[Service]
-Type=simple
-ExecStart=/usr/sbin/acpid --foreground --netlink --nosocket --logevents --confdir /usr/lib/tundravm/acpi --pidfile /run/tundravm-power-button/acpid.pid
-Restart=always
-RestartSec=5
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-NoNewPrivileges=yes
-ProtectKernelModules=yes
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-MemoryDenyWriteExecute=yes
-ProtectKernelLogs=yes
-ProtectClock=yes
-ProtectHostname=yes
-RestrictRealtime=yes
-RestrictNamespaces=yes
-LockPersonality=yes
-RestrictAddressFamilies=AF_NETLINK AF_UNIX
-SystemCallArchitectures=native
-CapabilityBoundingSet=
-RuntimeDirectory=tundravm-power-button
-
-[Install]
-WantedBy=minimal.target
-== production/mkosi.extra/usr/lib/systemd/system/tundravm-root-mode.service
-[Unit]
-Description=Make the initramfs root root:root 0755
-Before=sysinit.target
-DefaultDependencies=no
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/usr/bin/chown root:root /
-ExecStart=/usr/bin/chmod 0755 /
-TimeoutStartSec=30s
-NoNewPrivileges=yes
-ProtectKernelModules=yes
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-MemoryDenyWriteExecute=yes
-ProtectKernelLogs=yes
-ProtectClock=yes
-ProtectHostname=yes
-RestrictRealtime=yes
-RestrictNamespaces=yes
-LockPersonality=yes
-RestrictAddressFamilies=AF_UNIX
-SystemCallArchitectures=native
-CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
-PrivateNetwork=yes
-
-[Install]
-WantedBy=minimal.target
-== production/mkosi.extra/usr/lib/tundravm/acpi/power-button
-event=button[ /]power
-action=/usr/bin/systemctl poweroff
 == production/mkosi.postinst.d/50-postinst.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
 mkosi-chroot useradd --system --shell /usr/sbin/nologin db-ready
 mkosi-chroot systemctl enable db-ready.service
-mkosi-chroot systemctl enable tundravm-root-mode.service
-mkosi-chroot systemctl enable tundravm-power-button.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
 ln -sf "/etc/systemd/system/db-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/tundravm-root-mode.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/tundravm-power-button.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-mkosi-chroot systemctl mask acpid.path acpid.service acpid.socket
 == staging/mkosi.conf
 [Output]
 ImageId=%i-staging

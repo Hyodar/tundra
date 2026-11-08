@@ -248,6 +248,9 @@ def lower(recipe: Recipe, *, variants: Sequence[str] | None = None) -> Lowered:
                 variant.name, release=variant.release, default=default.release, ships=True
             )
             builder.instance_key(variant.name)
+            builder.power_button(variant.name)
+            if recipe.mkosi.root == "initramfs":
+                builder.root_mode(variant.name)
             builder.issuer(variant.name, release=variant.release)
             builder.targets(variant.name, recipe_targets(recipe), inherited=(DEFAULT_TARGET,))
             overlays.append(variant.name)
