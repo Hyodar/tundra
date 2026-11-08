@@ -152,6 +152,8 @@ class _Lowering:
     """The units of the services the profile being lowered removes, or its ancestors do."""
     backports: bool = False
     sends: tuple[tuple[str, Egress], ...] | None = None
+    local_sends: tuple[tuple[str, Egress], ...] = ()
+    """*sends* as a development profile sees them: the observability's in-guest form's."""
     owned_rules: tuple[dm.EgressRule, ...] = ()
     """The rules a packaged daemon's user owns (chrony's NTP), beside what *sends* asks."""
     implied: dict[str, dict[str, tuple[str, str, str]]] = field(default_factory=dict)
@@ -202,7 +204,8 @@ class _Lowering:
         )
         check_owner_login(image, self.runtime.ssh)
         dev = () if image.dev is None else tuple(services_of((image.dev,)))
-        self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev))
+        local = services_of(_forms((*self.workload(), *self.profile_content()), local=True))
+        self.declared = frozenset(s.unit_name for s in (*self.runtime.services, *dev, *local))
 
     def workload(self) -> tuple[object, ...]:
         """What the image runs beyond its baseline: services, components, observability."""
@@ -221,6 +224,20 @@ class _Lowering:
                 hint=f"Pass one {kind.__name__}(...): it replaces the image's default.",
             )
         return found[0] if found else None
+
+    def profile_content(self) -> tuple[object, ...]:
+        """What the image's profiles add."""
+        return tuple(item for profile in self.image.profiles.values() for item in profile.add)
+
+    def local(self, name: str | None) -> bool:
+        """Whether profile *name* (``None``: the image's own) is a development one, whose
+        observability ships to the receivers in the guest."""
+        if name is None or name == BASE_PROFILE:
+            return False
+        if name == DEV_PROFILE and self.image.dev is not None:
+            return True
+        profile = self.image.profiles.get(name)
+        return profile is not None and not profile.production
 
     def build_network(self) -> bool:
         """Whether a component's builds fetch dependencies while the image is built."""
@@ -316,6 +333,7 @@ class _Lowering:
         filtering = self.component(firewall)
         if egress is not None:
             self.sends = tuple(self.outbound(egress, (tee, tdxs, network)))
+            self.local_sends = tuple(self.outbound(egress, (tee, tdxs, network), local=True))
             self.owned_rules = (CHRONY_NTP,) if tee.time else ()
             rules = (*egress_rules(self.sends), *self.owned_rules)
             with _at(firewall):
@@ -334,34 +352,96 @@ class _Lowering:
         return tuple(found)
 
     def outbound(
-        self, egress: Egress, baseline: Sequence[Component]
+        self, egress: Egress, baseline: Sequence[Component], *, local: bool = False
     ) -> Iterator[tuple[str, Egress]]:
         """Who sends where: the image's *egress*, the ``outbound()`` of the *baseline*, of
-        every component and of what each composes. The cloud glue reaches the metadata
-        servers by its own units' egress."""
+        every component and of what each composes, the observability as a development
+        profile builds it when *local*. The cloud glue reaches the metadata servers by its
+        own units' egress."""
         image = self.image
         yield "image", egress
         own = [item for item in image.components if not isinstance(item, self.baseline_types)]
         observability = [] if image.observability is None else [image.observability]
-        for component in (*baseline, *own, *observability):
+        for component in (*baseline, *own, *_forms(observability, local=local)):
             yield from _outbound(component)
 
     def profile_egress(
-        self, added: Sequence[object], inherited: Sequence[object] = ()
+        self,
+        added: Sequence[object],
+        inherited: Sequence[object] = (),
+        *,
+        local: tuple[bool, bool] = (False, False),
     ) -> tuple[dm.Edit, ...]:
-        """The edit of the firewall a profile needs so its output chain also accepts what
-        the components it adds (*added*, beyond the *inherited* ones of the profiles it
-        extends) send: none when the image does not filter egress or they ask for nothing
-        new."""
+        """The edit of the firewall a profile needs so its output chain accepts what the
+        components it adds (*added*, beyond the *inherited* ones of the profiles it extends)
+        send: none when the image does not filter egress or nothing changes. *local* says
+        whether the profile it extends and the profile itself are development ones, whose
+        observability sends nothing."""
         from tundravm.components._network import egress_rules
 
         if self.sends is None:
             return ()
-        before = (*self.sends, *_sends(inherited))
-        rules = egress_rules((*before, *_sends(added)))
+        parent, own = local
+        before = (*self.base_sends(parent), *_sends(_forms(inherited, local=parent)))
+        after = (*self.base_sends(own), *_sends(_forms((*inherited, *added), local=own)))
+        rules = egress_rules(after)
         if rules == egress_rules(before):
             return ()
         return (dm.Ref("Firewall").edit(egress_rules=(*rules, *self.owned_rules)),)
+
+    def base_sends(self, local: bool) -> tuple[tuple[str, Egress], ...]:
+        """Who among the image itself sends where, in a development profile when *local*."""
+        return self.local_sends if local else (self.sends or ())
+
+    def switch(
+        self, inherited: Sequence[object], local: tuple[bool, bool]
+    ) -> tuple[list[dm.Edit | dm.Remove], list[dm.Declaration]]:
+        """What turns each observability among *inherited*, lowered as the profile it
+        comes from builds it, into the one this profile builds (*local*: whether each is a
+        development one): an edit of each declaration that differs, a removal of each that
+        is gone, and the declarations that are new."""
+        from tundravm.components.observability import Observability
+
+        parent, own = local
+        changes: list[dm.Edit | dm.Remove] = []
+        added: list[dm.Declaration] = []
+        if parent == own:
+            return changes, added
+        for item in inherited:
+            if not isinstance(item, Observability):
+                continue
+            with _at(item):
+                source, target = _forms((item,), local=parent)[0], _forms((item,), local=own)[0]
+                if source == target:
+                    continue
+                owned, self.owned = self.owned, []
+                before = {d.ref: d for d in self.flat(source)}
+                seen, self.owned = self.owned, []
+                after = self.flat(target)
+                self.owned = [*owned, *(entry for entry in self.owned if entry not in seen)]
+                for declaration in after:
+                    old = before.get(declaration.ref)
+                    if old is None:
+                        added.append(declaration)
+                    elif old != declaration:
+                        changes.append(dm.Edit(declaration.ref, _differing(old, declaration)))
+                kept = {declaration.ref for declaration in after}
+                changes.extend(dm.Remove(ref) for ref in before if ref not in kept)
+        return changes, added
+
+    def flat(self, item: object) -> list[dm.Declaration]:
+        """The declarations *item* lowers to, out of their fragments, each service and task
+        waiting for the image's owner steps as the image's own do."""
+        found: list[dm.Declaration] = []
+        pending = list(self.content(item))
+        while pending:
+            child = pending.pop(0)
+            if isinstance(child, dm.Fragment):
+                pending[:0] = child.items
+            else:
+                waiting = _waiting(child, self.owner_steps) if self.owner_steps else child
+                found.append(cast("dm.Declaration", waiting))
+        return found
 
     def shared_groups(self) -> tuple[str, ...]:
         """The groups shared volume directories name, declared once each."""
@@ -517,10 +597,17 @@ class _Lowering:
     def variant(self, name: str, profile: Profile) -> dm.Variant:
         """One ``Profile`` as the overlay it is."""
         changes, regenerated, world, removed = self.changes(profile)
-        items: list[dm.Declaration | dm.Fragment] = []
+        local = (self.local(profile.extends), not profile.production)
+        inherited = [item for ancestor in self.ancestors(profile) for item in ancestor.add]
+        switched, switched_in = self.switch(
+            (*_forms([self.image.observability], local=False), *inherited), local
+        )
+        items: list[dm.Declaration | dm.Fragment] = list(switched_in)
         self.world, self.removed, curl, self.curl = world, removed, self.curl, False
         for item in profile.add:
-            items.extend(self.content(item))
+            with _at(item):
+                (form,) = _forms((item,), local=local[1])
+            items.extend(self.content(form))
         self.world, self.removed = {}, frozenset()
         items.extend(regenerated)
         if any(isinstance(service.readiness, HttpProbe) for service in world.values()):
@@ -529,14 +616,13 @@ class _Lowering:
             items.append(dm.Package("curl"))
         self.curl = curl
         items = self.owners(items, name)
-        inherited = [item for ancestor in self.ancestors(profile) for item in ancestor.add]
         with _at(profile):
-            egress = self.profile_egress(profile.add, inherited)
+            egress = self.profile_egress(profile.add, inherited, local=local)
         return dm.Variant(
             name,
             inherits=profile.extends or BASE_PROFILE,
             add=dm.Fragment(name, items=tuple(items)),
-            changes=(*changes, *egress),
+            changes=(*switched, *changes, *egress),
             release=profile.production,
         )
 
@@ -741,7 +827,10 @@ class _Lowering:
         (``authorized_keys.d/root``) instead of a second ``sshd``."""
         dev = self.image.dev
         assert dev is not None
-        items: list[dm.Declaration | dm.Fragment] = []
+        switched, switched_in = self.switch(
+            _forms([self.image.observability], local=False), (False, True)
+        )
+        items: list[dm.Declaration | dm.Fragment] = list(switched_in)
         if self.runtime.control_plane:
             keys = dev.public_keys()
             if keys:
@@ -754,12 +843,12 @@ class _Lowering:
             items.append(self.component(dev))
         items = self.owners(items, DEV_PROFILE)
         with _at(dev):
-            egress = self.profile_egress([dev])
+            egress = self.profile_egress([dev], local=(False, True))
         return dm.Variant(
             DEV_PROFILE,
             inherits=BASE_PROFILE,
             add=dm.Fragment(DEV_PROFILE, items=tuple(items)),
-            changes=egress,
+            changes=(*switched, *egress),
             release=False,
         )
 
@@ -1331,6 +1420,18 @@ def _declares_container(item: object) -> bool:
     if isinstance(item, dm.ContainerRoot):
         return True
     return isinstance(item, Component) and any(map(_declares_container, composed(item)))
+
+
+def _forms[T](items: Sequence[T | None], *, local: bool) -> tuple[T, ...]:
+    """*items*, each ``Observability`` among them as a development profile builds it when
+    *local*; ``None`` left out."""
+    from tundravm.components.observability import Observability
+
+    return tuple(
+        cast("T", item.development()) if local and isinstance(item, Observability) else item
+        for item in items
+        if item is not None
+    )
 
 
 def _sends(items: Sequence[object]) -> Iterator[tuple[str, Egress]]:

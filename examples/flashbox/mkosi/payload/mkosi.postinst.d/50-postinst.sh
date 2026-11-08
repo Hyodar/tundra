@@ -91,8 +91,6 @@ ln -sfn ../run/systemd/resolve/stub-resolv.conf "$BUILDROOT/etc/resolv.conf"
 mkosi-chroot promtool check rules /etc/tundravm/metrics-rules.yml
 mkdir -p "$BUILDROOT/etc/ssh/authorized_keys.d"
 mkosi-chroot visudo -c -f /etc/sudoers.d/searcher
-rm -f "$BUILDROOT/etc/nvme/hostnqn" "$BUILDROOT/etc/nvme/hostid"
-
 mkosi-chroot systemctl mask apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer getty@tty1.service prometheus.service acpid.path acpid.service acpid.socket nvmf-autoconnect.service nvmefc-boot-connections.service uuidd.socket uuidd.service
 
 # Debloat: remove unwanted systemd binaries

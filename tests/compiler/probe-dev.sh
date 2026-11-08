@@ -9,6 +9,36 @@ say() { echo "tundravm-probe: $*"; }
 ok() { passed=$((passed + 1)); say "$check ok $*"; }
 fail() { failed=$((failed + 1)); say "$check fail $*"; }
 skip() { say "$check skip $*"; }
+probe_series() {
+    sink=$1
+    keep=$2
+    shift 2
+    if ! command -v promtool >/dev/null 2>&1; then
+        skip "no promtool in the image to ask the sink $sink"
+        return
+    fi
+    waited=0
+    while :; do
+        names=$(promtool query labels "$sink" __name__ 2>/dev/null) || names=
+        missing=
+        for name in "$@"; do
+            printf '%s\n' "$names" | grep -qxF "$name" || missing="$missing $name"
+        done
+        [ -z "$missing" ] && break
+        if [ "$waited" -ge 90 ]; then
+            fail "the sink at $sink holds no$missing after 90s: a rule whose expression selects nothing records nothing; journalctl -u image-metrics -u metrics-export says why"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    dropped=$(printf '%s\n' "$names" | grep -Evx "$keep" | tr '\n' ' ')
+    if [ -n "$dropped" ]; then
+        fail "the sink at $sink holds series the keep-list drops: $dropped"
+        return
+    fi
+    ok "the sink at $sink holds only what export= keeps: $(printf '%s\n' "$names" | grep . | tr '\n' ' ')"
+}
 probe_cmdline() {
     line=" $(cat /proc/cmdline) "
     missing=
@@ -415,25 +445,6 @@ probe_nowait() {
         fail "waiting:$waiting: nothing may wait on an exporter, whose sink can be away; drop it from that service's requires="
     fi
 }
-probe_rules() {
-    if ! command -v nft >/dev/null 2>&1; then
-        skip "no nft in the image"
-        return
-    fi
-    if ! chain=$(nft list chain inet filter output 2>&1); then
-        fail "nft list chain inet filter output: $(echo "$chain" | tail -n 1); systemctl status nftables.service"
-        return
-    fi
-    missing=
-    for rule in "$@"; do
-        case $chain in *"$rule accept"*) ;; *) missing="$missing, $rule" ;; esac
-    done
-    if [ -z "$missing" ]; then
-        ok "$# rules loaded"
-    else
-        fail "the output chain lacks ${missing#, }: nftables.service did not load /etc/nftables.conf; systemctl status nftables.service"
-    fi
-}
 probe_hardening() {
     if ! command -v systemd-analyze >/dev/null 2>&1; then
         skip "no systemd-analyze in the image"
@@ -565,6 +576,10 @@ check=timer:tick.timer
 probe_active tick.timer 'the timer must be enabled; systemctl status names why it is not'
 check=service:nginx.service
 probe_service nginx.service
+check=service:journal-sink.service
+probe_service journal-sink.service
+check=service:metrics-sink.service
+probe_service metrics-sink.service
 check=port:8080/tcp
 probe_locked /persistent data operator || probe_port tcp 8080
 check=port:5353/udp
@@ -577,8 +592,6 @@ check=egress:time.cloudflare.com
 probe_hostset time.cloudflare.com host4_time.cloudflare.com host6_time.cloudflare.com
 check=egress:nts.netnod.se
 probe_hostset nts.netnod.se host4_nts.netnod.se host6_nts.netnod.se
-check=egress:logs.example
-probe_hostset logs.example host4_logs.example host6_logs.example
 check=egress:metadata:tdxs
 probe_metadata tdxs - 169.254.169.254 no
 check=egress:metadata:journal-export
@@ -587,6 +600,10 @@ check=egress:metadata:metrics-export
 probe_metadata metrics-export - 169.254.169.254 no
 check=egress:metadata:app
 probe_metadata app - 169.254.169.254 no
+check=egress:metadata:journal-sink
+probe_metadata journal-sink - 169.254.169.254 no
+check=egress:metadata:metrics-sink
+probe_metadata metrics-sink - 169.254.169.254 no
 check=dns
 probe_dns 'cloudflare-dns.com'
 check=time:nts
@@ -594,19 +611,23 @@ probe_time time.cloudflare.com nts.netnod.se
 check=endpoint:8745
 probe_endpoint 8745 tundravm-endpoint.service
 check=observability:journal-export.service
-probe_upload journal-export.service 'https://logs.example:19532' /var/lib/journal-export/state 19532
+probe_upload journal-export.service 'http://127.0.0.1:19532' /var/lib/journal-export/state 19532
 check=observability:metrics-export.service
 probe_agent metrics-export.service /etc/tundravm/metrics-export.yml --agent
+check=observability:series
+probe_series 'http://127.0.0.1:9091' 'up|node_boot_time_seconds|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_oom_kill|tundravm_system_state|tundravm_units_failed|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest'
 check=observability:no-wait
-probe_nowait journal-export.service metrics-export.service -- tdxs.service image-metrics.service app.service
-check=observability:egress
-probe_rules 'ip daddr @host4_logs.example tcp dport 19532' 'ip6 daddr @host6_logs.example tcp dport 19532' 'ip daddr 10.0.0.9 tcp dport 443'
+probe_nowait journal-export.service metrics-export.service -- tdxs.service image-metrics.service app.service journal-sink.service metrics-sink.service
 check=hardening:journal-export.service
 probe_hardening journal-export.service 2.5 static
 check=hardening:metrics-export.service
 probe_hardening metrics-export.service 2.5 static
 check=hardening:app.service
 probe_hardening app.service 2.6 jit
+check=hardening:journal-sink.service
+probe_hardening journal-sink.service 2.5 static
+check=hardening:metrics-sink.service
+probe_hardening metrics-sink.service 2.5 static
 check=kernel:symbols
 probe_symbols bond_create fuse_conn_init hibernate __io_uring_cancel l2tp_tunnel_create handle_sysrq kclist_add handle_userfault vhost_dev_init xsk_tx_peek_desc
 check=kernel:modules

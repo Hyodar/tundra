@@ -1222,7 +1222,8 @@ The export path for logs and metrics: `image.observability` takes it.
 | Member | Does |
 |---|---|
 | `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM; `observability-export-unset`: the metrics name no keep-list and no rules, an error where a production profile writes them to *url*. |
-| `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one. |
+| `Observability.development() -> Observability` | What a development profile builds: each sink whose *url* is outside the guest goes to its in-guest receiver, and its credential stays unbound. The proxy goes too when no sink outside the guest is left. A sink on the loopback stays as it is. |
+| `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one; nothing when every sink is in the guest. |
 
 ### `PrometheusRemoteWrite`
 

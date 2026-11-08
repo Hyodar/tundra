@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 
 import pytest
 
-from tundravm import Image, Kernel, Package, Service
+from tundravm import Image, Kernel, Package, Profile, Service
 from tundravm._image import lower, recipe_of
 from tundravm.components import Component, Endpoint
 from tundravm.components._observability import PROXY_HOSTS, PROXY_HOSTS_SCRIPT
@@ -342,6 +342,48 @@ def test_a_sink_without_a_url_ships_to_the_in_guest_receiver(
     codes = {d.code for d in planned.lint()}
     assert ("observability-sink-unset" in codes) == reported
     assert "observability-plaintext" not in codes
+
+
+LOGS, METRICS = "https://logs.example", "https://metrics.example/api/v1/write"
+GUEST_LOGS, GUEST_METRICS = "http://127.0.0.1:19532", "http://127.0.0.1:9091/api/v1/write"
+
+
+@pytest.mark.parametrize(
+    ("logs", "metrics", "profile", "receivers"),
+    [
+        (LOGS, METRICS, "production", (LOGS, METRICS)),
+        (LOGS, METRICS, "dev", (GUEST_LOGS, GUEST_METRICS)),
+        (LOGS, METRICS, "lab", (GUEST_LOGS, GUEST_METRICS)),
+        (LOGS, METRICS, "release", (LOGS, METRICS)),
+        ("http://127.0.0.2:19580", METRICS, "dev", ("http://127.0.0.2:19580", GUEST_METRICS)),
+    ],
+)
+def test_a_development_profile_ships_to_the_in_guest_receivers(
+    logs: str, metrics: str, profile: str, receivers: tuple[str, str]
+) -> None:
+    """A production profile writes to each url= with its credential. A development profile
+    writes to the in-guest receiver instead, binds no credential and opens no egress for
+    it; a receiver on the loopback stays, since nothing leaves the VM for it."""
+    observability = Observability(
+        logs=JournalExport(logs, credential=Secret("logs-client")),
+        metrics=PrometheusRemoteWrite(metrics, credential=Secret("metrics-token"), export=[]),
+    )
+    image = Image(
+        "x",
+        observability=observability,
+        network=Network(egress=Egress()),
+        profiles={"lab": Profile(production=False), "release": Profile(extends="lab")},
+        dev=DevAccess(password="tdx"),
+    )
+    planned = plan(image, profile)
+    upload = planned.service("journal-export").exec_start or ""
+    config = planned.file("/etc/tundravm/metrics-export.yml").text.replace('"', "")
+    assert f"--url={receivers[0]} " in upload and f"url: {receivers[1]}\n" in config
+    for exporter, receiver in zip(("journal-export", "metrics-export"), receivers, strict=True):
+        bound = planned.service(exporter).values("Service", "LoadCredential")
+        assert bool(bound) == (receiver not in (GUEST_LOGS, GUEST_METRICS)), exporter
+    nftables = planned.file("/etc/nftables.conf").text
+    assert ("metrics.example" in nftables) == (receivers[1] == METRICS)
 
 
 AMP = "https://aps-workspaces.us-east-2.amazonaws.com/workspaces/ws-1/api/v1/remote_write"

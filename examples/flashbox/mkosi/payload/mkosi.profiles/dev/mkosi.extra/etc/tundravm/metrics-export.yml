@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+rule_files: [/etc/tundravm/metrics-rules.yml]
+scrape_configs:
+  - job_name: node
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+remote_write:
+  - url: http://127.0.0.1:9091/api/v1/write
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "flashbox:container_alive|flashbox:container_average_cpu_is_under_80_percent|flashbox:container_oom_kills_count|flashbox:disk_free_space_is_over_10_percent|flashbox:disk_free_space_is_over_128_gb|flashbox:network_is_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode"
+        action: keep
+    queue_config:
+      capacity: 10000
+      max_shards: 4
+      min_backoff: 1s
+      max_backoff: 1m
+      retry_on_http_429: true

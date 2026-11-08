@@ -9,6 +9,36 @@ say() { echo "tundravm-probe: $*"; }
 ok() { passed=$((passed + 1)); say "$check ok $*"; }
 fail() { failed=$((failed + 1)); say "$check fail $*"; }
 skip() { say "$check skip $*"; }
+probe_series() {
+    sink=$1
+    keep=$2
+    shift 2
+    if ! command -v promtool >/dev/null 2>&1; then
+        skip "no promtool in the image to ask the sink $sink"
+        return
+    fi
+    waited=0
+    while :; do
+        names=$(promtool query labels "$sink" __name__ 2>/dev/null) || names=
+        missing=
+        for name in "$@"; do
+            printf '%s\n' "$names" | grep -qxF "$name" || missing="$missing $name"
+        done
+        [ -z "$missing" ] && break
+        if [ "$waited" -ge 90 ]; then
+            fail "the sink at $sink holds no$missing after 90s: a rule whose expression selects nothing records nothing; journalctl -u image-metrics -u metrics-export says why"
+            return
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    dropped=$(printf '%s\n' "$names" | grep -Evx "$keep" | tr '\n' ' ')
+    if [ -n "$dropped" ]; then
+        fail "the sink at $sink holds series the keep-list drops: $dropped"
+        return
+    fi
+    ok "the sink at $sink holds only what export= keeps: $(printf '%s\n' "$names" | grep . | tr '\n' ' ')"
+}
 probe_cmdline() {
     line=" $(cat /proc/cmdline) "
     missing=
@@ -559,25 +589,6 @@ probe_nowait() {
         fail "waiting:$waiting: nothing may wait on an exporter, whose sink can be away; drop it from that service's requires="
     fi
 }
-probe_rules() {
-    if ! command -v nft >/dev/null 2>&1; then
-        skip "no nft in the image"
-        return
-    fi
-    if ! chain=$(nft list chain inet filter output 2>&1); then
-        fail "nft list chain inet filter output: $(echo "$chain" | tail -n 1); systemctl status nftables.service"
-        return
-    fi
-    missing=
-    for rule in "$@"; do
-        case $chain in *"$rule accept"*) ;; *) missing="$missing, $rule" ;; esac
-    done
-    if [ -z "$missing" ]; then
-        ok "$# rules loaded"
-    else
-        fail "the output chain lacks ${missing#, }: nftables.service did not load /etc/nftables.conf; systemctl status nftables.service"
-    fi
-}
 probe_hardening() {
     if ! command -v systemd-analyze >/dev/null 2>&1; then
         skip "no systemd-analyze in the image"
@@ -818,6 +829,8 @@ check=service:delay-pipe.service
 probe_locked /persistent/data data operator || probe_service delay-pipe.service
 check=service:input-proxy.service
 probe_locked /persistent/data data operator || probe_service input-proxy.service
+check=service:metrics-sink.service
+probe_service metrics-sink.service
 check=port:9000/tcp
 probe_locked /persistent/data data operator || probe_port tcp 9000
 check=port:9000/udp
@@ -856,6 +869,8 @@ check=egress:metadata:searcher-container-endpoint-8545
 probe_metadata searcher-container-endpoint-8545 - 169.254.169.254 no
 check=egress:metadata:metrics-export
 probe_metadata metrics-export - 169.254.169.254 no
+check=egress:metadata:metrics-sink
+probe_metadata metrics-sink - 169.254.169.254 no
 check=egress:metadata:azure-complete-provisioning
 probe_metadata root azure-complete-provisioning 168.63.129.16 yes
 check=egress:metadata:gcp-hostname
@@ -872,10 +887,10 @@ check=mode:firewall
 probe_firewall_mode
 check=observability:metrics-export.service
 probe_agent metrics-export.service /etc/tundravm/metrics-export.yml
+check=observability:series
+probe_series 'http://127.0.0.1:9091' 'flashbox:container_alive|flashbox:container_average_cpu_is_under_80_percent|flashbox:container_oom_kills_count|flashbox:disk_free_space_is_over_10_percent|flashbox:disk_free_space_is_over_128_gb|flashbox:network_is_up|tundravm_image_digest|tundravm_image_rtmr|tundravm_mode' 'tundravm_image_digest' 'flashbox:container_alive' 'flashbox:container_average_cpu_is_under_80_percent' 'flashbox:container_oom_kills_count' 'flashbox:disk_free_space_is_over_10_percent' 'flashbox:disk_free_space_is_over_128_gb' 'flashbox:network_is_up'
 check=observability:no-wait
-probe_nowait metrics-export.service -- tdxs.service nethermind.service lighthouse.service searcher-container.service searcher-container-endpoint-8545.service image-metrics.service delay-pipe.service input-proxy.service
-check=observability:egress
-probe_rules 'ip daddr 10.88.0.100 tcp dport 443'
+probe_nowait metrics-export.service -- tdxs.service nethermind.service lighthouse.service searcher-container.service searcher-container-endpoint-8545.service image-metrics.service delay-pipe.service input-proxy.service metrics-sink.service
 check=hardening:nethermind.service
 probe_hardening nethermind.service 2.7 dotnet
 check=hardening:lighthouse.service
@@ -888,6 +903,8 @@ check=hardening:delay-pipe.service
 probe_hardening delay-pipe.service 2.5 static
 check=hardening:input-proxy.service
 probe_hardening input-proxy.service 2.5 static
+check=hardening:metrics-sink.service
+probe_hardening metrics-sink.service 2.5 static
 check=kernel:symbols
 probe_symbols bond_create fuse_conn_init hibernate __io_uring_cancel l2tp_tunnel_create handle_sysrq kclist_add handle_userfault vhost_dev_init xsk_tx_peek_desc
 check=kernel:modules

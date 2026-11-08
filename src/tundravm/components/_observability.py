@@ -6,10 +6,10 @@ url, credential=...))`` ships the journal with ``systemd-journal-upload`` and no
 with Prometheus in agent mode (remote write only, no query API). Both run as their own
 users in the preset sandbox, read their credentials as systemd credentials, keep bounded
 buffers, retry on their own, and are required by nothing, so an exporter that cannot
-reach its sink never holds an application back. Either without a ``url`` ships to a
-receiver in the guest, so a dev boot shows the export working before the deployment's
-receiver is known. The metrics always carry the image's identity, which ``image-metrics``
-(``tools/cmd/image-metrics``) writes for the node exporter. ``rules=`` computes
+reach its sink never holds an application back. A development profile ships both to
+receivers in the guest, and so does either without a ``url``: a dev boot shows the export
+working, and nothing leaves the VM. The metrics always carry the image's identity, which
+``image-metrics`` (``tools/cmd/image-metrics``) writes for the node exporter. ``rules=`` computes
 :class:`RecordingRule` series in the guest, so the image can ship derived booleans in place
 of raw series; Prometheus then runs in server mode, which evaluates rules and agent mode
 does not. ``proxy="IP:PORT"`` sends both through one fixed-address proxy, the only
@@ -22,7 +22,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, replace
 from urllib.parse import urlsplit
 
 from tundravm._image._component import Component
@@ -156,6 +156,19 @@ def _check_url(owner: object, url: object) -> None:
             f"{kind}: url {url!r} names no host, or a port outside 1..65535.",
             hint="Pass the receiver's URL: 'https://logs.example:19532'.",
         )
+
+
+def _leaves(url: str | None) -> bool:
+    """Whether *url* names a receiver outside the guest: one not on the loopback."""
+    if url is None:
+        return False
+    host = urlsplit(url).hostname or ""
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
 
 
 def _destination(url: str) -> str:
@@ -337,9 +350,10 @@ class JournalExport(Keywords):
 
     Without *url* the receiver is in the guest: ``journal-sink``, Debian's
     ``systemd-journal-remote`` on the loopback, writing under ``/var/lib/journal-sink``. A
-    dev boot shows the export working, nothing leaves the VM, *credential* waits unbound
-    for a receiver to present it to, and a production profile reports
-    ``observability-sink-unset`` until *url* names the deployment's receiver.
+    development profile uses it too when *url* is outside the guest. There a dev boot shows
+    the export working, nothing leaves the VM, and *credential* stays unbound. A production
+    profile reports ``observability-sink-unset`` until *url* names the deployment's
+    receiver.
     """
 
     url: str | None = None
@@ -488,10 +502,11 @@ class PrometheusRemoteWrite(Keywords):
     leaves the VM.
 
     Without *url* the receiver is in the guest: ``metrics-sink``, Prometheus with its
-    remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A dev
-    boot shows the export working, nothing leaves the VM, *credential* waits unbound for a
-    receiver to present it to, and a production profile reports
-    ``observability-sink-unset`` until *url* names the deployment's receiver.
+    remote-write receiver on the loopback, writing under ``/var/lib/metrics-sink``. A
+    development profile uses it too when *url* is outside the guest. There a dev boot shows
+    the export working, nothing leaves the VM, and *credential* stays unbound. A production
+    profile reports ``observability-sink-unset`` until *url* names the deployment's
+    receiver.
     """
 
     url: str | None = None
@@ -715,6 +730,9 @@ class Observability(Component):
     instead: the fragment maps each sink's name to *address*, and the exporters know of no
     proxy.
 
+    A development profile builds :meth:`development` in its place, so nothing leaves a
+    dev VM.
+
     Exports :meth:`service` refs ``journal-export`` and ``metrics-export``. Component name:
     ``observability``.
     """
@@ -748,10 +766,23 @@ class Observability(Component):
         """The sinks' URLs, the in-guest receivers' left out."""
         return [s.url for s in (self.logs, self.metrics) if s is not None and s.url is not None]
 
+    def development(self) -> Observability:
+        """What a development profile builds: each sink whose *url* is outside the guest
+        goes to its in-guest receiver, and its credential stays unbound. The proxy goes too
+        when no sink outside the guest is left. A sink on the loopback stays as it is."""
+        logs, metrics = self.logs, self.metrics
+        if logs is not None and _leaves(logs.url):
+            logs = replace(logs, url=None)
+        if metrics is not None and _leaves(metrics.url):
+            metrics = replace(metrics, url=None)
+        found = replace(self, logs=logs, metrics=metrics)
+        return found if found._urls() else replace(found, proxy=None)
+
     def outbound(self) -> Egress:
-        """*proxy*, or each sink's ``HOST:PORT`` without one."""
+        """*proxy*, or each sink's ``HOST:PORT`` without one; nothing when every sink is
+        in the guest."""
         proxy = _as_proxy(self, self.proxy)
-        if proxy is not None:
+        if proxy is not None and self._urls():
             return Egress(hosts=[proxy.endpoint])
         urls = (sink.url for sink in (self.logs, self.metrics) if sink is not None)
         return Egress(hosts=list(dict.fromkeys(_destination(url) for url in urls if url)))
