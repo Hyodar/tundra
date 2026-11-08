@@ -10,9 +10,11 @@ is the record's. The release is unpacked into ``$XDG_CACHE_HOME/tundravm/toolcha
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import io
 import platform
+import re
 import shutil
 import tempfile
 import zipfile
@@ -44,6 +46,9 @@ Fetcher = Callable[[str], bytes]
 _TIMEOUT = 60.0
 _TILE_HEIGHT = 8
 _HASH_SIZE = 32
+_DECIMAL = re.compile(rb"0|[1-9][0-9]{0,17}")
+_H1 = re.compile(rb"h1:[A-Za-z0-9+/]{43}=")
+_SIGNATURE_PREFIX = "\N{EM DASH} ".encode()
 _GOARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
 
@@ -169,11 +174,16 @@ def _unpack(archive: zipfile.ZipFile, module: str, root: Path, checksum: str) ->
 
 
 def _sumdb_hash(module: str, get: Fetcher) -> str:
-    """The ``h1:`` hash of *module*'s zip, as the checksum database's signed tree holds it."""
+    """The ``h1:`` hash of *module*'s zip, as the checksum database's signed tree holds it.
+
+    The lookup is ``tlog.ParseRecord``'s: the record's index, its text up to the first blank
+    line, the signed tree head. The record must hash to leaf *index* of that tree and hold
+    exactly one ``h1:`` line for *module*'s path and version.
+    """
     body = get(f"{SUMDB}/lookup/{module}")
     head, sep, rest = body.partition(b"\n")
     record_end = rest.find(b"\n\n")
-    if not sep or not head.isdigit() or record_end < 0:
+    if not sep or _DECIMAL.fullmatch(head) is None or record_end < 0:
         raise _Refused("sum.golang.org's answer is not a record")
     index, text, note = int(head), rest[: record_end + 1], rest[record_end + 2 :]
     size, root = _signed_tree(note)
@@ -183,36 +193,78 @@ def _sumdb_hash(module: str, get: Fetcher) -> str:
     if _tree_hash(size, index, leaf, _TileReader(size, get)) != root:
         raise _Refused("sum.golang.org's record is not the one its signed tree holds")
     path, version = module.split("@", 1)
-    for line in text.decode("utf-8", "replace").splitlines():
-        words = line.split()
-        if len(words) == 3 and words[:2] == [path, version] and words[2].startswith("h1:"):
-            return words[2]
-    raise _Refused(f"sum.golang.org's record names no hash of {module}")
+    prefix = f"{path} {version} ".encode()
+    hashes = [line[len(prefix) :] for line in text.split(b"\n") if line.startswith(prefix)]
+    if not hashes:
+        raise _Refused(f"sum.golang.org's record names no hash of {module}")
+    if len(hashes) != 1 or _H1.fullmatch(hashes[0]) is None:
+        raise _Refused(f"sum.golang.org's record names {module} other than once by an h1: hash")
+    return hashes[0].decode()
+
+
+def _verifier() -> tuple[bytes, bytes, bytes]:
+    """``(name, key hash, Ed25519 public key)`` of :data:`SUMDB_KEY`, as ``note.NewVerifier``
+    reads a verifier key: its hash must be that of its name and key."""
+    name, key_id, key = SUMDB_KEY.split("+", 2)
+    public = _b64(key.encode())
+    hashed = hashlib.sha256(f"{name}\n".encode() + (public or b"")).digest()[:4]
+    if public is None or len(public) != 33 or public[0] != 1 or hashed.hex() != key_id:
+        raise _Refused(f"tundravm's key for {name} is not an Ed25519 verifier key")
+    return name.encode(), hashed, public[1:]
+
+
+def _open_note(note: bytes) -> bytes:
+    """The text of the signed note *note* once :data:`SUMDB_KEY` signed it (``note.Open``).
+
+    UTF-8 without control characters but newlines; the text ends at the last blank line;
+    every signature line after it is ``— <name> <base64>``; exactly one is by the key, and
+    it verifies. Lines by other keys (a witness's cosignature) are left unchecked.
+    """
+    name, key_hash, public = _verifier()
+    try:
+        decoded = note.decode("utf-8")
+    except UnicodeDecodeError:
+        raise _Refused("sum.golang.org's tree head is not UTF-8") from None
+    split = note.rfind(b"\n\n")
+    if split < 0 or not note.endswith(b"\n") or any(c < " " and c != "\n" for c in decoded):
+        raise _Refused("sum.golang.org's tree head is not a signed note")
+    text, block = note[: split + 1], note[split + 2 : -1]
+    ours = 0
+    for line in block.split(b"\n"):
+        signer, _, encoded = line.removeprefix(_SIGNATURE_PREFIX).partition(b" ")
+        blob = _b64(encoded)
+        if not line.startswith(_SIGNATURE_PREFIX) or not signer or blob is None or len(blob) < 5:
+            raise _Refused("sum.golang.org's tree head holds a line that is no signature")
+        if signer != name or blob[:4] != key_hash:
+            continue
+        ours += 1
+        if not ed25519_verify(public, text, blob[4:]):
+            raise _Refused(f"sum.golang.org's tree head carries an invalid signature by {name!r}")
+    if ours != 1:
+        raise _Refused(
+            f"sum.golang.org's tree head carries {ours} signatures by {name.decode()}, not one"
+        )
+    return text
 
 
 def _signed_tree(note: bytes) -> tuple[int, bytes]:
-    """``(size, root hash)`` of the tree *note*, once :data:`SUMDB_KEY`'s signature checks."""
-    name, key_id, key = SUMDB_KEY.split("+", 2)
-    public = base64.b64decode(key)
-    text, sep, signatures = note.partition(b"\n\n")
-    text += b"\n"
-    prefix = f"— {name} ".encode()
-    signed = False
-    for line in signatures.splitlines() if sep else ():
-        if not line.startswith(prefix):
-            continue
-        blob = base64.b64decode(line[len(prefix) :])
-        if blob[:4] == bytes.fromhex(key_id) and public[:1] == b"\x01":
-            signed = ed25519_verify(public[1:], text, blob[4:])
-    if not signed:
-        raise _Refused(f"sum.golang.org's tree head carries no valid signature by {name}")
-    lines = text.decode("utf-8", "replace").splitlines()
-    if len(lines) != 3 or lines[0] != "go.sum database tree" or not lines[1].isdigit():
+    """``(size, root hash)`` of the tree head *note*, its text exactly ``tlog.FormatTree``'s:
+    ``go.sum database tree``, the size in decimal, the hash in base64, nothing more."""
+    lines = _open_note(note).split(b"\n")
+    if len(lines) != 4 or lines[0] != b"go.sum database tree" or not _DECIMAL.fullmatch(lines[1]):
         raise _Refused("sum.golang.org's signed note is not a tree head")
-    root = base64.b64decode(lines[2])
-    if len(root) != _HASH_SIZE:
+    root = _b64(lines[2])
+    if root is None or len(root) != _HASH_SIZE:
         raise _Refused("sum.golang.org's tree head holds no hash")
     return int(lines[1]), root
+
+
+def _b64(data: bytes) -> bytes | None:
+    """*data* decoded as strict, padded base64, else ``None``."""
+    try:
+        return base64.b64decode(data, validate=True)
+    except binascii.Error:
+        return None
 
 
 def _node(left: bytes, right: bytes) -> bytes:
