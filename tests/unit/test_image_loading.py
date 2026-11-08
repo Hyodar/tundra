@@ -126,6 +126,21 @@ def test_a_sibling_module_resolves_and_an_edit_is_never_hidden_by_stale_bytecode
     assert not (tmp_path / "__pycache__").exists()
 
 
+@pytest.mark.parametrize("order", ["ab", "aba", "bab"])
+def test_two_projects_each_import_their_own_package_of_one_name(tmp_path: Path, order: str) -> None:
+    images = {}
+    for project, package in (("a", "curl"), ("b", "jq")):
+        root = tmp_path / project
+        (root / "parts").mkdir(parents=True)
+        (root / "pyproject.toml").write_text("")
+        _write(root / "parts", "__init__.py", f"PACKAGES = [{package!r}]\n")
+        body = "from parts import PACKAGES\n" + HEADER + "image = Image('r', packages=PACKAGES)\n"
+        images[project] = (_write(root, "image.py", body), package)
+    for project in order:
+        path, package = images[project]
+        assert list(tundravm.load(path).packages) == [package]
+
+
 @pytest.mark.parametrize("fixture", ["recipe", "example"])
 def test_the_kernel_workflow_fixtures_are_image_files(fixture: str) -> None:
     """``kernel.yml`` builds each one's ``dev`` profile, which boots its probe service."""

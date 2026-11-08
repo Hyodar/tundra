@@ -20,6 +20,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, cast
 
+from ._location import _SKIPPED as _LIBRARIES
 from ._reporting import display_path
 from .backends.base import BuildBackend
 from .declarative.model import Recipe, project_directory
@@ -94,7 +95,9 @@ def import_recipe_module(image_path: Path, *, extra_paths: Sequence[str | Path])
     ``if __name__ == "__main__":`` block is not executed. The file's directory, its
     project's (the nearest directory at or above it holding a ``pyproject.toml``) and
     every entry of *extra_paths* are importable while it runs, so sibling helper modules
-    and the project's own packages resolve from any working directory.
+    and the project's own packages resolve from any working directory. A module they
+    provide is the project's even when another project's image file, loaded earlier in the
+    process, imported one of that name.
     """
     digest = hashlib.sha256(str(image_path).encode("utf-8")).hexdigest()[:12]
     module_name = f"_tundravm_image_{digest}"
@@ -108,7 +111,8 @@ def import_recipe_module(image_path: Path, *, extra_paths: Sequence[str | Path])
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     roots = (image_path.parent, project_directory(image_path.parent))
-    with _import_paths(*map(str, roots), *(str(Path(p).resolve()) for p in extra_paths)):
+    paths = (*map(str, roots), *(str(Path(p).resolve()) for p in extra_paths))
+    with _import_paths(*paths), _own_modules(paths):
         keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
         try:
             _exec_source(image_path, module)
@@ -193,6 +197,66 @@ def _import_paths(*paths: str) -> Iterator[None]:
                 sys.path.remove(p)
             except ValueError:
                 pass
+
+
+@contextmanager
+def _own_modules(paths: Sequence[str]) -> Iterator[None]:
+    """While an image file runs, a module one of *paths* provides is imported from there.
+
+    Another project's image file, loaded earlier in this process, may have imported a module
+    of the same name (both examples write ``components``): that entry and its submodules are
+    hidden while this file runs, then put back. Installed libraries and tundravm are never
+    hidden, whatever a project names its directories.
+    """
+    provided = _provided(paths)
+    hidden = {
+        key: module
+        for key, module in sys.modules.items()
+        if (where := provided.get(key.partition(".")[0])) is not None and _foreign(module, where)
+    }
+    for key in hidden:
+        del sys.modules[key]
+    try:
+        yield
+    finally:
+        names = {key.partition(".")[0] for key in hidden}
+        for key in [key for key in sys.modules if key.partition(".")[0] in names]:
+            del sys.modules[key]
+        sys.modules.update(hidden)
+
+
+def _provided(paths: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    """Each module name *paths* provide (a ``.py`` file or a directory), with the files or
+    directories that provide it."""
+    found: dict[str, tuple[str, ...]] = {}
+    for path in paths:
+        try:
+            entries = os.listdir(path)
+        except OSError:
+            continue
+        for entry in entries:
+            name = entry.removesuffix(".py")
+            location = os.path.join(os.path.abspath(path), entry)
+            if name.isidentifier() and (entry.endswith(".py") or os.path.isdir(location)):
+                found[name] = (*found.get(name, ()), location)
+    return found
+
+
+def _foreign(module: ModuleType, where: tuple[str, ...]) -> bool:
+    """Whether *module* was imported from none of *where*, and not from a library."""
+    spec = module.__spec__
+    locations = [] if spec is None else list(spec.submodule_search_locations or ())
+    origin = getattr(module, "__file__", None)
+    if isinstance(origin, str):
+        locations.append(origin)
+    if not locations:
+        return False
+    for location in map(os.path.abspath, locations):
+        if location.startswith(_LIBRARIES) or any(
+            location == place or location.startswith(place + os.sep) for place in where
+        ):
+            return False
+    return True
 
 
 @dataclass(slots=True)
