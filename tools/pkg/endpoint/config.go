@@ -50,12 +50,14 @@ type Config struct {
 }
 
 // Container is one container's sshd: its name, its port, the glob of the host public keys
-// its host-side unit makes each boot, and the directory its delivered keys land in.
+// its host-side unit makes each boot, the directory its delivered keys land in, and whether
+// POST /ssh-key writes the operator's key there too (Owner).
 type Container struct {
 	Name     string `yaml:"name"`
 	Port     int    `yaml:"port"`
 	HostKeys string `yaml:"host_keys"`
 	Keys     string `yaml:"keys"`
+	Owner    bool   `yaml:"owner"`
 }
 
 // Listener is one attested TLS port and the PEM certificate its key unit writes at boot.

@@ -358,6 +358,11 @@ func TestAnSSHKeyForALoginLandsInItsFileAndNotRoots(t *testing.T) {
 	f := start(t)
 	f.server.cfg.SSH = &SSHConfig{Login: "tenant"}
 	f.server.cfg.LoginKeys = filepath.Join(f.dir, "authorized_keys.d")
+	bob := filepath.Join(f.dir, "containers", "bob", "keys")
+	f.server.cfg.Containers = []Container{
+		{Name: "bob", Port: 10022, HostKeys: filepath.Join(f.dir, "none", "*.pub"), Keys: bob, Owner: true},
+		{Name: "eve", Port: 10023, HostKeys: filepath.Join(f.dir, "none", "*.pub"), Keys: filepath.Join(f.dir, "eve")},
+	}
 	c := f.session()
 	evidence, _ := f.evidence(c, nonce(14))
 	if !evidence.Accepts.SSHKey || evidence.Accepts.SSHLogin != "tenant" {
@@ -380,6 +385,12 @@ func TestAnSSHKeyForALoginLandsInItsFileAndNotRoots(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "ssh")); !os.IsNotExist(err) {
 		t.Fatalf("root's ssh directory was made: %v", err)
+	}
+	if owned, _ := os.ReadFile(filepath.Join(bob, "authorized_keys")); string(owned) != "restrict ssh-ed25519 AAAAop\n" {
+		t.Fatalf("the owner container's keys are %q", owned)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "eve")); !os.IsNotExist(err) {
+		t.Fatalf("a container without owner took the key: %v", err)
 	}
 	for _, bad := range []SSHConfig{{Login: "Root"}, {Login: "tenant", Dir: "/root/.ssh"}} {
 		cfg := Config{QuoteSocket: "/x", SSH: &bad}

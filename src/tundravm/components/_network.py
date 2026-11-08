@@ -258,7 +258,7 @@ class Firewall(Component):
         return tuple(
             dm.FirewallMode(
                 name,
-                ingress=tuple(dm.Port(p.port, p.protocol) for p in mode.ingress),
+                ingress=tuple(dm.Port(p.port, p.protocol) for p in mode.ingress if p is not None),
                 egress_rules=()
                 if mode.egress is None
                 else egress_rules(((f"{name} mode", mode.egress),)),

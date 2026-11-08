@@ -539,6 +539,7 @@ class StateBuilder:
                 attested_tls=entry.attested_tls,
                 owners=tuple(disk.name for disk in disks if disk.owner),
                 containers=entry.containers,
+                container_owners=entry.container_owners,
             )
             spec = delivery.source_spec()
             if spec.name not in profile.source_builds:  # a second delivery reuses the binary

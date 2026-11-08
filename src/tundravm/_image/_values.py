@@ -17,7 +17,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.parse import urlsplit
 
 from tundravm._location import Located, caller_location
@@ -30,6 +30,9 @@ from tundravm.errors import ValidationError
 
 from .._keywords import Keywords, shown, subject
 from ._change import Ref
+
+if TYPE_CHECKING:
+    from tundravm.components._container import ContainerSsh
 
 __all__ = [
     "LOCKED_SNAPSHOT",
@@ -1103,23 +1106,35 @@ class Mode(Keywords):
     ``production``, which the image boots into and returns to).
 
     A port a mode names opens in that mode only, whatever listens on it:
-    ``Mode(ingress=[TCP(22)])`` keeps ``SshAccess``'s port closed until a switch.
+    ``Mode(ingress=[TCP(22)])`` keeps ``SshAccess``'s port closed until a switch. A
+    container's sshd (``searcher.ssh``, a ``ContainerSsh``) stands for its TCP port.
     """
 
-    ingress: Sequence[PortValue] = ()
+    ingress: Sequence[PortValue | ContainerSsh | None] = ()
+    """Each a port, or a container's ``ssh`` (``None`` for one without, which is refused)."""
     egress: Egress | None = None
     lasts: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.ingress, (TCP, UDP)):
             raise _fail(self, "ingress= takes a list of ports.", hint="Pass ingress=[TCP(22)].")
-        object.__setattr__(self, "ingress", tuple(self.ingress))
+        from tundravm.components._container import ContainerSsh
+
+        if None in self.ingress:
+            raise _fail(
+                self,
+                "ingress= holds None: a container's ssh is None until it says ssh=.",
+                hint="Container(..., ssh=ContainerSsh(port=10022, owner=True)), then "
+                "Mode(ingress=[container.ssh]).",
+            )
+        ports = [TCP(p.port) if isinstance(p, ContainerSsh) else p for p in self.ingress]
+        object.__setattr__(self, "ingress", tuple(ports))
         for port in self.ingress:
             if not isinstance(port, (TCP, UDP)):
                 raise _fail(
                     self,
-                    f"ingress= holds {shown(port)}, not TCP(...) or UDP(...).",
-                    hint="Mode(ingress=[TCP(22)])",
+                    f"ingress= holds {shown(port)}, not TCP(...), UDP(...) or a container's ssh.",
+                    hint="Mode(ingress=[TCP(22), searcher.ssh])",
                 )
         if self.egress is not None and not isinstance(self.egress, Egress):
             raise _fail(self, "egress= must be an Egress.", hint="egress=Egress(ports=[TCP(443)])")

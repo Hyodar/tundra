@@ -73,6 +73,11 @@ def read(out: Path, path: str) -> str:
         (lambda: Container("web", ["busybox", "httpd"], packages=["busybox"]), "program path"),
         (lambda: Container("Web", HTTPD, packages=["busybox"]), "not a container name"),
         (lambda: ContainerSsh(port=22, keys=Secret("web-keys")), "only root binds below 1024"),
+        (lambda: ContainerSsh(port=10022), "no key to accept"),
+        (lambda: ContainerSsh(port=10022, owner=True, keys=Secret("k")), "names others"),
+        (lambda: Bind(data.directory("logs", group="eth")), "the container's group"),
+        (lambda: Bind(data.directory("logs"), file=True), "not a file"),
+        (lambda: Mode(ingress=[web().ssh]), "until it says ssh="),
         (lambda: web(ssh=ContainerSsh(port=8081, keys=Secret("k"))), "ssh= exposes already"),
         (lambda: Container("web", packages=["busybox"]), "argv= is empty"),
         (lambda: web(binds=[Bind("/run/tundravm/keys")]), "tundravm keeps from it"),
@@ -418,3 +423,89 @@ def test_a_host_service_beside_a_container_reads_it_through_a_group(where: str, 
         (step,) = [step for step in planned.init_steps if step.name == where]
         assert line in step.script.splitlines()
     assert set(planned.groups) & {"tenant", "web"} == {"web"}
+
+
+KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host"
+MENU = {"status": Command("/usr/bin/true")}
+
+
+@pytest.mark.parametrize(
+    ("login", "volume", "outcome"),
+    [
+        (Login("tenant", owner=True, commands=MENU), True, "    owner: true\n"),
+        (None, True, "    owner: true\n"),
+        (Login("tenant", keys=[KEY], commands=MENU), True, "hands it to no account"),
+        (None, False, "no attested endpoint"),
+    ],
+)
+def test_a_containers_sshd_takes_the_owners_key(
+    login: Login | None, volume: bool, outcome: str
+) -> None:
+    """ContainerSsh(owner=True) takes the key attest hands over, as Login(owner=True) does:
+    the endpoint writes it to the container's keys directory too, and no secret is asked."""
+    container = Container(
+        "web",
+        packages=["busybox"],
+        ssh=ContainerSsh(port=10022, owner=True),
+        state=data.directory("web") if volume else None,
+    )
+    access = [] if login is None else [SshAccess(login=login)]
+    image = Image("box", components=[container, *access])
+    if not outcome.startswith("    "):
+        with pytest.raises(ValidationError, match=outcome):
+            plan(image, "production")
+        return
+    planned = plan(image, "production")
+    config = planned.file("/etc/tdx/secrets.yaml").text
+    assert '  - name: "web"\n' in config and outcome in config
+    dropin = planned.file("/usr/lib/systemd/system/web.service.d/20-container.conf").text
+    assert "/run/tundravm/containers/web/keys:/etc/ssh/tundravm/keys" in dropin
+    assert "credentials: []\n" in config
+
+
+@pytest.mark.parametrize(
+    ("ingress", "rule"),
+    [
+        ([ContainerSsh(port=10022, owner=True)], "tcp dport 10022 ct mark set 0x00000002 accept"),
+        ([TCP(10022)], "tcp dport 10022 ct mark set 0x00000002 accept"),
+    ],
+)
+def test_a_mode_opens_a_containers_sshd_by_naming_it(ingress: list[Any], rule: str) -> None:
+    assert Mode(ingress=ingress).ingress == (TCP(10022),)
+    container = web(state=data.directory("web"), ssh=ContainerSsh(port=10022, owner=True))
+    window = Firewall(modes={"production": Mode(), "maintenance": Mode(ingress=[container.ssh])})
+    image = Image("box", components=[container, window, SshAccess(from_delivery=True)])
+    assert rule in plan(image, "production").file("/etc/nftables.conf").text
+
+
+@pytest.mark.parametrize(
+    ("bind", "line"),
+    [
+        (
+            Bind(data.directory("input"), writable=True),
+            "-o feeder -g web -m 0770 /persistent/data/input",
+        ),
+        (Bind(data.directory("input")), "-o feeder -g web -m 0750 /persistent/data/input"),
+        (
+            Bind(data.directory("drop"), writable=True),
+            "-o web -g web -m 0770 /persistent/data/drop",
+        ),
+    ],
+)
+def test_a_bound_volume_directory_is_one_the_containers_group_traverses(
+    bind: Bind, line: str
+) -> None:
+    """The directory keeps its service as owner and takes the container's group, with the
+    mode the bind needs: no raw mode= on the directory."""
+    feeder = Service("feeder", ["/usr/bin/feeder"], state=data.directory("input"))
+    image = Image("box", components=[web(binds=[bind])], services=[feeder])
+    planned = plan(image, "production")
+    (step,) = [step for step in planned.init_steps if step.name == "volume-data"]
+    assert f"/usr/bin/install -d {line}" in step.script.splitlines()
+    assert (
+        "runtime-init-volume-data.service"
+        in planned.file("/usr/lib/systemd/system/web.service").text
+    )
+    dropin = planned.file("/usr/lib/systemd/system/web.service.d/20-container.conf").text
+    path = bind.target
+    assert f"{bind.directive}={path}:{path}" in dropin

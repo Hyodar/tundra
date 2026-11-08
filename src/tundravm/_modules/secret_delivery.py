@@ -108,7 +108,8 @@ class SecretDelivery(Module):
     terminal (``pty``) when *ssh_terminal*; with neither the endpoint takes none. *containers* are
     ``(name, port)`` pairs: the containers whose sshd host keys
     (:func:`tundravm._modules.container_ssh.host_keys`) the quote binds, labelled by name,
-    and whose keys directory takes a login's key.
+    and whose keys directory takes a login's key; the operator's SSH key also goes to that
+    directory for each of *container_owners*.
     """
 
     secrets: tuple[SecretSpec, ...] = ()
@@ -130,6 +131,7 @@ class SecretDelivery(Module):
     attested_tls: tuple[int, ...] = ()
     owners: tuple[str, ...] = ()
     containers: tuple[tuple[str, int], ...] = ()
+    container_owners: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.secrets = tuple(self.secrets)
@@ -332,6 +334,8 @@ class SecretDelivery(Module):
                     f'    keys: "{container_ssh.keys_directory(name)}"',
                 )
             )
+            if name in self.container_owners:
+                lines.append("    owner: true")
         return "\n".join(lines) + "\n"
 
 

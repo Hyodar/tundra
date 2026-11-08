@@ -1012,7 +1012,7 @@ A peer pinned to its addresses, in `Egress(hosts=)`: `Host("api.example", ["203.
 
 ```python
 Mode(
-    ingress: Sequence[PortValue] = (),
+    ingress: Sequence[PortValue | ContainerSsh | None] = (),
     egress: Egress | None = None,
     lasts: str | None = None,
 )
@@ -1212,10 +1212,16 @@ Containers: `Container`, a program in a Debian root of its own built with the im
 *dataclass*
 
 ```python
-Bind(path: str, *, at: str | None = None, writable: bool = False, file: bool = False)
+Bind(
+    path: str | VolumeDirectory,
+    *,
+    at: str | None = None,
+    writable: bool = False,
+    file: bool = False,
+)
 ```
 
-A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind("/run/input", writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
+A host *path* the container sees at *at* (default: the same path), read-only unless *writable*: `Bind("/var/log/lighthouse")`, `Bind(data.directory("input"), writable=True)`. *file* binds one file rather than a directory (a socket, a config). The path must exist when the container starts; the root gains its mount point. A volume directory is made for it: its service keeps it, the container's group traverses it (`0750`) and writes it when *writable* (`0770`), and the container waits for the volume. A secret reaches a container as `credentials=` on a `Service` does, not as a bind.
 
 | Member | Does |
 |---|---|
@@ -1272,14 +1278,14 @@ Container(
 *dataclass*
 
 ```python
-ContainerSsh(port: int, keys: Secret | Sequence[str])
+ContainerSsh(port: int, keys: Secret | Sequence[str] = (), owner: bool = False)
 ```
 
-The container's own sshd on *port*, letting its user in with *keys* and with nothing else: `Container("searcher", ssh=ContainerSsh(port=10022, keys=Secret("searcher-keys")))`.
+The container's own sshd on *port*, letting its user in by key and with nothing else: `Container("bob", ssh=ContainerSsh(port=10022, owner=True))`.
 
 | Member | Does |
 |---|---|
-| `ContainerSsh.delivered` | Whether the keys arrive after attestation (a `Secret`) rather than baked in. |
+| `ContainerSsh.delivered` | Whether the keys arrive after attestation (a `Secret`, or the owner's) rather than baked in. |
 
 ## tundravm.components.observability
 

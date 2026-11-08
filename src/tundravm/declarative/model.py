@@ -2224,7 +2224,8 @@ class Secrets(Declared):
     with neither the endpoint takes none. *ssh_terminal* lets that login's key have a
     terminal (``pty``), as a development build's dev commands do. *containers* are the
     ``(name, port)`` of each container's sshd, whose host keys, made at boot under
-    ``/run/tundravm/containers/<name>``, every quote binds before the attested TLS keys.
+    ``/run/tundravm/containers/<name>``, every quote binds before the attested TLS keys;
+    the operator's SSH key goes to the keys directory of each of *container_owners* too.
     """
 
     name: str = "secrets"
@@ -2240,11 +2241,13 @@ class Secrets(Declared):
     delivery: ExternalDelivery | None = None
     attested_tls: tuple[int, ...] = ()
     containers: tuple[tuple[str, int], ...] = ()
+    container_owners: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze(self, "entries")
         _freeze(self, "attested_tls")
         _freeze(self, "containers")
+        _freeze(self, "container_owners")
         _require_name(self, self.name)
         for port in self.attested_tls:
             if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:

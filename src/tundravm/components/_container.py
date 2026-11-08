@@ -18,8 +18,9 @@ import re
 import zlib
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field, replace
+from typing import ClassVar, Literal
 
-from tundravm._image._component import Component, Endpoint, ServiceReady
+from tundravm._image._component import BootReady, Component, Endpoint, ServiceReady
 from tundravm._image._metrics import UnitMetrics
 from tundravm._image._secrets import Secret
 from tundravm._image._service import Sandbox, Service, _sandbox
@@ -95,7 +96,7 @@ PROTECTED = ("/run/tundravm", "/proc", "/sys", "/dev", "/boot")
 containers' keys) and the kernel's interfaces."""
 WHOLE = frozenset({"/", "/etc", "/usr", "/var", "/run", "/root", "/home"})
 """Host directories a ``Bind`` may reach into but not bind whole."""
-_KEYS_HINT = 'keys=Secret("searcher-keys") for keys delivered after attestation.'
+_KEYS_HINT = "owner=True for the key attest hands over, or keys=[...] baked into the root."
 
 
 def _group_readable(hardening: Sandbox) -> Hardening:
@@ -112,11 +113,12 @@ def uid(user: str) -> int:
 
 @dataclass(frozen=True, slots=True)
 class ContainerSsh(Located):
-    """The container's own sshd on *port*, letting its user in with *keys* and with
-    nothing else: ``Container("searcher", ssh=ContainerSsh(port=10022,
-    keys=Secret("searcher-keys")))``.
+    """The container's own sshd on *port*, letting its user in by key and with nothing
+    else: ``Container("bob", ssh=ContainerSsh(port=10022, owner=True))``.
 
-    *keys* is a ``Secret`` (a public key list delivered after attestation) or public key
+    *owner* takes the owner's key, the one ``attest`` hands over, as ``Login(owner=True)``
+    does: the attested endpoint writes it for the container too, on the same terms. *keys*
+    is instead a ``Secret`` (a public key list delivered after attestation) or public key
     lines baked into the root, as on a ``Login``. tundravm supplies the rest: an sshd
     config allowing that one user by key only (no password, no root, no forwarding), and a
     host key the host makes each boot, owned by the container's user and read-only to it,
@@ -126,19 +128,30 @@ class ContainerSsh(Located):
     """
 
     port: int
-    keys: Secret | Sequence[str]
+    keys: Secret | Sequence[str] = ()
+    owner: bool = False
+
+    protocol: ClassVar[Literal["tcp"]] = "tcp"
+    """What its port speaks, so ``Mode(ingress=[searcher.ssh])`` reads it as a port."""
 
     def __post_init__(self) -> None:
         if isinstance(self.port, bool) or not isinstance(self.port, int):
             raise ValidationError(
                 f"ContainerSsh: port must be a number, got {self.port!r}.",
-                hint='ContainerSsh(port=10022, keys=Secret("searcher-keys"))',
+                hint="ContainerSsh(port=10022, owner=True)",
             )
         if not 1024 <= self.port <= 65535:
             raise ValidationError(
                 f"ContainerSsh: port {self.port} is not one the container's user may bind: "
                 "sshd runs as that user, and only root binds below 1024.",
                 hint="Pick a port from 1024 to 65535: ContainerSsh(port=10022, ...).",
+            )
+        if not isinstance(self.owner, bool):
+            raise ValidationError("ContainerSsh: owner= must be True or False.", hint="owner=True")
+        if self.owner and (isinstance(self.keys, Secret) or self.keys):
+            raise ValidationError(
+                "ContainerSsh: owner=True makes the owner's key its key, and keys= names others.",
+                hint="Drop keys=, or owner=True for keys of your own.",
             )
         if isinstance(self.keys, Secret):
             return
@@ -153,33 +166,54 @@ class ContainerSsh(Located):
                     f"ContainerSsh: {key!r} is not one OpenSSH public key line.",
                     hint="Paste the .pub file's line: 'ssh-ed25519 AAAA... comment'.",
                 )
-        if not self.keys:
+        if not self.keys and not self.owner:
             raise ValidationError(
                 "ContainerSsh has no key to accept, so nobody could log in.", hint=_KEYS_HINT
             )
 
     @property
     def delivered(self) -> bool:
-        """Whether the keys arrive after attestation (a ``Secret``) rather than baked in."""
-        return isinstance(self.keys, Secret)
+        """Whether the keys arrive after attestation (a ``Secret``, or the owner's) rather
+        than baked in."""
+        return self.owner or isinstance(self.keys, Secret)
 
 
 @dataclass(frozen=True, slots=True)
 class Bind(Located):
     """A host *path* the container sees at *at* (default: the same path), read-only unless
-    *writable*: ``Bind("/var/log/lighthouse")``, ``Bind("/run/input", writable=True)``.
-    *file* binds one file rather than a directory (a socket, a config). The path must exist
-    when the container starts; the root gains its mount point. A secret reaches a
-    container as ``credentials=`` on a ``Service`` does, not as a bind.
+    *writable*: ``Bind("/var/log/lighthouse")``, ``Bind(data.directory("input"),
+    writable=True)``. *file* binds one file rather than a directory (a socket, a config).
+    The path must exist when the container starts; the root gains its mount point. A
+    volume directory is made for it: its service keeps it, the container's group traverses
+    it (``0750``) and writes it when *writable* (``0770``), and the container waits for the
+    volume. A secret reaches a container as ``credentials=`` on a ``Service`` does, not as
+    a bind.
     """
 
-    path: str
+    path: str | VolumeDirectory
     _: KW_ONLY
     at: str | None = None
     writable: bool = False
     file: bool = False
+    directory: VolumeDirectory | None = field(default=None, init=False)
+    """The volume directory *path* named, which the image makes for the container."""
 
     def __post_init__(self) -> None:
+        if isinstance(self.path, VolumeDirectory):
+            if self.path.group is not None:
+                raise ValidationError(
+                    f"Bind: {self.path.path} shares group {self.path.group}, and a bind gives "
+                    "it the container's group.",
+                    hint="Bind a directory without group=; services beside the container "
+                    "join its group (groups=[container.group]).",
+                )
+            if self.file:
+                raise ValidationError(
+                    f"Bind: {self.path.path} is a volume directory, not a file.",
+                    hint="Drop file=True, or bind the file inside it: Bind(directory / 'name').",
+                )
+            object.__setattr__(self, "directory", self.path)
+            object.__setattr__(self, "path", self.path.path)
         for keyword in ("path", "at"):
             value = getattr(self, keyword)
             if value is None and keyword == "at":
@@ -199,7 +233,7 @@ class Bind(Located):
     @property
     def target(self) -> str:
         """Where the container sees it."""
-        return self.at or self.path
+        return self.at or str(self.path)
 
     @property
     def directive(self) -> str:
@@ -311,7 +345,7 @@ class Container(Component):
         if self.ssh is not None and not isinstance(self.ssh, ContainerSsh):
             raise _fail(
                 f"ssh= holds {self.ssh!r}, not a ContainerSsh.",
-                hint='ssh=ContainerSsh(port=10022, keys=Secret("web-keys"))',
+                hint="ssh=ContainerSsh(port=10022, owner=True)",
             )
         self._check_argv()
         self._check_packages()
@@ -451,9 +485,8 @@ class Container(Component):
         for item in self.binds:
             if not isinstance(item, Bind):
                 raise _fail(f"binds= holds {item!r}, not a Bind.", hint='binds=[Bind("/srv/a")]')
-            if item.path in WHOLE or any(
-                item.path == p or item.path.startswith(f"{p}/") for p in PROTECTED
-            ):
+            path = str(item.path)
+            if path in WHOLE or any(path == p or path.startswith(f"{p}/") for p in PROTECTED):
                 raise _fail(
                     f"Bind({item.path!r}) shows the container a host path tundravm keeps from "
                     "it: the control plane, the kernel's interfaces, or a whole system tree.",
@@ -491,6 +524,11 @@ class Container(Component):
                 where = container_ssh.keys_directory(self.name)
                 found.append(Bind(where, at=container_ssh.AUTHORIZED_KEYS))
         return tuple(found)
+
+    def _volumes(self) -> list[BootReady]:
+        """The readiness of each volume a bound directory is on, once."""
+        found = [item.directory.ready for item in self.binds if item.directory is not None]
+        return list(dict.fromkeys(found))
 
     def _check_packages(self) -> None:
         if not self.packages:
@@ -696,7 +734,7 @@ class Container(Component):
             state=self.state,
             user=self.run_user,
             hardening=_group_readable(self.hardening if self.argv else SSHD_SANDBOX),
-            requires=list(self.requires),
+            requires=[*self.requires, *self._volumes()],
             readiness=None
             if self.probe is None or network is None
             else replace(self.probe, host=network.address),
@@ -710,6 +748,7 @@ class Container(Component):
                     f"{self.name}-ssh",
                     sshd,
                     user=self.run_user,
+                    requires=self._volumes(),
                     hardening=_group_readable(SSHD_SANDBOX),
                     unit=self._dropin(f"{self.name}-ssh.service", units),
                     description=f"SSH into container {self.name}",
@@ -743,7 +782,8 @@ class Container(Component):
             packages.append(container_ssh.PACKAGE)
             config = container_ssh.config(self.run_user, ssh.port)
             files.append(dm.File(container_ssh.CONFIG, config, 0o644))
-            if not isinstance(ssh.keys, Secret):
+            if not ssh.delivered:
+                assert not isinstance(ssh.keys, Secret)
                 keys = "".join(f"{key.strip()}\n" for key in ssh.keys)
                 files.append(dm.File(f"{container_ssh.AUTHORIZED_KEYS}/authorized_keys", keys))
         ids = uid(self.run_user)

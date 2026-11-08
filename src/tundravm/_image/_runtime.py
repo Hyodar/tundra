@@ -144,21 +144,34 @@ def _logins(items: Iterable[object]) -> Iterator[du.Login]:
             yield from _logins(composed(item))
 
 
+def _every_container(items: Iterable[object]) -> Iterator[Container]:
+    """Every ``Container`` in *items*, components expanded."""
+    from tundravm.components.container import Container
+
+    for item in items:
+        if isinstance(item, Container):
+            yield item
+        elif isinstance(item, Component):
+            yield from _every_container(composed(item))
+
+
 def account_groups(image: object) -> frozenset[str]:
     """The groups an account makes for itself: each ``Login``'s (useradd's own group) and
     each ``Container``'s, which a ``group=`` directory may name and nothing declares again."""
-    from tundravm.components.container import Container
-
-    def containers(items: Iterable[object]) -> Iterator[Container]:
-        for item in items:
-            if isinstance(item, Container):
-                yield item
-            elif isinstance(item, Component):
-                yield from containers(composed(item))
-
     items = _image_items(image)
     return frozenset(
-        (*(login.name for login in _logins(items)), *(c.group for c in containers(items)))
+        (*(login.name for login in _logins(items)), *(c.group for c in _every_container(items)))
+    )
+
+
+def container_binds(image: object) -> tuple[tuple[VolumeDirectory, str, bool], ...]:
+    """``(directory, container's group, writable)`` of each volume directory a container
+    binds (``Bind(data.directory("input"))``)."""
+    return tuple(
+        (item.directory, container.group, item.writable)
+        for container in _every_container(_image_items(image))
+        for item in container.binds
+        if item.directory is not None
     )
 
 
@@ -191,6 +204,17 @@ def key_files(image: object) -> tuple[tuple[str, str], ...]:
         if container.ssh is not None and isinstance(container.ssh.keys, Secret)
     ]
     return tuple(dict.fromkeys((*logins, *containers)))
+
+
+def container_owners(image: object) -> tuple[str, ...]:
+    """The containers whose sshd takes the owner's key (``ContainerSsh(owner=True)``)."""
+    return tuple(
+        sorted(
+            container.name
+            for container in _containers(_image_items(image))
+            if container.ssh is not None and container.ssh.owner
+        )
+    )
 
 
 def container_ports(image: object) -> tuple[tuple[str, int], ...]:
@@ -251,6 +275,8 @@ def bound(image: object) -> tuple[tuple[Volume, ...], tuple[Secret, ...]]:
     for container in _containers(_image_items(image)):
         if container.ssh is not None and isinstance(container.ssh.keys, Secret):
             _first("secret", secrets, container.ssh.keys)
+    for directory, _group, _writable in container_binds(image):
+        _first("volume", volumes, directory.volume)
     for way in image.ingress:
         if isinstance(way, TLS):
             _first("secret", secrets, way.certificate)
@@ -345,6 +371,11 @@ class Runtime:
     location."""
     containers: tuple[tuple[str, int], ...] = ()
     """``(name, port)`` of each container's sshd, whose host keys the quote binds."""
+    container_owners: tuple[str, ...] = ()
+    """The containers whose sshd takes the owner's key beside the account that does."""
+    binds: tuple[tuple[VolumeDirectory, str, bool], ...] = ()
+    """``(directory, group, writable)``: a volume directory a container binds, which its
+    group may traverse (and write, when *writable*)."""
     ssh: Component | None = None
     """The image's own ``SshAccess``, which the control plane runs with ``from_delivery``
     on instead of a second one."""
@@ -476,6 +507,19 @@ class Runtime:
                 hint="Give the image a Volume(..., unlock=OperatorKey()), whose owner it is, "
                 "or keys= of its own.",
             )
+        for name in self.container_owners:
+            if not self.control_plane or not (self.root_delivery or self.owner_login):
+                raise ValidationError(
+                    f"Container({name!r}): ContainerSsh(owner=True) takes the key attest hands "
+                    "over, and "
+                    + (
+                        "this image runs no attested endpoint to take it."
+                        if not self.control_plane
+                        else "this image's SshAccess hands it to no account."
+                    ),
+                    hint="Give the image a Volume(..., unlock=OperatorKey()) and a "
+                    "Login(owner=True), or keys= of its own.",
+                )
         if self.volumes or self.control_plane:
             found.append(dm.RuntimeTools(self.tools))
         for volume in self.volumes:
@@ -541,6 +585,19 @@ class Runtime:
                 found[state.path] = (user, state.group, state.mode)
             else:
                 found[state.path] = ("root", state.group, state.mode)
+        binders: dict[str, str] = {}
+        for directory, group, writable in self.binds:
+            if directory.volume != volume:
+                continue
+            first = binders.setdefault(directory.path, group)
+            if first != group:
+                raise ValidationError(
+                    f"Image: {directory.path} is bound by containers {first} and {group}, "
+                    "and only one container's group can own it.",
+                    hint="Give each container a directory of its own.",
+                )
+            owner = found.get(directory.path, (group,))[0]
+            found[directory.path] = (owner, group, 0o770 if writable else 0o750)
         return found
 
     def delivery(self) -> Iterator[dm.Declaration | Component]:
@@ -558,6 +615,7 @@ class Runtime:
             ssh_login=self.owner_login,
             attested_tls=tuple(way.port for way in self.attested),
             containers=self.containers,
+            container_owners=self.container_owners,
         )
         if isinstance(self.ssh, SshAccess):
             yield dataclasses.replace(self.ssh, from_delivery=self.root_delivery)
