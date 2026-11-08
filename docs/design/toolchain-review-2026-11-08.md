@@ -21,7 +21,7 @@ vouched for it, **W** weakens it or allows denial of service, **H** hygiene.
 | 10 | H | `_unpack` | `rmtree(root)` before the rename removed a concurrent fetch's verified release under the go running from it. | A verified `root` is kept; anything else is moved aside first. | yes |
 | 11 | H | `go_toolchain` | `toolchain go1.22`, a language version, failed later as a proxy 404. | Refused up front, naming `go1.22.0`. | yes |
 | 12 | H | `host_cache` | A relative `XDG_CACHE_HOME` put the cache, and the fetched `bin` on `PATH`, relative to the working directory. | Ignored, as the XDG spec says. | yes |
-| 13 | W | `_sumdb_hash` | No tree head is remembered, so there is no consistency proof between runs: whoever holds the database key can show one client a forked tree. Go keeps the latest head in `GOPATH/pkg/sumdb`. | Persist the latest head per database and check `tlog` consistency proofs. | no: needs the database key |
+| 13 | W | `_sumdb_hash` | No tree head is remembered, so there is no consistency proof between runs: whoever holds the database key can show one client a forked tree. Go keeps the latest head in `GOPATH/pkg/sumdb`. | `toolchains/sum.golang.org.latest` keeps the largest verified head; each new one is proven consistent with it from the larger tree's tiles (RFC 6962), else refused as a fork. | yes |
 | 14 | H | `_unpack` | A hard kill mid-unpack leaves a `.go1.N.P.*` scratch directory: never trusted, but kept. | Sweep old scratch directories. | no |
 | 15 | H | `_toolchains` | Only the toolchains directory and the release are checked; an owner of a parent directory could swap them after the check. | Check up to the first root-owned parent. | no |
 
@@ -40,8 +40,8 @@ vouched for it, **W** weakens it or allows denial of service, **H** hygiene.
   size`; tile paths and partial widths are `tlog`'s. Tested on logs of 1 to 70000 records
   (three tile levels, partial tiles) against a bottom-up tile builder.
 - **A record of another module or version**, though proven, is refused.
-- **A replayed older tree head** is harmless: records never change, and a head older than
-  the release proves nothing.
+- **A replayed older tree head** is harmless: records never change, a head older than the
+  release proves nothing, and one the remembered head does not begin with is refused.
 - **Extraction**: hash before any write; names outside `<module>/`, `..`, `.`, empty
   parts and absolute paths refused; links and setuid bits in the zip ignored (regular
   files, 0755 under `bin/` and `pkg/tool/`, 0644 elsewhere); staged, marker last, renamed
@@ -56,5 +56,8 @@ vouched for it, **W** weakens it or allows denial of service, **H** hygiene.
 - Behaviour changes: arm64 and non-Linux hosts need golang; a release fetched before this
   review is fetched once again (its marker held no module); a go.mod
   `toolchain go1.22` is refused.
+- A smaller head the remembered one begins with is accepted, as `go` accepts it, since
+  sum.golang.org's lookups are cached for three hours; a wiped cache trusts the first head
+  it sees, as `go` does once `GOPATH/pkg/sumdb` is gone.
 - The storage host the proxy redirects to is pinned; if proxy.golang.org moves its zips,
   the fetch fails closed with a message naming the redirect.

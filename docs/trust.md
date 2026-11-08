@@ -196,9 +196,10 @@ Some limits hold on every platform:
 - **The tools.** The evidence service, the endpoint, and the key and disk tools build from
   `tools/` at the SDK's commit, which the lock pins like any other source.
 - **A fetched Go toolchain.** On a host without `go` 1.21 or newer, tundravm downloads the
-  release a `go.mod` names and runs it on your machine, once the Go checksum database has
-  vouched for it as `go` would check: a tree head signed by the key `go` has built in, the
-  release's record proven in that tree, and the zip's hash matching that record.
+  release a `go.mod` names and runs it once sum.golang.org vouches for it as `go` checks: a
+  tree head signed by `go`'s built-in key, the release's record proven in that tree, and the
+  zip's hash matching it. A head contradicting the largest one remembered is refused as a
+  fork.
 
 ## Recovery
 
