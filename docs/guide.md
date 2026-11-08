@@ -111,13 +111,17 @@ whole Component API:
 <!-- listing: examples/attested-node/components/nethermind.py Nethermind -->
 ```python
 class Nethermind(Component):
-    """Nethermind on *config*, its JSON-RPC and Engine API on the loopback."""
+    """Nethermind on *config*, its JSON-RPC and Engine API on the loopback.
+
+    It dials peers on 30303 and accepts none unless *expose_p2p*.
+    """
 
     jwt: Secret | Generated
     state: VolumeDirectory | None = None
     config: str = "hoodi"
     rpc_port: int = 8545
     engine_port: int = 8551
+    expose_p2p: bool = False
 
     @property
     def rpc(self) -> Endpoint:
@@ -162,6 +166,7 @@ class Nethermind(Component):
             state="nethermind" if self.state is None else self.state,
             credentials=[self.jwt],
             environment={"DOTNET_BUNDLE_EXTRACT_BASE_DIR": datadir},
+            expose=[TCP(30303), UDP(30303)] if self.expose_p2p else [],
             hardening="dotnet",
         )
 
