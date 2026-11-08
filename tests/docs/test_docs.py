@@ -278,7 +278,7 @@ def test_slugs_follow_github() -> None:
         ("docs/guide.md", 1750),
         ("docs/howto.md", 1200),
         ("docs/manual.md", 6000),
-        ("docs/trust.md", 2900),
+        ("docs/trust.md", 2750),
     ],
 )
 def test_pages_stay_short(page: str, limit: int) -> None:
