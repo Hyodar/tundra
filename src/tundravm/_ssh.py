@@ -2,9 +2,10 @@
 
 The address and the port come from the instance's receipt (a local instance forwards each
 guest port from ``127.0.0.1``), and the host key is checked strictly against the
-``known_hosts`` a passing ``attest`` wrote from the keys its quote binds. The account comes
-from the build's tree: each ``Login``'s sshd block on the host's sshd, and each container's
-own sshd (``ContainerSsh``) with its one user and its guest port. The key is the one
+``known_hosts`` a passing ``attest`` wrote from the keys its quote binds (a local boot's
+probe pins the same keys). The account comes from the build's tree: each ``Login``'s sshd
+block on the host's sshd, and each container's own sshd (``ContainerSsh``) with its one
+user and its guest port; ``root`` is a development build's alone. The key is the one
 ``attest --identity`` recorded for the instance, else ssh's own defaults. :func:`argv` is
 what ``ssh`` runs; nothing passes through a shell.
 """
@@ -21,6 +22,11 @@ from .builds import Build
 from .declarative.utils import SSH_LOGIN_CONFIG
 from .errors import StateError, ValidationError
 from .instances import SSH_PORT, Instance, known_hosts
+
+ROOT = "root"
+"""The account a development build lets in by ``DevAccess(ssh_keys=)``."""
+KEEPALIVE = ("-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2")
+"""A session whose guest stops answering (a ``toggle`` that closes its port) ends in 30s."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +68,17 @@ def accounts(build: Build) -> tuple[Account, ...]:
 
 
 def choose(instance: Instance, found: Sequence[Account], login: str | None) -> Account:
-    """The account ``tundravm ssh`` logs in as: *login*, else the image's one ``Login``."""
+    """The account ``tundravm ssh`` logs in as: *login*, else the image's one ``Login``;
+    ``root`` only on a development build."""
+    if login == ROOT:
+        kind = instance.data["build"]["kind"]
+        if kind != "development":
+            raise ValidationError(
+                f"{instance.id} runs a {kind} build: root logs in only on a development build.",
+                hint=f"Log in as the image's Login (`tundravm ssh {instance.id}`), or boot the "
+                "dev profile, DevAccess(ssh_keys=[...]), with `tundravm dev`.",
+            )
+        return Account(ROOT)
     logins = [account for account in found if account.container is None]
     if login is None and len(logins) == 1:
         return logins[0]
@@ -119,10 +135,11 @@ def argv(
     *,
     identity: Path | None,
     tty: bool,
+    batch: bool,
 ) -> list[str]:
     """``ssh`` to *account* on *instance* running *command*: strict host key checking
-    against the instance's ``known_hosts``, *identity* alone when there is one, ``-t``
-    when *tty*."""
+    against the instance's ``known_hosts``, *identity* alone when there is one, the
+    keepalive always, ``-t`` when *tty* and ``BatchMode`` (no prompt) when *batch*."""
     port = instance.port(account.port) or account.port
     hosts = require_known(instance, port)
     found = ["ssh"]
@@ -132,8 +149,19 @@ def argv(
         found += ["-i", str(identity), "-o", "IdentitiesOnly=yes"]
     if port != SSH_PORT:
         found += ["-p", str(port)]
-    found += ["-o", f"UserKnownHostsFile={hosts}", "-o", "StrictHostKeyChecking=yes"]
+    found += ["-o", f"UserKnownHostsFile={hosts}", "-o", "StrictHostKeyChecking=yes", *KEEPALIVE]
+    if batch:
+        found += ["-o", "BatchMode=yes"]
     return [*found, "--", f"{account.name}@{instance.host}", *command]
 
 
-__all__ = ["Account", "accounts", "argv", "choose", "host_name", "recorded_identity"]
+__all__ = [
+    "KEEPALIVE",
+    "ROOT",
+    "Account",
+    "accounts",
+    "argv",
+    "choose",
+    "host_name",
+    "recorded_identity",
+]

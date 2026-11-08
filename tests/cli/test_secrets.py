@@ -125,6 +125,19 @@ def test_attest_deliver_and_unlock_over_the_bound_session(
     assert again.code == EXIT_ERROR and "refused /credentials (409)" in again.err
 
 
+def test_a_local_boot_pins_its_host_keys_from_its_own_measurements(
+    instance: instances.Instance, endpoint: FakeEndpoint
+) -> None:
+    """What the probe of a ``dev``/``run`` boot does: the build's measurements.json judges
+    the evidence, the bound keys become known_hosts, nothing is handed over or recorded."""
+    result = bootstrap.pin_host_keys(instance)
+    assert (result.passed, result.verdict) == (True, "simulated")
+    known = instances.known_hosts(instance).read_text()
+    assert known == f"[127.0.0.1]:2222 {HOST_KEY}\n[127.0.0.1]:10022 {CONTAINER_KEY}\n"
+    assert endpoint.ssh_keys == [] and "attested" not in instance.data
+    assert [event["event"] for event in _events(instance)] == ["pinned"]
+
+
 @pytest.mark.parametrize(
     ("contract", "misbehave", "build", "endpoint_kwargs", "refusal"),
     [

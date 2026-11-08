@@ -123,7 +123,7 @@ COMMANDS = (
     "doctor",
     "ssh",
 )
-RUN_ACTIONS = ("status", "logs", "stop", "ssh", "mode", "switch", "probe")
+RUN_ACTIONS = ("status", "logs", "stop", "mode", "switch", "probe")
 DEPLOY_ACTIONS = ("status", "logs", "mode", "switch", "upgrade", "rollback")
 DOCTOR_AREAS = ("build", "run", "tdx", "azure", "gcp")
 
@@ -508,7 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = command(
         "run",
         _cmd_run,
-        "Run a build locally as a named instance; status|logs|stop|ssh|mode|switch|probe.",
+        "Run a build locally as a named instance; status|logs|stop|mode|switch|probe.",
         "tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]\n"
         "    boot qemu.raw through OVMF from its ESP on a snapshot (the build is never\n"
         "    written), forward every TCP port the image's firewall accepts or its services\n"
@@ -518,12 +518,12 @@ def build_parser() -> argparse.ArgumentParser:
         "      production build boots fail-closed (tdx-evidence.service refuses, no service\n"
         "      starts, nothing is delivered), a --dev build runs its services.\n"
         "    tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.\n"
-        "    --probe: wait for the dev build's boot probe, print its table, exit 1 on a\n"
-        "      failed check (a production build carries no probe).\n"
+        "    --probe: wait for the dev build's boot probe, print its table, pin the host\n"
+        "      keys its attested endpoint binds as known_hosts (for `tundravm ssh`), exit 1\n"
+        "      on a failed check (a production build carries no probe).\n"
         "tundravm run status INSTANCE   the process, control-plane and application readiness\n"
         "tundravm run logs INSTANCE     the serial console\n"
         "tundravm run stop INSTANCE     quit QEMU\n"
-        "tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH\n"
         "tundravm run mode INSTANCE     the security mode and what it means for evidence\n"
         "tundravm run switch INSTANCE MODE\n"
         "    put a firewall mode in force over the attested endpoint (signed by the pinned\n"
@@ -563,9 +563,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--memory", default="2G", help="Guest memory (default: %(default)s).")
     run.add_argument("--cpus", type=int, default=2, help="Guest CPUs (default: %(default)s).")
-    run.add_argument(
-        "--identity", type=Path, default=None, metavar="KEY", help="SSH key for `run ssh`."
-    )
 
     dev_cmd = command(
         "dev",
@@ -856,12 +853,15 @@ def build_parser() -> argparse.ArgumentParser:
         + _wrapped(
             "Run ssh against the instance's address and port from its receipt (a local "
             "instance's forward), checking the host key strictly against the known_hosts the "
-            "last passing `attest` wrote, which it refuses without. The account is the "
-            "image's one Login; --login names another, or a ContainerSsh user on its own "
-            "port. The key is the one `attest --identity` recorded, else ssh's defaults. "
-            "COMMAND and its words go to the login's program as typed, and none lists its "
-            "commands; a terminal gets -t when COMMAND is empty or the build is a "
-            "development one. --print prints the ssh command line instead of running it."
+            "last passing `attest` wrote (a local boot's probe pins the same keys), which it "
+            "refuses without. The account is the image's one Login; --login names another, a "
+            "ContainerSsh user on its own port, or root on a development build. The key is "
+            "the one `attest --identity` recorded, else ssh's defaults. COMMAND and its words "
+            "go to the login's program as typed, and none lists its commands; a terminal gets "
+            "-t when COMMAND is empty or the build is a development one, and anything else "
+            "(a script, CI) gets BatchMode, so nothing waits on a prompt. A guest that stops "
+            "answering for 30s ends the session. --print prints the ssh command line instead "
+            "of running it."
         ),
     )
     ssh_cmd.add_argument("instance", metavar="INSTANCE")
@@ -873,7 +873,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="The login's command and its words (none: the program lists its commands).",
     )
     ssh_cmd.add_argument(
-        "--login", default=None, metavar="NAME", help="The account (default: the one Login)."
+        "--login",
+        default=None,
+        metavar="NAME",
+        help="The account (default: the one Login; root on a development build).",
     )
     ssh_cmd.add_argument(
         "--identity",
@@ -1512,9 +1515,11 @@ def _cmd_run(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _probe(instance: instances.Instance, out: TextIO, *, timeout: float, as_json: bool) -> int:
-    """Wait for *instance*'s boot probe, print its table (or ``--json``); 0 only when every
-    check printed and none failed."""
+    """Wait for *instance*'s boot probe, print its table (or ``--json``) and, once it
+    finished, pin its host keys (:func:`_pin`); 0 only when every check printed and none
+    failed."""
     report = instances.probe(instance, timeout=timeout)
+    pinned = _pin(instance) if report.done is not None else None
     if as_json:
         print(json_report("run", {"id": instance.id, "probe": report.to_dict()}), file=out)
     else:
@@ -1527,7 +1532,30 @@ def _probe(instance: instances.Instance, out: TextIO, *, timeout: float, as_json
                 file=out,
             )
         print(f"recorded in {instance.path / instances.PROBE}", file=out)
+        if pinned is not None:
+            print(pinned, file=out)
     return EXIT_OK if report.ok else EXIT_FAILURE
+
+
+def _pin(instance: instances.Instance) -> str | None:
+    """Pin a booted local instance's host keys from its attested endpoint where nothing has
+    yet, so ``tundravm ssh`` checks them strictly; what was pinned, or ``None``."""
+    hosts = instances.known_hosts(instance)
+    if instance.port(instances.MANAGEMENT_PORT) is None or hosts.is_file():
+        return None
+    try:
+        result = bootstrap.pin_host_keys(instance)
+    except TdxError as exc:
+        print(f"note: host keys not pinned: {exc.args[0]}", file=sys.stderr)
+        return None
+    if not result.passed:
+        print(
+            f"note: host keys not pinned: the evidence is {result.verdict} against "
+            f"{instance.build.path / mf.MEASUREMENTS}",
+            file=sys.stderr,
+        )
+        return None
+    return f"host keys pinned in {hosts} ({result.verdict} quote)"
 
 
 def _run_action(
@@ -1560,17 +1588,7 @@ def _run_action(
         return _mode(instance, args, out)
     if action == "switch":
         return _switch(instance, args.target, args, out)
-    if action == "probe":
-        return _probe(instance, out, timeout=args.timeout, as_json=args.json)
-    instances.ssh_permitted(instance)
-    argv = bootstrap.ssh_argv(instance, bootstrap.identity_path(args.identity))
-    if not instances.known_hosts(instance).is_file():
-        print(
-            f"note: host key unverified: `tundravm attest {instance.id}` writes the host keys "
-            "its quote binds",
-            file=sys.stderr,
-        )
-    os.execvp(argv[0], argv)
+    return _probe(instance, out, timeout=args.timeout, as_json=args.json)
 
 
 def _firewall_line(instance: instances.Instance) -> str | None:
@@ -2105,6 +2123,7 @@ def _cmd_ssh(args: argparse.Namespace, out: TextIO) -> int:
         args.remote,
         identity=args.identity or _ssh.recorded_identity(instance),
         tty=terminal and (not args.remote or not build.production),
+        batch=not terminal,
     )
     if args.print_only:
         print(shlex.join(argv), file=out)

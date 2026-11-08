@@ -20,7 +20,11 @@ FLASHBOX = Path(__file__).parents[2] / "examples" / "flashbox" / "mkosi"
 LOGIN = "payload/mkosi.extra/etc/ssh/sshd_config.d/60-tundravm-login-{name}.conf"
 CONTAINER = "mkosi.images/bob/mkosi.extra/etc/ssh/tundravm/sshd_config"
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-STRICT = "-o UserKnownHostsFile=KNOWN -o StrictHostKeyChecking=yes"
+STRICT = (
+    "-o UserKnownHostsFile=KNOWN -o StrictHostKeyChecking=yes "
+    "-o ServerAliveInterval=15 -o ServerAliveCountMax=2"
+)
+SCRIPT = f"{STRICT} -o BatchMode=yes"
 
 
 class _Terminal(io.StringIO):
@@ -93,25 +97,26 @@ def _printed(cli: Cli, found: instances.Instance, *words: str) -> str:
 @pytest.mark.parametrize(
     ("setup", "words", "argv"),
     [
-        ({}, ("toggle", "maintenance"), f"{STRICT} -- searcher@203.0.113.7 toggle maintenance"),
-        ({}, ("logs", "--lines", "500"), f"{STRICT} -- searcher@203.0.113.7 logs --lines 500"),
-        ({}, ("--login", "bob"), f"-p 10022 {STRICT} -- bob@203.0.113.7"),
-        ({"platform": "qemu"}, (), f"-p 2222 {STRICT} -- searcher@127.0.0.1"),
-        ({"platform": "qemu"}, ("--login=bob", "id"), f"-p 10022 {STRICT} -- bob@127.0.0.1 id"),
+        ({}, ("toggle", "maintenance"), f"{SCRIPT} -- searcher@203.0.113.7 toggle maintenance"),
+        ({}, ("logs", "--lines", "500"), f"{SCRIPT} -- searcher@203.0.113.7 logs --lines 500"),
+        ({}, ("--login", "bob"), f"-p 10022 {SCRIPT} -- bob@203.0.113.7"),
+        ({"platform": "qemu"}, (), f"-p 2222 {SCRIPT} -- searcher@127.0.0.1"),
+        ({"platform": "qemu"}, ("--login=bob", "id"), f"-p 10022 {SCRIPT} -- bob@127.0.0.1 id"),
         (
             {"logins": ("searcher", "tenant")},
             ("--login", "tenant"),
-            f"{STRICT} -- tenant@203.0.113.7",
+            f"{SCRIPT} -- tenant@203.0.113.7",
         ),
+        ({"kind": "development"}, ("--login", "root"), f"{SCRIPT} -- root@203.0.113.7"),
         (
             {"identity": "/keys/searcher"},
             ("status",),
-            f"-i /keys/searcher -o IdentitiesOnly=yes {STRICT} -- searcher@203.0.113.7 status",
+            f"-i /keys/searcher -o IdentitiesOnly=yes {SCRIPT} -- searcher@203.0.113.7 status",
         ),
         (
             {"identity": "/keys/searcher"},
             ("--identity", "/keys/other", "status"),
-            f"-i /keys/other -o IdentitiesOnly=yes {STRICT} -- searcher@203.0.113.7 status",
+            f"-i /keys/other -o IdentitiesOnly=yes {SCRIPT} -- searcher@203.0.113.7 status",
         ),
     ],
     ids=[
@@ -121,6 +126,7 @@ def _printed(cli: Cli, found: instances.Instance, *words: str) -> str:
         "local",
         "local-container",
         "second-login",
+        "dev-root",
         "recorded-identity",
         "given-identity",
     ],
@@ -145,8 +151,20 @@ def test_the_argv(
         ({"known": ()}, (), "flashbox-1 has no known_hosts yet: ssh would have to trust a key"),
         ({"known": (22,)}, ("--login", "bob"), "no host key for [203.0.113.7]:10022 in"),
         ({}, ("--login",), "argument --login: expected one argument"),
+        (
+            {},
+            ("--login", "root"),
+            "flashbox-1 runs a production build: root logs in only on a development build.",
+        ),
     ],
-    ids=["two-logins", "unknown-login", "no-known-hosts", "container-not-pinned", "no-name"],
+    ids=[
+        "two-logins",
+        "unknown-login",
+        "no-known-hosts",
+        "container-not-pinned",
+        "no-name",
+        "production-root",
+    ],
 )
 def test_refusals(
     root: Path,
@@ -184,7 +202,7 @@ def test_no_such_instance_names_the_ones_there(root: Path, cli: Cli) -> None:
         (False, "development", (), False),
     ],
 )
-def test_a_terminal_gets_t_for_the_listing_or_a_dev_build(
+def test_a_terminal_gets_t_for_the_listing_or_a_dev_build_and_a_script_batch_mode(
     root: Path,
     cli: Cli,
     monkeypatch: pytest.MonkeyPatch,
@@ -196,4 +214,5 @@ def test_a_terminal_gets_t_for_the_listing_or_a_dev_build(
     if terminal:
         monkeypatch.setattr("sys.stdin", _Terminal())
     found = _instance(root, kind=kind)
-    assert _printed(cli, found, *words).startswith("ssh -t ") is tty
+    printed = _printed(cli, found, *words)
+    assert (printed.startswith("ssh -t "), "-o BatchMode=yes" in printed) == (tty, not terminal)

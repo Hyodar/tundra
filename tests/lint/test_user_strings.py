@@ -105,6 +105,9 @@ DENYLIST = {
         r"\bboot step (?:'|$)"
     ),
     "a keyword called deprecated (what to write instead)": re.compile(r"\(deprecated\)"),
+    "trust on first use (StrictHostKeyChecking=yes against the pinned known_hosts)": re.compile(
+        r"\baccept-new\b"
+    ),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -363,6 +366,10 @@ def test_removed_verbs_are_caught(text: str) -> None:
         ("Duplicate user name 'a' in variant 'dev'.", "variant for a profile (profile)"),
         ("  variant=", "variant for a profile (profile)"),
         ("variants.dev.files changed since the lock", "variant for a profile (profile)"),
+        (
+            "-o StrictHostKeyChecking=accept-new",
+            "trust on first use (StrictHostKeyChecking=yes against the pinned known_hosts)",
+        ),
         (
             "Name one Nethermind ships, e.g. config='surge-hoodi'.",
             "removed workload (Raiko) or example (surge; examples/attested-node)",

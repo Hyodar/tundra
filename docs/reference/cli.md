@@ -9,7 +9,7 @@ Generated from the `tundravm` argument parser by `uv run python -m tundravm._ref
 | [`lock`](#tundravm-lock) | Resolve or check the lock: snapshot, sources, toolchain. |
 | [`build`](#tundravm-build) | Build into an immutable build directory, with its manifest. |
 | [`show`](#tundravm-show) | Show the image as written and what it builds, or a build; --diff two of either. |
-| [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|ssh\|mode\|switch\|probe. |
+| [`run`](#tundravm-run) | Run a build locally as a named instance; status\|logs\|stop\|mode\|switch\|probe. |
 | [`dev`](#tundravm-dev) | Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it. |
 | [`deploy`](#tundravm-deploy) | Deploy a build to Azure or GCP; status\|logs\|mode\|switch\|upgrade\|rollback. |
 | [`attest`](#tundravm-attest) | Verify an instance's evidence against a policy; delivers nothing. |
@@ -33,7 +33,7 @@ positional arguments:
     lock      Resolve or check the lock: snapshot, sources, toolchain.
     build     Build into an immutable build directory, with its manifest.
     show      Show the image as written and what it builds, or a build; --diff two of either.
-    run       Run a build locally as a named instance; status|logs|stop|ssh|mode|switch|probe.
+    run       Run a build locally as a named instance; status|logs|stop|mode|switch|probe.
     dev       Build the dev profile, boot it, probe it, follow its console; Ctrl-C stops it.
     deploy    Deploy a build to Azure or GCP; status|logs|mode|switch|upgrade|rollback.
     attest    Verify an instance's evidence against a policy; delivers nothing.
@@ -226,11 +226,11 @@ options:
 
 ## tundravm run
 
-Run a build locally as a named instance; status|logs|stop|ssh|mode|switch|probe.
+Run a build locally as a named instance; status|logs|stop|mode|switch|probe.
 
 ```text
 usage: tundravm run [-h] [--json] [--traceback] [--mode {simulated,tdx}] [--dev] [--detach]
-                    [--probe] [--timeout SECONDS] [--memory MEMORY] [--cpus CPUS] [--identity KEY]
+                    [--probe] [--timeout SECONDS] [--memory MEMORY] [--cpus CPUS]
                     [BUILD|ACTION] [INSTANCE] [MODE]
 
 tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]
@@ -242,12 +242,12 @@ tundravm run [BUILD] --mode simulated|tdx [--dev] [--detach] [--probe]
       production build boots fail-closed (tdx-evidence.service refuses, no service
       starts, nothing is delivered), a --dev build runs its services.
     tdx: TDVF and a tdx-guest object; refused unless `doctor --for tdx` is ready.
-    --probe: wait for the dev build's boot probe, print its table, exit 1 on a
-      failed check (a production build carries no probe).
+    --probe: wait for the dev build's boot probe, print its table, pin the host
+      keys its attested endpoint binds as known_hosts (for `tundravm ssh`), exit 1
+      on a failed check (a production build carries no probe).
 tundravm run status INSTANCE   the process, control-plane and application readiness
 tundravm run logs INSTANCE     the serial console
 tundravm run stop INSTANCE     quit QEMU
-tundravm run ssh INSTANCE      a shell, only on a development build that runs SSH
 tundravm run mode INSTANCE     the security mode and what it means for evidence
 tundravm run switch INSTANCE MODE
     put a firewall mode in force over the attested endpoint (signed by the pinned
@@ -271,7 +271,6 @@ options:
   --timeout SECONDS     How long --probe waits (default: 900.0).
   --memory MEMORY       Guest memory (default: 2G).
   --cpus CPUS           Guest CPUs (default: 2).
-  --identity KEY        SSH key for `run ssh`.
 ```
 
 ## tundravm dev
@@ -598,12 +597,14 @@ tundravm ssh INSTANCE [--login NAME] [--identity KEY] [--print] [COMMAND ...]
 
 Run ssh against the instance's address and port from its receipt (a local instance's
 forward), checking the host key strictly against the known_hosts the last passing
-`attest` wrote, which it refuses without. The account is the image's one Login;
---login names another, or a ContainerSsh user on its own port. The key is the one
-`attest --identity` recorded, else ssh's defaults. COMMAND and its words go to the
-login's program as typed, and none lists its commands; a terminal gets -t when COMMAND
-is empty or the build is a development one. --print prints the ssh command line
-instead of running it.
+`attest` wrote (a local boot's probe pins the same keys), which it refuses without.
+The account is the image's one Login; --login names another, a ContainerSsh user on
+its own port, or root on a development build. The key is the one `attest --identity`
+recorded, else ssh's defaults. COMMAND and its words go to the login's program as
+typed, and none lists its commands; a terminal gets -t when COMMAND is empty or the
+build is a development one, and anything else (a script, CI) gets BatchMode, so
+nothing waits on a prompt. A guest that stops answering for 30s ends the session.
+--print prints the ssh command line instead of running it.
 
 positional arguments:
   INSTANCE
@@ -612,7 +613,7 @@ positional arguments:
 options:
   -h, --help      show this help message and exit
   --traceback     Raise errors with the Python traceback.
-  --login NAME    The account (default: the one Login).
+  --login NAME    The account (default: the one Login; root on a development build).
   --identity KEY  The SSH key (default: the one `attest --identity` recorded).
   --print         Print the ssh command line; run nothing.
 ```

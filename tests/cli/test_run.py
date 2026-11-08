@@ -103,9 +103,6 @@ def test_a_production_build_runs_simulated_fail_closed(
     assert report["services"] == instances.FAIL_CLOSED
     mode = cli("run", "mode", "demo-1")
     assert instances.FAIL_CLOSED in mode.out
-    ssh = cli("run", "ssh", "demo-1")
-    assert ssh.code == EXIT_ERROR
-    assert "runs a production build: it has no debug access" in ssh.err
     cli("run", "stop", "demo-1")
 
 

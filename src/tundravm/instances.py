@@ -637,22 +637,6 @@ def logs(instance: Instance) -> Iterator[str]:
     return iter(path.read_text(encoding="utf-8", errors="replace").splitlines())
 
 
-def ssh_permitted(instance: Instance) -> None:
-    """Refuse ``ssh`` unless the build is a development one whose image runs SSH."""
-    build = instance.data["build"]
-    if build["kind"] != "development":
-        raise ValidationError(
-            f"{instance.id} runs a production build: it has no debug access.",
-            hint="SSH on a production image is the control plane only; use `tundravm secrets "
-            "deliver|unlock`. Build with --dev (DevAccess) for a shell.",
-        )
-    if instance.port(SSH_PORT) is None:
-        raise ValidationError(
-            f"{instance.id}'s image runs no SSH server.",
-            hint="Give the image dev=DevAccess(ssh_keys=[...]) and build --dev.",
-        )
-
-
 def probe_checks(build: Mapping[str, Any], subject: str) -> tuple[str, ...]:
     """The checks a build's manifest records for its probe; refuses a build that has none
     (a production one), naming the fix."""
@@ -736,7 +720,6 @@ __all__ = [
     "readiness",
     "reachable",
     "require_host",
-    "ssh_permitted",
     "status",
     "stop",
     "tdx_refusal",

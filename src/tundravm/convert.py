@@ -506,7 +506,7 @@ REFUSED: dict[str, str] = {
     "RAM": f"{_VM} (run --memory)",
     "CPUs": f"{_VM} (run --cpus)",
     "Credentials": "secrets= are delivered after attestation; nothing is passed at boot",
-    **_group("SshKey SshCertificate", "run ssh takes --identity; SshAccess names the keys"),
+    **_group("SshKey SshCertificate", "tundravm ssh takes --identity; SshAccess names the keys"),
     "Machine": "tundravm run names instances <image>-<n>",
     "KernelCommandLineExtra": "Kernel(cmdline=) measures its parameters; nothing is added at boot",
 }

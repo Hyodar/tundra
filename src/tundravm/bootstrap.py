@@ -579,28 +579,6 @@ def signed(instance: Instance, evidence: Evidence, key: Operator | None) -> dict
     return {"signer": key.public, "signature": signature.decode()}
 
 
-def ssh_argv(instance: Instance, identity: Path) -> list[str]:
-    """``ssh`` to *instance* as root, checking the host key against the ``known_hosts`` a
-    passing ``attest`` wrote from the quote's binding."""
-    port = instance.port(SSH_PORT) or SSH_PORT
-    hosts = known_hosts(instance)
-    checking = "yes" if hosts.is_file() else "accept-new"
-    return [
-        "ssh",
-        "-i",
-        str(identity),
-        "-p",
-        str(port),
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        f"UserKnownHostsFile={hosts}",
-        "-o",
-        f"StrictHostKeyChecking={checking}",
-        f"root@{instance.host}",
-    ]
-
-
 # ── policy ───────────────────────────────────────────────────────────────
 
 
@@ -696,6 +674,21 @@ def _known_hosts(instance: Instance, evidence: Evidence) -> None:
     lines = [f"{name(SSH_PORT)} {key}\n" for key in evidence.host_keys]
     lines += [f"{name(c.port)} {key}\n" for c in evidence.containers for key in c.host_keys]
     known_hosts(instance).write_text("".join(lines), encoding="utf-8")
+
+
+def pin_host_keys(instance: Instance, *, connect: Connector | None = None) -> Attestation:
+    """A local boot's ``known_hosts``, written as :func:`attest` writes it: fresh evidence
+    from the attested endpoint on the forwarded management port, bound to the session and
+    judged against the build's own ``measurements.json``. Nothing is handed over and the
+    receipt records no attestation; the operator's ``attest`` against an approved policy
+    does both."""
+    data, digest = read_policy(instance.build.path / mf.MEASUREMENTS, instance)
+    channel, where = _session(instance, connect)
+    result, evidence = verify(instance, data, channel, where)
+    if result.passed:
+        _known_hosts(instance, evidence)
+        instance.event("pinned", verdict=result.verdict, policy_sha256=digest)
+    return result
 
 
 def attest(
@@ -1148,9 +1141,9 @@ __all__ = [
     "switch",
     "post",
     "read_passphrase",
+    "pin_host_keys",
     "read_policy",
     "release_predicate",
-    "ssh_argv",
     "unlock",
     "verify",
 ]
