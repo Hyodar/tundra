@@ -130,29 +130,47 @@ def test_a_ready_linux_host_reports_every_capability_in_the_plan_format() -> Non
         "verify:azure     unsupported: Azure evidence is vTPM-bound: no TDX register can be "
         "predicted",
     ]
-    assert rows[7].startswith("verify:qemu      ready (built-in TDX replay ")
+    assert (
+        rows[7]
+        == "verify:qemu      ready (built in: each build predicts the registers a QEMU TD reports)"
+    )
     assert rows[8].startswith("verify:gcp       ready (built-in replay, GCP firmware table ")
     assert _fixes(host) == {}
 
 
-NO_GO = f"no go on PATH: {GO_ABSENT}"
+NO_GO = f"no go on PATH: {GO_ABSENT.format(sources='each Go source')}"
 NO_RUSTUP = f"no rustup on PATH, which {RUSTUP_PURPOSE}"
 NEEDS_BOTH = ToolchainNeeds(go=("tdxs",), rustup=("prover",))
-ROW_GO = f"ready (go1.24.4, which {GO_PURPOSE})"
+ROW_GO = f"ready (go1.24.4, which {GO_PURPOSE.format(sources='each Go source')})"
+GO_SOURCES = ("delay-pipe", "input-proxy", "tundravm's tools")
 
 
 @pytest.mark.parametrize(
     ("tool", "version", "needs", "row", "code"),
     [
-        ("go", None, NEEDS_BOTH, f"optional: {NO_GO}", EXIT_OK),
+        (
+            "go",
+            None,
+            NEEDS_BOTH,
+            f"optional: no go on PATH: {GO_ABSENT.format(sources='tdxs')}",
+            EXIT_OK,
+        ),
         (
             "go",
             "go version go1.19.8 linux/amd64",
             NEEDS_BOTH,
-            f"optional: go1.19.8 predates toolchain switching (Go 1.21): {GO_ABSENT}",
+            "optional: go1.19.8 predates toolchain switching (Go 1.21): "
+            + GO_ABSENT.format(sources="tdxs"),
             EXIT_OK,
         ),
-        ("go", "go version go1.24.4 linux/amd64", NEEDS_BOTH, ROW_GO, EXIT_OK),
+        (
+            "go",
+            "go version go1.24.4 linux/amd64",
+            ToolchainNeeds(go=GO_SOURCES),
+            "ready (go1.24.4, which prefetches the modules and Go toolchain of delay-pipe, "
+            "input-proxy and tundravm's tools for the offline build)",
+            EXIT_OK,
+        ),
         ("rustup", None, NEEDS_BOTH, f"blocked: {NO_RUSTUP}", EXIT_FAILURE),
         ("go", None, None, f"optional: {NO_GO}", EXIT_OK),
         ("rustup", None, None, f"optional: {NO_RUSTUP}", EXIT_OK),
@@ -216,8 +234,8 @@ image = replace(image, services=[*image.services, Service("probe", [probe])])
 def test_doctor_reads_what_the_projects_image_needs(
     project: Path, monkeypatch: pytest.MonkeyPatch, added: str, row: str, code: int
 ) -> None:
-    """The project's image says which toolchains the build needs: every image's Tdxs is a Go
-    source, and a Cargo source not checked out yet may pin a Rust toolchain."""
+    """The project's image says which toolchains the build needs: tundravm's tools are Go
+    sources, and a Cargo source not checked out yet may pin a Rust toolchain."""
     with (project / "demo.py").open("a", encoding="utf-8") as demo:
         demo.write(added)
     host, _ = _host({k: v for k, v in TOOLS.items() if k != "rustup"}, files=LINUX_FILES)

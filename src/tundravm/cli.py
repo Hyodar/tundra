@@ -41,6 +41,7 @@ from . import manifest as mf
 from . import templates as scaffold
 from ._image._lower import component_classes
 from ._location import raised_at
+from ._modules.base import TOOLS_LOCAL
 from ._reporting import TextReporter
 from ._source import (
     SOURCES_DIRNAME,
@@ -52,7 +53,7 @@ from ._source import (
 )
 from .attestation import render_attestation
 from .backends.base import BuildBackend
-from .capabilities import AREAS, Capability, Host, ToolchainNeeds, capabilities, failed
+from .capabilities import AREAS, GO_TOOLS, Capability, Host, ToolchainNeeds, capabilities, failed
 from .check import (
     RULES,
     component_rules,
@@ -597,8 +598,8 @@ def build_parser() -> argparse.ArgumentParser:
         "Deploy a build to Azure or GCP; status|logs|mode|switch|upgrade|rollback.",
         "tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID] [--plan]\n"
         "    publish the build's disk and start a TDX VM from it, with a receipt; every\n"
-        "    volume the image declares needs --volume (GCP attaches it as tundravm-NAME;\n"
-        "    Azure is refused: its disks have no name the image can find). Settings come\n"
+        "    volume the image declares needs --volume (GCP attaches it as tundravm-NAME,\n"
+        "    Azure at the LUN of its place among the image's volumes). Settings come\n"
         "    from [tool.tundravm.gcp] (project, bucket, zone, machine_type) and\n"
         "    [tool.tundravm.azure] (storage_account, resource_group, location, vm_size,\n"
         "    gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.\n"
@@ -1995,10 +1996,13 @@ def _toolchain_needs(loaded: RecipeFile, found: Settings) -> ToolchainNeeds:
         if not isinstance(spec, SourceBuild):
             continue
         if isinstance(spec.build, GoBuild):
-            go.append(spec.key)
+            ours = isinstance(spec.source, LocalSource) and spec.source.path == TOOLS_LOCAL
+            go.append(GO_TOOLS if ours else spec.key)
         elif isinstance(spec.build, CargoBuild) and _may_pin(spec, spec.pin_from(pins), checkouts):
             rustup.append(spec.key)
-    return ToolchainNeeds(tuple(go), tuple(rustup))
+    own = [name for name in dict.fromkeys(go) if name != GO_TOOLS]
+    tools = (GO_TOOLS,) if GO_TOOLS in go else ()
+    return ToolchainNeeds((*own, *tools), tuple(rustup))
 
 
 def _may_pin(spec: SourceBuild, pin: str | None, checkouts: Path) -> bool:

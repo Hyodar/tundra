@@ -30,7 +30,6 @@ from typing import Literal
 from .backends.local_linux import DEBIAN_KEYRING
 from .deploy.qemu import TDVF_PATHS, ovmf_firmware
 from .measure.gcp_firmware import TABLE_VERSION
-from .measure.model import MEASURE_VERSION
 from .toolchain import MKOSI_PIN, installed_version
 
 Area = Literal["build", "run", "deploy", "verify"]
@@ -195,13 +194,27 @@ def _linux_build(name: str, host: Host) -> Capability:
     return Capability(name, "ready", f"mkosi {MKOSI_PIN.version}, {privilege}", fix)
 
 
-GO_PURPOSE = (
-    "prefetches each Go source's modules and the toolchain its go.mod names for the offline build"
-)
+GO_PURPOSE = "prefetches the modules and Go toolchain of {sources} for the offline build"
 """What the host ``go`` is for, in a ready ``build:go`` row."""
 
-GO_ABSENT = "tundravm fetches the toolchain each go.mod names, checked against sum.golang.org"
+GO_ABSENT = (
+    "tundravm fetches the Go toolchain of {sources} (the release each go.mod names), checked "
+    "against sum.golang.org"
+)
 """What prefetches Go sources instead of a host ``go``, in an optional ``build:go`` row."""
+
+GO_TOOLS = "tundravm's tools"
+"""How ``ToolchainNeeds.go`` names the Go sources of tundravm's own tools, all together."""
+
+
+def go_sources(names: Sequence[str]) -> str:
+    """*names* as the ``build:go`` row lists them: ``a, b and tundravm's tools``; ``each Go
+    source`` for none."""
+    if not names:
+        return "each Go source"
+    *head, last = names
+    return f"{', '.join(head)} and {last}" if head else last
+
 
 KEYRING_PACKAGE = "debian-archive-keyring"
 """The package holding the keyring mkosi checks its Debian tools tree against."""
@@ -215,8 +228,9 @@ packages the workflow ``new --ci`` writes installs on its runner."""
 class ToolchainNeeds:
     """The sources of the image doctor checks that need a host toolchain to build.
 
-    *go*: its Go source builds. *rustup*: its Cargo source builds that pin a Rust toolchain,
-    or whose checkout is not in the workspace yet to say.
+    *go*: its Go source builds, tundravm's own tools as one :data:`GO_TOOLS`, last. *rustup*:
+    its Cargo source builds that pin a Rust toolchain, or whose checkout is not in the
+    workspace yet to say.
     """
 
     go: tuple[str, ...] = ()
@@ -241,22 +255,23 @@ def go_capability(host: Host, needs: ToolchainNeeds | None = None) -> Capability
     ``optional`` when it is missing or older, since tundravm then fetches the release each
     go.mod names itself, or when the image *needs* none (:func:`_as_needed`); never
     blocked."""
-    row = _go_row(host)
+    row = _go_row(host, go_sources(() if needs is None else needs.go))
     return row if needs is None else _as_needed(row, needs.go)
 
 
-def _go_row(host: Host) -> Capability:
+def _go_row(host: Host, sources: str) -> Capability:
     name = "build:go"
+    absent = GO_ABSENT.format(sources=sources)
     words = (host.output("go", "version") or "").split()
     found = words[2] if len(words) > 2 and words[2].startswith("go1.") else None
     if found is None:
-        return Capability(name, "optional", f"no go on PATH: {GO_ABSENT}")
+        return Capability(name, "optional", f"no go on PATH: {absent}")
     minor = found.removeprefix("go1.").split(".", 1)[0]
     if not minor.isdigit() or int(minor) < 21:
         return Capability(
-            name, "optional", f"{found} predates toolchain switching (Go 1.21): {GO_ABSENT}"
+            name, "optional", f"{found} predates toolchain switching (Go 1.21): {absent}"
         )
-    return Capability(name, "ready", f"{found}, which {GO_PURPOSE}")
+    return Capability(name, "ready", f"{found}, which {GO_PURPOSE.format(sources=sources)}")
 
 
 RUSTUP_PURPOSE = (
@@ -425,7 +440,9 @@ def _deploy_azure(host: Host) -> Capability:
 def verify_capabilities() -> tuple[Capability, ...]:
     """What tundravm replays measurements for: built in, so nothing depends on the host."""
     return (
-        Capability("verify:qemu", "ready", f"built-in TDX replay {MEASURE_VERSION}"),
+        Capability(
+            "verify:qemu", "ready", "built in: each build predicts the registers a QEMU TD reports"
+        ),
         Capability("verify:gcp", "ready", f"built-in replay, GCP firmware table {TABLE_VERSION}"),
         Capability(
             "verify:azure",

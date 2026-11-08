@@ -321,8 +321,8 @@ usage: tundravm deploy [-h] [--json] [--traceback] [--build BUILD]
 
 tundravm deploy azure|gcp --build BUILD [--volume NAME=create:SIZE|existing:ID] [--plan]
     publish the build's disk and start a TDX VM from it, with a receipt; every
-    volume the image declares needs --volume (GCP attaches it as tundravm-NAME;
-    Azure is refused: its disks have no name the image can find). Settings come
+    volume the image declares needs --volume (GCP attaches it as tundravm-NAME,
+    Azure at the LUN of its place among the image's volumes). Settings come
     from [tool.tundravm.gcp] (project, bucket, zone, machine_type) and
     [tool.tundravm.azure] (storage_account, resource_group, location, vm_size,
     gallery), or TUNDRAVM_GCP_* / TUNDRAVM_AZURE_*. BUILD is never guessed.
