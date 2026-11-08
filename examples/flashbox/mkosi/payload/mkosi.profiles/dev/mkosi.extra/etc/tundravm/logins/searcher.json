@@ -1,0 +1,84 @@
+{
+  "login": "searcher",
+  "entries": [
+    {
+      "name": "logs",
+      "argv": [
+        {
+          "word": "/usr/bin/tail"
+        },
+        {
+          "word": "--lines"
+        },
+        {
+          "arg": "lines",
+          "int": [
+            1,
+            10000
+          ]
+        },
+        {
+          "word": "/persistent/data/delayed/output.log"
+        }
+      ],
+      "root": true,
+      "modes": []
+    },
+    {
+      "name": "reboot",
+      "argv": [
+        {
+          "word": "/usr/bin/systemctl"
+        },
+        {
+          "word": "reboot"
+        }
+      ],
+      "root": true,
+      "modes": []
+    },
+    {
+      "name": "shell",
+      "argv": [
+        {
+          "word": "/usr/bin/bash"
+        }
+      ],
+      "root": false,
+      "modes": []
+    },
+    {
+      "name": "status",
+      "argv": [
+        {
+          "word": "/usr/bin/mode-switch"
+        },
+        {
+          "word": "status"
+        }
+      ],
+      "root": true,
+      "modes": []
+    },
+    {
+      "name": "toggle",
+      "argv": [
+        {
+          "word": "/usr/bin/mode-switch"
+        },
+        {
+          "word": "to"
+        },
+        {
+          "arg": "mode",
+          "choice": [
+            "production",
+            "maintenance"
+          ]
+        }
+      ],
+      "root": true,
+      "modes": []
+    }
+  ]
+}

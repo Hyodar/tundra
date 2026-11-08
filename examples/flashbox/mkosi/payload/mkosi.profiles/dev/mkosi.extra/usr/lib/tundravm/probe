@@ -916,7 +916,7 @@ probe_root
 check=login:searcher
 probe_login searcher /etc/sudoers.d/searcher '-' '/usr/bin/login-menu'
 check=menu:searcher
-probe_menu searcher /etc/tundravm/logins/searcher.json /etc/sudoers.d/searcher 'logs 10001' logs reboot status toggle
+probe_menu searcher /etc/tundravm/logins/searcher.json /etc/sudoers.d/searcher 'logs 10001' logs reboot shell status toggle
 check=ssh:root
 probe_no_root
 check=key:instance

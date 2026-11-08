@@ -232,13 +232,12 @@ Application components are the project's.
 | `container.Container` | a program in a Debian root of its own | `unit`, `image`, `endpoint(port)` |
 
 `SshAccess(login=Login(name, keys=, owner=, commands={...}, shell=))` lets another account
-in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to an argv. A list runs
-as the login, `Sudo([...])` as root. `firewall.status` and `firewall.switch` are root
-entries. `{lines:int}` (0-65535), `{lines:int:1-1000}` and
-`{mode:choice:a|b}` are whole-word arguments. `login-menu` is the account's shell and
-forced command. It lists the menu for an empty request and refuses anything else. It runs
-no shell and no terminal. Each root entry gets exact lines in
-`/etc/sudoers.d/<name>`; an int becomes a digits-only sudoers pattern.
+in ([a task](howto.md#log-in-as-a-tenant)). `commands=` maps a word to a `Command(...)`, run
+as the login, or a `Sudo(...)`, run as root (`firewall.status`, `firewall.switch`). A word is
+a string, `Int("lines", 1, 1000)` or `Choice("mode", "a", "b")`. `modes=` limits a command
+to those firewall modes, `dev=True` to development builds. `login-menu`, the account's shell
+and forced command, lists the menu, refuses anything else and runs no shell or terminal.
+Root commands get exact `/etc/sudoers.d/<name>` lines.
 `owner=True` gives the login the key `attest` hands over. A `Login` in `SshAccess` takes
 root's delivered key away unless `from_delivery=True`. Root without a key never logs in
 (`PermitRootLogin no`). A port no mode names stays open in every mode, so a menu login

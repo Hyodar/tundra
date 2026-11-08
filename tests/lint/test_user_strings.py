@@ -95,6 +95,13 @@ DENYLIST = {
         r"\b[Uu]nknown variant|\bDeclared variants\b|\bin variant\b|\bvariant=(?:\{|\s*$)"
         r"|\bInherits: |\bvariants\.[a-z]"
     ),
+    "login argument mini-language (Int(name, low, high), Choice(name, ...))": re.compile(
+        r"\{[a-z][a-z0-9_]*:(?:int|choice)\b"
+    ),
+    "Sudo of one list (Sudo(path, word, ...))": re.compile(r"\bSudo\(\s*\["),
+    "a login command as a plain list (Command(path, word, ...))": re.compile(
+        r"\bcommands=\{\s*[\"'][a-z][a-z0-9-]*[\"']:\s*\["
+    ),
 }
 """Phrases a hint, message or template must not contain, by what they name."""
 
@@ -386,6 +393,8 @@ def test_the_thirteen_commands_pass(text: str) -> None:
         "error(hint='pin it with HttpSource(sha256=...)')",
         "MESSAGE = 'see `tundravm lint RECIPE`'",
         "HINT = 'run tundravm init --base debian/sid'",
+        """HINT = 'Sudo(["/usr/bin/journalctl", "-n", "{lines:int:1-1000}"])'""",
+        """HINT = 'Login("t", commands={"status": ["/usr/bin/app-status"]})'""",
     ],
 )
 def test_denylist_catches_fluent_hints(source: str) -> None:

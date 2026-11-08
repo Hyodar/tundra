@@ -1,6 +1,7 @@
 // Package menu is a Login's command menu: the file the image writes for each login, one
-// entry per command with its words already typed, and the parser that turns the request a
-// client sent over SSH into one entry's exact argv. No shell ever sees the request.
+// entry per command with its words already typed and the firewall modes it is offered in,
+// and the parser that turns the request a client sent over SSH into one entry's exact argv.
+// No shell ever sees the request.
 package menu
 
 import (
@@ -23,6 +24,7 @@ var Sudo = []string{"/usr/bin/sudo", "-n", "--"}
 var (
 	entryPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	argPattern   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	modePattern  = regexp.MustCompile(`^[a-z][a-z0-9]{0,23}$`)
 	decimal      = regexp.MustCompile(`^(0|[1-9][0-9]{0,9})$`)
 )
 
@@ -35,12 +37,17 @@ type Word struct {
 	Choice []string `json:"choice,omitempty"`
 }
 
-// Entry is one command: its name, its argv, and whether it runs as root through sudo.
+// Entry is one command: its name, its argv, whether it runs as root through sudo, and the
+// firewall modes it is offered in (none: every mode).
 type Entry struct {
-	Name string `json:"name"`
-	Argv []Word `json:"argv"`
-	Root bool   `json:"root"`
+	Name  string   `json:"name"`
+	Argv  []Word   `json:"argv"`
+	Root  bool     `json:"root"`
+	Modes []string `json:"modes"`
 }
+
+// InForce reads the firewall mode in force, which a request for an entry with modes needs.
+type InForce func() (string, error)
 
 // Menu is one login's file.
 type Menu struct {
@@ -86,6 +93,13 @@ func (m *Menu) Check() error {
 		seen[e.Name] = true
 		if len(e.Argv) == 0 || e.Argv[0].Word == nil || !strings.HasPrefix(*e.Argv[0].Word, "/") {
 			return fmt.Errorf("entry %s does not start with an absolute path", e.Name)
+		}
+		modes := map[string]bool{}
+		for _, mode := range e.Modes {
+			if !modePattern.MatchString(mode) || modes[mode] {
+				return fmt.Errorf("entry %s: mode %q is invalid or repeated", e.Name, mode)
+			}
+			modes[mode] = true
 		}
 		args := map[string]bool{}
 		for _, w := range e.Argv {
@@ -139,7 +153,7 @@ func (w Word) domain() string {
 }
 
 // Listing is the menu as an empty request prints it: one entry per line, sorted, with the
-// domain of each argument and whether it runs as root.
+// domain of each argument, whether it runs as root and the modes it is offered in.
 func (m *Menu) Listing() string {
 	entries := append([]Entry(nil), m.Entries...)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
@@ -159,6 +173,9 @@ func (m *Menu) Listing() string {
 		if e.Root {
 			notes = append(notes, "as root")
 		}
+		if len(e.Modes) > 0 {
+			notes = append(notes, strings.Join(e.Modes, ", ")+" only")
+		}
 		line := "  " + e.usage()
 		if len(notes) > 0 {
 			line += strings.Repeat(" ", width-len(e.usage())) + "  " + strings.Join(notes, ", ")
@@ -169,8 +186,9 @@ func (m *Menu) Listing() string {
 }
 
 // Parse turns request ($SSH_ORIGINAL_COMMAND) into the exact argv to exec: nil for an
-// empty request, which lists the menu; a *Problem for anything the menu does not offer.
-func (m *Menu) Parse(request string) ([]string, error) {
+// empty request, which lists the menu; a *Problem for anything the menu does not offer,
+// an entry with modes included while inForce names another mode.
+func (m *Menu) Parse(request string, inForce InForce) ([]string, error) {
 	words := strings.Fields(request)
 	if len(words) == 0 {
 		return nil, nil
@@ -181,6 +199,9 @@ func (m *Menu) Parse(request string) ([]string, error) {
 			fmt.Sprintf("%s runs no %q", m.Login, words[0]),
 			fmt.Sprintf("ssh %s@HOST with no command lists what it runs", m.Login),
 		}
+	}
+	if err := e.offered(inForce); err != nil {
+		return nil, err
 	}
 	fix := fmt.Sprintf("ssh %s@HOST %s", m.Login, e.usage())
 	given := words[1:]
@@ -206,6 +227,30 @@ func (m *Menu) Parse(request string) ([]string, error) {
 		argv = append(append([]string(nil), Sudo...), argv...)
 	}
 	return argv, nil
+}
+
+// offered refuses an entry with modes unless one of them is in force.
+func (e Entry) offered(inForce InForce) error {
+	if len(e.Modes) == 0 {
+		return nil
+	}
+	only := strings.Join(e.Modes, ", ")
+	mode, err := inForce()
+	if err != nil {
+		return &Problem{
+			fmt.Sprintf("%s is offered in %s only, and the mode in force is unread: %v", e.Name, only, err),
+			"mode-switch status says which mode is in force",
+		}
+	}
+	for _, m := range e.Modes {
+		if m == mode {
+			return nil
+		}
+	}
+	return &Problem{
+		fmt.Sprintf("%s is offered in %s only, and %s is in force", e.Name, only, mode),
+		fmt.Sprintf("switch to %s first (tundravm run switch INSTANCE %s)", e.Modes[0], e.Modes[0]),
+	}
 }
 
 // check refuses value unless the argument's type takes it as written.

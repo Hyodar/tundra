@@ -62,7 +62,7 @@ COMPONENTS = [
     "ServiceReady",
     "ServiceRef",
 ]
-ACCESS = ["DevAccess", "Login", "SshAccess", "Sudo"]
+ACCESS = ["Choice", "Command", "DevAccess", "Int", "Login", "SshAccess", "Sudo"]
 NETWORK = ["Egress", "Firewall", "Host", "Mode", "Network", "StaticAddress"]
 TEE = ["EVIDENCE", "Tdxs", "TeeBase"]
 CONTAINER = ["Bind", "Container", "ContainerSsh"]

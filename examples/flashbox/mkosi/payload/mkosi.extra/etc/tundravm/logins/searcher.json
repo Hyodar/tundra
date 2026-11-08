@@ -21,7 +21,8 @@
           "word": "/persistent/data/delayed/output.log"
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     },
     {
       "name": "reboot",
@@ -33,7 +34,8 @@
           "word": "reboot"
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     },
     {
       "name": "status",
@@ -45,7 +47,8 @@
           "word": "status"
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     },
     {
       "name": "toggle",
@@ -64,7 +67,8 @@
           ]
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     }
   ]
 }

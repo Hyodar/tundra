@@ -11,7 +11,8 @@
           "word": "/etc/greeter/greeting"
         }
       ],
-      "root": false
+      "root": false,
+      "modes": []
     },
     {
       "name": "logs",
@@ -45,7 +46,8 @@
           "word": "cat"
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     },
     {
       "name": "switch",
@@ -64,7 +66,8 @@
           ]
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     },
     {
       "name": "web",
@@ -79,7 +82,8 @@
           "word": "web"
         }
       ],
-      "root": true
+      "root": true,
+      "modes": []
     }
   ]
 }

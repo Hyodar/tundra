@@ -496,19 +496,17 @@ class _Lowering:
     def switch(
         self, inherited: Sequence[object], local: tuple[bool, bool]
     ) -> tuple[list[dm.Edit | dm.Remove], list[dm.Declaration]]:
-        """What turns each observability among *inherited*, lowered as the profile it
-        comes from builds it, into the one this profile builds (*local*: whether each is a
-        development one): an edit of each declaration that differs, a removal of each that
-        is gone, and the declarations that are new."""
-        from tundravm.components.observability import Observability
-
+        """What turns each observability and each ``SshAccess`` among *inherited*, lowered
+        as the profile it comes from builds it, into the one this profile builds (*local*:
+        whether each is a development one): an edit of each declaration that differs, a
+        removal of each that is gone, and the declarations that are new."""
         parent, own = local
         changes: list[dm.Edit | dm.Remove] = []
         added: list[dm.Declaration] = []
         if parent == own:
             return changes, added
         for item in inherited:
-            if not isinstance(item, Observability):
+            if _development(item) == item:
                 continue
             with _at(item):
                 source, target = _forms((item,), local=parent)[0], _forms((item,), local=own)[0]
@@ -692,7 +690,27 @@ class _Lowering:
             found.append(self.variant(name, profile))
         if image.dev is not None:
             found.append(self.dev_variant())
+        self.developed_somewhere(found)
         return tuple(found)
+
+    def developed(self) -> list[object]:
+        """The image's own components a development build holds otherwise: each
+        ``SshAccess`` whose logins have ``dev=True`` commands."""
+        return [item for item in self.image.components if _development(item) != item]
+
+    def developed_somewhere(self, variants: Sequence[dm.Variant]) -> None:
+        """Refuse a ``dev=True`` command in an image without a development profile."""
+        if any(not variant.release for variant in variants):
+            return
+        for item in (*self.developed(), *self.profile_content()):
+            if _development(item) != item:
+                with _at(item):
+                    raise ValidationError(
+                        "A Login command says dev=True, and the image has no development "
+                        "profile to hold it, so it exists in no build.",
+                        hint="Add one: dev=DevAccess(...) or "
+                        'profiles={"staging": Profile(production=False)}; or drop dev=True.',
+                    )
 
     def variant(self, name: str, profile: Profile) -> dm.Variant:
         """One ``Profile`` as the overlay it is."""
@@ -700,7 +718,8 @@ class _Lowering:
         local = (self.local(profile.extends), not profile.production)
         inherited = [item for ancestor in self.ancestors(profile) for item in ancestor.add]
         switched, switched_in = self.switch(
-            (*_forms([self.image.observability], local=False), *inherited), local
+            (*_forms([self.image.observability, *self.developed()], local=False), *inherited),
+            local,
         )
         items: list[dm.Declaration | dm.Fragment] = list(switched_in)
         self.world, self.removed, curl, self.curl = world, removed, self.curl, False
@@ -935,7 +954,7 @@ class _Lowering:
         dev = self.image.dev
         assert dev is not None
         switched, switched_in = self.switch(
-            _forms([self.image.observability], local=False), (False, True)
+            _forms([self.image.observability, *self.developed()], local=False), (False, True)
         )
         items: list[dm.Declaration | dm.Fragment] = list(switched_in)
         if self.runtime.control_plane:
@@ -1551,15 +1570,22 @@ def _declares_container(item: object) -> bool:
 
 
 def _forms[T](items: Sequence[T | None], *, local: bool) -> tuple[T, ...]:
-    """*items*, each ``Observability`` among them as a development profile builds it when
-    *local*; ``None`` left out."""
+    """*items*, each ``Observability`` and ``SshAccess`` among them as a development profile
+    builds it when *local*; ``None`` left out."""
+    return tuple(
+        cast("T", _development(item)) if local else item for item in items if item is not None
+    )
+
+
+def _development(item: object) -> object:
+    """*item* as a development profile builds it: an ``Observability``'s sinks in the guest,
+    an ``SshAccess``'s ``dev=True`` commands held; anything else as it is."""
+    from tundravm.components.access import SshAccess
     from tundravm.components.observability import Observability
 
-    return tuple(
-        cast("T", item.development()) if local and isinstance(item, Observability) else item
-        for item in items
-        if item is not None
-    )
+    if isinstance(item, (Observability, SshAccess)):
+        return item.development()
+    return item
 
 
 def _sends(items: Sequence[object]) -> Iterator[tuple[str, Egress]]:

@@ -16,7 +16,7 @@ import posixpath
 import re
 import shlex
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -1061,9 +1061,11 @@ LOGIN_MENU_FILE = "/etc/tundravm/logins/{name}.json"
 NOLOGIN = "/usr/sbin/nologin"
 _LOGIN_NAME = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _ENTRY_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
-_PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{0,31}):(int|choice)(?::([^{}]*))?\}")
+_ARGUMENT_NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")
+_OLD_ARGUMENT = re.compile(r"\{([a-z][a-z0-9_]{0,31}):(int|choice)(?::([^{}]*))?\}")
 _CHOICE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
-_INT_DEFAULT = (0, 65535)
+_MODE_NAME = re.compile(r"[a-z][a-z0-9]{0,23}")
+_MODE_RESERVED = frozenset({"tdx", "simulated"})
 _INT_MAX = 999_999_999
 _SUDO_REFUSED = frozenset("*?[]\\\"'")
 _PATTERN_WORD = re.compile(r"[A-Za-z0-9/_.+-]+")
@@ -1071,121 +1073,206 @@ _SUDO_COMBINATIONS = 32
 _SHELL_REFUSED = frozenset('"\\\n')
 
 
-@dataclass(frozen=True, slots=True)
-class Arg:
-    """A word of a :class:`Login` entry the client fills: an int within *bounds*, or one of
-    *choices*. Written ``{lines:int}``, ``{lines:int:1-1000}`` or ``{mode:choice:a|b}``."""
+def _argument_name(kind: str, name: object) -> None:
+    if not isinstance(name, str) or not _ARGUMENT_NAME.fullmatch(name):
+        raise ValidationError(
+            f"{kind}: {name!r} is not an argument name.",
+            hint=f'Use lower-case letters, digits and "_": {kind}("lines", ...).',
+        )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class Int:
+    """A word of a :class:`Command` the client types: a decimal number from *low* to *high*,
+    both included: ``Int("lines", 1, 10000)``. ``login-menu`` takes it in canonical decimal
+    only (no sign, no leading zero); a root command's sudoers line takes digits only."""
 
     name: str
-    bounds: tuple[int, int] | None = None
-    choices: tuple[str, ...] = ()
+    low: int
+    high: int
+
+    def __post_init__(self) -> None:
+        _argument_name("Int", self.name)
+        bounds = (self.low, self.high)
+        if any(isinstance(b, bool) or not isinstance(b, int) for b in bounds) or not (
+            0 <= self.low <= self.high <= _INT_MAX
+        ):
+            raise ValidationError(
+                f"Int {self.name}: bounds {self.low!r} to {self.high!r} are not two whole "
+                f"numbers from 0 to {_INT_MAX}, the low one first.",
+                hint=f'Int("{self.name}", 1, 1000).',
+            )
+
+    def __repr__(self) -> str:
+        return f"Int({json.dumps(self.name)}, {self.low}, {self.high})"
 
     def menu(self) -> dict[str, object]:
         """The word in the menu file ``login-menu`` reads."""
-        if self.bounds is not None:
-            return {"arg": self.name, "int": list(self.bounds)}
-        return {"arg": self.name, "choice": list(self.choices)}
+        return {"arg": self.name, "int": [self.low, self.high]}
+
+    def shown(self) -> str:
+        """The word as ``show`` prints it: ``<lines 1-10000>``."""
+        return f"<{self.name} {self.low}-{self.high}>"
 
     def pattern(self) -> str:
-        """The sudoers regular expression of an int: digits, as many as its bound has."""
-        assert self.bounds is not None
-        return "[0-9]" + "[0-9]?" * (len(str(self.bounds[1])) - 1)
+        """The sudoers regular expression of the word: digits, as many as *high* has."""
+        return "[0-9]" + "[0-9]?" * (len(str(self.high)) - 1)
 
 
-def _arg(where: str, word: str) -> Arg | None:
-    """The :class:`Arg` *word* writes, ``None`` for a literal word; refuses a placeholder
-    that is not a whole word or names no type."""
-    found = _PLACEHOLDER.fullmatch(word)
-    if found is None:
-        if "{" in word or "}" in word:
-            raise ValidationError(
-                f"{where}: {word!r} is not a literal word, and not one argument.",
-                hint='An argument is a whole word: "{lines:int}", "{lines:int:1-1000}" or '
-                '"{mode:choice:a|b}"; a literal word holds no "{" or "}".',
-            )
-        return None
-    name, kind, spec = found.groups()
-    if kind == "int":
-        bounds = _INT_DEFAULT
-        if spec is not None:
-            low, dash, high = spec.partition("-")
-            if not (dash and low.isdigit() and high.isdigit()):
-                raise ValidationError(
-                    f"{where}: {word!r} has bounds {spec!r}, not LOW-HIGH.",
-                    hint=f'Write "{{{name}:int:1-1000}}", or "{{{name}:int}}" for 0-65535.',
-                )
-            bounds = (int(low), int(high))
-        if not 0 <= bounds[0] <= bounds[1] <= _INT_MAX:
-            raise ValidationError(
-                f"{where}: {word!r} has bounds {bounds[0]}-{bounds[1]}.",
-                hint=f"The low bound comes first, and the high one is at most {_INT_MAX}.",
-            )
-        return Arg(name, bounds=bounds)
-    choices = tuple((spec or "").split("|"))
-    bad = [c for c in choices if not _CHOICE.fullmatch(c)]
-    if bad or len(set(choices)) != len(choices):
-        raise ValidationError(
-            f"{where}: {word!r} offers {', '.join(map(repr, bad)) or 'a value twice'}.",
-            hint=f'List distinct words: "{{{name}:choice:production|maintenance}}"; '
-            'none starts with "-".',
-        )
-    return Arg(name, choices=choices)
-
-
-@dataclass(frozen=True, slots=True)
-class Sudo(Keywords):
-    """A :class:`Login` entry that runs as root, exactly as written:
-    ``Sudo(["/usr/bin/systemctl", "restart", "app"])``.
-
-    ``login-menu`` runs it through ``sudo -n``, and ``/etc/sudoers.d/<login>`` admits this
-    argv and no other: one exact line (a choice gives one per value), or for an int one
-    anchored sudoers pattern that takes digits only. No wildcard, no quoting, no shell.
-    """
-
-    argv: Sequence[str]
-
-    def __post_init__(self) -> None:
-        if isinstance(self.argv, str):
-            raise ValidationError(
-                f"Sudo: {self.argv!r} is one string, not an argv.",
-                hint=f"Sudo({self.argv.split()!r}).",
-            )
-        object.__setattr__(self, "argv", tuple(self.argv))
-
-
-@dataclass(frozen=True, slots=True)
-class Entry:
-    """One command of a :class:`Login`'s menu: its words (literal or :class:`Arg`) and
-    whether it runs as root."""
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class Choice:
+    """A word of a :class:`Command` the client types: one of *values*,
+    ``Choice("mode", "production", "maintenance")``. A root command gets one exact sudoers
+    line per value."""
 
     name: str
-    words: tuple[str | Arg, ...]
-    root: bool
+    values: tuple[str, ...]
 
-    @property
-    def args(self) -> tuple[Arg, ...]:
-        return tuple(word for word in self.words if isinstance(word, Arg))
+    def __init__(self, name: str, *values: str) -> None:
+        _argument_name("Choice", name)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "values", values)
+        bad = [v for v in values if not isinstance(v, str) or not _CHOICE.fullmatch(v)]
+        if not values or bad or len(set(values)) != len(values):
+            raise ValidationError(
+                f"Choice {name}: "
+                + (
+                    "offers no value."
+                    if not values
+                    else f"offers {', '.join(map(repr, bad)) or 'a value twice'}."
+                ),
+                hint=f'List distinct words, none starting with "-": Choice("{name}", "a", "b").',
+            )
+
+    def __repr__(self) -> str:
+        return f"Choice({', '.join(json.dumps(word) for word in (self.name, *self.values))})"
 
     def menu(self) -> dict[str, object]:
+        """The word in the menu file ``login-menu`` reads."""
+        return {"arg": self.name, "choice": list(self.values)}
+
+    def shown(self) -> str:
+        """The word as ``show`` prints it: ``<mode production|maintenance>``."""
+        return f"<{self.name} {'|'.join(self.values)}>"
+
+
+Word = str | Int | Choice
+"""A word of a :class:`Command`: a literal string, or an argument the client types."""
+
+
+def _new_spelling(word: str) -> str:
+    """How *word* reads as a word of a :class:`Command`: an argument when it is written in
+    the removed mini-language, else the literal."""
+    found = _OLD_ARGUMENT.fullmatch(word)
+    if found is None:
+        return json.dumps(word)
+    name, kind, spec = found.groups()
+    if kind == "choice":
+        values = (spec or "a|b").split("|")
+        return f"Choice({', '.join(json.dumps(v) for v in (name, *values))})"
+    low, _, high = (spec or "0-65535").partition("-")
+    return f"Int({json.dumps(name)}, {low or 0}, {high or 65535})"
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class Command:
+    """A command of a :class:`Login`'s menu that runs as the login:
+    ``Command("/usr/bin/app-status")``. :class:`Sudo` is one that runs as root.
+
+    Each word is a positional argument, in the order the argv holds them: a string is a
+    literal word, :class:`Int` and :class:`Choice` are words the client types. The first is
+    the program's absolute path. *modes* offers the command in those ``Firewall(modes=)``
+    modes only (``login-menu`` refuses it in any other, naming the mode in force); without
+    it the command is offered in every mode. *dev* makes it exist in development builds
+    only: the profiles whose ``production=`` is ``False``, ``DevAccess``'s ``dev`` among them.
+    """
+
+    argv: tuple[Word, ...]
+    modes: tuple[str, ...]
+    dev: bool
+
+    def __init__(
+        self, *argv: str | Int | Choice, modes: Sequence[str] = (), dev: bool = False
+    ) -> None:
+        object.__setattr__(self, "argv", argv)
+        object.__setattr__(self, "modes", modes)
+        object.__setattr__(self, "dev", dev)
+        self._check_words()
+        if isinstance(modes, str) or not isinstance(modes, Sequence):
+            raise ValidationError(
+                f"{self._kind}: modes={modes!r} is not a list of mode names.",
+                hint='modes=["maintenance"].',
+            )
+        object.__setattr__(self, "modes", tuple(modes))
+        for mode in self.modes:
+            if not isinstance(mode, str) or not _MODE_NAME.fullmatch(mode):
+                raise ValidationError(
+                    f"{self._kind}: modes= names {mode!r}, not a firewall mode's name.",
+                    hint='Name a mode of Firewall(modes=): modes=["maintenance"].',
+                )
+            if mode in _MODE_RESERVED:
+                raise ValidationError(
+                    f"{self._kind}: modes= names {mode!r}, a word of the security mode "
+                    "(run mode), not a firewall mode.",
+                    hint='Name a mode of Firewall(modes=): modes=["maintenance"].',
+                )
+        if len(set(self.modes)) != len(self.modes):
+            raise ValidationError(
+                f"{self._kind}: modes= names a mode twice.", hint="Name each mode once."
+            )
+        if not isinstance(dev, bool):
+            raise ValidationError(f"{self._kind}: dev= must be True or False.", hint="dev=True.")
+        if self.root:
+            self._check_root()
+
+    @property
+    def _kind(self) -> str:
+        return type(self).__name__
+
+    @property
+    def root(self) -> bool:
+        """Whether it runs as root (:class:`Sudo`)."""
+        return False
+
+    @property
+    def args(self) -> tuple[Int | Choice, ...]:
+        """The words the client types."""
+        return tuple(word for word in self.argv if not isinstance(word, str))
+
+    def developed(self) -> Command:
+        """The command as a development build holds it: there for every build."""
+        return type(self)(*self.argv, modes=self.modes)
+
+    def __repr__(self) -> str:
+        words = [json.dumps(w) if isinstance(w, str) else repr(w) for w in self.argv]
+        if self.modes:
+            words.append(f"modes={json.dumps(list(self.modes))}")
+        if self.dev:
+            words.append("dev=True")
+        return f"{self._kind}({', '.join(words)})"
+
+    def shown(self) -> str:
+        """The argv as ``show`` prints it, each argument with its name and bounds."""
+        return " ".join(w if isinstance(w, str) else w.shown() for w in self.argv)
+
+    def menu(self, name: str) -> dict[str, object]:
         """The entry in the menu file."""
-        words = [w.menu() if isinstance(w, Arg) else {"word": w} for w in self.words]
-        return {"name": self.name, "argv": words, "root": self.root}
+        words = [{"word": w} if isinstance(w, str) else w.menu() for w in self.argv]
+        return {"name": name, "argv": words, "root": self.root, "modes": list(self.modes)}
 
     def commands(self) -> list[str]:
-        """The sudoers commands admitting this entry: one per combination of its choices,
+        """The sudoers commands admitting this command: one per combination of its choices,
         each exact, or with an int an anchored pattern taking digits only."""
-        lines: list[list[str | Arg]] = [[]]
-        for word in self.words:
-            options: tuple[str | Arg, ...] = (word,)
-            if isinstance(word, Arg) and word.bounds is None:
-                options = word.choices
+        lines: list[list[Word]] = [[]]
+        for word in self.argv:
+            options: tuple[Word, ...] = word.values if isinstance(word, Choice) else (word,)
             lines = [[*line, option] for line in lines for option in options]
         found = []
         for line in lines:
             path, rest = str(line[0]), line[1:]
-            if any(isinstance(word, Arg) for word in rest):
+            if any(isinstance(word, Int) for word in rest):
                 parts = [
-                    w.pattern() if isinstance(w, Arg) else re.sub(r"([.+])", r"[\1]", w)
+                    w.pattern() if isinstance(w, Int) else re.sub(r"([.+])", r"[\1]", str(w))
                     for w in rest
                 ]
                 found.append(f"{path} ^{' '.join(parts)}$")
@@ -1194,79 +1281,116 @@ class Entry:
             found.append(" ".join(words if rest else [*words, '""']))
         return found
 
+    def _check_words(self) -> None:
+        kind = self._kind
+        if len(self.argv) == 1 and isinstance(self.argv[0], (list, tuple)):
+            spelled = ", ".join(
+                _new_spelling(w) if isinstance(w, str) else repr(w) for w in self.argv[0]
+            )
+            raise ValidationError(
+                f"{kind}: the argv is one list; each word is its own argument.",
+                hint=f"{kind}({spelled}).",
+            )
+        if not self.argv:
+            raise ValidationError(f"{kind}() runs nothing.", hint=f'{kind}("/usr/bin/app-status").')
+        for word in self.argv:
+            if isinstance(word, (Int, Choice)):
+                continue
+            if not isinstance(word, str) or not word or "\n" in word or "\0" in word:
+                raise ValidationError(
+                    f"{kind}: {word!r} is not a word.",
+                    hint='Each word is a non-empty str, Int("name", LOW, HIGH) or '
+                    'Choice("name", ...).',
+                )
+            found = _OLD_ARGUMENT.search(word)
+            if found is not None:
+                raise ValidationError(
+                    f"{kind}: {word!r} is a literal word; an argument is a value of its own.",
+                    hint=f"Write {_new_spelling(found[0])} in its place"
+                    + ("." if found[0] == word else ", a whole word apart from the rest."),
+                )
+        first = self.argv[0]
+        if not isinstance(first, str) or not first.startswith("/"):
+            raise ValidationError(
+                f"{kind}: {first!r} is not an absolute path, and login-menu runs nothing by name.",
+                hint=f'Start with the program\'s path: {kind}("/usr/bin/...", ...).',
+            )
+        named = [arg.name for arg in self.args]
+        if len(set(named)) != len(named):
+            raise ValidationError(
+                f"{kind} {first} names an argument twice.",
+                hint="Give each argument its own name.",
+            )
 
-def _entry(login: str, name: object, value: object) -> Entry:
-    """The :class:`Entry` ``commands={name: value}`` declares, refusing what the menu or
-    sudoers could not hold exactly."""
+    def _check_root(self) -> None:
+        """Refuse a root command sudoers would read as more than it says."""
+        where = f"Sudo {self.argv[0]}"
+        literal = [w for w in self.argv if isinstance(w, str)]
+        pattern = any(isinstance(arg, Int) for arg in self.args)
+        for at, word in enumerate(literal):
+            refused = "".join(sorted(_SUDO_REFUSED & set(word)))
+            if refused or any(c.isspace() for c in word):
+                raise ValidationError(
+                    f"{where}: {word!r} holds {refused or 'a space'!r}, which sudoers reads as "
+                    "a wildcard, a quote or two words, so the line would allow more than it "
+                    "says.",
+                    hint="Write each word literally, one argv word per word.",
+                )
+            if pattern and at and not _PATTERN_WORD.fullmatch(word):
+                raise ValidationError(
+                    f"{where}: {word!r} beside an Int becomes part of a sudoers pattern, which "
+                    "takes only letters, digits and /_.+-.",
+                    hint='Spell the option apart from its value: "-n", Int("lines", 1, 1000).',
+                )
+        count = 1
+        for arg in self.args:
+            count *= len(arg.values) if isinstance(arg, Choice) else 1
+        if count > _SUDO_COMBINATIONS:
+            raise ValidationError(
+                f"{where} offers {count} combinations, one sudoers line each.",
+                hint=f"Offer at most {_SUDO_COMBINATIONS}: split the command or narrow its "
+                "choices.",
+            )
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class Sudo(Command):
+    """A command of a :class:`Login`'s menu that runs as root, exactly as written:
+    ``Sudo("/usr/bin/systemctl", "restart", "app")``; the keywords are :class:`Command`'s.
+
+    ``login-menu`` runs it through ``sudo -n``, and ``/etc/sudoers.d/<login>`` admits this
+    argv and no other: one exact line (a :class:`Choice` gives one per value), or with an
+    :class:`Int` one anchored sudoers pattern that takes digits only. No wildcard, no
+    quoting, no shell.
+    """
+
+    @property
+    def root(self) -> bool:
+        """Whether it runs as root: always."""
+        return True
+
+
+def _command(login: str, name: object, value: object) -> Command:
+    """The :class:`Command` ``commands={name: value}`` declares."""
     if not isinstance(name, str) or not _ENTRY_NAME.fullmatch(name):
         raise ValidationError(
             f"Login {login}: commands= names {name!r}, not a command word.",
-            hint='Use lower-case letters, digits and "-": commands={"status": [...]}.',
+            hint='Use lower-case letters, digits and "-": commands={"status": Command(...)}.',
         )
-    where = f"Login {login}: command {name}"
-    root = isinstance(value, Sudo)
-    argv = value.argv if isinstance(value, Sudo) else value
-    if isinstance(argv, str) or not isinstance(argv, Sequence) or not argv:
-        raise ValidationError(
-            f"{where} is {value!r}, not an argv.",
-            hint=f'commands={{"{name}": ["/usr/bin/{name}"]}}, or Sudo([...]) to run it as root.',
-        )
-    words: list[str | Arg] = []
-    for word in argv:
-        if not isinstance(word, str) or not word or "\n" in word or "\0" in word:
-            raise ValidationError(
-                f"{where}: {word!r} is not a word.", hint="Each word is a non-empty str."
-            )
-        words.append(_arg(where, word) or word)
-    first = words[0]
-    if not isinstance(first, str) or not first.startswith("/"):
-        raise ValidationError(
-            f"{where}: {argv[0]!r} is not an absolute path, and login-menu runs nothing by name.",
-            hint=f'Start with the program\'s path: "/usr/bin/{argv[0]}".',
-        )
-    entry = Entry(name, tuple(words), root)
-    named = [arg.name for arg in entry.args]
-    if len(set(named)) != len(named):
-        raise ValidationError(
-            f"{where} names an argument twice.", hint="Give each argument its own name."
-        )
-    if root:
-        _check_root(where, entry)
-    return entry
-
-
-def _check_root(where: str, entry: Entry) -> None:
-    """Refuse a root entry sudoers would read as more than it says."""
-    literal = [w for w in entry.words if isinstance(w, str)]
-    pattern = any(arg.bounds is not None for arg in entry.args)
-    for at, word in enumerate(literal):
-        refused = "".join(sorted(_SUDO_REFUSED & set(word)))
-        if refused or any(c.isspace() for c in word):
-            raise ValidationError(
-                f"{where}: {word!r} holds {refused or 'a space'!r}, which sudoers reads as a "
-                "wildcard, a quote or two words, so the line would allow more than it says.",
-                hint="Write each word literally, one argv word per word.",
-            )
-        if pattern and at and not _PATTERN_WORD.fullmatch(word):
-            raise ValidationError(
-                f"{where}: {word!r} beside an int becomes part of a sudoers pattern, which "
-                "takes only letters, digits and /_.+-.",
-                hint='Spell the option apart from its value: ["-n", "{lines:int}"].',
-            )
-    count = 1
-    for arg in entry.args:
-        count *= len(arg.choices) or 1
-    if count > _SUDO_COMBINATIONS:
-        raise ValidationError(
-            f"{where} offers {count} combinations, one sudoers line each.",
-            hint=f"Offer at most {_SUDO_COMBINATIONS}: split the command or narrow its choices.",
-        )
+    if isinstance(value, Command):
+        return value
+    words = value if isinstance(value, (list, tuple)) else [value]
+    spelled = ", ".join(_new_spelling(w) if isinstance(w, str) else repr(w) for w in words)
+    raise ValidationError(
+        f"Login {login}: command {name} is {value!r}, not a Command or a Sudo.",
+        hint=f"Command({spelled}) runs it as the login, Sudo({spelled}) as root.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class Login(Keywords):
     """An account other than root that logs in over SSH into a menu of commands:
-    ``Login("tenant", keys=[...], commands={"status": ["/usr/bin/app-status"]})``.
+    ``Login("tenant", keys=[...], commands={"status": Command("/usr/bin/app-status")})``.
 
     The account has no password and no other way in. *keys* are public keys baked into the
     image (``/etc/ssh/authorized_keys.d/<name>``), or a ``Secret`` the attested endpoint
@@ -1276,10 +1400,11 @@ class Login(Keywords):
     at all: bake them as a list in *keys*.
     *owner* makes the owner's key its only key instead: the key ``attest`` hands over, from
     the owner an ``OperatorKey()`` volume pins (in a simulated boot, the first). Root then
-    takes no delivered key. *commands* maps each command the client may type to its argv:
-    a list runs as the login, :class:`Sudo` as root. A word ``{lines:int}``
-    (0-65535), ``{lines:int:1-1000}`` or ``{mode:choice:a|b}`` is an argument the client
-    fills. ``login-menu`` is the account's shell and sshd's forced command: no command lists
+    takes no delivered key. *commands* maps each name the client may type to what it runs:
+    a :class:`Command` runs as the login, a :class:`Sudo` as root, each word literal or an
+    :class:`Int` or :class:`Choice` the client fills; ``modes=`` and ``dev=`` say in which
+    firewall modes and builds it exists, and at least one exists in every build.
+    ``login-menu`` is the account's shell and sshd's forced command: no command lists
     the menu, anything the menu does not offer is refused, and nothing reaches a shell.
     *shell* is the escape hatch: a login shell the image ships, with a terminal and no
     sudo. One of them is required. Every key is ``restrict``-ed and sshd's ``Match User``
@@ -1289,7 +1414,7 @@ class Login(Keywords):
 
     name: str
     keys: Sequence[str] | Secret = ()
-    commands: Mapping[str, Sequence[str] | Sudo] | None = None
+    commands: Mapping[str, Command] | None = None
     shell: str | None = None
     owner: bool = False
     home: bool = False
@@ -1329,18 +1454,26 @@ class Login(Keywords):
                     if self.shell is None
                     else "has both commands= and shell=."
                 ),
-                hint=f'Login("{self.name}", commands={{"status": ["/usr/bin/app-status"]}}), '
+                hint=f'Login("{self.name}", commands='
+                '{"status": Command("/usr/bin/app-status")}), '
                 "or shell= alone for a login shell the image ships.",
             )
         if self.commands is not None:
             if not isinstance(self.commands, Mapping) or not self.commands:
                 raise ValidationError(
-                    f"Login {self.name}: commands= takes a dict of command names to argvs.",
-                    hint='commands={"status": ["/usr/bin/app-status"]}.',
+                    f"Login {self.name}: commands= takes a dict of command names to commands.",
+                    hint='commands={"status": Command("/usr/bin/app-status")}.',
                 )
             for name, value in self.commands.items():
-                _entry(self.name, name, value)
+                _command(self.name, name, value)
             object.__setattr__(self, "commands", FrozenMap(self.commands))
+            if all(command.dev for command in self.commands.values()):
+                raise ValidationError(
+                    f"Login {self.name}: every command says dev=True, so a production build "
+                    "would hold an empty menu.",
+                    hint="Give it one command for every build, or leave the Login to a "
+                    "development profile's add=.",
+                )
 
     def _check_keys(self) -> None:
         from tundravm._image._secrets import Secret
@@ -1379,11 +1512,25 @@ class Login(Keywords):
             )
 
     @property
-    def entries(self) -> tuple[Entry, ...]:
-        """The menu, sorted by command name."""
+    def entries(self) -> tuple[tuple[str, Command], ...]:
+        """The menu this build holds, sorted by command name: every command but a
+        ``dev=True`` one (:meth:`development` holds those too)."""
         if self.commands is None:
             return ()
-        return tuple(_entry(self.name, n, v) for n, v in sorted(self.commands.items()))
+        return tuple((n, c) for n, c in sorted(self.commands.items()) if not c.dev)
+
+    @property
+    def developed(self) -> bool:
+        """Whether a development build holds more of it: a command says ``dev=True``."""
+        return any(command.dev for command in (self.commands or {}).values())
+
+    def development(self) -> Login:
+        """The login as a development build holds it: its ``dev=True`` commands too."""
+        if not self.developed:
+            return self
+        assert self.commands is not None
+        commands = {name: command.developed() for name, command in self.commands.items()}
+        return replace(self, commands=commands)
 
     @property
     def delivered(self) -> bool:
@@ -1414,8 +1561,8 @@ class Login(Keywords):
 
     @property
     def sudoers_file(self) -> str | None:
-        """``/etc/sudoers.d/<name>``, or ``None`` without a root entry."""
-        if any(entry.root for entry in self.entries):
+        """``/etc/sudoers.d/<name>``, or ``None`` without a root command."""
+        if any(command.root for _, command in self.entries):
             return f"{SUDOERS_DIRECTORY}/{self.name}"
         return None
 
@@ -1434,16 +1581,17 @@ class Login(Keywords):
 
     def menu(self) -> str:
         """The menu file ``login-menu`` reads: each entry with its words typed."""
-        payload = {"login": self.name, "entries": [entry.menu() for entry in self.entries]}
+        payload = {"login": self.name, "entries": [c.menu(n) for n, c in self.entries]}
         return json.dumps(payload, indent=2) + "\n"
 
     def sudo_rules(self) -> tuple[str, ...]:
-        """The ``sudoers`` lines: each root entry's exact argv, or its digits-only pattern."""
+        """The ``sudoers`` lines: each root command's exact argv, or its digits-only
+        pattern."""
         return tuple(
-            f"{self.name} ALL=(root) NOPASSWD: {command}"
-            for entry in self.entries
-            if entry.root
-            for command in entry.commands()
+            f"{self.name} ALL=(root) NOPASSWD: {line}"
+            for _, command in self.entries
+            if command.root
+            for line in command.commands()
         )
 
     def sudoers(self) -> str:
@@ -1777,6 +1925,8 @@ def _step_name(prefix: str, path: str) -> str:
 
 __all__ = [
     "Backports",
+    "Choice",
+    "Command",
     "CargoBinary",
     "Composite",
     "ConfigFile",
@@ -1786,6 +1936,7 @@ __all__ = [
     "Firewall",
     "GoBinary",
     "HttpEndpoint",
+    "Int",
     "LOGIN_MENU",
     "LOGIN_MENU_FILE",
     "Login",

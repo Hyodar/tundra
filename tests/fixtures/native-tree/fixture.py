@@ -32,7 +32,7 @@ from typing import Literal
 
 from tundravm import Debian, File, Image, Mkosi, Package, Profile, RootFS, Service
 from tundravm.components import Component
-from tundravm.components.access import Login, SshAccess, Sudo
+from tundravm.components.access import Choice, Command, Int, Login, SshAccess, Sudo
 from tundravm.components.container import Container, ContainerSsh
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.components.observability import (
@@ -247,21 +247,19 @@ TENANT = Login(
     "tenant",
     owner=True,
     commands={
-        "greeting": ["/usr/bin/cat", "/etc/greeter/greeting"],
-        "web": Sudo(["/usr/bin/systemctl", "is-active", "web"]),
+        "greeting": Command("/usr/bin/cat", "/etc/greeter/greeting"),
+        "web": Sudo("/usr/bin/systemctl", "is-active", "web"),
         "logs": Sudo(
-            [
-                "/usr/bin/journalctl",
-                "--unit",
-                "greeter.service",
-                "--lines",
-                "{lines:int:1-1000}",
-                "--no-pager",
-                "--output",
-                "cat",
-            ]
+            "/usr/bin/journalctl",
+            "--unit",
+            "greeter.service",
+            "--lines",
+            Int("lines", 1, 1000),
+            "--no-pager",
+            "--output",
+            "cat",
         ),
-        "switch": Sudo(["/usr/bin/mode-switch", "to", "{mode:choice:production|maintenance}"]),
+        "switch": Sudo("/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance")),
     },
     home=True,
 )

@@ -53,7 +53,8 @@ def declared(image: Image, profiles: Sequence[str]) -> dict[str, object]:
     Components are the ones the file named (``components=``, ``network=``,
     ``observability=``), never the implied baseline; services are the image's and those its
     components compose, each with the component that holds it; content is what the image
-    names itself (``packages=``, ``files=``, ``users=``, ``groups=``).
+    names itself (``packages=``, ``files=``, ``users=``, ``groups=``); logins are each
+    ``SshAccess`` login's menu, every command with the profiles it exists in.
     """
     return {
         "components": [_component(c) for c in _written_components(image)],
@@ -63,6 +64,7 @@ def declared(image: Image, profiles: Sequence[str]) -> dict[str, object]:
             _content(item) for item in (*image.packages, *image.files, *image.users, *image.groups)
         ],
         "profiles": [row for row in _profiles(image) if row["name"] in profiles],
+        "logins": _logins(image),
     }
 
 
@@ -82,7 +84,14 @@ def declared_recipe(recipe: Recipe, profiles: Sequence[str]) -> dict[str, object
         for variant in recipe.variants
         if variant.name in profiles
     ]
-    return {"components": [], "services": [], "ingress": [], "content": [], "profiles": rows}
+    return {
+        "components": [],
+        "services": [],
+        "ingress": [],
+        "content": [],
+        "profiles": rows,
+        "logins": [],
+    }
 
 
 def probe_units(image: Image) -> frozenset[str]:
@@ -196,6 +205,63 @@ def _profiles(image: Image) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _logins(image: Image) -> list[dict[str, object]]:
+    """Each login of an ``SshAccess`` the image or a profile holds: how its keys arrive,
+    its shell or menu, and per command who runs it, its typed argv, the firewall modes it
+    is offered in (none: every mode) and the profiles it exists in."""
+    from .components.access import SshAccess
+
+    rows = _profiles(image)
+    extends = {str(row["name"]): row["extends"] for row in rows}
+    development = [str(row["name"]) for row in rows if not row["production"]]
+
+    def under(root: str | None) -> list[str]:
+        found = []
+        for name in extends:
+            chain: str | None = name
+            while chain is not None and chain != root:
+                chain = cast("str | None", extends.get(chain))
+            if root is None or chain == root:
+                found.append(name)
+        return found
+
+    held: list[tuple[SshAccess, str | None]] = [
+        (item, None) for item in image.components if isinstance(item, SshAccess)
+    ]
+    for name, profile in image.profiles.items():
+        held += [(item, name) for item in profile.add if isinstance(item, SshAccess)]
+    found: list[dict[str, object]] = []
+    for access, root in held:
+        builds = under(root)
+        for login in access.logins:
+            commands = sorted((login.commands or {}).items())
+            baked = len(login.keys) if isinstance(login.keys, tuple) else 0
+            found.append(
+                {
+                    "name": login.name,
+                    "keys": "the owner's key"
+                    if login.owner
+                    else f"keys delivered as {call(login.keys)}"
+                    if login.delivered
+                    else f"{baked} baked key{'s' * (baked != 1)}",
+                    "shell": login.shell,
+                    "commands": [
+                        {
+                            "name": name,
+                            "runs_as": "root" if command.root else login.name,
+                            "argv": command.menu(name)["argv"],
+                            "shown": command.shown(),
+                            "modes": list(command.modes),
+                            "profiles": [p for p in builds if not command.dev or p in development],
+                        }
+                        for name, command in commands
+                    ],
+                    "profiles": builds,
+                }
+            )
+    return found
 
 
 def _content(item: object) -> str:
@@ -672,8 +738,25 @@ def declared_sections(report: Mapping[str, Any]) -> list[Section]:
         Section("Ingress", tuple(Row(way) for way in report.get("ingress", ())), True),
         Section("Content", tuple(Row(item) for item in report.get("content", ())), True),
         Section("Profiles", tuple(_profile_rows(report["profiles"])), True),
+        Section("Logins", tuple(_login_row(row) for row in report.get("logins", ())), True),
     ]
     return [section for section in sections if section.rows]
+
+
+def _login_row(row: Mapping[str, Any]) -> Row:
+    """A login's head (``searcher  the owner's key, a menu``), then one line per command:
+    its name, who runs it, its argv, and the modes and profiles it is limited to."""
+    way = f"shell {row['shell']}" if row["shell"] else "a menu"
+    items: list[Item] = []
+    for command in row["commands"]:
+        limits = []
+        if command["modes"]:
+            limits.append("modes " + ", ".join(command["modes"]))
+        if command["profiles"] != row["profiles"]:
+            limits.append("profiles " + (", ".join(command["profiles"]) or "none"))
+        argv = command["shown"] + (f"  ({'; '.join(limits)})" if limits else "")
+        items.append((command["name"], command["runs_as"], argv))
+    return Row(f"{row['name']}  {row['keys']}, {way}", tuple(items))
 
 
 def _component_row(row: Mapping[str, Any]) -> Row:

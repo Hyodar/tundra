@@ -1,8 +1,10 @@
 // login-menu is a Login's shell and sshd's ForceCommand for it: it reads the login's menu,
 // /etc/tundravm/logins/<user>.json, and the request the client sent ($SSH_ORIGINAL_COMMAND).
 // An empty request prints the menu; any other names one entry and its typed arguments, and
-// login-menu execs that entry's exact argv, through sudo -n for a root entry. Anything else
-// is refused with a problem line and a fix line. Its own arguments (sshd passes -c and the
+// login-menu execs that entry's exact argv, through sudo -n for a root entry. An entry with
+// modes runs only while one of them is in force, as the boot's log of switches
+// (/run/tundravm/firewall-events) says. Anything else is refused with a problem line and a
+// fix line. Its own arguments (sshd passes -c and the
 // forced command) are ignored: the request is never handed to a shell.
 package main
 
@@ -15,11 +17,21 @@ import (
 	"syscall"
 
 	"github.com/Hyodar/tundra/tools/pkg/menu"
+	"github.com/Hyodar/tundra/tools/pkg/modes"
 )
 
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "login-menu: "+format+"\n", args...)
 	os.Exit(2)
+}
+
+// inForce is the mode the log of switches leaves in force, as mode-switch status reads it.
+func inForce() (string, error) {
+	events, err := modes.ReadEvents(modes.EventsPath)
+	if err != nil {
+		return "", err
+	}
+	return modes.Current(events), nil
 }
 
 func main() {
@@ -31,7 +43,7 @@ func main() {
 	if err != nil {
 		fail("%v\nfix: the image declares no menu for %s; Login(%q, commands={...})", err, me.Username, me.Username)
 	}
-	argv, err := m.Parse(os.Getenv("SSH_ORIGINAL_COMMAND"))
+	argv, err := m.Parse(os.Getenv("SSH_ORIGINAL_COMMAND"), inForce)
 	var problem *menu.Problem
 	if errors.As(err, &problem) {
 		fail("%s", problem.Error())

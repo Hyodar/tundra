@@ -108,6 +108,7 @@ IMAGE_KEYS = (
     "ingress",
     "content",
     "profiles",
+    "logins",
     "resolved",
     "provenance",
 )

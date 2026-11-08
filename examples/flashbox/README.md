@@ -14,7 +14,7 @@ attested node's components. `channels/` holds the two small Go programs flashbox
 |---|---|
 | podman, `init-container.sh` | `Container(ssh=, expose=, egress=, modes=, binds=, files=)` |
 | `init-firewall.sh`, `toggle`, `firewall-config` | `Firewall(modes=)`, `firewall.switch` as the menu's `toggle` |
-| `searchersh.c`, `99-searcher`, dropbear | `SshAccess(login=Login("searcher", owner=True, commands=))` |
+| `searchersh.c`, `99-searcher`, dropbear | `SshAccess(login=Login("searcher", owner=True, commands={...}))`: `Sudo("/usr/bin/tail", "--lines", Int("lines", 1, 10000), ...)` as root, `Command("/usr/bin/bash", dev=True)` in development builds only |
 | tdx-init, `persistent-mount.service` | `Volume("data", unlock=OperatorKey())` |
 | `lighthouse.service` | `Lighthouse(disable_quic=, ...)`, `Generated("jwt")` |
 | the container's execution client | `Nethermind` on the host, `Container(requires=[nethermind.rpc])` |

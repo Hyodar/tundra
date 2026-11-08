@@ -1,11 +1,13 @@
 """The ways in for people: ``SshAccess`` (root, and each non-root ``Login`` with its
-``Sudo`` rules) and ``DevAccess`` (``image.dev``).
+menu of ``Command`` and ``Sudo`` values) and ``DevAccess`` (``image.dev``).
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from tundravm._image._component import Component
@@ -14,14 +16,18 @@ from tundravm._image._values import (
 )
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
-from tundravm.declarative.utils import Login, Sudo
+from tundravm.declarative._network import MODES_CONFIG
+from tundravm.declarative.utils import Choice, Command, Int, Login, Sudo
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
 from ._base import _diagnostic
 
 __all__ = [
+    "Choice",
+    "Command",
     "DevAccess",
+    "Int",
     "Login",
     "SshAccess",
     "Sudo",
@@ -71,7 +77,7 @@ class SshAccess(Component):
         if isinstance(logins, str) or not all(isinstance(item, Login) for item in logins):
             raise ValidationError(
                 f"SshAccess: login= takes a Login or a list of them, got {self.login!r}.",
-                hint='Pass login=Login("tenant", keys=[...], commands={"status": [...]}).',
+                hint='Pass login=Login("tenant", keys=[...], commands={"status": Command(...)}).',
             )
         object.__setattr__(self, "login", tuple(logins))
         if not self.keys and not self.from_delivery and not self.login:
@@ -100,6 +106,12 @@ class SshAccess(Component):
         assert isinstance(self.login, tuple)
         return self.login
 
+    def development(self) -> SshAccess:
+        """What a development build holds: each login's ``dev=True`` commands too."""
+        if not any(login.developed for login in self.logins):
+            return self
+        return replace(self, login=tuple(login.development() for login in self.logins))
+
     rules = (
         Rule(
             "ssh-keys-baked",
@@ -114,13 +126,23 @@ class SshAccess(Component):
             "warning",
             "A production login gets an interactive shell and no command menu, so whoever "
             "holds its key runs whatever that shell allows.",
-            'Pin what it runs: Login("tenant", commands={"status": ["/usr/bin/app-status"]}).',
+            "Pin what it runs: "
+            'Login("tenant", commands={"status": Command("/usr/bin/app-status")}).',
+        ),
+        Rule(
+            "login-mode-undeclared",
+            "error",
+            "A login's command names a firewall mode the image's Firewall does not declare, so "
+            "login-menu would never offer it.",
+            'Name a mode of Firewall(modes=): Sudo(..., modes=["maintenance"]), or declare '
+            'the mode: Firewall(modes={"production": Mode(), "maintenance": Mode(...)}).',
         ),
     )
 
     def check(self, resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]:
         """``ssh-keys-baked``: keys baked into a cloud image let in whoever holds them;
-        ``ssh-login-shell``: a production login with a shell and no command menu."""
+        ``ssh-login-shell``: a production login with a shell and no command menu;
+        ``login-mode-undeclared``: a command offered in a mode the firewall lacks."""
         found = [
             dm.Diagnostic(
                 "ssh-login-shell",
@@ -128,12 +150,13 @@ class SshAccess(Component):
                 f"login {login.name!r} gets the shell {login.shell} and no commands=: whoever "
                 "holds its key runs whatever that shell allows",
                 subject=login.name,
-                hint=f'Login("{login.name}", commands={{"status": ["/usr/bin/app-status"]}}) '
-                "pins what it runs.",
+                hint=f'Login("{login.name}", commands='
+                '{"status": Command("/usr/bin/app-status")}) pins what it runs.',
             )
             for login in self.logins
             if resolved.production and login.shell is not None
         ]
+        found += self._undeclared_modes(resolved)
         if self.keys and {"azure", "gcp"} & set(resolved.targets):
             found.append(
                 _diagnostic(
@@ -144,6 +167,29 @@ class SshAccess(Component):
                 )
             )
         return tuple(found)
+
+    def _undeclared_modes(self, resolved: dm.Resolved) -> Iterator[dm.Diagnostic]:
+        config = next(
+            (i for i in resolved.items if isinstance(i, dm.File) and i.path == MODES_CONFIG),
+            None,
+        )
+        declared: list[str] = []
+        if config is not None and isinstance(config.content, str):
+            declared = [mode["name"] for mode in json.loads(config.content)["modes"]]
+        for login in self.logins:
+            for name, command in sorted((login.commands or {}).items()):
+                missing = [mode for mode in command.modes if mode not in declared]
+                if missing:
+                    yield dm.Diagnostic(
+                        "login-mode-undeclared",
+                        "error",
+                        f"login {login.name!r}: command {name} is offered in "
+                        f"{', '.join(missing)}, which the image's Firewall does not declare "
+                        f"({', '.join(declared) or 'it has no modes'})",
+                        subject=login.name,
+                        hint=f'Firewall(modes={{"production": Mode(), "{missing[0]}": '
+                        "Mode(...)}), or drop the mode from modes=.",
+                    )
 
 
 class DevAccess(Component):

@@ -18,8 +18,11 @@ var fixture = Menu{
 		{Name: "switch", Root: true, Argv: []Word{
 			word("/usr/bin/mode-switch"), word("to"), {Arg: "mode", Choice: []string{"production", "maintenance"}},
 		}},
+		{Name: "debug", Root: true, Modes: []string{"maintenance", "sync"}, Argv: []Word{word("/usr/bin/debug")}},
 	},
 }
+
+func production() (string, error) { return "production", nil }
 
 func TestParse(t *testing.T) {
 	sudo := strings.Join(Sudo, " ")
@@ -49,7 +52,7 @@ func TestParse(t *testing.T) {
 		{"switch Production", "", "not one of"},
 	}
 	for _, c := range cases {
-		argv, err := fixture.Parse(c.request)
+		argv, err := fixture.Parse(c.request, production)
 		if c.refused != "" {
 			var problem *Problem
 			if !errors.As(err, &problem) || !strings.Contains(problem.What, c.refused) || problem.Fix == "" {
@@ -70,10 +73,41 @@ func TestListingNamesEveryEntry(t *testing.T) {
 		"  greeting\n",
 		"  logs <lines>   lines 1-1000, as root\n",
 		"  switch <mode>  mode production|maintenance, as root\n",
+		"  debug          as root, maintenance, sync only\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Listing() lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestAnEntryWithModesRunsOnlyInThem(t *testing.T) {
+	unread := func() (string, error) { return "", errors.New("permission denied") }
+	cases := []struct {
+		inForce InForce
+		refused string
+		fix     string
+	}{
+		{func() (string, error) { return "maintenance", nil }, "", ""},
+		{func() (string, error) { return "sync", nil }, "", ""},
+		{production, "debug is offered in maintenance, sync only, and production is in force", "switch to maintenance first"},
+		{unread, "the mode in force is unread: permission denied", "mode-switch status"},
+	}
+	for _, c := range cases {
+		argv, err := fixture.Parse("debug", c.inForce)
+		if c.refused == "" {
+			if err != nil || strings.Join(argv, " ") != strings.Join(Sudo, " ")+" /usr/bin/debug" {
+				t.Errorf("Parse(debug) = %q, %v; want it run", argv, err)
+			}
+			continue
+		}
+		var problem *Problem
+		if !errors.As(err, &problem) || !strings.Contains(problem.What, c.refused) || !strings.Contains(problem.Fix, c.fix) {
+			t.Errorf("Parse(debug) = %v, %v; want refused with %q and %q", argv, err, c.refused, c.fix)
+		}
+	}
+	if _, err := fixture.Parse("logs 3", unread); err != nil {
+		t.Errorf("an entry without modes read the mode: %v", err)
 	}
 }
 
@@ -84,6 +118,8 @@ func TestCheckRefusesAMenuTheImageCouldNotWrite(t *testing.T) {
 		"argument first": {Login: "t", Entries: []Entry{{Name: "a", Argv: []Word{{Arg: "x", Int: []int64{0, 1}}}}}},
 		"untyped":        {Login: "t", Entries: []Entry{{Name: "a", Argv: []Word{word("/x"), {Arg: "x"}}}}},
 		"bounds":         {Login: "t", Entries: []Entry{{Name: "a", Argv: []Word{word("/x"), {Arg: "x", Int: []int64{5, 1}}}}}},
+		"bad mode":       {Login: "t", Entries: []Entry{{Name: "a", Modes: []string{"Maint"}, Argv: []Word{word("/x")}}}},
+		"mode twice":     {Login: "t", Entries: []Entry{{Name: "a", Modes: []string{"m", "m"}, Argv: []Word{word("/x")}}}},
 		"twice": {Login: "t", Entries: []Entry{
 			{Name: "a", Argv: []Word{word("/x")}}, {Name: "a", Argv: []Word{word("/y")}},
 		}},

@@ -979,8 +979,8 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 |---|---|
 | `Firewall.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
 | `Firewall.lowered_modes() -> tuple[FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
-| `Firewall.status` | A `Login` entry printing the mode in force, the switches since boot and whether RTMR3 replays them: `mode-switch status`. |
-| `Firewall.switch` | A `Login` entry switching to the mode the client names, one of *modes*: `mode-switch to MODE`, extended into RTMR3. |
+| `Firewall.status` | A `Login` command printing the mode in force, the switches since boot and whether RTMR3 replays them: `Sudo("/usr/bin/mode-switch", "status")`. |
+| `Firewall.switch` | A `Login` command switching to the mode the client names, one of *modes*, extended into RTMR3: `Sudo("/usr/bin/mode-switch", "to", Choice("mode", *modes))`. |
 
 ### `Host`
 
@@ -1060,7 +1060,41 @@ A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")
 
 ## tundravm.components.access
 
-The ways in for people: `SshAccess` (root, and each non-root `Login` with its `Sudo` rules) and `DevAccess` (`image.dev`).
+The ways in for people: `SshAccess` (root, and each non-root `Login` with its menu of `Command` and `Sudo` values, their words literal or an `Int` or `Choice` the client types) and `DevAccess` (`image.dev`).
+
+### `Choice`
+
+*dataclass*
+
+```python
+Choice(name: str, *values: str)
+```
+
+A word of a `Command` the client types: one of *values*, `Choice("mode", "production", "maintenance")`. A root command gets one exact sudoers line per value.
+
+| Member | Does |
+|---|---|
+| `Choice.menu() -> dict[str, object]` | The word in the menu file `login-menu` reads. |
+| `Choice.shown() -> str` | The word as `show` prints it: `<mode production\|maintenance>`. |
+
+### `Command`
+
+*dataclass*
+
+```python
+Command(*argv: str | Int | Choice, modes: Sequence[str] = (), dev: bool = False)
+```
+
+A command of a `Login`'s menu that runs as the login: `Command("/usr/bin/app-status")`. `Sudo` is one that runs as root.
+
+| Member | Does |
+|---|---|
+| `Command.args` | The words the client types. |
+| `Command.commands() -> list[str]` | The sudoers commands admitting this command: one per combination of its choices, each exact, or with an int an anchored pattern taking digits only. |
+| `Command.developed() -> Command` | The command as a development build holds it: there for every build. |
+| `Command.menu(name: str) -> dict[str, object]` | The entry in the menu file. |
+| `Command.root` | Whether it runs as root (`Sudo`). |
+| `Command.shown() -> str` | The argv as `show` prints it, each argument with its name and bounds. |
 
 ### `DevAccess`
 
@@ -1078,6 +1112,22 @@ Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`
 | `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
 | `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
 
+### `Int`
+
+*dataclass*
+
+```python
+Int(name: str, low: int, high: int)
+```
+
+A word of a `Command` the client types: a decimal number from *low* to *high*, both included: `Int("lines", 1, 10000)`. `login-menu` takes it in canonical decimal only (no sign, no leading zero); a root command's sudoers line takes digits only.
+
+| Member | Does |
+|---|---|
+| `Int.menu() -> dict[str, object]` | The word in the menu file `login-menu` reads. |
+| `Int.pattern() -> str` | The sudoers regular expression of the word: digits, as many as *high* has. |
+| `Int.shown() -> str` | The word as `show` prints it: `<lines 1-10000>`. |
+
 ### `Login`
 
 *dataclass*
@@ -1086,14 +1136,14 @@ Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`
 Login(
     name: str,
     keys: Sequence[str] | Secret = (),
-    commands: Mapping[str, Sequence[str] | Sudo] | None = None,
+    commands: Mapping[str, Command] | None = None,
     shell: str | None = None,
     owner: bool = False,
     home: bool = False,
 )
 ```
 
-An account other than root that logs in over SSH into a menu of commands: `Login("tenant", keys=[...], commands={"status": ["/usr/bin/app-status"]})`.
+An account other than root that logs in over SSH into a menu of commands: `Login("tenant", keys=[...], commands={"status": Command("/usr/bin/app-status")})`.
 
 | Member | Does |
 |---|---|
@@ -1101,14 +1151,16 @@ An account other than root that logs in over SSH into a menu of commands: `Login
 | `Login.config() -> str` | The `sshd_config.d` file: its own keys only, no forwarding, its menu if any. |
 | `Login.declarations() -> Iterator[Declaration]` | The account, its sshd block, its keys, its menu and its sudo lines. |
 | `Login.delivered` | Whether the keys arrive after attestation (a `Secret`, or the owner's). |
-| `Login.entries` | The menu, sorted by command name. |
+| `Login.developed` | Whether a development build holds more of it: a command says `dev=True`. |
+| `Login.development() -> Login` | The login as a development build holds it: its `dev=True` commands too. |
+| `Login.entries` | The menu this build holds, sorted by command name: every command but a `dev=True` one (`development` holds those too). |
 | `Login.key_file` | Where its keys are read: `/etc/ssh/authorized_keys.d/<name>`. |
 | `Login.menu() -> str` | The menu file `login-menu` reads: each entry with its words typed. |
 | `Login.menu_file` | `/etc/tundravm/logins/<name>.json`, or `None` for a shell login. |
 | `Login.options` | The `authorized_keys` options every baked key carries. |
-| `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: each root entry's exact argv, or its digits-only pattern. |
+| `Login.sudo_rules() -> tuple[str, ...]` | The `sudoers` lines: each root command's exact argv, or its digits-only pattern. |
 | `Login.sudoers() -> str` | The `sudoers.d` file: exactly `sudo_rules`. |
-| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without a root entry. |
+| `Login.sudoers_file` | `/etc/sudoers.d/<name>`, or `None` without a root command. |
 
 ### `SshAccess`
 
@@ -1128,7 +1180,8 @@ Root logs in over SSH with a public key, and with nothing else.
 
 | Member | Does |
 |---|---|
-| `SshAccess.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu. |
+| `SshAccess.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu; `login-mode-undeclared`: a command offered in a mode the firewall lacks. |
+| `SshAccess.development() -> SshAccess` | What a development build holds: each login's `dev=True` commands too. |
 | `SshAccess.logins` | Every `Login`, in the order given. |
 | `SshAccess.port` | The port `sshd` listens on. |
 
@@ -1137,10 +1190,14 @@ Root logs in over SSH with a public key, and with nothing else.
 *dataclass*
 
 ```python
-Sudo(argv: Sequence[str])
+Sudo(*argv: str | Int | Choice, modes: Sequence[str] = (), dev: bool = False)
 ```
 
-A `Login` entry that runs as root, exactly as written: `Sudo(["/usr/bin/systemctl", "restart", "app"])`.
+A command of a `Login`'s menu that runs as root, exactly as written: `Sudo("/usr/bin/systemctl", "restart", "app")`; the keywords are `Command`'s.
+
+| Member | Does |
+|---|---|
+| `Sudo.root` | Whether it runs as root: always. |
 
 ## tundravm.components.container
 

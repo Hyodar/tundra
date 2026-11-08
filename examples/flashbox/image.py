@@ -23,7 +23,7 @@ from tundravm import (
     RootFS,
     Service,
 )
-from tundravm.components.access import DevAccess, Login, SshAccess, Sudo
+from tundravm.components.access import Command, DevAccess, Int, Login, SshAccess, Sudo
 from tundravm.components.container import Bind, Container, ContainerSsh
 from tundravm.components.network import Egress, Firewall, Host, Mode, Network
 from tundravm.components.observability import (
@@ -133,10 +133,11 @@ ssh = SshAccess(
         commands={
             "status": firewall.status,
             "logs": Sudo(
-                ["/usr/bin/tail", "--lines", "{lines:int:1-10000}", delayed / "output.log"]
+                "/usr/bin/tail", "--lines", Int("lines", 1, 10000), delayed / "output.log"
             ),
             "toggle": firewall.switch,
-            "reboot": Sudo(["/usr/bin/systemctl", "reboot"]),
+            "reboot": Sudo("/usr/bin/systemctl", "reboot"),
+            "shell": Command("/usr/bin/bash", dev=True),
         },
     )
 )

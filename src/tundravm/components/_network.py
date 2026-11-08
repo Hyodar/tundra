@@ -261,22 +261,24 @@ class Firewall(Component):
 
     @property
     def status(self) -> du.Sudo:
-        """A :class:`~tundravm.components.access.Login` entry printing the mode in force,
-        the switches since boot and whether RTMR3 replays them: ``mode-switch status``."""
+        """A :class:`~tundravm.components.access.Login` command printing the mode in force,
+        the switches since boot and whether RTMR3 replays them:
+        ``Sudo("/usr/bin/mode-switch", "status")``."""
         self._switchable("status")
-        return du.Sudo((MODE_SWITCH, "status"))
+        return du.Sudo(MODE_SWITCH, "status")
 
     @property
     def switch(self) -> du.Sudo:
-        """A :class:`~tundravm.components.access.Login` entry switching to the mode the
-        client names, one of *modes*: ``mode-switch to MODE``, extended into RTMR3."""
+        """A :class:`~tundravm.components.access.Login` command switching to the mode the
+        client names, one of *modes*, extended into RTMR3:
+        ``Sudo("/usr/bin/mode-switch", "to", Choice("mode", *modes))``."""
         self._switchable("switch")
-        return du.Sudo((MODE_SWITCH, "to", f"{{mode:choice:{'|'.join(self.modes)}}}"))
+        return du.Sudo(MODE_SWITCH, "to", du.Choice("mode", *self.modes))
 
     def _switchable(self, entry: str) -> None:
         if not self.modes:
             raise ValidationError(
-                f"Firewall: {entry} is a login entry for a switchable firewall, and this one "
+                f"Firewall: {entry} is a login command for a switchable firewall, and this one "
                 "has no modes.",
                 hint='Add modes={"production": Mode(), "maintenance": Mode(...)}.',
             )
