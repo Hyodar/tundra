@@ -126,6 +126,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - `convert --from mkosi` on a tundravm tree converts the payload and its cloud wrappers into `targets=`, drops the packages every image implies, and refuses what the Image file generated.
 - Every error prints its code and a hint naming the command that gets past it; a closed pipe exits 141 quietly; a misspelt verb gets a "did you mean".
 - `check` prints tundravm's own tools as one `source-unpinned` line, lists the findings that share a hint together with the hint once after them, says a missing lock stops a production build with the error `lock-missing`, and names the preset and its reason in a preset's `hardening-relaxed`.
+- `convert --from mkosi` of a tree tundravm wrote names what its Image file generated on one line, says the round trip keeps packages and settings only, and gives `ManifestFormat=`, `Output=` and `SplitArtifacts=` each its own reason.
 
 ### Build and lock
 
