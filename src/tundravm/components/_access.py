@@ -1,5 +1,5 @@
 """The ways in for people: ``SshAccess`` (root, and each non-root ``Login`` with its
-menu of ``Command`` and ``Sudo`` values) and ``DevAccess`` (``image.dev``).
+menu of ``Command`` values) and ``DevAccess`` (``image.dev``).
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from tundravm._image._values import (
 from tundravm.declarative import model as dm
 from tundravm.declarative import utils as du
 from tundravm.declarative._network import MODES_CONFIG
-from tundravm.declarative.utils import Choice, Command, Int, Login, Sudo
+from tundravm.declarative.utils import Choice, Command, Int, Login
 from tundravm.diagnostics import Rule
 from tundravm.errors import ValidationError
 
@@ -30,7 +30,6 @@ __all__ = [
     "Int",
     "Login",
     "SshAccess",
-    "Sudo",
 ]
 
 _SSH_KEY = re.compile(
@@ -134,7 +133,7 @@ class SshAccess(Component):
             "error",
             "A login's command names a firewall mode the image's Firewall does not declare, so "
             "login-menu would never offer it.",
-            'Name a mode of Firewall(modes=): Sudo(..., modes=["maintenance"]), or declare '
+            'Name a mode of Firewall(modes=): Command(..., modes=["maintenance"]), or declare '
             'the mode: Firewall(modes={"production": Mode(), "maintenance": Mode(...)}).',
         ),
     )

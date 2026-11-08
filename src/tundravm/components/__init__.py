@@ -12,7 +12,7 @@ The shipped components, one submodule each:
 - :mod:`tundravm.components.tee`: ``TeeBase``, ``Tdxs`` and its readiness ``EVIDENCE``.
 - :mod:`tundravm.components.network`: ``Network``, ``StaticAddress``, ``Egress``,
   ``Firewall``, ``Mode``.
-- :mod:`tundravm.components.access`: ``SshAccess``, ``Login``, ``Sudo``, ``DevAccess``.
+- :mod:`tundravm.components.access`: ``SshAccess``, ``Login``, ``Command``, ``DevAccess``.
 - :mod:`tundravm.components.container`: ``Container``, ``ContainerSsh``, ``Bind``.
 - :mod:`tundravm.components.observability`: ``Observability``, ``JournalExport``,
   ``PrometheusRemoteWrite``, ``Proxy``, ``RecordingRule``, ``SigV4``.

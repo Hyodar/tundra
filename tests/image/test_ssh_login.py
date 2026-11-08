@@ -1,6 +1,6 @@
 """``SshAccess(login=Login(...))``: a non-root login into a command menu or a shell, keys
-baked, delivered or the owner's, its commands typed (``Command``, ``Sudo``, ``Int``,
-``Choice``), offered by firewall mode and by build, its root commands as exact sudoers lines,
+baked, delivered or the owner's, its commands typed (``Command``, ``Int``, ``Choice``),
+offered by firewall mode and by build, its ``sudo=True`` commands as exact sudoers lines,
 what ``show`` says of it, its probe rows and its lint."""
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import pytest
 
 from tundravm import Image, Profile, Service
 from tundravm._describe import declared, declared_sections, render_sections
-from tundravm.components.access import Choice, Command, DevAccess, Int, Login, SshAccess, Sudo
+from tundravm.components.access import Choice, Command, DevAccess, Int, Login, SshAccess
 from tundravm.components.network import Firewall, Mode
 from tundravm.errors import ValidationError
 from tundravm.ports import TCP
@@ -71,7 +71,11 @@ def _postinst(planned: object) -> str:
             "/usr/bin/menu",
         ),
         (
-            Login("tenant", owner=True, commands={"web": Sudo("/usr/bin/systemctl", "restart")}),
+            Login(
+                "tenant",
+                owner=True,
+                commands={"web": Command("/usr/bin/systemctl", "restart", sudo=True)},
+            ),
             {SUDOERS: "tenant ALL=(root) NOPASSWD: /usr/bin/systemctl restart\n"},
             ["/etc/ssh/authorized_keys.d/tenant"],
             "/usr/bin/login-menu",
@@ -119,17 +123,21 @@ def test_the_owners_key_goes_to_the_owner_login_and_root_takes_none_without_aski
 @pytest.mark.parametrize(
     ("command", "rules"),
     [
-        (Sudo("/usr/bin/toggle"), ['/usr/bin/toggle ""']),
-        (Sudo("/usr/bin/x", "a=b,c"), ["/usr/bin/x a\\=b\\,c"]),
+        (Command("/usr/bin/toggle", sudo=True), ['/usr/bin/toggle ""']),
+        (Command("/usr/bin/x", "a=b,c", sudo=True), ["/usr/bin/x a\\=b\\,c"]),
         (
-            Sudo("/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance")),
+            Command(
+                "/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance"), sudo=True
+            ),
             ["/usr/bin/mode-switch to production", "/usr/bin/mode-switch to maintenance"],
         ),
         (
-            Sudo("/usr/bin/journalctl", "-u", "a.service", "-n", Int("lines", 1, 1000)),
+            Command(
+                "/usr/bin/journalctl", "-u", "a.service", "-n", Int("lines", 1, 1000), sudo=True
+            ),
             ["/usr/bin/journalctl ^-u a[.]service -n [0-9][0-9]?[0-9]?[0-9]?$"],
         ),
-        (Sudo("/usr/bin/x", modes=["maintenance"]), ['/usr/bin/x ""']),
+        (Command("/usr/bin/x", modes=["maintenance"], sudo=True), ['/usr/bin/x ""']),
         (Command("/usr/bin/x"), []),
     ],
 )
@@ -154,7 +162,7 @@ def test_a_root_command_is_exact_sudoers_lines(command: Command, rules: list[str
             },
         ),
         (
-            Sudo("/bin/x", modes=["maintenance"]),
+            Command("/bin/x", modes=["maintenance"], sudo=True),
             {"argv": [{"word": "/bin/x"}], "root": True, "modes": ["maintenance"]},
         ),
     ],
@@ -177,7 +185,9 @@ def test_the_menu_types_each_word_and_names_its_modes(
 def test_a_command_names_only_modes_the_firewall_declares(
     modes: list[str], firewall: Firewall, found: str | None
 ) -> None:
-    login = Login("tenant", owner=True, commands={**STATUS, "x": Sudo("/x", modes=modes)})
+    login = Login(
+        "tenant", owner=True, commands={**STATUS, "x": Command("/x", modes=modes, sudo=True)}
+    )
     messages = [
         d.message
         for d in plan(_image(login, firewall=firewall), "production").lint()
@@ -208,7 +218,7 @@ def test_a_dev_command_exists_in_development_builds_only(
         commands={
             **STATUS,
             "shell": Command("/usr/bin/bash", dev=True),
-            "debug": Sudo("/usr/bin/debug", dev=True),
+            "debug": Command("/usr/bin/debug", dev=True, sudo=True),
         },
     )
     baked = Login("guest", keys=[KEY], commands={**STATUS, "sh": Command("/bin/sh", dev=True)})
@@ -249,10 +259,12 @@ def test_show_prints_each_command_who_runs_it_its_argv_modes_and_profiles() -> N
         "tenant",
         owner=True,
         commands={
-            "logs": Sudo("/usr/bin/tail", "-n", Int("lines", 1, 1000), "/var/log/app"),
+            "logs": Command(
+                "/usr/bin/tail", "-n", Int("lines", 1, 1000), "/var/log/app", sudo=True
+            ),
             "shell": Command("/usr/bin/bash", dev=True),
             "toggle": MODES.switch,
-            "debug": Sudo("/usr/bin/debug", modes=["maintenance"]),
+            "debug": Command("/usr/bin/debug", modes=["maintenance"], sudo=True),
         },
     )
     report = declared(_image(login), ["production", "dev", "staging"])
@@ -275,7 +287,9 @@ def test_show_prints_each_command_who_runs_it_its_argv_modes_and_profiles() -> N
 
 
 def test_the_dev_probe_checks_each_login_its_menu_and_root() -> None:
-    login = Login("tenant", owner=True, commands={"logs": Sudo("/bin/x", Int("n", 1, 9))})
+    login = Login(
+        "tenant", owner=True, commands={"logs": Command("/bin/x", Int("n", 1, 9), sudo=True)}
+    )
     probe = plan(_image(login), "dev").file("/usr/lib/tundravm/probe").text
     assert "probe_login tenant /etc/sudoers.d/tenant '-' '/usr/bin/login-menu'\n" in probe
     assert f"probe_menu tenant {MENU} /etc/sudoers.d/tenant 'logs 10' logs\n" in probe
@@ -322,7 +336,10 @@ def test_a_production_shell_login_warns(shell: bool, production: bool, found: bo
         (lambda: Command(), "runs nothing"),
         (lambda: Command("/x", "--n={n:int}"), r'Write Int\("n", 0, 65535\)'),
         (lambda: Command("/x", "{m:choice:a|b}"), r'Write Choice\("m", "a", "b"\)'),
-        (lambda: Sudo(["/x", "{n:int:1-9}"]), r'Sudo\("/x", Int\("n", 1, 9\)\)'),  # type: ignore[arg-type]
+        (
+            lambda: Command(["/x", "{n:int:1-9}"], sudo=True),  # type: ignore[arg-type]
+            r'Command\("/x", Int\("n", 1, 9\), sudo=True\)',
+        ),
         (lambda: Command("/x", Int("n", 0, 1), Int("n", 0, 1)), "twice"),
         (lambda: Command("/x", modes="maintenance"), "not a list"),
         (lambda: Command("/x", modes=["tdx"]), "security mode"),
@@ -333,9 +350,9 @@ def test_a_production_shell_login_warns(shell: bool, production: bool, found: bo
         (lambda: Choice("m"), "offers no value"),
         (lambda: Choice("m", "-f"), "offers '-f'"),
         (lambda: Choice("m", "a", "a"), "a value twice"),
-        (lambda: Sudo("/x", "*"), "wildcard"),
-        (lambda: Sudo("/x", "a b"), "a space"),
-        (lambda: Sudo("/x", "a=b", Int("n", 0, 1)), "pattern"),
+        (lambda: Command("/x", "*", sudo=True), "wildcard"),
+        (lambda: Command("/x", "a b", sudo=True), "a space"),
+        (lambda: Command("/x", "a=b", Int("n", 0, 1), sudo=True), "pattern"),
         (lambda: SshAccess(login=["tenant"]), "takes a Login"),  # type: ignore[list-item]
         (
             lambda: SshAccess(

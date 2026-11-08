@@ -121,3 +121,9 @@ strings and in the examples.
 ## Not here
 
 An argument inside a word (`--lines=N`), and free strings.
+
+## Revised 2026-11-08
+
+Franco preferred the flag to a subclass ("I think it should be Command(..., sudo=True)"), so
+`Sudo` is gone and a root command is `Command("/usr/bin/systemctl", "reboot", sudo=True)`;
+the first rejection above no longer holds. The menu and sudoers bytes are unchanged.

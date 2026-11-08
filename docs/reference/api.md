@@ -985,8 +985,8 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 |---|---|
 | `Firewall.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
 | `Firewall.lowered_modes() -> tuple[FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
-| `Firewall.status` | A `Login` command printing the mode in force, the switches since boot and whether RTMR3 replays them: `Sudo("/usr/bin/mode-switch", "status")`. |
-| `Firewall.switch` | A `Login` command switching to the mode the client names, one of *modes*, extended into RTMR3: `Sudo("/usr/bin/mode-switch", "to", Choice("mode", *modes))`. |
+| `Firewall.status` | A `Login` command printing the mode in force, the switches since boot and whether RTMR3 replays them: `Command("/usr/bin/mode-switch", "status", sudo=True)`. |
+| `Firewall.switch` | A `Login` command switching to the mode the client names, one of *modes*, extended into RTMR3: `Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)`. |
 
 ### `Host`
 
@@ -1067,7 +1067,7 @@ A fixed address for `Network`: `StaticAddress("10.0.0.5/24", gateway="10.0.0.1")
 
 ## tundravm.components.access
 
-The ways in for people: `SshAccess` (root, and each non-root `Login` with its menu of `Command` and `Sudo` values, their words literal or an `Int` or `Choice` the client types) and `DevAccess` (`image.dev`).
+The ways in for people: `SshAccess` (root, and each non-root `Login` with its menu of `Command` values, run as the login or as root, their words literal or an `Int` or `Choice` the client types) and `DevAccess` (`image.dev`).
 
 ### `Choice`
 
@@ -1089,10 +1089,15 @@ A word of a `Command` the client types: one of *values*, `Choice("mode", "produc
 *dataclass*
 
 ```python
-Command(*argv: str | Int | Choice, modes: Sequence[str] = (), dev: bool = False)
+Command(
+    *argv: str | Int | Choice,
+    modes: Sequence[str] = (),
+    dev: bool = False,
+    sudo: bool = False,
+)
 ```
 
-A command of a `Login`'s menu that runs as the login: `Command("/usr/bin/app-status")`. `Sudo` is one that runs as root.
+A command of a `Login`'s menu: `Command("/usr/bin/app-status")` runs as the login, `Command("/usr/bin/systemctl", "reboot", sudo=True)` as root.
 
 | Member | Does |
 |---|---|
@@ -1100,7 +1105,6 @@ A command of a `Login`'s menu that runs as the login: `Command("/usr/bin/app-sta
 | `Command.commands() -> list[str]` | The sudoers commands admitting this command: one per combination of its choices, each exact, or with an int an anchored pattern taking digits only. |
 | `Command.developed() -> Command` | The command as a development build holds it: there for every build. |
 | `Command.menu(name: str) -> dict[str, object]` | The entry in the menu file. |
-| `Command.root` | Whether it runs as root (`Sudo`). |
 | `Command.shown() -> str` | The argv as `show` prints it, each argument with its name and bounds. |
 
 ### `DevAccess`
@@ -1191,20 +1195,6 @@ Root logs in over SSH with a public key, and with nothing else.
 | `SshAccess.development() -> SshAccess` | What a development build holds: each login's `dev=True` commands too. |
 | `SshAccess.logins` | Every `Login`, in the order given. |
 | `SshAccess.port` | The port `sshd` listens on. |
-
-### `Sudo`
-
-*dataclass*
-
-```python
-Sudo(*argv: str | Int | Choice, modes: Sequence[str] = (), dev: bool = False)
-```
-
-A command of a `Login`'s menu that runs as root, exactly as written: `Sudo("/usr/bin/systemctl", "restart", "app")`; the keywords are `Command`'s.
-
-| Member | Does |
-|---|---|
-| `Sudo.root` | Whether it runs as root: always. |
 
 ## tundravm.components.container
 

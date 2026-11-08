@@ -344,7 +344,7 @@ def _logins(image: Image) -> list[dict[str, object]]:
                     "commands": [
                         {
                             "name": name,
-                            "runs_as": "root" if command.root else login.name,
+                            "runs_as": "root" if command.sudo else login.name,
                             "argv": command.menu(name)["argv"],
                             "shown": command.shown(),
                             "modes": list(command.modes),

@@ -17,7 +17,7 @@ import pytest
 
 import tundravm
 from tundravm import DebianConfig, Image, Kernel
-from tundravm.components.access import Choice, Sudo
+from tundravm.components.access import Choice, Command
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.declarative._network import expand_firewall
 from tundravm.declarative.model import EgressRule, FirewallMode, Port
@@ -130,24 +130,31 @@ THREE = {"production": Mode(), "debug": Mode(ingress=[TCP(22)]), "sync": Mode(in
 @pytest.mark.parametrize(
     ("modes", "entry", "command"),
     [
-        (MODES, "status", Sudo("/usr/bin/mode-switch", "status")),
+        (MODES, "status", Command("/usr/bin/mode-switch", "status", sudo=True)),
         (
             MODES,
             "switch",
-            Sudo("/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance")),
+            Command(
+                "/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance"), sudo=True
+            ),
         ),
-        (THREE, "status", Sudo("/usr/bin/mode-switch", "status")),
+        (THREE, "status", Command("/usr/bin/mode-switch", "status", sudo=True)),
         (
             THREE,
             "switch",
-            Sudo("/usr/bin/mode-switch", "to", Choice("mode", "production", "debug", "sync")),
+            Command(
+                "/usr/bin/mode-switch",
+                "to",
+                Choice("mode", "production", "debug", "sync"),
+                sudo=True,
+            ),
         ),
         ({}, "status", None),
         ({}, "switch", None),
     ],
 )
 def test_a_switchable_firewall_hands_out_its_login_commands(
-    modes: dict[str, Mode], entry: str, command: Sudo | None
+    modes: dict[str, Mode], entry: str, command: Command | None
 ) -> None:
     firewall = Firewall(modes=modes)
     if command is None:

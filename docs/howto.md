@@ -146,7 +146,7 @@ ssh = SshAccess(login=Login(
     owner=True,
     commands={
         "status": Command("/usr/bin/app-status"),
-        "logs": Sudo("/usr/bin/journalctl", "-u", "app", "-n", Int("lines", 1, 1000)),
+        "logs": Command("/usr/bin/journalctl", "-u", "app", "-n", Int("lines", 1, 1000), sudo=True),
         "toggle": firewall.switch,
         "shell": Command("/usr/bin/bash", dev=True),
     },
@@ -154,8 +154,9 @@ ssh = SshAccess(login=Login(
 ```
 
 Pass both in `components=`. `ssh tenant@HOST` lists the menu, and `ssh tenant@HOST logs 50`
-runs one command. A `Command` runs as the login, a `Sudo` as root. `modes=["maintenance"]`
-limits a command to that mode, and `dev=True` keeps `shell` out of production builds.
+runs one command. A `Command` runs as the login, with `sudo=True` as root.
+`modes=["maintenance"]` limits a command to that mode, and `dev=True` keeps `shell` out of
+production builds.
 `owner=True` gives the account the key `attest` hands over.
 
 ## Run a container

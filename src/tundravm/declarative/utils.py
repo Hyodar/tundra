@@ -1054,7 +1054,7 @@ SSH_LOGIN_CONFIG = "/etc/ssh/sshd_config.d/60-tundravm-login-{name}.conf"
 """Each :class:`Login`'s ``Match User`` block, one file each: a ``Match`` in an included
 file ends with that file, so Debian's own lines after the ``Include`` stay global."""
 SUDOERS_DIRECTORY = "/etc/sudoers.d"
-"""Where a :class:`Login` with ``Sudo`` entries gets their lines, one file per login
+"""Where a :class:`Login` with ``sudo=True`` commands gets their lines, one file per login
 (``0440``)."""
 LOGIN_MENU = "/usr/bin/login-menu"
 """``login-menu`` (``tools/cmd/login-menu``): a menu login's shell and forced command."""
@@ -1178,8 +1178,8 @@ def _new_spelling(word: str) -> str:
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class Command:
-    """A command of a :class:`Login`'s menu that runs as the login:
-    ``Command("/usr/bin/app-status")``. :class:`Sudo` is one that runs as root.
+    """A command of a :class:`Login`'s menu: ``Command("/usr/bin/app-status")`` runs as the
+    login, ``Command("/usr/bin/systemctl", "reboot", sudo=True)`` as root.
 
     Each word is a positional argument, in the order the argv holds them: a string is a
     literal word, :class:`Int` and :class:`Choice` are words the client types. The first is
@@ -1187,18 +1187,27 @@ class Command:
     modes only (``login-menu`` refuses it in any other, naming the mode in force); without
     it the command is offered in every mode. *dev* makes it exist in development builds
     only: the profiles whose ``production=`` is ``False``, ``DevAccess``'s ``dev`` among them.
+    *sudo* runs it as root through ``sudo -n``, which ``/etc/sudoers.d/<login>`` admits for
+    exactly this argv: one line per :class:`Choice` value, or with an :class:`Int` one
+    anchored pattern taking digits only, and no wildcard, no quoting, no shell.
     """
 
     argv: tuple[Word, ...]
     modes: tuple[str, ...]
     dev: bool
+    sudo: bool
 
     def __init__(
-        self, *argv: str | Int | Choice, modes: Sequence[str] = (), dev: bool = False
+        self,
+        *argv: str | Int | Choice,
+        modes: Sequence[str] = (),
+        dev: bool = False,
+        sudo: bool = False,
     ) -> None:
         object.__setattr__(self, "argv", argv)
         object.__setattr__(self, "modes", modes)
         object.__setattr__(self, "dev", dev)
+        object.__setattr__(self, "sudo", sudo)
         self._check_words()
         if isinstance(modes, str) or not isinstance(modes, Sequence):
             raise ValidationError(
@@ -1224,17 +1233,14 @@ class Command:
             )
         if not isinstance(dev, bool):
             raise ValidationError(f"{self._kind}: dev= must be True or False.", hint="dev=True.")
-        if self.root:
-            self._check_root()
+        if not isinstance(sudo, bool):
+            raise ValidationError(f"{self._kind}: sudo= must be True or False.", hint="sudo=True.")
+        if self.sudo:
+            self._check_sudo()
 
     @property
     def _kind(self) -> str:
         return type(self).__name__
-
-    @property
-    def root(self) -> bool:
-        """Whether it runs as root (:class:`Sudo`)."""
-        return False
 
     @property
     def args(self) -> tuple[Int | Choice, ...]:
@@ -1243,7 +1249,7 @@ class Command:
 
     def developed(self) -> Command:
         """The command as a development build holds it: there for every build."""
-        return type(self)(*self.argv, modes=self.modes)
+        return type(self)(*self.argv, modes=self.modes, sudo=self.sudo)
 
     def __repr__(self) -> str:
         words = [json.dumps(w) if isinstance(w, str) else repr(w) for w in self.argv]
@@ -1251,6 +1257,8 @@ class Command:
             words.append(f"modes={json.dumps(list(self.modes))}")
         if self.dev:
             words.append("dev=True")
+        if self.sudo:
+            words.append("sudo=True")
         return f"{self._kind}({', '.join(words)})"
 
     def shown(self) -> str:
@@ -1260,7 +1268,7 @@ class Command:
     def menu(self, name: str) -> dict[str, object]:
         """The entry in the menu file."""
         words = [{"word": w} if isinstance(w, str) else w.menu() for w in self.argv]
-        return {"name": name, "argv": words, "root": self.root, "modes": list(self.modes)}
+        return {"name": name, "argv": words, "root": self.sudo, "modes": list(self.modes)}
 
     def commands(self) -> list[str]:
         """The sudoers commands admitting this command: one per combination of its choices,
@@ -1291,7 +1299,7 @@ class Command:
             )
             raise ValidationError(
                 f"{kind}: the argv is one list; each word is its own argument.",
-                hint=f"{kind}({spelled}).",
+                hint=f"{kind}({spelled}{', sudo=True' if self.sudo else ''}).",
             )
         if not self.argv:
             raise ValidationError(f"{kind}() runs nothing.", hint=f'{kind}("/usr/bin/app-status").')
@@ -1324,9 +1332,9 @@ class Command:
                 hint="Give each argument its own name.",
             )
 
-    def _check_root(self) -> None:
+    def _check_sudo(self) -> None:
         """Refuse a root command sudoers would read as more than it says."""
-        where = f"Sudo {self.argv[0]}"
+        where = f"{self._kind} {self.argv[0]} (sudo=True)"
         literal = [w for w in self.argv if isinstance(w, str)]
         pattern = any(isinstance(arg, Int) for arg in self.args)
         for at, word in enumerate(literal):
@@ -1355,23 +1363,6 @@ class Command:
             )
 
 
-@dataclass(frozen=True, slots=True, init=False, repr=False)
-class Sudo(Command):
-    """A command of a :class:`Login`'s menu that runs as root, exactly as written:
-    ``Sudo("/usr/bin/systemctl", "restart", "app")``; the keywords are :class:`Command`'s.
-
-    ``login-menu`` runs it through ``sudo -n``, and ``/etc/sudoers.d/<login>`` admits this
-    argv and no other: one exact line (a :class:`Choice` gives one per value), or with an
-    :class:`Int` one anchored sudoers pattern that takes digits only. No wildcard, no
-    quoting, no shell.
-    """
-
-    @property
-    def root(self) -> bool:
-        """Whether it runs as root: always."""
-        return True
-
-
 def _command(login: str, name: object, value: object) -> Command:
     """The :class:`Command` ``commands={name: value}`` declares."""
     if not isinstance(name, str) or not _ENTRY_NAME.fullmatch(name):
@@ -1384,8 +1375,8 @@ def _command(login: str, name: object, value: object) -> Command:
     words = value if isinstance(value, (list, tuple)) else [value]
     spelled = ", ".join(_new_spelling(w) if isinstance(w, str) else repr(w) for w in words)
     raise ValidationError(
-        f"Login {login}: command {name} is {value!r}, not a Command or a Sudo.",
-        hint=f"Command({spelled}) runs it as the login, Sudo({spelled}) as root.",
+        f"Login {login}: command {name} is {value!r}, not a Command.",
+        hint=f"Command({spelled}) runs it as the login, Command({spelled}, sudo=True) as root.",
     )
 
 
@@ -1402,10 +1393,10 @@ class Login(Keywords):
     at all: bake them as a list in *keys*.
     *owner* makes the owner's key its only key instead: the key ``attest`` hands over, from
     the owner an ``OperatorKey()`` volume pins (in a simulated boot, the first). Root then
-    takes no delivered key. *commands* maps each name the client may type to what it runs:
-    a :class:`Command` runs as the login, a :class:`Sudo` as root, each word literal or an
-    :class:`Int` or :class:`Choice` the client fills; ``modes=`` and ``dev=`` say in which
-    firewall modes and builds it exists, and at least one exists in every build.
+    takes no delivered key. *commands* maps each name the client may type to the
+    :class:`Command` it runs, as the login or with ``sudo=True`` as root, each word literal
+    or an :class:`Int` or :class:`Choice` the client fills; ``modes=`` and ``dev=`` say in
+    which firewall modes and builds it exists, and at least one exists in every build.
     ``login-menu`` is the account's shell and sshd's forced command: no command lists
     the menu, anything the menu does not offer is refused, and nothing reaches a shell.
     *shell* is the escape hatch: a login shell the image ships, with a terminal and no
@@ -1574,7 +1565,7 @@ class Login(Keywords):
     @property
     def sudoers_file(self) -> str | None:
         """``/etc/sudoers.d/<name>``, or ``None`` without a root command."""
-        if any(command.root for _, command in self.entries):
+        if any(command.sudo for _, command in self.entries):
             return f"{SUDOERS_DIRECTORY}/{self.name}"
         return None
 
@@ -1604,7 +1595,7 @@ class Login(Keywords):
         return tuple(
             f"{self.name} ALL=(root) NOPASSWD: {line}"
             for _, command in self.entries
-            if command.root
+            if command.sudo
             for line in command.commands()
         )
 
@@ -1968,7 +1959,6 @@ __all__ = [
     "SUDOERS_DIRECTORY",
     "SshAccess",
     "StaticAddress",
-    "Sudo",
     "TEE_HYPERVISOR_CLOCKS",
     "TEE_KERNEL_CMDLINE",
     "TEE_KERNEL_OVERRIDES",

@@ -98,7 +98,6 @@ DENYLIST = {
     "login argument mini-language (Int(name, low, high), Choice(name, ...))": re.compile(
         r"\{[a-z][a-z0-9_]*:(?:int|choice)\b"
     ),
-    "Sudo of one list (Sudo(path, word, ...))": re.compile(r"\bSudo\(\s*\["),
     "a login command as a plain list (Command(path, word, ...))": re.compile(
         r"\bcommands=\{\s*[\"'][a-z][a-z0-9-]*[\"']:\s*\["
     ),
@@ -162,6 +161,7 @@ RENAMED = {
     "service-command-not-shipped (service-program-missing)": re.compile(
         r"\bservice-command-not-shipped\b"
     ),
+    "Sudo (Command(..., sudo=True))": re.compile(r"(?<![\w.])Sudo\("),
 }
 """Removed recipe-authoring spellings, by their replacement."""
 RENAMED_KEYWORDS = {
@@ -497,6 +497,7 @@ def test_examples_and_docs_use_the_current_recipe_spellings(path: Path) -> None:
         'Diagnostic("app-x", "error", "m", variant=resolved.variant)',
         "the variant-empty finding",
         'Secret("jwt", rotation="restart")',
+        '"reboot": Sudo("/usr/bin/systemctl", "reboot"),',
     ],
 )
 def test_renamed_guard_catches_the_removed_spellings(source: str) -> None:

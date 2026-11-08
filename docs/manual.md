@@ -295,7 +295,7 @@ account, are refused.
 | `name` | the account |
 | `keys=` | its public keys: baked, or a `Secret` the attested endpoint writes to `/etc/ssh/authorized_keys.d/<name>` |
 | `owner=True` | the owner's key, the one `attest` hands over, in place of keys of its own |
-| `commands={...}` | its menu: a word mapped to a `Command(...)`, run as the login, or a `Sudo(...)`, run as root |
+| `commands={...}` | its menu: a word mapped to a `Command(...)`, run as the login, or with `sudo=True` as root |
 | `shell=` | the escape hatch: a login shell the image ships, with a terminal and no sudo; `ssh-login-shell` warns in production |
 | `home=True` | `/home/<name>`, handed to the login at boot |
 
@@ -306,7 +306,7 @@ the `Firewall` lacks; `dev=True` offers it in development builds only. `firewall
 `firewall.switch` are two such commands, run as root.
 
 `login-menu` is the account's shell and sshd's forced command: an empty request lists the
-menu, a request runs exactly the argv it names, and anything else is refused. Each `Sudo`
+menu, a request runs exactly the argv it names, and anything else is refused. Each `sudo=True`
 command gets exact `/etc/sudoers.d/<name>` lines. A menu gets no terminal, through two locks
 (`PermitTTY no` and `restrict` keys), except in a development build of a login with
 `dev=True` commands, which lifts both (`PermitTTY yes`, `restrict,pty`) so that `ssh -t`

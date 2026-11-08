@@ -268,20 +268,20 @@ class Firewall(Component):
         )
 
     @property
-    def status(self) -> du.Sudo:
+    def status(self) -> du.Command:
         """A :class:`~tundravm.components.access.Login` command printing the mode in force,
         the switches since boot and whether RTMR3 replays them:
-        ``Sudo("/usr/bin/mode-switch", "status")``."""
+        ``Command("/usr/bin/mode-switch", "status", sudo=True)``."""
         self._switchable("status")
-        return du.Sudo(MODE_SWITCH, "status")
+        return du.Command(MODE_SWITCH, "status", sudo=True)
 
     @property
-    def switch(self) -> du.Sudo:
+    def switch(self) -> du.Command:
         """A :class:`~tundravm.components.access.Login` command switching to the mode the
         client names, one of *modes*, extended into RTMR3:
-        ``Sudo("/usr/bin/mode-switch", "to", Choice("mode", *modes))``."""
+        ``Command("/usr/bin/mode-switch", "to", Choice("mode", *modes), sudo=True)``."""
         self._switchable("switch")
-        return du.Sudo(MODE_SWITCH, "to", du.Choice("mode", *self.modes))
+        return du.Command(MODE_SWITCH, "to", du.Choice("mode", *self.modes), sudo=True)
 
     def _switchable(self, entry: str) -> None:
         if not self.modes:

@@ -32,7 +32,7 @@ from typing import Literal
 
 from tundravm import Debian, File, Image, Mkosi, Package, Profile, RootFS, Service
 from tundravm.components import Component
-from tundravm.components.access import Choice, Command, Int, Login, SshAccess, Sudo
+from tundravm.components.access import Choice, Command, Int, Login, SshAccess
 from tundravm.components.container import Container, ContainerSsh
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.components.observability import (
@@ -248,8 +248,8 @@ TENANT = Login(
     owner=True,
     commands={
         "greeting": Command("/usr/bin/cat", "/etc/greeter/greeting"),
-        "web": Sudo("/usr/bin/systemctl", "is-active", "web"),
-        "logs": Sudo(
+        "web": Command("/usr/bin/systemctl", "is-active", "web", sudo=True),
+        "logs": Command(
             "/usr/bin/journalctl",
             "--unit",
             "greeter.service",
@@ -258,8 +258,11 @@ TENANT = Login(
             "--no-pager",
             "--output",
             "cat",
+            sudo=True,
         ),
-        "switch": Sudo("/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance")),
+        "switch": Command(
+            "/usr/bin/mode-switch", "to", Choice("mode", "production", "maintenance"), sudo=True
+        ),
     },
     home=True,
 )

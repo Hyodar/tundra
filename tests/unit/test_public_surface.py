@@ -62,7 +62,7 @@ COMPONENTS = [
     "ServiceReady",
     "ServiceRef",
 ]
-ACCESS = ["Choice", "Command", "DevAccess", "Int", "Login", "SshAccess", "Sudo"]
+ACCESS = ["Choice", "Command", "DevAccess", "Int", "Login", "SshAccess"]
 NETWORK = ["Egress", "Firewall", "Host", "Mode", "Network", "StaticAddress"]
 TEE = ["EVIDENCE", "Tdxs", "TeeBase"]
 CONTAINER = ["Bind", "Container", "ContainerSsh"]
@@ -181,7 +181,6 @@ REUSED_FROM_DECLARATIVE = [
     "Login",
     "Resolved",
     "StaticAddress",
-    "Sudo",
     "User",
 ]
 """Names the public surface keeps rather than re-spells: the internal model's own objects.

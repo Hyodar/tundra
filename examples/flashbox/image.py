@@ -13,7 +13,7 @@ from components.nethermind import Nethermind
 from components.searcher import Searcher
 
 from tundravm import Debian, DebianConfig, Image, Kernel, KernelFragment, RootFS
-from tundravm.components.access import Command, DevAccess, Int, Login, SshAccess, Sudo
+from tundravm.components.access import Command, DevAccess, Int, Login, SshAccess
 from tundravm.components.network import Egress, Firewall, Mode, Network
 from tundravm.components.observability import Observability, PrometheusRemoteWrite, Proxy, SigV4
 from tundravm.secrets import Generated, Secret
@@ -57,7 +57,7 @@ ssh = SshAccess(
             "status": firewall.status,
             "logs": Command("/usr/bin/tail", "--lines", Int("lines", 1, 10000), searcher.logs),
             "toggle": firewall.switch,
-            "reboot": Sudo("/usr/bin/systemctl", "reboot"),
+            "reboot": Command("/usr/bin/systemctl", "reboot", sudo=True),
             "shell": Command("/usr/bin/bash", dev=True),
         },
     )
