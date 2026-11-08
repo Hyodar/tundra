@@ -25,4 +25,4 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=minimal.target

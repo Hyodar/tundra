@@ -139,7 +139,7 @@ def declarative_recipe() -> Recipe:
     )
 
 
-EQUIVALENCE_TREE = "91c5bba6ac0b629db5b162efcbdf44ac429f32f5e424c6022c726c05262a698a"
+EQUIVALENCE_TREE = "1849a0cc6be8112300bb7d753efde4e0eea14c99f5b906e4e7c8b213974dcf5d"
 EQUIVALENCE_RECIPE = "20dfe130f492cb6963f0c557009362d29cf3823e147bc26e48e26eecd1642ec0"
 """The tree and recipe digests :func:`declarative_recipe` lowers to, recorded when the tree
 became mkosi-native (one payload, its cloud glue for every target, ``azure`` a profile
@@ -149,7 +149,7 @@ every profile gained the execution gate, then the instance key, when the initram
 ESP became sized from the UKI's ceiling, and when the endpoint's configuration gained
 its ``attested_tls`` list, when the cloud glue gained its own groups, when the Azure
 glue gained ``azure-vm-utils``, and when every image gained the power button and kept
-its poweroff units. The recipe
+its poweroff units, and when the wants links named the unit files. The recipe
 digest covers the compiler version, recorded as
 ``0.1.0``."""
 

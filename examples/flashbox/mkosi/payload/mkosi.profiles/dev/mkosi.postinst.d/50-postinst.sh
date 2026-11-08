@@ -35,10 +35,10 @@ mkosi-chroot systemctl enable metrics-sink-ready.service
 mkosi-chroot systemctl enable serial-getty@ttyS0.service
 mkosi-chroot systemctl enable tundravm-probe.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
-ln -sf "/etc/systemd/system/metrics-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/metrics-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/serial-getty@ttyS0.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/usr/lib/systemd/system/metrics-sink.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/metrics-sink.service"
+ln -sf "/usr/lib/systemd/system/metrics-sink-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/metrics-sink-ready.service"
+ln -sf "/usr/lib/systemd/system/serial-getty@.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/serial-getty@ttyS0.service"
+ln -sf "/usr/lib/systemd/system/tundravm-probe.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/tundravm-probe.service"
 # Set root password and unlock account
 SALT=$(printf 'tundravm-devtools:%s' "${IMAGE_ID:-devtools}" | sha256sum | cut -c1-16)
 ROOT_PASS=$(openssl passwd -6 -salt "$SALT" "tdx")

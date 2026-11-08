@@ -316,7 +316,7 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=minimal.target
 """
 """``mode-switch`` (``tools/cmd/mode-switch``): root, ``CAP_NET_ADMIN`` for nft, writing
 only ``/run/tundravm`` and the kernel's RTMR3, after the ruleset and the execution gate."""

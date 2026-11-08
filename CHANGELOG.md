@@ -135,6 +135,7 @@ endpoint has run simulated under QEMU only; no real TDX quote is recorded yet.
 - A kernel fixture with its own config builds in every driver a target needs; a weekly workflow builds it and Debian's newest 6.12 (6.12.113, from the security pool).
 - A dev profile's root password (`DevAccess(password=)`, `DevTools`) is set inside the image with `mkosi-chroot chpasswd -e`, so the build no longer fails locking `/etc/passwd`; it logs in on the console only, unless `DevTools(network_login=True)` opens SSH to it.
 - The version is the release tag (`tundravm --version`; `<tag>.post1.dev<n>+g<sha>` between tags), and a wheel records the commit it was built from, so an installed release builds `tools/` at its tag's commit; the lock's compiler section records that version, so another tundravm is lock drift.
+- Each `minimal.target.wants/` link points at the unit file it starts (`/usr/lib/systemd/system/<unit>`, a template for an instance) instead of a missing `/etc/systemd/system/<unit>`, and `mode-switch.service` says `WantedBy=minimal.target`, where it is linked.
 
 ### Sources and toolchains
 

@@ -44,7 +44,7 @@ set -euo pipefail
 mkosi-chroot useradd --system --shell /usr/sbin/nologin db-ready
 mkosi-chroot systemctl enable db-ready.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
-ln -sf "/etc/systemd/system/db-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/usr/lib/systemd/system/db-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/db-ready.service"
 == staging/mkosi.conf
 [Output]
 ImageId=%i-staging

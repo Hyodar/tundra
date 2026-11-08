@@ -214,11 +214,11 @@ mkosi-chroot systemctl enable web.service
 mkosi-chroot systemctl enable web-ready.service
 mkosi-chroot systemctl enable credential-key.service
 mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"
-ln -sf "/etc/systemd/system/api.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/tick.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/web-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
-ln -sf "/etc/systemd/system/credential-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/"
+ln -sf "/usr/lib/systemd/system/api.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/api.service"
+ln -sf "/usr/lib/systemd/system/tick.timer" "$BUILDROOT/etc/systemd/system/minimal.target.wants/tick.timer"
+ln -sf "/usr/lib/systemd/system/web.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/web.service"
+ln -sf "/usr/lib/systemd/system/web-ready.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/web-ready.service"
+ln -sf "/usr/lib/systemd/system/credential-key.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/credential-key.service"
 == staging/mkosi.conf
 [Output]
 ImageId=%i-staging

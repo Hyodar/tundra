@@ -41,7 +41,7 @@ from tundravm._options import RootLayout
 from tundravm._source import FETCH_MARKER, SOURCES_MOUNT, HttpSource
 from tundravm._units import v1
 from tundravm._units.render import service_unit
-from tundravm.compiler._split import is_empty, split_profiles
+from tundravm.compiler._split import UNIT_DIRECTORY, is_empty, split_profiles
 from tundravm.errors import ValidationError
 from tundravm.kernel_modules import (
     MODULE_SETS_VERSION,
@@ -1020,6 +1020,16 @@ def _render_kernel_build_script(
     """)
 
 
+def _unit_file(unit: str, placed: Collection[str]) -> str:
+    """The file *unit* loads from: ``/etc/systemd/system`` when *placed* (the profile's
+    paths) has it there, else :data:`UNIT_DIRECTORY`, where the tree and the packages put
+    units; an instance (``serial-getty@ttyS0.service``) loads from its template."""
+    prefix, at, rest = unit.partition("@")
+    name = f"{prefix}@.{rest.rpartition('.')[2]}" if at and not rest.startswith(".") else unit
+    override = f"/etc/systemd/system/{name}"
+    return override if override in placed else f"{UNIT_DIRECTORY}/{name}"
+
+
 _GLOB = re.compile(r"[*?]|\[[^]/]*\]")
 """The glob characters of a debloat removal entry (``/etc/ssh/ssh_host_*_key*``)."""
 
@@ -1687,12 +1697,13 @@ class DeterministicMkosiEmitter:
             commands.append(
                 CommandSpec(argv=('mkdir -p "$BUILDROOT/etc/systemd/system/minimal.target.wants"',))
             )
+            placed = declared_paths(profile)
             for unit_name in enabled_units:
                 commands.append(
                     CommandSpec(
                         argv=(
-                            f'ln -sf "/etc/systemd/system/{unit_name}" '
-                            f'"$BUILDROOT/etc/systemd/system/minimal.target.wants/"',
+                            f'ln -sf "{_unit_file(unit_name, placed)}" '
+                            f'"$BUILDROOT/etc/systemd/system/minimal.target.wants/{unit_name}"',
                         )
                     )
                 )
