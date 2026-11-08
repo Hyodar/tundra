@@ -81,7 +81,7 @@ compile(
     *,
     profiles: Sequence[str] | None = None,
     lock: Lock | None = None,
-) -> Tree
+) -> tundravm.declarative.lifecycle.Tree
 ```
 
 The mkosi tree *image* compiles to, with *lock*'s source pins applied.
@@ -178,10 +178,10 @@ Group(name: str, system: bool = True, gid: int | None = None)
 Image(
     name: str,
     *,
-    base: Debian = Debian(release='trixie', snapshot=None, efi_stub=None, repositories=()),
+    base: Debian = Debian(),
     packages: Sequence[str | Package] = (),
     files: Sequence[File | Tree | Build] = (),
-    sysctl: Mapping[str, str | int | bool] = FrozenMap(),
+    sysctl: Mapping[str, str | int | bool] = {},
     services: Sequence[Service] = (),
     components: Sequence[Component] = (),
     ingress: Sequence[Ingress] = (),
@@ -193,7 +193,7 @@ Image(
     observability: Observability | None = None,
     targets: Sequence[Target] = ('qemu',),
     dev: DevAccess | None = None,
-    profiles: Mapping[str, Profile] = FrozenMap(),
+    profiles: Mapping[str, Profile] = {},
     mkosi: Mkosi | None = None,
 )
 ```
@@ -369,7 +369,7 @@ Service(
     groups: Sequence[str] = (),
     quotes: bool = False,
     working_directory: str | None = None,
-    environment: Mapping[str, str | Binding | Endpoint] = FrozenMap(),
+    environment: Mapping[str, str | Binding | Endpoint] = {},
     logs: str | None = None,
     runtime: str | None = None,
     package: str | None = None,
@@ -523,9 +523,9 @@ DropIn(
     group: str | None = None,
     groups: Sequence[str] = (),
     working_dir: str | None = None,
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     env_file: str | Sequence[str] | None = None,
-    credentials: Mapping[str, str | SecretFile] = FrozenMap(),
+    credentials: Mapping[str, str | SecretFile] = {},
     state: str | None = None,
     logs: str | None = None,
     runtime: str | None = None,
@@ -535,7 +535,7 @@ DropIn(
     restart_sec: str | None = None,
     timeout_start: str | None = None,
     timeout_stop: str | None = None,
-    limits: Mapping[str, str | int] = FrozenMap(),
+    limits: Mapping[str, str | int] = {},
     hardening: Hardening | None = None,
     after: Sequence[UnitTarget] = (),
     requires: Sequence[UnitTarget] = (),
@@ -544,7 +544,7 @@ DropIn(
     part_of: Sequence[UnitTarget] = (),
     binds_to: Sequence[UnitTarget] = (),
     conflicts: Sequence[UnitTarget] = (),
-    extra: Extra = FrozenMap(),
+    extra: Extra = {},
 )
 ```
 
@@ -574,28 +574,28 @@ Every(interval: str, *, first: str | None = None, jitter: str | None = None)
 
 ```python
 Hardening(
-    protect_system: ProtectSystem = <strict>,
-    protect_home: bool = <strict>,
-    private_tmp: bool = <strict>,
-    private_devices: bool = <strict>,
-    devices: Sequence[str] = <strict>,
-    no_new_privileges: bool = <strict>,
-    capabilities: Sequence[str] | None = <strict>,
-    jit: bool = <strict>,
-    network: Network = <strict>,
-    syscalls: Sequence[str] = <strict>,
-    deny_syscalls: Sequence[str] = <strict>,
-    kernel: bool = <strict>,
-    sandbox: bool = <strict>,
-    umask: str | None = <strict>,
+    protect_system: ProtectSystem = 'strict',
+    protect_home: bool = True,
+    private_tmp: bool = True,
+    private_devices: bool = True,
+    devices: Sequence[str] = (),
+    no_new_privileges: bool = True,
+    capabilities: Sequence[str] | None = (),
+    jit: bool = False,
+    network: AddressFamilies = 'inet',
+    syscalls: Sequence[str] = ('@system-service',),
+    deny_syscalls: Sequence[str] = ('@privileged', '@resources'),
+    kernel: bool = True,
+    sandbox: bool = True,
+    umask: str | None = '0077',
 )
 ```
 
-The sandbox a generated unit runs in: one field per knob, and reviewed presets.
+The sandbox a generated unit runs in: one field per knob, and reviewed presets. Each default is the strict profile's value; a preset (`Service(hardening="jit")`) sets every field, its own changes over them.
 
 | Member | Does |
 |---|---|
-| `Hardening.entries() -> tuple[tuple[str, str], ...]` | The `[Service]` directives, in the canonical hardening order (design 2.3). |
+| `Hardening.entries() -> tuple[tuple[str, str], ...]` | The `[Service]` directives, in the canonical hardening order. |
 | `Hardening.none() -> Hardening` | No sandbox at all: renders nothing in a unit (a drop-in turns every knob off). |
 | `Hardening.patch_entries() -> tuple[tuple[str, str], ...]` | The directives a drop-in writes to make the `explicit` fields hold over whatever the unit it extends sets: switches render `yes` or `no`, and each list starts with its empty reset (`SystemCallFilter=`, `DeviceAllow=`...), so the patch replaces it instead of adding to it. Unset fields render nothing. |
 | `Hardening.preset(name: PresetName, **deviations: Any) -> Hardening` | The sandbox for a runtime class (`PRESETS`), with explicit *deviations*. |
@@ -838,7 +838,7 @@ One code `tundravm check` reports: its severity, what it checks and how to fix i
 
 | Member | Does |
 |---|---|
-| `Rule.severity_text` | The severity as the lint reference and `--explain` print it: `error (warning under Policy(storage_safety='warn'))`. |
+| `Rule.severity_text` | The severity as the lint reference and `--explain` print it: `error (warning in a development profile)`. |
 
 ### `ServiceReady`
 
@@ -885,9 +885,9 @@ EVIDENCE = ServiceReady(unit='tdxs.service')
 ```python
 Tdxs(
     *,
-    source: dm.Git | dm.Local = tools_source(),
-    validator: du.TdxsType | None = None,
-    expected_measurements: Mapping[str, str] = FrozenMap({}),
+    source: Git | Local = ...,
+    validator: TdxsType | None = None,
+    expected_measurements: Mapping[str, str] = {},
     check_revocations: bool = False,
     get_collateral: bool = False,
     verify_imds: bool = False,
@@ -899,8 +899,8 @@ The evidence service: `tdxs` from `tools/` of tundravm's repository, socket-acti
 
 | Member | Does |
 |---|---|
-| `Tdxs.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tdxs-validator-unchecked`: a validator with nothing to compare a quote to. |
-| `Tdxs.from_policy(policy: str \| Path \| Mapping[str, object], *, validator: du.TdxsType = 'tdx', allow_placeholder: bool = False, **kwargs: Any) -> Tdxs` | A verifier whose `expected_measurements` are *policy*'s registers. |
+| `Tdxs.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `tdxs-validator-unchecked`: a validator with nothing to compare a quote to. |
+| `Tdxs.from_policy(policy: str \| Path \| Mapping[str, object], *, validator: TdxsType = 'tdx', allow_placeholder: bool = False, **kwargs: Any) -> Tdxs` | A verifier whose `expected_measurements` are *policy*'s registers. |
 | `Tdxs.group` | The group whose members may ask for quotes. |
 | `Tdxs.outbound() -> Egress` | Intel's PCS over HTTPS with *get_collateral* or *check_revocations*, and the root CA's CRL with *check_revocations*; nothing otherwise (quotes are made in the guest). |
 | `Tdxs.socket` | Where a service asks for quotes (its `tdx` group may connect). |
@@ -926,7 +926,7 @@ The confidential-VM baseline: authenticated time, a volatile journal, sysctl har
 
 | Member | Does |
 |---|---|
-| `TeeBase.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
+| `TeeBase.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `tee-base-clock`: an image without authenticated time trusts the host's clock. |
 | `TeeBase.kernel_cmdline` | `mitigations=auto,nosmt spec_store_bypass_disable=on`: every CPU vulnerability mitigated, SMT off where that needs it, Speculative Store Bypass off for every process (`TEE_KERNEL_CMDLINE` says why each). |
 | `TeeBase.outbound() -> Egress` | With *time*, NTS key exchange (TCP 4460) to each of *nts_servers*. NTP on UDP 123 goes where the key exchange says (RFC 8915 4.1.7), so the firewall accepts it to any address for chrony's user alone (`CHRONY_NTP`). The `Network` names where DNS goes. |
 
@@ -957,7 +957,7 @@ Firewall(
     *,
     allow: Sequence[PortValue] = (),
     egress: Egress | None = None,
-    modes: Mapping[str, Mode] = FrozenMap({}),
+    modes: Mapping[str, Mode] = {},
 )
 ```
 
@@ -965,8 +965,8 @@ The inbound (and optionally outbound) packet filter, nftables in the image.
 
 | Member | Does |
 |---|---|
-| `Firewall.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
-| `Firewall.lowered_modes() -> tuple[dm.FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
+| `Firewall.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `firewall-ssh-open`: port 22 opened by hand instead of by `SshAccess`; `egress-unfiltered`: a production profile that sends anywhere; `firewall-modes-kernel`: modes on a kernel whose TDX switches are all refused. |
+| `Firewall.lowered_modes() -> tuple[FirewallMode, ...]` | *modes* as the ruleset takes them, production first. |
 | `Firewall.status` | A `Login` entry printing the mode in force, the switches since boot and whether RTMR3 replays them: `mode-switch status`. |
 | `Firewall.switch` | A `Login` entry switching to the mode the client names, one of *modes*: `mode-switch to MODE`, extended into RTMR3. |
 
@@ -1007,7 +1007,7 @@ How the image reaches the network: `Network()` is DHCP on `en*`/`eth*`.
 
 | Member | Does |
 |---|---|
-| `Network.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
+| `Network.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `network-no-route`: a static address without a gateway reaches its subnet only. |
 | `Network.online` | "An interface is configured": `systemd-networkd-wait-online`, bounded. |
 | `Network.outbound() -> Egress` | DNS over TLS (TCP 853) to each of *dns*. |
 
@@ -1041,7 +1041,7 @@ Debug access to a development build: `dev=DevAccess(ssh_keys=["~/.ssh/id.pub"])`
 
 | Member | Does |
 |---|---|
-| `DevAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
+| `DevAccess.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `dev-access-rsa-key`: an RSA key where every current client makes ed25519. |
 | `DevAccess.public_keys() -> tuple[str, ...]` | The public key lines, reading every entry that names a `.pub` file. |
 | `DevAccess.tools() -> tuple[object, ...]` | The debugging tools and, with *password*, the console login. |
 
@@ -1095,7 +1095,7 @@ Root logs in over SSH with a public key, and with nothing else.
 
 | Member | Does |
 |---|---|
-| `SshAccess.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu. |
+| `SshAccess.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `ssh-keys-baked`: keys baked into a cloud image let in whoever holds them; `ssh-login-shell`: a production login with a shell and no command menu. |
 | `SshAccess.logins` | Every `Login`, in the order given. |
 | `SshAccess.port` | The port `sshd` listens on. |
 
@@ -1144,7 +1144,7 @@ Container(
     expose: Sequence[PortValue] = (),
     egress: Egress | None = Egress(),
     requires: Sequence[Endpoint] = (),
-    modes: Mapping[str, Egress] | None = FrozenMap(),
+    modes: Mapping[str, Egress] | None = {},
     serves: Sequence[PortValue] = (),
     probe: TcpProbe | None = None,
     ssh: ContainerSsh | None = None,
@@ -1157,14 +1157,14 @@ Container(
 
 | Member | Does |
 |---|---|
-| `Container.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `container-shell`: a production container whose program is a shell. |
+| `Container.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `container-shell`: a production container whose program is a shell. |
 | `Container.endpoint(port: int, *, path: str = '/', scheme: str = 'http') -> Endpoint` | Where the container answers the host on *port*, a port of *serves*: its veth address, which nothing outside the host reaches, ready once *probe* connects (`lighthouse = Lighthouse(execution=searcher.endpoint(8551))`). |
 | `Container.exposed` | The ports DNATed to it: *expose*'s, and its sshd's. |
 | `Container.image` | Where the payload ships its root image. |
 | `Container.kernel() -> tuple[KernelFragment, ...]` | With a veth, what a built kernel needs for it: veth and the firewall's nat. |
 | `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there. |
 | `Container.namespace` | The `<name>-net.service` that makes its namespace, `None` when it holds `lo` only (`PrivateNetwork=yes`). |
-| `Container.network() -> dm.ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
+| `Container.network() -> ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
 | `Container.relay(endpoint: Endpoint) -> str` | The socket in its namespace that relays *endpoint*. |
 | `Container.run_user` | The account the program runs as: *user*, else the container's name. |
 | `Container.sshd_unit` | The unit running sshd: the container's own without *argv*, `<name>-ssh` beside it with one; `None` without *ssh*. |
@@ -1221,7 +1221,7 @@ The export path for logs and metrics: `image.observability` takes it.
 
 | Member | Does |
 |---|---|
-| `Observability.check(resolved: dm.Resolved) -> tuple[dm.Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM; `observability-export-unset`: the metrics name no keep-list and no rules, an error where a production profile writes them to *url*. |
+| `Observability.check(resolved: Resolved) -> tuple[Diagnostic, ...]` | `observability-plaintext`: an http:// sink sees what the TD logs in the clear; `observability-sink-unset`: a production profile's logs or metrics never leave the VM; `observability-export-unset`: the metrics name no keep-list and no rules, an error where a production profile writes them to *url*. |
 | `Observability.development() -> Observability` | What a development profile builds: each sink whose *url* is outside the guest goes to its in-guest receiver, and its credential stays unbound. The proxy goes too when no sink outside the guest is left. A sink on the loopback stays as it is. |
 | `Observability.outbound() -> Egress` | *proxy*, or each sink's `HOST:PORT` without one; nothing when every sink is in the guest. |
 
@@ -1245,7 +1245,7 @@ Send node metrics to *url*, a Prometheus remote-write receiver.
 | Member | Does |
 |---|---|
 | `PrometheusRemoteWrite.config(proxy: Proxy \| None = None) -> dict[str, object]` | The agent's configuration: scrape the node exporter, keep `kept`, write to *url*, through *proxy* when given; without *url*, to the in-guest `sink`. |
-| `PrometheusRemoteWrite.identity() -> tuple[dm.Build, dm.Service]` | `image-metrics` from `tools/` and its service: as root without capabilities (the event log and the TDX device are root's), with the TDX device and AF_UNIX alone, rewriting its file in `IMAGE_METRICS_DIRECTORY` every *interval*. |
+| `PrometheusRemoteWrite.identity() -> tuple[Build, tundravm.declarative.model.Service]` | `image-metrics` from `tools/` and its service: as root without capabilities (the event log and the TDX device are root's), with the TDX device and AF_UNIX alone, rewriting its file in `IMAGE_METRICS_DIRECTORY` every *interval*. |
 | `PrometheusRemoteWrite.kept() -> tuple[str, ...]` | The series names that leave, in order, once each: the records of the rules with `export=True`, then *export* with its presets expanded, then `IDENTITY_SERIES`. Without *export*, `health` leaves when there are no rules. A rule's record in *export* is refused: the rule says that itself. |
 | `PrometheusRemoteWrite.rules_file() -> dict[str, object]` | `METRICS_RULES`: *rules* as one group, in their order. |
 | `PrometheusRemoteWrite.service(proxy: Proxy \| None = None) -> Service` | The `metrics-export` service: Prometheus in agent mode, in server mode with *rules*, through *proxy*; without *url*, to the in-guest `sink`, never through a proxy. |
@@ -1470,7 +1470,7 @@ Build(
     script: str | None = None,
     install: Sequence[Install] = (),
     packages: Sequence[str] = (),
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     cache_namespace: str | None = None,
     using: Go | Cargo | Dotnet | None = None,
     command: Sequence[str] | None = None,
@@ -1489,7 +1489,7 @@ Cargo(
     package: str | None = None,
     features: Sequence[str] = (),
     profile: str = 'release',
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     packages: Sequence[str] = ('cargo',),
     auditable: bool | None = None,
     reproducible: bool | None = None,
@@ -1517,7 +1517,7 @@ CargoBinary(
     install: str | None = None,
     features: Sequence[str] = (),
     profile: str = 'release',
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     auditable: bool | None = None,
     cache_namespace: str | None = None,
 )
@@ -1540,10 +1540,10 @@ Dotnet(
     output: str,
     configuration: str = 'Release',
     runtime: str = 'linux-x64',
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     packages: Sequence[str] = ('libicu76', 'libssl3t64', 'libstdc++6'),
     restore_args: Sequence[str] = (),
-    properties: Mapping[str, str] = FrozenMap(),
+    properties: Mapping[str, str] = {},
 )
 ```
 
@@ -1581,7 +1581,7 @@ Go(
     package: str = '.',
     ldflags: str = '-s -w -buildid=',
     tags: Sequence[str] = (),
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     packages: Sequence[str] = ('golang',),
     output_dir: str = './build',
     mkdir: bool = True,
@@ -1608,7 +1608,7 @@ GoBinary(
     *,
     package: str = '.',
     install: str | None = None,
-    env: Mapping[str, str] = FrozenMap(),
+    env: Mapping[str, str] = {},
     tags: Sequence[str] = (),
     ldflags: str = '-s -w -buildid=',
     cgo: bool = False,
@@ -1846,7 +1846,7 @@ Return the first diagnostic matching every given field, else fail listing them a
 *function*
 
 ```python
-assert_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.Report
+assert_probe(console: str | BootResult, expected: Sequence[str] = ()) -> ProbeReport
 ```
 
 `read_probe`, raising `AssertionError` with its table unless the probe finished, nothing failed and every *expected* check printed.
@@ -1856,7 +1856,12 @@ assert_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.R
 *function*
 
 ```python
-assert_tree(tree: Tree, golden: str | Path, *, update: bool | None = None) -> None
+assert_tree(
+    tree: tundravm.declarative.lifecycle.Tree,
+    golden: str | Path,
+    *,
+    update: bool | None = None,
+) -> None
 ```
 
 Fail unless *golden* holds exactly *tree*: every path, its bytes, exec bit and symlink.
@@ -1993,28 +1998,28 @@ One recorded `invoke`: mkosi's *argv*, the directory it ran in and its log.
 ```python
 FakeEndpoint(
     platform: Literal['simulator', 'tdx'] = 'simulator',
-    registers: Mapping[str, bytes] = dict(),
+    registers: Mapping[str, bytes] = {},
     debug: bool = False,
     mode: str = 'simulated',
     credentials: tuple[str, ...] = ('api-token',),
     volumes: tuple[str, ...] = ('data',),
     ssh_key: bool = True,
-    listeners: Mapping[int, bytes] = dict(),
+    listeners: Mapping[int, bytes] = {},
     misbehave: Misbehaviour | None = None,
-    received: dict[str, bytes] = dict(),
-    unlocked: dict[str, bytes] = dict(),
-    ssh_keys: list[str] = list(),
-    sessions: list[FakeSession] = list(),
+    received: dict[str, bytes] = {},
+    unlocked: dict[str, bytes] = {},
+    ssh_keys: list[str] = [],
+    sessions: list[FakeSession] = [],
     first_nonce: bytes | None = None,
     pins: bool = False,
     owner: str | None = None,
     mismatch: str | None = None,
     confirmed: bool = False,
-    signers: list[str] = list(),
+    signers: list[str] = [],
     modes: tuple[str, ...] = (),
-    mode_events: list[str] = list(),
+    mode_events: list[str] = [],
     clock: int = 412,
-    reply: dict[str, object] = dict(),
+    reply: dict[str, object] = {},
 )
 ```
 
@@ -2051,7 +2056,7 @@ FakeMkosi(
     log: str = '',
     uki_size: int | None = None,
     sudo: bool = False,
-    calls: list[FakeCall] = list(),
+    calls: list[FakeCall] = [],
 )
 ```
 
@@ -2069,7 +2074,7 @@ Records mkosi verbs instead of running them.
 *dataclass*
 
 ```python
-FakeSources(fetched: list[FakeFetch] = list())
+FakeSources(fetched: list[FakeFetch] = [])
 ```
 
 Records source checkouts instead of fetching them.
@@ -2146,11 +2151,13 @@ One runtime-init step: a declared one or a built-in (`keys`, `disks`, `secrets`)
 
 ### `Lintable`
 
-*value*
+*alias*
 
 ```python
-Lintable = tundravm._image._image.Image | tundravm.testing._image.PlannedImage | collections.abc.Sequence[tundravm.diagnostics.Diagnostic]
+Lintable = Image | PlannedImage | Sequence[Diagnostic]
 ```
+
+What the assertions check: an image (every profile, or those *profiles* names), one planned profile, or findings.
 
 ### `plan`
 
@@ -2158,7 +2165,7 @@ Lintable = tundravm._image._image.Image | tundravm.testing._image.PlannedImage |
 
 ```python
 plan(
-    subject: PublicImage | Component,
+    subject: Image | Component,
     profile: str | None = None,
     *,
     lock: Lock | None = None,
@@ -2173,7 +2180,7 @@ plan(
 
 ```python
 PlannedImage(
-    subject: PublicImage | Component,
+    subject: Image | Component,
     profile: str | None = None,
     *,
     lock: Lock | None = None,
@@ -2228,11 +2235,13 @@ What the probe printed: each check's last line, and its `done` counts (`None` un
 
 ### `Profiles`
 
-*value*
+*alias*
 
 ```python
-Profiles = str | collections.abc.Sequence[str] | None
+Profiles = str | Sequence[str] | None
 ```
+
+A profile selection: one name, several names, or `None` for every declared profile.
 
 ### `read_lock`
 
@@ -2249,7 +2258,7 @@ The lockfile at *path* (`build/tundravm.lock`), as `tundravm.compile(image, lock
 *function*
 
 ```python
-read_probe(console: str | BootResult, expected: Sequence[str] = ()) -> probe.Report
+read_probe(console: str | BootResult, expected: Sequence[str] = ()) -> ProbeReport
 ```
 
 What the boot probe (`tundravm-probe.service`, which every development profile carries) printed on *console*: each check's last line and its `done` counts. A production boot's report is empty. *expected* names checks that must have printed.

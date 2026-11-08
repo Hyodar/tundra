@@ -46,7 +46,7 @@ __all__ = [
 ]
 
 ProtectSystem = Literal["strict", "full", "yes", "no"]
-Network = Literal["inet", "inet+netlink", "unix", "none", "any"]
+AddressFamilies = Literal["inet", "inet+netlink", "unix", "none", "any"]
 
 _FAMILIES = {
     "inet": "AF_UNIX AF_INET AF_INET6",
@@ -137,7 +137,9 @@ def _fail(owner: object, message: str, *, hint: str | None = None) -> Validation
 
 @dataclass(frozen=True, slots=True)
 class Hardening(Keywords):
-    """The sandbox a generated unit runs in: one field per knob, and reviewed presets.
+    """The sandbox a generated unit runs in: one field per knob, and reviewed presets. Each
+    default is the strict profile's value; a preset (``Service(hardening="jit")``) sets
+    every field, its own changes over them.
 
     The field defaults are :meth:`strict`; :meth:`relaxed` and :meth:`none` are the other
     two levels, :meth:`preset` names one per runtime class (:data:`PRESETS`: ``static``,
@@ -165,7 +167,7 @@ class Hardening(Keywords):
     no_new_privileges: bool = _UNSET
     capabilities: Sequence[str] | None = _UNSET
     jit: bool = _UNSET
-    network: Network = _UNSET
+    network: AddressFamilies = _UNSET
     syscalls: Sequence[str] = _UNSET
     deny_syscalls: Sequence[str] = _UNSET
     kernel: bool = _UNSET
@@ -198,7 +200,7 @@ class Hardening(Keywords):
                 hint='Hardening.strict(protect_system="strict"): one of '
                 f"{', '.join(repr(v) for v in get_args(ProtectSystem))}.",
             )
-        if self.network not in get_args(Network):
+        if self.network not in get_args(AddressFamilies):
             raise _fail(
                 self,
                 f"invalid network {self.network!r}.",
@@ -263,7 +265,7 @@ class Hardening(Keywords):
         return cls.strict(**{**PRESETS[name], **deviations})
 
     def entries(self) -> tuple[tuple[str, str], ...]:
-        """The ``[Service]`` directives, in the canonical hardening order (design 2.3)."""
+        """The ``[Service]`` directives, in the canonical hardening order."""
         out: list[tuple[str, str]] = []
         add = out.append
         if self.protect_system != "no":

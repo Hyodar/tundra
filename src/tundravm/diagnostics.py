@@ -95,7 +95,7 @@ class Rule(Keywords):
     a ``rule-undeclared`` error. *severity* is the level it reports at, or every level it
     reports at, the default first and then in the order the policy escalates to them;
     *when* says, for each level after the default, when the code reports at it
-    (``"under Policy(storage_safety='warn')"``). *summary* is one line: what it checks and
+    (``"in a development profile"``). *summary* is one line: what it checks and
     why it matters; *fix* is what clears it, in the words of an ``Image`` file. *checks* are
     the passes of tundravm's own compiler that report it; a component's rule has none.
     """
@@ -140,7 +140,7 @@ class Rule(Keywords):
                 f"Rule {code}: {len(levels) - 1} level(s) after the default, "
                 f"{len(phrases)} when= phrase(s).",
                 hint="Pass when= one phrase per level after the default, saying when the code "
-                "reports at it: when=(\"under Policy(storage_safety='warn')\",).",
+                'reports at it: when=("in a development profile",).',
             )
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "severity", levels)
@@ -152,7 +152,7 @@ class Rule(Keywords):
     @property
     def severity_text(self) -> str:
         """The severity as the lint reference and ``--explain`` print it:
-        ``error (warning under Policy(storage_safety='warn'))``."""
+        ``error (warning in a development profile)``."""
         default, *others = self.severity
         if not others:
             return default
