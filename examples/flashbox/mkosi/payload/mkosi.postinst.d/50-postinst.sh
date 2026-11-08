@@ -29,7 +29,6 @@ mkosi-chroot systemctl enable nethermind.service
 mkosi-chroot systemctl enable nethermind-ready.service
 mkosi-chroot systemctl enable lighthouse.service
 mkosi-chroot systemctl enable lighthouse-ready.service
-mkosi-chroot systemctl enable searcher-container-loop.service
 mkosi-chroot systemctl enable searcher-container.service
 mkosi-chroot systemctl enable searcher-container-ssh-keys.service
 mkosi-chroot systemctl enable searcher-container-endpoint-8545.socket
@@ -64,7 +63,6 @@ ln -sf "/usr/lib/systemd/system/tdxs.socket" "$BUILDROOT/etc/systemd/system/mini
 ln -sf "/usr/lib/systemd/system/systemd-networkd.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-networkd.service"
 ln -sf "/usr/lib/systemd/system/systemd-networkd.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-networkd.socket"
 ln -sf "/usr/lib/systemd/system/systemd-networkd-wait-online.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/systemd-networkd-wait-online.service"
-ln -sf "/usr/lib/systemd/system/searcher-container-loop.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/searcher-container-loop.service"
 ln -sf "/usr/lib/systemd/system/searcher-container-ssh-keys.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/searcher-container-ssh-keys.service"
 ln -sf "/usr/lib/systemd/system/searcher-container-endpoint-8545.socket" "$BUILDROOT/etc/systemd/system/minimal.target.wants/searcher-container-endpoint-8545.socket"
 ln -sf "/usr/lib/systemd/system/image-metrics.service" "$BUILDROOT/etc/systemd/system/minimal.target.wants/image-metrics.service"

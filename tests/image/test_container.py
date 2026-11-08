@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tundravm import File, Image, Profile, Service
+from tundravm import DebianConfig, File, Image, Kernel, Profile, Service
 from tundravm._image import compile as compile_image
 from tundravm.builds import _container_roots
 from tundravm.components import Endpoint
@@ -137,10 +137,26 @@ def test_a_container_lowers_to_a_subimage_its_unit_runs_from(tmp_path: Path) -> 
     )
     assert "WorkingDirectory=/persistent/data/web\n" in read(units, "web.service")
     loader = read(units, "web-loop.service")
-    assert "ExecStart=/usr/sbin/modprobe loop\n" in loader
-    assert "ConditionPathExists=!/dev/loop-control\n" in loader
-    assert "User=" not in loader
+    for line in (
+        "ExecStart=/usr/sbin/modprobe loop\n",
+        "ConditionPathExists=!/dev/loop-control\n",
+        "ProtectSystem=strict\n",
+        "RestrictAddressFamilies=none\n",
+        "SystemCallFilter=@system-service @module\n",
+        "CapabilityBoundingSet=CAP_SYS_MODULE\n",
+    ):
+        assert line in loader, line
+    assert "User=" not in loader and "ProtectKernelModules" not in loader
     assert not (units / "web-net.service").exists()
+
+
+def test_a_built_kernel_s_container_loads_no_loop_module() -> None:
+    """A built kernel has loop built in (the container asks it for =y), so nothing loads it."""
+    kernel = Kernel.build(base=DebianConfig("6.12.113-1"))
+    planned = plan(Image("box", components=[web()], kernel=kernel))
+    assert "/usr/lib/systemd/system/web-loop.service" not in planned.files
+    dropin = planned.file("/usr/lib/systemd/system/web.service.d/20-container.conf").text
+    assert "loop" not in dropin
 
 
 def networked() -> Image:
@@ -199,9 +215,14 @@ def test_a_networked_container_lowers_to_a_veth_the_firewall_forwards() -> None:
         "DefaultDependencies=no\nRequires=nftables.service\nAfter=nftables.service\n",
         "ExecStart=/usr/bin/ip link add ve-web type veth peer name host0 netns web\n",
         "ExecStart=/usr/bin/ip -n web route add default via 169.254.132.217\n",
-        "ExecStart=/bin/sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward'\n",
+        "CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN\n",
+        "RestrictAddressFamilies=AF_UNIX AF_NETLINK\n",
+        "SystemCallFilter=@system-service @mount\n",
     ):
         assert line in net, line
+    assert "/bin/sh" not in net and "ProtectSystem" not in net
+    forward = planned.file("/etc/sysctl.d/60-container-web.conf").text
+    assert forward.endswith("\nnet.ipv4.ip_forward = 1\n")
     relay = planned.file("/usr/lib/systemd/system/web-endpoint-8545.socket.d/20-container.conf")
     assert "[Socket]\nNetworkNamespacePath=/run/netns/web\n" in relay.text
     assert "Unmanaged=yes" in planned.file("/etc/systemd/network/10-tundravm-ve-web.network").text

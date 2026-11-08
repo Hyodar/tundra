@@ -9,6 +9,25 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/modprobe loop
 TimeoutStartSec=5min
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=none
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @module
+SystemCallFilter=~@resources
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=CAP_SYS_MODULE
+AmbientCapabilities=CAP_SYS_MODULE
+UMask=0077
 
 [Install]
 WantedBy=minimal.target

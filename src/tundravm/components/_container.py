@@ -17,6 +17,7 @@ import posixpath
 import re
 import zlib
 from collections.abc import Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import KW_ONLY, dataclass, field, replace
 from typing import ClassVar, Literal
 
@@ -62,15 +63,46 @@ _RESERVED = frozenset({0, 169, 255})
 """Third octets of 169.254.0.0/16 no container takes: RFC 3927's reserved first and last
 /24, and the cloud metadata server's."""
 LOAD_LOOP = ("/usr/sbin/modprobe", "loop")
-"""What loads ``loop`` before ``RootImage=`` attaches the root, as its own root unit: no
-device asks for it, the debloated image makes no static ``/dev/loop-control`` node that would
-load it on open, and nothing run by the container's unit can, since systemd attaches the
-image first for every command of it (a ``+`` one too) and fails with ``226/NAMESPACE``."""
+"""What loads ``loop`` before ``RootImage=`` attaches the root on Debian's kernel, whose
+``loop`` is a module (trixie's 6.12 ``amd64`` and ``cloud-amd64`` configs say
+``CONFIG_BLK_DEV_LOOP=m``), as its own root unit: no device asks for it, the debloated image
+makes no static ``/dev/loop-control`` node that would load it on open, and nothing run by
+the container's unit can, since systemd attaches the image first for every command of it
+(a ``+`` one too) and fails with ``226/NAMESPACE``."""
+LOOP_BUILT_IN: ContextVar[bool] = ContextVar("tundravm_loop_built_in", default=False)
+"""Whether the image being lowered boots a built kernel, which has ``loop`` built in (every
+container asks it for ``CONFIG_BLK_DEV_LOOP=y``), so no container composes a loader."""
+LOADER_SANDBOX = Hardening.strict(
+    kernel=False,
+    network="none",
+    capabilities=["CAP_SYS_MODULE"],
+    syscalls=["@system-service", "@module"],
+    deny_syscalls=["@resources"],
+)
+"""``modprobe loop`` as root with ``CAP_SYS_MODULE`` alone, no network, a read-only system:
+the strict sandbox with the module calls allowed and ``ProtectKernelModules=`` off."""
+NAMESPACE_SANDBOX = (
+    "CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN",
+    "NoNewPrivileges=yes",
+    "RestrictAddressFamilies=AF_UNIX AF_NETLINK",
+    "RestrictNamespaces=net mnt",
+    "RestrictRealtime=yes",
+    "RestrictSUIDSGID=yes",
+    "LockPersonality=yes",
+    "MemoryDenyWriteExecute=yes",
+    "SystemCallArchitectures=native",
+    "SystemCallFilter=@system-service @mount",
+    "SystemCallErrorNumber=EPERM",
+)
+"""The ``<name>-net.service`` sandbox: ``ip`` with the two capabilities a namespace and a
+veth need and netlink alone. It keeps the host's mount namespace (no ``ProtectSystem=``,
+``PrivateTmp=`` or ``Protect*`` that makes one): ``ip netns add`` bind-mounts the namespace
+at ``/run/netns/<name>``, where the container's units join it, and a private mount
+namespace would keep that mount from them."""
 LOOP_PRESENT = Condition.path_exists("/dev/loop-control", negate=True)
-"""Skips the loader where ``loop`` is already there: a built ``Kernel`` has it built in and
-no ``modprobe``, and devtmpfs makes the node once the driver registers. Not
-``ConditionKernelModuleLoaded=``, which systemd 258 added and 257, Debian's, ignores with a
-warning, so the unit would still run ``modprobe``."""
+"""Skips the loader where ``loop`` is already loaded (devtmpfs makes the node once the driver
+registers). Not ``ConditionKernelModuleLoaded=``, which systemd 258 added and 257, Debian's,
+ignores with a warning, so the unit would still run ``modprobe``."""
 SHELLS = frozenset({"sh", "bash", "dash", "ash"})
 """The program names ``container-shell`` reads as a shell."""
 
@@ -595,10 +627,11 @@ class Container(Component):
         return f"{CONTAINERS_PATH}/{self.name}.raw"
 
     @property
-    def loader(self) -> str:
+    def loader(self) -> str | None:
         """The root oneshot that loads ``loop`` before the unit attaches its root image,
-        unless ``/dev/loop-control`` is already there."""
-        return f"{self.name}-loop.service"
+        unless ``/dev/loop-control`` is already there; ``None`` on a built kernel, which
+        has it built in."""
+        return None if LOOP_BUILT_IN.get() else f"{self.name}-loop.service"
 
     @property
     def namespace(self) -> str | None:
@@ -712,18 +745,20 @@ class Container(Component):
         return f"{self.name}-endpoint-{endpoint.port}.socket"
 
     def compose(self) -> Iterator[object]:
-        yield dm.Task(
-            self.loader.removesuffix(".service"),
-            LOAD_LOOP,
-            description=f"Load loop for container {self.name}'s root image",
-            user=Root(),
-            hardening=Hardening.none(),
-            conditions=(LOOP_PRESENT,),
-        )
+        loader = self.loader
+        if loader is not None:
+            yield dm.Task(
+                loader.removesuffix(".service"),
+                LOAD_LOOP,
+                description=f"Load loop for container {self.name}'s root image",
+                user=Root(),
+                hardening=LOADER_SANDBOX,
+                conditions=(LOOP_PRESENT,),
+            )
         yield from self._account()
         network = self.network()
         yield self._root(network)
-        units = [self.loader]
+        units = [] if loader is None else [loader]
         if self.namespace is not None:
             units += [self.namespace, *(self.relay(endpoint) for endpoint in self.requires)]
             yield from self._namespace(network)
@@ -850,7 +885,6 @@ class Container(Component):
                 f"{IP} -n {name} addr add {network.address}/30 dev {PEER}",
                 f"{IP} -n {name} link set {PEER} up",
                 f"{IP} -n {name} route add default via {network.host}",
-                "/bin/sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward'",
             ]
             stop.insert(0, f"-{IP} link delete {veth}")
             order = "Requires=nftables.service\nAfter=nftables.service\n"
@@ -859,15 +893,21 @@ class Container(Component):
                 f"# tundravm Container {name}: {network.interface} is {self.namespace}'s\n"
                 f"[Match]\nName={veth}\n\n[Link]\nUnmanaged=yes\n",
             )
+            yield dm.File.text(
+                f"/etc/sysctl.d/60-container-{name}.conf",
+                f"# tundravm Container {name}: the host forwards {veth}'s packets, which the "
+                "firewall's forward chain filters\nnet.ipv4.ip_forward = 1\n",
+            )
         text = (
             f"# tundravm Container {name}: its network namespace"
-            + (", a veth the firewall forwards and IPv4 forwarding" if network else "")
+            + (" and a veth the firewall forwards" if network else "")
             + "\n[Unit]\n"
             f"Description=Network namespace of container {name}\n"
             "DefaultDependencies=no\n"
             f"{order}"
             "Conflicts=shutdown.target\nBefore=shutdown.target\n\n"
             "[Service]\nType=oneshot\nRemainAfterExit=yes\n"
+            + "".join(f"{line}\n" for line in NAMESPACE_SANDBOX)
             + "".join(
                 f"ExecStartPre=-{command}\n"
                 for command in (

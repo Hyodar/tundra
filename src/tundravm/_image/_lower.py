@@ -117,8 +117,8 @@ CONTAINER_KERNEL = KernelFragment(
     reason="a Container: its unit attaches the erofs root image through a loop device",
 )
 """What a ``Container`` in any profile asks of a built kernel: ``loop`` and ``erofs`` built
-in, since a built kernel loads no module and the container's loader skips ``modprobe`` once
-``/dev/loop-control`` exists. The drivers check already wanted both."""
+in, since a built kernel loads no module, so no container of it gets a loader. The drivers
+check already wanted both."""
 
 
 def kernel_of(image: Image) -> dm.Kernel:
@@ -128,7 +128,18 @@ def kernel_of(image: Image) -> dm.Kernel:
 
 
 def recipe_of(image: Image) -> dm.Recipe:
-    """The internal recipe *image* lowers to, with every implied declaration in place."""
+    """The internal recipe *image* lowers to, with every implied declaration in place; a
+    built kernel's containers compose no ``loop`` loader (:data:`CONTAINER_KERNEL`)."""
+    from tundravm.components._container import LOOP_BUILT_IN
+
+    token = LOOP_BUILT_IN.set(image.kernel.built)
+    try:
+        return _recipe(image)
+    finally:
+        LOOP_BUILT_IN.reset(token)
+
+
+def _recipe(image: Image) -> dm.Recipe:
     state = _Lowering(image)
     items = state.items()
     return dm.Recipe(

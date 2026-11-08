@@ -1263,7 +1263,7 @@ Container(
 | `Container.group` | The group a host service joins to read what the container writes (`Service(..., groups=[searcher.group])`): its account's own, whose gid `uid` pins. The container writes group-readable files (`UMask=0027`), so a service in it reads them without running as the container's uid. |
 | `Container.image` | Where the payload ships its root image. |
 | `Container.kernel() -> tuple[KernelFragment, ...]` | With a veth, what a built kernel needs for it: veth and the firewall's nat. |
-| `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there. |
+| `Container.loader` | The root oneshot that loads `loop` before the unit attaches its root image, unless `/dev/loop-control` is already there; `None` on a built kernel, which has it built in. |
 | `Container.metrics` | Its unit's series as PromQL selectors, for a `RecordingRule`: `f"max({searcher.metrics.active})"`. |
 | `Container.namespace` | The `<name>-net.service` that makes its namespace, `None` when it holds `lo` only (`PrivateNetwork=yes`). |
 | `Container.network() -> ContainerNetwork \| None` | Its veth: `ve-<name>` (`ve-<first 7>-<4 hex>` past 12 characters) and a /30 of 169.254.0.0/16 the name's sha256 picks, outside `_RESERVED`. |
