@@ -16,6 +16,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -521,29 +522,92 @@ def _describe_units(profile_state: ProfileState, probes: frozenset[str]) -> dict
 
 
 def _describe_firewall(profile_state: ProfileState) -> dict[str, object] | None:
-    """What ``/etc/nftables.conf`` accepts: inbound, and outbound when its output chain
-    drops what no rule accepts (``None`` there: unfiltered). Each rule names who asked."""
+    """What ``/etc/nftables.conf`` accepts: inbound, each port DNATed to a container among
+    it; outbound when its output chain drops what no rule accepts (``None`` there:
+    unfiltered); and what each container may send (``containers``). Each rule names who
+    asked, a container by its unit."""
     conf = next((f for f in profile_state.files if f.path == _FIREWALL), None)
     if conf is None:
         return None
-    chains: dict[str, list[dict[str, str]]] = {"input": [], "output": []}
+    units = {unit_name(s.name) for s in profile_state.services}
+    inbound: list[dict[str, str]] = []
+    outbound: list[dict[str, str]] = []
+    sent: list[dict[str, str]] = []
+    forwarded: dict[str, str] = {}
     filtered = False
-    chain = None
+    chain = ""
     for line in conf.data.decode("utf-8", errors="replace").splitlines():
         words = line.split()
         if words[:1] == ["chain"] and len(words) > 1:
-            # a firewall mode's chain (maintenance_input) holds what that mode accepts
-            chain = words[1].rpartition("_")[2] if "_" in words[1] else words[1]
+            chain = words[1]
             continue
         if chain == "output" and "policy" in words and "drop;" in words:
             filtered = True
-        if chain not in chains or "accept" not in words or "comment" not in words:
+        if "comment" not in words:
             continue
-        who = line.split("comment", 1)[1].strip().strip('"')
-        if who.startswith("DHCP"):
+        who, pinned = _who(line.split("comment", 1)[1].strip().strip('"'))
+        if chain == "prerouting" and "dnat" in words:
+            forwarded[_rule(words[: words.index("dnat")])] = who
             continue
-        chains[chain].append({"rule": _rule(words[: words.index("accept")]), "for": who})
-    return {"inbound": chains["input"], "outbound": chains["output"] if filtered else None}
+        if "accept" not in words or who.startswith("DHCP"):
+            continue
+        rule = {"rule": _rule(words[: words.index("accept")], pinned), "for": who}
+        hook = chain.rpartition("_")[2]
+        if chain == "forward" and words[0] == "iifname":
+            name, _, mode = who.partition(": ")
+            rule["for"] = f"{mode}: {_unit(name, units)}" if mode else _unit(name, units)
+            sent.append(rule)
+        elif hook == "output":
+            outbound.append(rule)
+        elif hook == "input":
+            inbound.append(rule)
+    for row in inbound:
+        mode, _, names = row["for"].rpartition(": ")
+        container = forwarded.get(row["rule"])
+        if mode and container in names.split(", "):
+            del forwarded[row["rule"]]
+            row["rule"] += f" {_FORWARDED} {container}"
+            row["for"] = f"{mode}: {_unit(container, units)}"
+    inbound += [
+        {"rule": f"{port} {_FORWARDED} {name}", "for": _unit(name, units)}
+        for port, name in forwarded.items()
+    ]
+    return {
+        "inbound": inbound,
+        "outbound": _merged(outbound) if filtered else None,
+        "containers": _merged(sent),
+    }
+
+
+_FORWARDED = "\N{RIGHTWARDS ARROW}"
+"""Between a port and the container the host DNATs it to."""
+
+
+def _who(comment: str) -> tuple[str, str | None]:
+    """A rule's comment as who asked and the name its address is pinned to:
+    ``image (api.example)`` is ``("image", "api.example")``."""
+    found = re.fullmatch(r"(.*?) \(([^()]+)\)", comment)
+    return (comment, None) if found is None else (found.group(1), found.group(2))
+
+
+def _unit(name: str, units: Collection[str]) -> str:
+    """A container (or a service) by its unit, one of *units*."""
+    return unit_name(name) if unit_name(name) in units else name
+
+
+def _merged(rules: list[dict[str, str]]) -> list[dict[str, str]]:
+    """*rules* once each, the addresses of one pinned name on one rule:
+    ``api.example:443/tcp (203.0.113.7, 203.0.113.8)``."""
+    found: dict[tuple[str, str], list[str]] = {}
+    for row in rules:
+        rule, _, address = row["rule"].partition(" (")
+        held = found.setdefault((rule, row["for"]), [])
+        if address and address.rstrip(")") not in held:
+            held.append(address.rstrip(")"))
+    return [
+        {"rule": f"{rule} ({', '.join(held)})" if held else rule, "for": who}
+        for (rule, who), held in found.items()
+    ]
 
 
 def _describe_control_plane(profile_state: ProfileState) -> dict[str, object] | None:
@@ -574,9 +638,10 @@ def _describe_control_plane(profile_state: ProfileState) -> dict[str, object] | 
     }
 
 
-def _rule(words: list[str]) -> str:
+def _rule(words: list[str], pinned: str | None = None) -> str:
     """``tcp dport 8080`` as ``8080/tcp``, ``ip daddr 1.1.1.1 tcp dport 443`` as
-    ``1.1.1.1:443/tcp``; anything else as written."""
+    ``1.1.1.1:443/tcp``, an address *pinned* to a name as ``api.example:443/tcp
+    (203.0.113.7)``; anything else as written."""
     found: dict[str, str] = {}
     for key in ("daddr", "dport"):
         if key in words and words.index(key) + 1 < len(words):
@@ -585,9 +650,12 @@ def _rule(words: list[str]) -> str:
     if not found:
         return " ".join(words)
     port = f"{found['dport']}/{protocol}" if "dport" in found else ""
-    if "daddr" in found:
-        return f"{found['daddr']}:{port}" if port else found["daddr"]
-    return port
+    if "daddr" not in found:
+        return port
+    address = found["daddr"]
+    if pinned is not None:
+        return f"{pinned}:{port} ({address})" if port else f"{pinned} ({address})"
+    return f"{address}:{port}" if port else address
 
 
 _STEPS = {
@@ -934,14 +1002,23 @@ def _firewall_items(firewall: Mapping[str, Any]) -> list[Item]:
     outbound = firewall.get("outbound")
     if outbound is None:
         items.append(("out", "unfiltered"))
-        return items
-    grouped: dict[str, list[str]] = {}
-    for rule in outbound:
-        grouped.setdefault(rule["for"], []).append(rule["rule"])
-    items += [("out", ", ".join(rules), who) for who, rules in grouped.items()]
-    if not outbound:
-        items.append(("out", "nothing beyond replies and DHCP"))
-    return items
+    else:
+        items += _grouped(outbound)
+        if not outbound:
+            items.append(("out", "nothing beyond replies and DHCP"))
+    return items + _grouped(firewall.get("containers", ()))
+
+
+def _grouped(rules: Sequence[Mapping[str, str]]) -> list[Item]:
+    """``out`` rows, one per who asked, its rules joined up to :data:`PROGRAM_WIDTH`
+    characters a row."""
+    grouped: dict[str, list[list[str]]] = {}
+    for rule in rules:
+        rows = grouped.setdefault(rule["for"], [[]])
+        if rows[-1] and len(", ".join([*rows[-1], rule["rule"]])) > PROGRAM_WIDTH:
+            rows.append([])
+        rows[-1].append(rule["rule"])
+    return [("out", ", ".join(row), who) for who, rows in grouped.items() for row in rows]
 
 
 def _control_plane_items(control: Mapping[str, Any]) -> list[Item]:

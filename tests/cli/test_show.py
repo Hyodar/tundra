@@ -18,10 +18,27 @@ from tundravm.testing import UPDATE_GOLDEN_ENV
 
 GOLDEN = Path(__file__).parent
 """``show-<project>.txt``: ``tundravm show`` of what ``new`` writes and of the ``prover``
-fixture (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites them)."""
+fixture with :data:`BOX` (``TUNDRAVM_UPDATE_GOLDEN=1`` rewrites them)."""
 
 INTERNAL = ("dev-access", "devtools", "app-ready", "SALT=", "mkosi-chroot", "Hooks")
 """What ``show`` never prints: internal fragment and unit names, and shell."""
+
+BOX = """
+from dataclasses import replace
+
+from tundravm.components.container import Container
+from tundravm.ports import UDP
+
+box = Container(
+    "box",
+    ["/usr/bin/busybox", "nc", "-lu", "-p", "9000"],
+    packages=["busybox"],
+    expose=[UDP(9000)],
+    egress=Egress(hosts=["192.0.2.7:443"]),
+)
+image = replace(image, components=[box])
+"""
+"""The smallest container with a port DNATed to it and an egress of its own."""
 
 
 @pytest.mark.parametrize("which", ["new", "prover"])
@@ -37,7 +54,8 @@ def test_show_reads_like_the_image_file(
         assert cli("new", "demo").code == EXIT_OK
         monkeypatch.chdir(tmp_path / "demo")
     else:
-        request.getfixturevalue("prover")
+        with (request.getfixturevalue("prover") / "prover.py").open("a") as prover:
+            prover.write(BOX)
     result = cli("show")
     assert result.code == EXIT_OK, result.err
     golden = GOLDEN / f"show-{which}.txt"
